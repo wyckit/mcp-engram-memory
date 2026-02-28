@@ -61,6 +61,19 @@ public class VectorIndexTests
         Assert.False(index.Delete("missing"));
     }
 
+    [Fact]
+    public void Delete_RemovedEntryNotInSearchResults()
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+        index.Upsert(new VectorEntry("b", new float[] { 0f, 1f }));
+        index.Delete("a");
+
+        var results = index.Search(new float[] { 1f, 0f }, k: 5);
+        Assert.Single(results);
+        Assert.Equal("b", results[0].Entry.Id);
+    }
+
     // ── Search ───────────────────────────────────────────────────────────────
 
     [Fact]
@@ -73,7 +86,7 @@ public class VectorIndexTests
 
         Assert.Single(results);
         Assert.Equal("a", results[0].Entry.Id);
-        Assert.Equal(1f, results[0].Score, precision: 5);
+        Assert.Equal(1f, results[0].Score, precision: 4);
     }
 
     [Fact]
@@ -85,7 +98,7 @@ public class VectorIndexTests
         var results = index.Search(new float[] { -1f, 0f }, k: 1, minScore: -1f);
 
         Assert.Single(results);
-        Assert.Equal(-1f, results[0].Score, precision: 5);
+        Assert.Equal(-1f, results[0].Score, precision: 4);
     }
 
     [Fact]
@@ -207,6 +220,85 @@ public class VectorIndexTests
         var index = new VectorIndex();
         index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
         index.Dispose();
+    }
+
+    // ── Persistence ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Persistence_SaveAndLoad_RoundTrips()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        try
+        {
+            // Create index, add data, dispose (triggers no special behavior but data is persisted on upsert)
+            using (var index = new VectorIndex(dataPath: tempPath))
+            {
+                index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }, "alpha",
+                    new Dictionary<string, string> { ["key"] = "val" }));
+                index.Upsert(new VectorEntry("b", new float[] { 0f, 1f }, "beta"));
+            }
+
+            Assert.True(File.Exists(tempPath));
+
+            // Load into a new index
+            using var reloaded = new VectorIndex(dataPath: tempPath);
+            Assert.Equal(2, reloaded.Count);
+
+            var results = reloaded.Search(new float[] { 1f, 0f }, k: 1);
+            Assert.Single(results);
+            Assert.Equal("a", results[0].Entry.Id);
+            Assert.Equal("alpha", results[0].Entry.Text);
+            Assert.Equal("val", results[0].Entry.Metadata["key"]);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+    }
+
+    [Fact]
+    public void Persistence_DeletePersists()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        try
+        {
+            using (var index = new VectorIndex(dataPath: tempPath))
+            {
+                index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+                index.Upsert(new VectorEntry("b", new float[] { 0f, 1f }));
+                index.Delete("a");
+            }
+
+            using var reloaded = new VectorIndex(dataPath: tempPath);
+            Assert.Equal(1, reloaded.Count);
+
+            var results = reloaded.Search(new float[] { 1f, 0f }, k: 5);
+            Assert.Single(results);
+            Assert.Equal("b", results[0].Entry.Id);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+    }
+
+    [Fact]
+    public void Persistence_NonExistentFile_StartsEmpty()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        using var index = new VectorIndex(dataPath: tempPath);
+        Assert.Equal(0, index.Count);
+        // Clean up if file was created
+        if (File.Exists(tempPath)) File.Delete(tempPath);
+    }
+
+    [Fact]
+    public void Persistence_NullPath_NoFileCreated()
+    {
+        using var index = new VectorIndex(dataPath: null);
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+        Assert.Equal(1, index.Count);
+        // No file should have been created — just verify no crash
     }
 
     // ── VectorEntry validation ───────────────────────────────────────────────

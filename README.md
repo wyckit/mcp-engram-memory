@@ -1,6 +1,6 @@
 # MCP Vector Memory
 
-An [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that gives an LLM tools to store, search, and delete vector embeddings in-memory using cosine-similarity k-nearest-neighbor search.
+An [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that gives an LLM tools to store, search, and delete vector embeddings using cosine-similarity nearest-neighbor search, backed by an HNSW index with optional JSON file persistence.
 
 ## Prerequisites
 
@@ -33,6 +33,34 @@ Add the server to your MCP client (e.g. Claude Desktop, VS Code, etc.):
   }
 }
 ```
+
+### Persistence
+
+By default, stored vectors are persisted to a JSON file at:
+
+| OS      | Default path |
+|---------|-------------|
+| Linux   | `~/.local/share/mcp-vector-memory/index.json` |
+| macOS   | `~/Library/Application Support/mcp-vector-memory/index.json` |
+| Windows | `%LOCALAPPDATA%\mcp-vector-memory\index.json` |
+
+Override with the `VECTOR_MEMORY_DATA_PATH` environment variable:
+
+```json
+{
+  "mcpServers": {
+    "vector-memory": {
+      "command": "dotnet",
+      "args": ["run", "--project", "/absolute/path/to/src/McpVectorMemory"],
+      "env": {
+        "VECTOR_MEMORY_DATA_PATH": "/path/to/my/vectors.json"
+      }
+    }
+  }
+}
+```
+
+Set `VECTOR_MEMORY_DATA_PATH=none` to disable persistence and run fully in-memory.
 
 ## Tools
 
@@ -70,22 +98,38 @@ Delete a stored memory entry by its unique identifier.
 ## Architecture
 
 ```
-Program.cs              → Host setup, DI, MCP server wiring (stdio transport)
+Program.cs              → Host setup, DI, MCP server wiring, persistence config
 VectorEntry.cs          → Immutable vector record (id, vector, text, metadata)
-VectorIndex.cs          → Thread-safe in-memory index (upsert, delete, search)
+VectorIndex.cs          → Thread-safe index: HNSW search + file persistence
+HnswGraph.cs            → HNSW approximate nearest-neighbor graph
+VectorMath.cs           → SIMD-accelerated dot product, norm, cosine similarity
+IndexPersistence.cs     → JSON serialization for durable storage
 SearchResult.cs         → Search result DTO (entry + cosine similarity score)
 VectorMemoryTools.cs    → MCP tool definitions (store, search, delete)
 ```
 
+- **HNSW index** — Search uses a Hierarchical Navigable Small World graph (O(log n) per query) instead of brute-force linear scan. Separate graphs are maintained per vector dimension.
+- **Persistence** — Entries are saved to a JSON file after every mutation (upsert/delete). The HNSW graph is rebuilt from persisted entries on startup.
 - **Thread safety** — `VectorIndex` uses `ReaderWriterLockSlim` for concurrent reads and exclusive writes.
 - **SIMD acceleration** — Dot-product computation uses `System.Numerics.Vector<T>` when hardware acceleration is available.
-- **Norm caching** — Entry norms are computed once at upsert time and reused across searches.
+
+## HNSW Parameters
+
+The HNSW index uses sensible defaults that work well for most workloads:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| M | 16 | Max bi-directional connections per node per layer |
+| efConstruction | 200 | Search effort during index construction (higher = better recall, slower insert) |
+| efSearch | 50 | Minimum search effort at query time (higher = better recall, slower search) |
+
+These can be tuned via the `VectorIndex` constructor for advanced use cases.
 
 ## Limitations
 
-- **Ephemeral storage** — All data lives in-memory and is lost when the process exits.
-- **Linear scan** — Search is O(n) per query. For large vector counts (>10k), consider an approximate nearest-neighbor index such as HNSW.
-- **No dimension enforcement** — Vectors of different dimensions can coexist; mismatched entries are silently skipped during search.
+- **No dimension enforcement** — Vectors of different dimensions can coexist; each dimension gets its own HNSW graph. Queries only match entries with the same dimension.
+- **Approximate search** — HNSW is not exact; for very small datasets it may occasionally miss a result. Increasing `efSearch` improves recall at the cost of speed.
+- **Startup cost** — The HNSW graph is rebuilt from the persisted entries on each process start. For very large datasets (>100k vectors), this adds startup latency.
 
 ## License
 

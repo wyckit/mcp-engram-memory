@@ -7,7 +7,22 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-builder.Services.AddSingleton<VectorIndex>();
+// Persistence: defaults to ~/.local/share/mcp-vector-memory/index.json.
+// Set VECTOR_MEMORY_DATA_PATH to override, or "none" to disable persistence.
+string? dataPath = Environment.GetEnvironmentVariable("VECTOR_MEMORY_DATA_PATH");
+if (dataPath is null)
+{
+    dataPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "mcp-vector-memory",
+        "index.json");
+}
+else if (dataPath.Equals("none", StringComparison.OrdinalIgnoreCase) || dataPath == "")
+{
+    dataPath = null;
+}
+
+builder.Services.AddSingleton(new VectorIndex(dataPath));
 
 builder.Services
     .AddMcpServer()
