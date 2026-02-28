@@ -29,14 +29,13 @@ internal sealed class HnswGraph
     }
 
     /// <summary>
-    /// Inserts a new node into the graph. If <paramref name="id"/> already exists,
-    /// the previous node is soft-deleted and replaced.
+    /// Inserts a new node into the graph. The caller must ensure <paramref name="id"/>
+    /// is unique — use <see cref="MarkDeleted"/> to remove an existing node first.
     /// </summary>
     public void Add(int id, float[] vector)
     {
-        // If the ID already exists, mark the old node as deleted first.
-        if (_nodes.TryGetValue(id, out var existing))
-            existing.IsDeleted = true;
+        if (_nodes.ContainsKey(id))
+            throw new ArgumentException($"Node {id} already exists. MarkDeleted + fresh ID required.", nameof(id));
 
         int level = RandomLevel();
         var node = new HnswNode(id, vector, level);

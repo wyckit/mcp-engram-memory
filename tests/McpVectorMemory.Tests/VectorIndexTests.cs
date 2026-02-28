@@ -317,6 +317,101 @@ public class VectorIndexTests
         }
     }
 
+    [Fact]
+    public void Persistence_TmpFileRecovery_LoadsFromTmp()
+    {
+        string mainPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        string tmpPath = mainPath + ".tmp";
+        try
+        {
+            // Simulate a crash: .tmp file exists but main file does not.
+            // First create valid data via a normal index.
+            using (var index = new VectorIndex(dataPath: mainPath))
+            {
+                index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }, "recovered"));
+            }
+
+            // Move the main file to .tmp to simulate the crash scenario
+            File.Move(mainPath, tmpPath, overwrite: true);
+            Assert.False(File.Exists(mainPath));
+            Assert.True(File.Exists(tmpPath));
+
+            // Load should recover from .tmp
+            using var recovered = new VectorIndex(dataPath: mainPath);
+            Assert.Equal(1, recovered.Count);
+
+            var results = recovered.Search(new float[] { 1f, 0f }, k: 1);
+            Assert.Single(results);
+            Assert.Equal("recovered", results[0].Entry.Text);
+
+            // .tmp should have been promoted to main file
+            Assert.True(File.Exists(mainPath));
+        }
+        finally
+        {
+            if (File.Exists(mainPath)) File.Delete(mainPath);
+            if (File.Exists(tmpPath)) File.Delete(tmpPath);
+        }
+    }
+
+    [Fact]
+    public void Persistence_CorruptMainFile_FallsBackToTmp()
+    {
+        string mainPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        string tmpPath = mainPath + ".tmp";
+        try
+        {
+            // Create valid data in .tmp
+            using (var index = new VectorIndex(dataPath: mainPath))
+            {
+                index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }, "from-tmp"));
+            }
+            File.Move(mainPath, tmpPath, overwrite: true);
+
+            // Write corrupt data to main file
+            File.WriteAllText(mainPath, "CORRUPT{{{");
+
+            // Load should skip corrupt main and recover from .tmp
+            using var recovered = new VectorIndex(dataPath: mainPath);
+            Assert.Equal(1, recovered.Count);
+
+            var results = recovered.Search(new float[] { 1f, 0f }, k: 1);
+            Assert.Equal("from-tmp", results[0].Entry.Text);
+        }
+        finally
+        {
+            if (File.Exists(mainPath)) File.Delete(mainPath);
+            if (File.Exists(tmpPath)) File.Delete(tmpPath);
+        }
+    }
+
+    // ── Rebuild after heavy deletion ─────────────────────────────────────────
+
+    [Fact]
+    public void ManyReplacements_SearchStillFindsAllEntries()
+    {
+        var index = new VectorIndex();
+
+        // Insert 10 entries, then replace each one 20 times.
+        // This triggers graph rebuild (deletedNodeCount > live count).
+        for (int round = 0; round < 20; round++)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                float angle = 2f * MathF.PI * i / 10f + round * 0.01f;
+                index.Upsert(new VectorEntry($"v{i}",
+                    new float[] { MathF.Cos(angle), MathF.Sin(angle) },
+                    $"round{round}"));
+            }
+        }
+
+        Assert.Equal(10, index.Count);
+
+        // All 10 entries should be searchable
+        var results = index.Search(new float[] { 1f, 0f }, k: 10);
+        Assert.Equal(10, results.Count);
+    }
+
     // ── Dimension change ────────────────────────────────────────────────────
 
     [Fact]

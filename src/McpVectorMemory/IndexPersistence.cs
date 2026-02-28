@@ -50,8 +50,30 @@ internal static class IndexPersistence
     /// </summary>
     public static List<VectorEntry> Load(string path)
     {
+        // Try the main file first.
+        var entries = TryLoadFile(path);
+        if (entries is not null)
+            return entries;
+
+        // If the main file is missing or corrupt, check for a .tmp file left
+        // behind by a crash during Save (after writing temp but before rename).
+        string tempPath = path + ".tmp";
+        entries = TryLoadFile(tempPath);
+        if (entries is not null)
+        {
+            // Promote the .tmp to the main file so subsequent loads use it.
+            try { File.Move(tempPath, path, overwrite: true); }
+            catch { /* best effort — the data is already loaded in memory */ }
+            return entries;
+        }
+
+        return new List<VectorEntry>();
+    }
+
+    private static List<VectorEntry>? TryLoadFile(string path)
+    {
         if (!File.Exists(path))
-            return new List<VectorEntry>();
+            return null;
 
         VectorEntryDto[]? dtos;
         try
@@ -61,12 +83,11 @@ internal static class IndexPersistence
         }
         catch (JsonException)
         {
-            // Corrupted file — start fresh rather than crashing.
-            return new List<VectorEntry>();
+            return null; // corrupt
         }
 
         if (dtos is null)
-            return new List<VectorEntry>();
+            return null;
 
         var entries = new List<VectorEntry>(dtos.Length);
         foreach (var dto in dtos)

@@ -85,7 +85,7 @@ public sealed class VectorIndex : IDisposable
             var graph = GetOrCreateGraph(dim);
             graph.Add(internalId, entry.Vector);
 
-            CompactIfNeeded();
+            RebuildIfNeeded();
             PersistUnsafe();
         }
         finally { _lock.ExitWriteLock(); }
@@ -109,7 +109,7 @@ public sealed class VectorIndex : IDisposable
             _count--;
             _deletedNodeCount++;
 
-            CompactIfNeeded();
+            RebuildIfNeeded();
             PersistUnsafe();
             return true;
         }
@@ -207,19 +207,24 @@ public sealed class VectorIndex : IDisposable
     }
 
     /// <summary>
-    /// Compacts HNSW graphs when the number of soft-deleted nodes exceeds a
-    /// threshold relative to live entries. Must be called under write lock.
+    /// Rebuilds all HNSW graphs from scratch when the number of soft-deleted
+    /// nodes exceeds the live count. Compact alone can leave the graph
+    /// fragmented (orphaned nodes with no connections at higher layers),
+    /// so a full rebuild guarantees optimal graph quality.
+    /// Must be called under write lock.
     /// </summary>
-    private void CompactIfNeeded()
+    private void RebuildIfNeeded()
     {
-        // Compact when deleted nodes exceed the live count (or at least 100)
         int threshold = Math.Max(_count, 100);
         if (_deletedNodeCount < threshold)
             return;
 
-        foreach (var graph in _graphs.Values)
-            graph.Compact();
-
+        _graphs.Clear();
+        foreach (var (internalId, (entry, dim)) in _entries)
+        {
+            var graph = GetOrCreateGraph(dim);
+            graph.Add(internalId, entry.Vector);
+        }
         _deletedNodeCount = 0;
     }
 

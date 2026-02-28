@@ -127,19 +127,14 @@ public class HnswGraphTests
         Assert.False(graph.Compact());
     }
 
-    // ── Add with duplicate ID (replacement) ─────────────────────────────────
+    // ── Add duplicate ID ──────────────────────────────────────────────────
 
     [Fact]
-    public void Add_DuplicateId_ReplacesOldNode()
+    public void Add_DuplicateId_Throws()
     {
         var graph = new HnswGraph(m: 4, efConstruction: 50, seed: 42);
         graph.Add(0, new float[] { 1f, 0f });
-        graph.Add(0, new float[] { 0f, 1f }); // replace ID 0 with a different vector
-
-        var results = graph.Search(new float[] { 0f, 1f }, k: 1, ef: 10);
-        Assert.Single(results);
-        Assert.Equal(0, results[0].Id);
-        Assert.Equal(0f, results[0].Distance, precision: 5); // should match the new vector exactly
+        Assert.Throws<ArgumentException>(() => graph.Add(0, new float[] { 0f, 1f }));
     }
 
     // ── Larger scale ────────────────────────────────────────────────────────
