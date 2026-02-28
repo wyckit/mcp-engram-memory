@@ -6,21 +6,14 @@ namespace McpVectorMemory;
 /// Thread-safe in-memory vector index supporting upsert, delete, and
 /// k-nearest-neighbor search via cosine similarity.
 /// </summary>
-public sealed class VectorIndex
+public sealed class VectorIndex : IDisposable
 {
-    private readonly Dictionary<string, VectorEntry> _entries = new();
+    private readonly Dictionary<string, (VectorEntry Entry, float Norm)> _entries = new();
     private readonly ReaderWriterLockSlim _lock = new();
+    private int _count;
 
     /// <summary>Number of vectors currently stored in the index.</summary>
-    public int Count
-    {
-        get
-        {
-            _lock.EnterReadLock();
-            try { return _entries.Count; }
-            finally { _lock.ExitReadLock(); }
-        }
-    }
+    public int Count => Volatile.Read(ref _count);
 
     /// <summary>
     /// Adds or replaces a vector entry.
@@ -28,8 +21,14 @@ public sealed class VectorIndex
     public void Upsert(VectorEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        float norm = Norm(entry.Vector);
         _lock.EnterWriteLock();
-        try { _entries[entry.Id] = entry; }
+        try
+        {
+            if (!_entries.ContainsKey(entry.Id))
+                _count++;
+            _entries[entry.Id] = (entry, norm);
+        }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -39,7 +38,13 @@ public sealed class VectorIndex
     public bool Delete(string id)
     {
         _lock.EnterWriteLock();
-        try { return _entries.Remove(id); }
+        try
+        {
+            bool removed = _entries.Remove(id);
+            if (removed)
+                _count--;
+            return removed;
+        }
         finally { _lock.ExitWriteLock(); }
     }
 
@@ -49,7 +54,7 @@ public sealed class VectorIndex
     /// </summary>
     /// <param name="query">Query vector (must have the same dimension as stored vectors).</param>
     /// <param name="k">Maximum number of results to return.</param>
-    /// <param name="minScore">Minimum cosine-similarity threshold (0–1).</param>
+    /// <param name="minScore">Minimum cosine-similarity threshold (-1 to 1).</param>
     public IReadOnlyList<SearchResult> Search(float[] query, int k = 5, float minScore = 0f)
     {
         if (query is null || query.Length == 0)
@@ -59,19 +64,17 @@ public sealed class VectorIndex
 
         float queryNorm = Norm(query);
         if (queryNorm == 0f)
-            return Array.Empty<SearchResult>();
+            throw new ArgumentException("Query vector must not be zero-magnitude.", nameof(query));
 
         _lock.EnterReadLock();
         List<(VectorEntry entry, float score)> scored;
         try
         {
             scored = new List<(VectorEntry, float)>(_entries.Count);
-            foreach (var entry in _entries.Values)
+            foreach (var (entry, entryNorm) in _entries.Values)
             {
                 if (entry.Vector.Length != query.Length)
                     continue;
-
-                float entryNorm = Norm(entry.Vector);
                 if (entryNorm == 0f)
                     continue;
 
@@ -91,6 +94,12 @@ public sealed class VectorIndex
         for (int i = 0; i < take; i++)
             results[i] = new SearchResult(scored[i].entry, scored[i].score);
         return results;
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _lock.Dispose();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

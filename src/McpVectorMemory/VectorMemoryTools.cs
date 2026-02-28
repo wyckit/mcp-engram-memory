@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Text.Json.Serialization;
 using ModelContextProtocol.Server;
 
 namespace McpVectorMemory;
@@ -25,14 +24,20 @@ public sealed class VectorMemoryTools
     [Description("Store a vector embedding together with its text and optional metadata.")]
     public string StoreMemory(
         [Description("Unique identifier for this memory entry.")] string id,
-        [Description("The float vector embedding (comma-separated values).")] string vector,
+        [Description("The float vector embedding as an array of numbers.")] float[] vector,
         [Description("The original text the vector was derived from.")] string? text = null,
         [Description("Optional metadata as a JSON object with string keys and values.")] Dictionary<string, string>? metadata = null)
     {
-        float[] floats = ParseVector(vector);
-        var entry = new VectorEntry(id, floats, text, metadata);
-        _index.Upsert(entry);
-        return $"Stored entry '{id}' ({floats.Length}-dim vector).";
+        try
+        {
+            var entry = new VectorEntry(id, vector, text, metadata);
+            _index.Upsert(entry);
+            return $"Stored entry '{id}' ({vector.Length}-dim vector).";
+        }
+        catch (ArgumentException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
     }
 
     /// <summary>
@@ -41,12 +46,11 @@ public sealed class VectorMemoryTools
     [McpServerTool(Name = "search_memory")]
     [Description("Find the most similar stored memories for a query vector.")]
     public IReadOnlyList<SearchResult> SearchMemory(
-        [Description("The query vector embedding (comma-separated float values).")] string vector,
+        [Description("The query vector embedding as an array of numbers.")] float[] vector,
         [Description("Maximum number of results to return (default: 5).")] int k = 5,
         [Description("Minimum cosine-similarity score threshold between -1 and 1 (default: 0).")] float minScore = 0f)
     {
-        float[] floats = ParseVector(vector);
-        return _index.Search(floats, k, minScore);
+        return _index.Search(vector, k, minScore);
     }
 
     /// <summary>
@@ -61,28 +65,5 @@ public sealed class VectorMemoryTools
         return removed
             ? $"Deleted entry '{id}'."
             : $"Entry '{id}' not found.";
-    }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
-
-    private static float[] ParseVector(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            throw new ArgumentException("Vector string must not be empty.", nameof(raw));
-
-        var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0)
-            throw new ArgumentException("Vector string must contain at least one value.", nameof(raw));
-
-        var result = new float[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-        {
-            if (!float.TryParse(parts[i], System.Globalization.NumberStyles.Float,
-                                System.Globalization.CultureInfo.InvariantCulture, out result[i]))
-            {
-                throw new ArgumentException($"Invalid float value '{parts[i]}' at position {i}.", nameof(raw));
-            }
-        }
-        return result;
     }
 }
