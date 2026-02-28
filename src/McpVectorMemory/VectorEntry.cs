@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace McpVectorMemory;
 
 /// <summary>
@@ -5,10 +7,17 @@ namespace McpVectorMemory;
 /// </summary>
 public sealed class VectorEntry
 {
-    public string Id { get; init; }
-    public float[] Vector { get; init; }
-    public string? Text { get; init; }
-    public Dictionary<string, string> Metadata { get; init; }
+    [JsonPropertyName("id")]
+    public string Id { get; }
+
+    [JsonIgnore]
+    public float[] Vector { get; }
+
+    [JsonPropertyName("text")]
+    public string? Text { get; }
+
+    [JsonPropertyName("metadata")]
+    public Dictionary<string, string> Metadata { get; }
 
     public VectorEntry(string id, float[] vector, string? text = null, Dictionary<string, string>? metadata = null)
     {
@@ -18,8 +27,8 @@ public sealed class VectorEntry
             throw new ArgumentException("Vector must not be null or empty.", nameof(vector));
 
         Id = id;
-        Vector = vector;
+        Vector = (float[])vector.Clone();
         Text = text;
-        Metadata = metadata ?? new Dictionary<string, string>();
+        Metadata = metadata is not null ? new Dictionary<string, string>(metadata) : new Dictionary<string, string>();
     }
 }

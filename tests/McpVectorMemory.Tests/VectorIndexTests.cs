@@ -124,13 +124,26 @@ public class VectorIndexTests
     }
 
     [Fact]
-    public void Search_ZeroQueryVector_ReturnsEmpty()
+    public void Search_ZeroQueryVector_Throws()
     {
         var index = new VectorIndex();
         index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
 
-        var results = index.Search(new float[] { 0f, 0f }, k: 5);
-        Assert.Empty(results);
+        Assert.Throws<ArgumentException>(() => index.Search(new float[] { 0f, 0f }, k: 5));
+    }
+
+    [Fact]
+    public void Search_NegativeK_Throws()
+    {
+        var index = new VectorIndex();
+        Assert.Throws<ArgumentOutOfRangeException>(() => index.Search(new float[] { 1f, 0f }, k: -1));
+    }
+
+    [Fact]
+    public void Search_ZeroK_Throws()
+    {
+        var index = new VectorIndex();
+        Assert.Throws<ArgumentOutOfRangeException>(() => index.Search(new float[] { 1f, 0f }, k: 0));
     }
 
     [Fact]
@@ -161,6 +174,41 @@ public class VectorIndexTests
         Assert.Equal("low",  results[2].Entry.Id);
     }
 
+    // ── Concurrency ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ConcurrentUpsertAndSearch_DoesNotThrow()
+    {
+        var index = new VectorIndex();
+        var tasks = new List<Task>();
+
+        for (int i = 0; i < 100; i++)
+        {
+            int id = i;
+            tasks.Add(Task.Run(() =>
+                index.Upsert(new VectorEntry($"v{id}", new float[] { id + 1f, id + 2f }))));
+        }
+
+        for (int i = 0; i < 100; i++)
+        {
+            tasks.Add(Task.Run(() =>
+                index.Search(new float[] { 1f, 2f }, k: 5)));
+        }
+
+        Task.WaitAll(tasks.ToArray());
+        Assert.Equal(100, index.Count);
+    }
+
+    // ── Dispose ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Dispose_CanBeCalledSafely()
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+        index.Dispose();
+    }
+
     // ── VectorEntry validation ───────────────────────────────────────────────
 
     [Fact]
@@ -179,5 +227,23 @@ public class VectorIndexTests
     public void VectorEntry_NullVector_Throws()
     {
         Assert.Throws<ArgumentException>(() => new VectorEntry("a", null!));
+    }
+
+    [Fact]
+    public void VectorEntry_DefensiveCopy_VectorNotMutatedExternally()
+    {
+        var original = new float[] { 1f, 2f, 3f };
+        var entry = new VectorEntry("a", original);
+        original[0] = 999f;
+        Assert.Equal(1f, entry.Vector[0]);
+    }
+
+    [Fact]
+    public void VectorEntry_DefensiveCopy_MetadataNotMutatedExternally()
+    {
+        var metadata = new Dictionary<string, string> { ["key"] = "value" };
+        var entry = new VectorEntry("a", new float[] { 1f }, metadata: metadata);
+        metadata["key"] = "changed";
+        Assert.Equal("value", entry.Metadata["key"]);
     }
 }
