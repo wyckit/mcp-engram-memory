@@ -27,8 +27,12 @@ public sealed class VectorEntry
         if (vector is null || vector.Length == 0)
             throw new ArgumentException("Vector must not be null or empty.", nameof(vector));
 
+        // Clone first so the magnitude check operates on our own copy
         Id = id;
         Vector = (float[])vector.Clone();
+
+        if (VectorMath.Norm(Vector) == 0f)
+            throw new ArgumentException("Vector must not be zero-magnitude.", nameof(vector));
         Text = text;
         Metadata = new ReadOnlyDictionary<string, string>(
             metadata is not null ? new Dictionary<string, string>(metadata) : new Dictionary<string, string>());

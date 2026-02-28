@@ -129,6 +129,8 @@ public sealed class VectorIndex : IDisposable
             throw new ArgumentException("Query vector must not be null or empty.", nameof(query));
         if (k <= 0)
             throw new ArgumentOutOfRangeException(nameof(k), "k must be positive.");
+        if (float.IsNaN(minScore) || minScore < -1f || minScore > 1f)
+            throw new ArgumentOutOfRangeException(nameof(minScore), "minScore must be between -1 and 1.");
 
         float queryNorm = VectorMath.Norm(query);
         if (queryNorm == 0f)
@@ -164,6 +166,32 @@ public sealed class VectorIndex : IDisposable
             }
 
             return results.ToArray();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Returns a snapshot of index statistics for diagnostics and monitoring.
+    /// </summary>
+    public IndexStatistics GetStatistics()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var dimensions = _graphs.Keys.OrderBy(d => d).ToArray();
+            var entriesPerDimension = new Dictionary<int, int>();
+            foreach (var (internalId, (_, dim)) in _entries)
+            {
+                entriesPerDimension.TryGetValue(dim, out int count);
+                entriesPerDimension[dim] = count + 1;
+            }
+
+            return new IndexStatistics(
+                EntryCount: _count,
+                PendingDeletions: _deletedNodeCount,
+                Dimensions: dimensions,
+                EntriesPerDimension: entriesPerDimension,
+                IsPersistent: _dataPath is not null);
         }
         finally { _lock.ExitReadLock(); }
     }

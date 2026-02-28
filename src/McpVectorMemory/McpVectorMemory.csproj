@@ -5,6 +5,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Version>0.1.0</Version>
+    <Description>MCP server providing vector memory tools with HNSW search and JSON persistence.</Description>
+    <Authors>wyckit</Authors>
+    <License>MIT</License>
   </PropertyGroup>
 
   <ItemGroup>

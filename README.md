@@ -104,6 +104,7 @@ VectorIndex.cs          → Thread-safe index: HNSW search + file persistence
 HnswGraph.cs            → HNSW approximate nearest-neighbor graph
 VectorMath.cs           → SIMD-accelerated dot product, norm, cosine similarity
 IndexPersistence.cs     → JSON serialization for durable storage
+IndexStatistics.cs      → Diagnostics snapshot (entry counts, dimensions, state)
 SearchResult.cs         → Search result DTO (entry + cosine similarity score)
 VectorMemoryTools.cs    → MCP tool definitions (store, search, delete)
 ```
@@ -124,6 +125,24 @@ The HNSW index uses sensible defaults that work well for most workloads:
 | efSearch | 50 | Minimum search effort at query time (higher = better recall, slower search) |
 
 These can be tuned via the `VectorIndex` constructor for advanced use cases.
+
+## Internal Behavior
+
+### Deletion and Graph Maintenance
+
+Entries are **soft-deleted** from the HNSW graph when removed or replaced — the node is flagged but stays in the graph to preserve connectivity for ongoing searches. When the number of soft-deleted nodes exceeds the live entry count (minimum 100), the graph is **rebuilt from scratch** automatically during the next mutation. This ensures optimal graph quality without manual intervention.
+
+Search effort (`ef`) is automatically tuned as `max(k * 2, efSearch)` — no manual adjustment is needed.
+
+### Persistence Crash Safety
+
+Writes use an atomic two-step process: data is written to a `.tmp` file first, then renamed to the target path. If the process crashes between these steps, the `.tmp` file is automatically recovered on the next load.
+
+### Validation
+
+- Entry IDs must be non-empty strings.
+- Vectors must be non-empty and non-zero-magnitude (a zero vector like `[0, 0, 0]` is rejected).
+- The `minScore` parameter must be in the range `[-1, 1]`.
 
 ## Limitations
 

@@ -159,6 +159,32 @@ public class VectorIndexTests
         Assert.Throws<ArgumentOutOfRangeException>(() => index.Search(new float[] { 1f, 0f }, k: 0));
     }
 
+    [Theory]
+    [InlineData(-1.1f)]
+    [InlineData(1.1f)]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(float.NegativeInfinity)]
+    public void Search_MinScoreOutOfRange_Throws(float minScore)
+    {
+        var index = new VectorIndex();
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            index.Search(new float[] { 1f, 0f }, k: 5, minScore: minScore));
+    }
+
+    [Theory]
+    [InlineData(-1f)]
+    [InlineData(0f)]
+    [InlineData(0.5f)]
+    [InlineData(1f)]
+    public void Search_MinScoreInRange_DoesNotThrow(float minScore)
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+        var results = index.Search(new float[] { 1f, 0f }, k: 5, minScore: minScore);
+        Assert.NotNull(results);
+    }
+
     [Fact]
     public void Search_DimensionMismatch_SkipsEntry()
     {
@@ -185,6 +211,64 @@ public class VectorIndexTests
         Assert.Equal("high", results[0].Entry.Id);
         Assert.Equal("mid",  results[1].Entry.Id);
         Assert.Equal("low",  results[2].Entry.Id);
+    }
+
+    // ── GetStatistics ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void GetStatistics_EmptyIndex()
+    {
+        var index = new VectorIndex();
+        var stats = index.GetStatistics();
+        Assert.Equal(0, stats.EntryCount);
+        Assert.Equal(0, stats.PendingDeletions);
+        Assert.Empty(stats.Dimensions);
+        Assert.Empty(stats.EntriesPerDimension);
+        Assert.False(stats.IsPersistent);
+    }
+
+    [Fact]
+    public void GetStatistics_MixedDimensions()
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));       // 2-dim
+        index.Upsert(new VectorEntry("b", new float[] { 0f, 1f }));       // 2-dim
+        index.Upsert(new VectorEntry("c", new float[] { 1f, 0f, 0f }));   // 3-dim
+
+        var stats = index.GetStatistics();
+        Assert.Equal(3, stats.EntryCount);
+        Assert.Equal(0, stats.PendingDeletions);
+        Assert.Equal(new[] { 2, 3 }, stats.Dimensions);
+        Assert.Equal(2, stats.EntriesPerDimension[2]);
+        Assert.Equal(1, stats.EntriesPerDimension[3]);
+    }
+
+    [Fact]
+    public void GetStatistics_TracksPendingDeletions()
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f }));
+        index.Upsert(new VectorEntry("b", new float[] { 0f, 1f }));
+        index.Delete("a");
+
+        var stats = index.GetStatistics();
+        Assert.Equal(1, stats.EntryCount);
+        Assert.Equal(1, stats.PendingDeletions);
+    }
+
+    [Fact]
+    public void GetStatistics_Persistent()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        try
+        {
+            using var index = new VectorIndex(dataPath: tempPath);
+            Assert.True(index.GetStatistics().IsPersistent);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
     }
 
     // ── Concurrency ──────────────────────────────────────────────────────────
@@ -451,6 +535,12 @@ public class VectorIndexTests
     public void VectorEntry_NullVector_Throws()
     {
         Assert.Throws<ArgumentException>(() => new VectorEntry("a", null!));
+    }
+
+    [Fact]
+    public void VectorEntry_ZeroMagnitudeVector_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => new VectorEntry("a", new float[] { 0f, 0f, 0f }));
     }
 
     [Fact]

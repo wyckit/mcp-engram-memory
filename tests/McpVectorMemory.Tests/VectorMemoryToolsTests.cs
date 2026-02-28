@@ -54,6 +54,14 @@ public class VectorMemoryToolsTests
         Assert.Equal(1, _index.Count);
     }
 
+    [Fact]
+    public void StoreMemory_ZeroMagnitudeVector_ReturnsError()
+    {
+        string result = _tools.StoreMemory("a", new float[] { 0f, 0f, 0f });
+        Assert.StartsWith("Error:", result);
+        Assert.Equal(0, _index.Count);
+    }
+
     // ── SearchMemory ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -89,6 +97,14 @@ public class VectorMemoryToolsTests
     public void SearchMemory_ZeroK_ReturnsError()
     {
         var result = _tools.SearchMemory(new float[] { 1f, 0f }, k: 0);
+        Assert.IsType<string>(result);
+        Assert.StartsWith("Error:", (string)result);
+    }
+
+    [Fact]
+    public void SearchMemory_MinScoreOutOfRange_ReturnsError()
+    {
+        var result = _tools.SearchMemory(new float[] { 1f, 0f }, minScore: 1.5f);
         Assert.IsType<string>(result);
         Assert.StartsWith("Error:", (string)result);
     }
