@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/McpVectorMemory/McpVectorMemory.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/McpVectorMemory.Tests/McpVectorMemory.Tests.csproj" />
+  </Folder>
+</Solution>
