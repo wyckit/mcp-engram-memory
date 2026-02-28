@@ -9,9 +9,13 @@ internal static class VectorMath
 {
     /// <summary>
     /// Computes the dot product of two float arrays using SIMD when available.
+    /// Both arrays must have the same length.
     /// </summary>
     public static float Dot(float[] a, float[] b)
     {
+        if (a.Length != b.Length)
+            throw new ArgumentException($"Vector dimensions must match ({a.Length} vs {b.Length}).");
+
         float sum = 0f;
         int i = 0;
 

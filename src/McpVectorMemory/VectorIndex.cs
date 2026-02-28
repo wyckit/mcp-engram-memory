@@ -23,6 +23,7 @@ public sealed class VectorIndex : IDisposable
     private readonly int _hnswEfSearch;
     private int _nextId;
     private int _count;
+    private int _deletedNodeCount; // tracks soft-deleted HNSW nodes for compaction
 
     /// <summary>Number of vectors currently stored in the index.</summary>
     public int Count => Volatile.Read(ref _count);
@@ -69,6 +70,7 @@ public sealed class VectorIndex : IDisposable
                 var (_, oldDim) = _entries[oldInternalId];
                 GetOrCreateGraph(oldDim).MarkDeleted(oldInternalId);
                 _entries.Remove(oldInternalId);
+                _deletedNodeCount++;
                 // count stays the same (replace, not add)
             }
             else
@@ -83,6 +85,7 @@ public sealed class VectorIndex : IDisposable
             var graph = GetOrCreateGraph(dim);
             graph.Add(internalId, entry.Vector);
 
+            CompactIfNeeded();
             PersistUnsafe();
         }
         finally { _lock.ExitWriteLock(); }
@@ -104,7 +107,9 @@ public sealed class VectorIndex : IDisposable
             _entries.Remove(internalId);
             _idMap.Remove(id);
             _count--;
+            _deletedNodeCount++;
 
+            CompactIfNeeded();
             PersistUnsafe();
             return true;
         }
@@ -144,8 +149,10 @@ public sealed class VectorIndex : IDisposable
             var results = new List<SearchResult>(Math.Min(k, hnswResults.Count));
             foreach (var (internalId, distance) in hnswResults)
             {
+                // HNSW results are sorted by distance ascending — once past the
+                // threshold, all remaining results are also too far.
                 if (distance > maxDistance)
-                    continue;
+                    break;
 
                 if (_entries.TryGetValue(internalId, out var e))
                 {
@@ -197,6 +204,23 @@ public sealed class VectorIndex : IDisposable
             graph.Add(internalId, entry.Vector);
             _count++;
         }
+    }
+
+    /// <summary>
+    /// Compacts HNSW graphs when the number of soft-deleted nodes exceeds a
+    /// threshold relative to live entries. Must be called under write lock.
+    /// </summary>
+    private void CompactIfNeeded()
+    {
+        // Compact when deleted nodes exceed the live count (or at least 100)
+        int threshold = Math.Max(_count, 100);
+        if (_deletedNodeCount < threshold)
+            return;
+
+        foreach (var graph in _graphs.Values)
+            graph.Compact();
+
+        _deletedNodeCount = 0;
     }
 
     /// <summary>

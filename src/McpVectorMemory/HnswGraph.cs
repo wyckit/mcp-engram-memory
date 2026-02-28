@@ -18,7 +18,7 @@ internal sealed class HnswGraph
 
     public HnswGraph(int m = 16, int efConstruction = 200, int? seed = null)
     {
-        if (m <= 0) throw new ArgumentOutOfRangeException(nameof(m));
+        if (m < 2) throw new ArgumentOutOfRangeException(nameof(m), "M must be at least 2.");
         if (efConstruction <= 0) throw new ArgumentOutOfRangeException(nameof(efConstruction));
 
         _m = m;
@@ -159,21 +159,18 @@ internal sealed class HnswGraph
         foreach (var id in deletedIds)
             _nodes.Remove(id);
 
-        // Update entry point if it was deleted
-        if (_entryPointId >= 0 && deletedSet.Contains(_entryPointId))
+        // Always recalculate entry point and max level after compaction,
+        // since deleted nodes at high levels may have been removed.
+        if (_nodes.Count == 0)
         {
-            if (_nodes.Count == 0)
-            {
-                _entryPointId = -1;
-                _maxLevel = -1;
-            }
-            else
-            {
-                // Pick the node with the highest level as new entry point
-                var best = _nodes.Values.MaxBy(n => n.Level)!;
-                _entryPointId = best.Id;
-                _maxLevel = best.Level;
-            }
+            _entryPointId = -1;
+            _maxLevel = -1;
+        }
+        else
+        {
+            var best = _nodes.Values.MaxBy(n => n.Level)!;
+            _entryPointId = best.Id;
+            _maxLevel = best.Level;
         }
 
         return true;
@@ -293,7 +290,8 @@ internal sealed class HnswGraph
 
     private int RandomLevel()
     {
-        return (int)(-Math.Log(_random.NextDouble()) * _levelMult);
+        // NextDouble returns [0, 1). Use 1-NextDouble to get (0, 1] and avoid Log(0) = -inf.
+        return (int)(-Math.Log(1.0 - _random.NextDouble()) * _levelMult);
     }
 }
 

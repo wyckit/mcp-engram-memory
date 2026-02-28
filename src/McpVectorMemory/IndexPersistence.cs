@@ -53,8 +53,18 @@ internal static class IndexPersistence
         if (!File.Exists(path))
             return new List<VectorEntry>();
 
-        using var stream = File.OpenRead(path);
-        var dtos = JsonSerializer.Deserialize<VectorEntryDto[]>(stream, _jsonOptions);
+        VectorEntryDto[]? dtos;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            dtos = JsonSerializer.Deserialize<VectorEntryDto[]>(stream, _jsonOptions);
+        }
+        catch (JsonException)
+        {
+            // Corrupted file — start fresh rather than crashing.
+            return new List<VectorEntry>();
+        }
+
         if (dtos is null)
             return new List<VectorEntry>();
 

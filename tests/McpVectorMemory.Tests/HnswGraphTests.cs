@@ -183,7 +183,69 @@ public class HnswGraphTests
         Assert.Equal(25, results[0].Id);
     }
 
+    // ── Compact edge cases ────────────────────────────────────────────────
+
+    [Fact]
+    public void Compact_EntryPointDeleted_PicksNewEntryPoint()
+    {
+        var graph = new HnswGraph(m: 4, efConstruction: 50, seed: 42);
+        graph.Add(0, new float[] { 1f, 0f });
+        graph.Add(1, new float[] { 0f, 1f });
+        graph.Add(2, new float[] { 0.7071f, 0.7071f });
+
+        // Delete the first node (likely entry point)
+        graph.MarkDeleted(0);
+        graph.Compact();
+
+        // Search should still work with the remaining nodes
+        var results = graph.Search(new float[] { 0f, 1f }, k: 1, ef: 20);
+        Assert.Single(results);
+        Assert.Equal(1, results[0].Id);
+    }
+
+    [Fact]
+    public void Compact_AllNodesDeleted_SearchReturnsEmpty()
+    {
+        var graph = new HnswGraph(m: 4, efConstruction: 50, seed: 42);
+        graph.Add(0, new float[] { 1f, 0f });
+        graph.Add(1, new float[] { 0f, 1f });
+
+        graph.MarkDeleted(0);
+        graph.MarkDeleted(1);
+        graph.Compact();
+
+        var results = graph.Search(new float[] { 1f, 0f }, k: 5, ef: 20);
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Compact_GraphRemainsSearchableAfterPartialCompaction()
+    {
+        var graph = new HnswGraph(m: 4, efConstruction: 50, seed: 42);
+        for (int i = 0; i < 20; i++)
+        {
+            float angle = 2f * MathF.PI * i / 20f;
+            graph.Add(i, new float[] { MathF.Cos(angle), MathF.Sin(angle) });
+        }
+
+        // Delete every other node
+        for (int i = 0; i < 20; i += 2)
+            graph.MarkDeleted(i);
+        graph.Compact();
+
+        // Remaining nodes (odd) should still be searchable
+        var results = graph.Search(new float[] { 1f, 0f }, k: 5, ef: 50);
+        Assert.True(results.Count > 0);
+        Assert.All(results, r => Assert.True(r.Id % 2 == 1)); // all odd
+    }
+
     // ── Constructor validation ──────────────────────────────────────────────
+
+    [Fact]
+    public void Constructor_M1_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new HnswGraph(m: 1));
+    }
 
     [Fact]
     public void Constructor_ZeroM_Throws()

@@ -301,6 +301,43 @@ public class VectorIndexTests
         // No file should have been created — just verify no crash
     }
 
+    [Fact]
+    public void Persistence_CorruptFile_StartsEmpty()
+    {
+        string tempPath = Path.Combine(Path.GetTempPath(), $"hnsw_test_{Guid.NewGuid()}.json");
+        try
+        {
+            File.WriteAllText(tempPath, "NOT VALID JSON{{{");
+            using var index = new VectorIndex(dataPath: tempPath);
+            Assert.Equal(0, index.Count);
+        }
+        finally
+        {
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+        }
+    }
+
+    // ── Dimension change ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Upsert_DimensionChange_MovesEntryToNewDimension()
+    {
+        var index = new VectorIndex();
+        index.Upsert(new VectorEntry("a", new float[] { 1f, 0f, 0f })); // 3-dim
+        index.Upsert(new VectorEntry("a", new float[] { 0f, 1f }));      // 2-dim
+
+        Assert.Equal(1, index.Count);
+
+        // Should NOT appear in 3-dim searches
+        var results3 = index.Search(new float[] { 1f, 0f, 0f }, k: 5);
+        Assert.Empty(results3);
+
+        // Should appear in 2-dim searches
+        var results2 = index.Search(new float[] { 0f, 1f }, k: 5);
+        Assert.Single(results2);
+        Assert.Equal("a", results2[0].Entry.Id);
+    }
+
     // ── VectorEntry validation ───────────────────────────────────────────────
 
     [Fact]

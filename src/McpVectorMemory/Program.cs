@@ -22,7 +22,9 @@ else if (dataPath.Equals("none", StringComparison.OrdinalIgnoreCase) || dataPath
     dataPath = null;
 }
 
-builder.Services.AddSingleton(new VectorIndex(dataPath));
+// Use a factory so the DI container owns the lifetime and calls Dispose on shutdown.
+string? capturedDataPath = dataPath;
+builder.Services.AddSingleton(_ => new VectorIndex(capturedDataPath));
 
 builder.Services
     .AddMcpServer()
