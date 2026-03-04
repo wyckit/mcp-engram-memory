@@ -2,10 +2,54 @@
 
 A cognitive memory MCP server that provides an LLM with namespace-isolated vector storage, k-nearest-neighbor search (cosine similarity), a knowledge graph, semantic clustering, lifecycle management with activation energy decay, and physics-based re-ranking. Data is persisted to disk as JSON with debounced writes.
 
+## Project Structure
+
+The solution is split into two projects:
+
+| Project | Type | Description |
+|---------|------|-------------|
+| `McpVectorMemory` | Executable | MCP server with stdio transport — register this in your MCP client |
+| `McpVectorMemory.Core` | NuGet Library | Core engine (vector index, graph, clustering, lifecycle, persistence) — use this to embed the memory engine in your own application |
+
+```
+src/
+  McpVectorMemory/           # MCP server (Program.cs + Tool classes)
+  McpVectorMemory.Core/      # Core library (Models + Services)
+tests/
+  McpVectorMemory.Tests/     # xUnit tests
+```
+
+## NuGet Package
+
+The core engine is available as a NuGet package for use in your own .NET applications.
+
+```bash
+dotnet add package McpVectorMemory.Core --version 0.1.0
+```
+
+### Library Usage
+
+```csharp
+using McpVectorMemory.Core.Services;
+
+// Create services
+var persistence = new PersistenceManager();
+var embedding = new LocalEmbeddingService();
+var cognitiveIndex = new CognitiveIndex(persistence, embedding);
+var knowledgeGraph = new KnowledgeGraph(persistence);
+var clusterManager = new ClusterManager(persistence, cognitiveIndex);
+var lifecycleEngine = new LifecycleEngine(cognitiveIndex, persistence);
+
+// Store and search memories
+cognitiveIndex.Store("default", "The capital of France is Paris", "facts");
+var results = cognitiveIndex.Search("default", "French capital", topK: 5);
+```
+
 ## Tech Stack
 
 - .NET 8, C#
 - [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
+- [SmartComponents.LocalEmbeddings](https://www.nuget.org/packages/SmartComponents.LocalEmbeddings) (384-dimensional vectors)
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
@@ -83,24 +127,28 @@ Activation energy formula: `(accessCount x reinforcementWeight) - (hoursSinceLas
 | `PhysicsEngine` | Gravitational force re-ranking with "Asteroid" (semantic) + "Sun" (importance) output |
 | `AccretionScanner` | DBSCAN-based density scanning of LTM entries for cluster detection |
 | `PersistenceManager` | JSON file-based persistence with debounced async writes (default 500ms) |
+| `LocalEmbeddingService` | 384-dimensional vector embeddings via SmartComponents.LocalEmbeddings |
 
 ### Background Services
 
 | Service | Interval | Description |
 |---------|----------|-------------|
+| `EmbeddingWarmupService` | Startup | Warms up the embedding model on server start so first queries are fast |
 | `DecayBackgroundService` | 15 minutes | Runs activation energy decay on all namespaces |
 | `AccretionBackgroundService` | 30 minutes | Scans all namespaces for dense LTM clusters needing summarization |
 
 ### Persistence
 
-Data is stored as JSON files in a `data/` directory, organized per namespace:
-- `{namespace}.json` — entries
-- `{namespace}_edges.json` — graph edges
-- `{namespace}_clusters.json` — semantic clusters
+Data is stored as JSON files in a `data/` directory:
+- `{namespace}.json` — entries (per namespace)
+- `_edges.json` — graph edges (global)
+- `_clusters.json` — semantic clusters (global)
 
 Writes are debounced (500ms default) to avoid excessive disk I/O.
 
 ## Usage
+
+### MCP Server
 
 Configure the MCP server in your client (e.g. Claude Desktop, VS Code):
 
@@ -109,7 +157,7 @@ Configure the MCP server in your client (e.g. Claude Desktop, VS Code):
   "mcpServers": {
     "vector-memory": {
       "command": "dotnet",
-      "args": ["run", "--project", "C:/Software/mcps/mcp-vector-memory/src/McpVectorMemory"]
+      "args": ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
     }
   }
 }
@@ -125,19 +173,20 @@ dotnet test
 
 ### Tests
 
-12 test files with 173 test cases covering:
+13 test files with 170 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
-| `CognitiveIndexTests.cs` | 40 | Vector search, lifecycle filtering, persistence |
-| `KnowledgeGraphTests.cs` | 19 | Edge operations, graph traversal |
+| `CognitiveIndexTests.cs` | 39 | Vector search, lifecycle filtering, persistence |
+| `CoreMemoryToolsTests.cs` | 20 | Store, search, delete memory tool endpoints |
 | `PhysicsEngineTests.cs` | 19 | Mass computation, gravitational force, slingshot |
-| `CoreMemoryToolsTests.cs` | 18 | Store, search, delete memory tool endpoints |
 | `AccretionScannerTests.cs` | 18 | DBSCAN clustering, pending collapses |
-| `ClusterManagerTests.cs` | 16 | Cluster CRUD and centroid operations |
-| `LifecycleEngineTests.cs` | 14 | State transitions, deep recall, decay cycles |
-| `PersistenceManagerTests.cs` | 11 | JSON serialization, debounced saves |
-| `RegressionTests.cs` | 11 | Integration and edge-case scenarios |
-| `AccretionToolsTests.cs` | 9 | Accretion tool functionality |
-| `DecayBackgroundServiceTests.cs` | 4 | Background service decay cycles |
-| `AccretionBackgroundServiceTests.cs` | 4 | Background service lifecycle |
+| `KnowledgeGraphTests.cs` | 17 | Edge operations, graph traversal |
+| `ClusterManagerTests.cs` | 14 | Cluster CRUD and centroid operations |
+| `LifecycleEngineTests.cs` | 12 | State transitions, deep recall, decay cycles |
+| `PersistenceManagerTests.cs` | 9 | JSON serialization, debounced saves |
+| `RegressionTests.cs` | 9 | Integration and edge-case scenarios |
+| `AccretionToolsTests.cs` | 7 | Accretion tool functionality |
+| `DecayBackgroundServiceTests.cs` | 2 | Background service decay cycles |
+| `AccretionBackgroundServiceTests.cs` | 2 | Background service lifecycle |
+| `EmbeddingWarmupServiceTests.cs` | 2 | Embedding warmup startup behavior |
