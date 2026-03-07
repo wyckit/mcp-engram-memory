@@ -7,7 +7,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpVectorMemory.Core</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.2.0</Version>
     <Authors>wyckit</Authors>
     <Description>Cognitive vector memory engine with semantic search, knowledge graphs, clustering, and lifecycle management. Core library for MCP Vector Memory.</Description>
     <PackageTags>mcp;vector;memory;embeddings;semantic-search;knowledge-graph</PackageTags>
@@ -21,12 +21,17 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="build\McpVectorMemory.Core.targets" Pack="true" PackagePath="build\" />
   </ItemGroup>
+
+  <Import Project="build\McpVectorMemory.Core.targets" />
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
-    <PackageReference Include="SmartComponents.LocalEmbeddings" Version="0.1.0-preview10148" />
+    <PackageReference Include="FastBertTokenizer" Version="0.4.67" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.0" />
+    <PackageReference Include="System.Numerics.Tensors" Version="8.0.0" />
   </ItemGroup>
 
 </Project>

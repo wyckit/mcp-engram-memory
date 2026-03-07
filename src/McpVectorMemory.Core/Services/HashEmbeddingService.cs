@@ -2,9 +2,9 @@ namespace McpVectorMemory.Core.Services;
 
 /// <summary>
 /// A lightweight deterministic embedding service that produces vectors from text hashing.
-/// Useful for testing, CI environments, or scenarios where the SmartComponents dependency is unavailable.
+/// Useful for testing, CI environments, or scenarios where the ONNX model is unavailable.
 /// Produces consistent embeddings for identical text inputs.
-/// NOT suitable for real semantic similarity — use LocalEmbeddingService for production.
+/// NOT suitable for real semantic similarity — use OnnxEmbeddingService for production.
 /// </summary>
 public sealed class HashEmbeddingService : IEmbeddingService
 {

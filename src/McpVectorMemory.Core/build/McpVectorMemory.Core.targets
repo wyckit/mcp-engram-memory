@@ -1,0 +1,40 @@
+<Project>
+    <PropertyGroup>
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == ''">$(MSBuildThisFileDirectory)..\.cache\</BgeMicroModelCacheDir>
+        <BgeMicroModelUrl Condition="'$(BgeMicroModelUrl)' == ''">https://huggingface.co/SmartComponents/bge-micro-v2/resolve/72908b7/onnx/model_quantized.onnx</BgeMicroModelUrl>
+        <BgeMicroVocabUrl Condition="'$(BgeMicroVocabUrl)' == ''">https://huggingface.co/SmartComponents/bge-micro-v2/resolve/72908b7/vocab.txt</BgeMicroVocabUrl>
+        <BgeMicroModelPath Condition="'$(BgeMicroModelPath)' == ''">$(BgeMicroModelCacheDir)$([System.Text.RegularExpressions.Regex]::Replace($(BgeMicroModelUrl), "[^a-zA-Z0-9\.]", "_"))</BgeMicroModelPath>
+        <BgeMicroVocabPath Condition="'$(BgeMicroVocabPath)' == ''">$(BgeMicroModelCacheDir)$([System.Text.RegularExpressions.Regex]::Replace($(BgeMicroVocabUrl), "[^a-zA-Z0-9\.]", "_"))</BgeMicroVocabPath>
+    </PropertyGroup>
+
+    <Target Name="AttachBgeMicroModelFiles" BeforeTargets="AssignTargetPaths" DependsOnTargets="AcquireBgeMicroModel; AcquireBgeMicroVocab">
+        <ItemGroup>
+            <Content CopyToOutputDirectory="PreserveNewest" Pack="false"
+                     Include="$(BgeMicroModelPath)"
+                     TargetPath="LocalEmbeddingsModel\default\model.onnx" />
+            <Content CopyToOutputDirectory="PreserveNewest" Pack="false"
+                     Include="$(BgeMicroVocabPath)"
+                     TargetPath="LocalEmbeddingsModel\default\vocab.txt" />
+        </ItemGroup>
+    </Target>
+
+    <Target Name="AcquireBgeMicroModel" Condition="!Exists('$(BgeMicroModelPath)')">
+        <PropertyGroup>
+            <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
+        </PropertyGroup>
+        <DownloadFile SourceUrl="$(BgeMicroModelUrl)"
+                      DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
+                      DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)" />
+    </Target>
+
+    <Target Name="AcquireBgeMicroVocab" Condition="!Exists('$(BgeMicroVocabPath)')">
+        <PropertyGroup>
+            <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
+        </PropertyGroup>
+        <DownloadFile SourceUrl="$(BgeMicroVocabUrl)"
+                      DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
+                      DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)" />
+    </Target>
+</Project>

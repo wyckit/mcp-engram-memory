@@ -1,15 +1,15 @@
 # Benchmark Ideas
 
-10 proposals for expanding the IR quality benchmark suite beyond the current default-v1 dataset (25 seeds, 20 queries, CS topics).
+10 proposals for expanding the IR quality benchmark suite. Three have been implemented (paraphrase-v1, multihop-v1, scale-v1). Seven remain as future candidates.
 
-## Current Baseline (default-v1)
+## Current Baselines
 
-| Metric | Score |
-|--------|-------|
-| Recall@5 | 0.867 |
-| Precision@5 | 0.430 |
-| MRR | 1.000 |
-| nDCG@5 | 0.938 |
+| Dataset | Seeds | Queries | Recall@5 | Precision@5 | MRR | nDCG@5 |
+|---------|-------|---------|----------|-------------|-----|--------|
+| default-v1 | 25 | 20 | 0.867 | 0.430 | 1.000 | 0.938 |
+| paraphrase-v1 | 25 | 15 | 0.944 | 0.360 | 1.000 | 0.977 |
+| multihop-v1 | 25 | 15 | 0.939 | 0.587 | 1.000 | 0.929 |
+| scale-v1 | 80 | 30 | 0.717 | 0.447 | 1.000 | 0.860 |
 
 ## Ideas
 
@@ -24,7 +24,7 @@ Queries where the same term has different meanings across domains. Tests whether
 
 ---
 
-### 2. Paraphrase Robustness
+### 2. Paraphrase Robustness — IMPLEMENTED as `paraphrase-v1`
 
 Queries that are heavy paraphrases or indirect descriptions of seed content. Tests embedding model's semantic understanding beyond lexical overlap.
 
@@ -46,7 +46,7 @@ Queries that are superficially similar to seeds but semantically different. Test
 
 ---
 
-### 4. Multi-Hop Reasoning
+### 4. Multi-Hop Reasoning — IMPLEMENTED as `multihop-v1`
 
 Queries that span two or more seed topics, requiring the system to surface multiple relevant entries that together answer the query.
 
@@ -93,13 +93,13 @@ Store cluster summaries alongside member entries, then query to verify summaries
 
 ---
 
-### 8. Scale Stress Test
+### 8. Scale Stress Test — IMPLEMENTED as `scale-v1`
 
-100+ seed entries to test how IR metrics and latency degrade as corpus size grows. Provides a performance baseline for larger deployments.
+80 seed entries across 8 categories to test how IR metrics and latency degrade as corpus size grows.
 
-**Setup:** 100-200 seed entries across 8-10 categories.
-**Queries:** 30-50 queries with graded relevance.
-**Track:** Recall@5/10/20, latency percentiles, memory footprint.
+**Setup:** 80 seed entries across 8 categories (languages, data structures, ML, databases, networking, systems, security, devops).
+**Queries:** 30 queries with graded relevance.
+**Track:** Recall@5, latency percentiles.
 
 **Measures:** Metric degradation curve, latency scaling behavior.
 
@@ -131,15 +131,15 @@ Intentionally inject near-duplicate seeds (slightly reworded versions of the sam
 
 ## Implementation Priority
 
-| Priority | Idea | Rationale |
-|----------|------|-----------|
-| High | 2. Paraphrase Robustness | Directly tests core embedding quality |
-| High | 4. Multi-Hop Reasoning | Common real-world query pattern |
-| High | 8. Scale Stress Test | Essential for production readiness |
-| Medium | 1. Cross-Domain Ambiguity | Tests semantic precision |
-| Medium | 3. Negative/Distractor | Tests false positive resistance |
-| Medium | 5. Specificity Gradient | Tests abstraction handling |
-| Medium | 9. Physics Re-ranking | Validates a key differentiating feature |
-| Low | 6. Lifecycle-Aware | More of a functional test than IR quality |
-| Low | 7. Cluster Summary | Depends on cluster feature maturity |
-| Low | 10. Duplicate Contamination | Edge case, already covered by detect_duplicates |
+| Priority | Idea | Status |
+|----------|------|--------|
+| High | 2. Paraphrase Robustness | **Implemented** — `paraphrase-v1` |
+| High | 4. Multi-Hop Reasoning | **Implemented** — `multihop-v1` |
+| High | 8. Scale Stress Test | **Implemented** — `scale-v1` |
+| Medium | 1. Cross-Domain Ambiguity | Not started |
+| Medium | 3. Negative/Distractor | Not started |
+| Medium | 5. Specificity Gradient | Not started |
+| Medium | 9. Physics Re-ranking | Not started |
+| Low | 6. Lifecycle-Aware | Not started |
+| Low | 7. Cluster Summary | Not started |
+| Low | 10. Duplicate Contamination | Not started |

@@ -429,3 +429,6 @@ FodyWeavers.xsd
 
 # NuGet user-level caches (keep packages in global cache, not repo)
 *.nupkg
+
+# ONNX model cache (downloaded at build time)
+.cache/

@@ -19,6 +19,10 @@ tests/
   McpVectorMemory.Tests/     # xUnit tests
 benchmarks/
   baseline-v1.json           # IR quality baseline (MRR 1.0, nDCG@5 0.938, Recall@5 0.867)
+  baseline-paraphrase-v1.json
+  baseline-multihop-v1.json
+  baseline-scale-v1.json
+  ideas/                     # Benchmark proposals and analysis
 ```
 
 ## NuGet Package
@@ -26,32 +30,40 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpVectorMemory.Core --version 0.1.0
+dotnet add package McpVectorMemory.Core --version 0.2.0
 ```
 
 ### Library Usage
 
 ```csharp
+using McpVectorMemory.Core.Models;
 using McpVectorMemory.Core.Services;
 
 // Create services
 var persistence = new PersistenceManager();
-var embedding = new LocalEmbeddingService();
-var cognitiveIndex = new CognitiveIndex(persistence, embedding);
-var knowledgeGraph = new KnowledgeGraph(persistence);
-var clusterManager = new ClusterManager(persistence, cognitiveIndex);
-var lifecycleEngine = new LifecycleEngine(cognitiveIndex, persistence);
+var embedding = new OnnxEmbeddingService();
+var index = new CognitiveIndex(persistence);
+var graph = new KnowledgeGraph(persistence, index);
+var clusters = new ClusterManager(index, persistence);
+var lifecycle = new LifecycleEngine(index, persistence);
 
-// Store and search memories
-cognitiveIndex.Store("default", "The capital of France is Paris", "facts");
-var results = cognitiveIndex.Search("default", "French capital", topK: 5);
+// Store a memory
+var vector = embedding.Embed("The capital of France is Paris");
+var entry = new CognitiveEntry("fact-1", vector, "default", "The capital of France is Paris", "facts");
+index.Upsert(entry);
+
+// Search by text
+var queryVector = embedding.Embed("French capital");
+var results = index.Search(queryVector, "default", k: 5);
 ```
 
 ## Tech Stack
 
 - .NET 8, C#
 - [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
-- [SmartComponents.LocalEmbeddings](https://www.nuget.org/packages/SmartComponents.LocalEmbeddings) (384-dimensional vectors)
+- [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67 (WordPiece tokenization)
+- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.17.0 (ONNX model inference)
+- [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX model (384-dimensional vectors, MIT license, downloaded at build time)
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
@@ -131,11 +143,11 @@ Activation energy formula: `(accessCount x reinforcementWeight) - (hoursSinceLas
 
 | Tool | Description |
 |------|-------------|
-| `run_benchmark` | Run the built-in IR quality benchmark: ingest 25 seed entries, execute 20 queries, compute Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. Uses an isolated namespace that is cleaned up after. |
+| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
-Benchmark dataset covers programming languages, data structures, ML, databases, networking, and systems topics. Relevance grades use a 0–3 scale (3 = highly relevant).
+Four benchmark datasets covering programming languages, data structures, ML, databases, networking, systems, security, and DevOps topics. Relevance grades use a 0–3 scale (3 = highly relevant).
 
 ## Architecture
 
@@ -153,7 +165,7 @@ Benchmark dataset covers programming languages, data structures, ML, databases, 
 | `MetricsCollector` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `IStorageProvider` | Storage abstraction interface for persistence backends |
 | `PersistenceManager` | JSON file-based `IStorageProvider` implementation with debounced async writes (default 500ms) |
-| `LocalEmbeddingService` | 384-dimensional vector embeddings via SmartComponents.LocalEmbeddings |
+| `OnnxEmbeddingService` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer |
 | `HashEmbeddingService` | Deterministic hash-based embeddings for testing/CI (no model dependency) |
 
 ### Background Services
@@ -202,13 +214,13 @@ dotnet test
 
 ### Tests
 
-16 test files with 235 test cases covering:
+16 test files with 250 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
 | `CognitiveIndexTests.cs` | 39 | Vector search, lifecycle filtering, persistence |
 | `IntelligenceTests.cs` | 37 | Duplicate detection, contradictions, reversible collapse, decay tuning, hash embeddings, persistence |
-| `BenchmarkRunnerTests.cs` | 20 | IR metrics (Recall@K, Precision@K, MRR, nDCG@K), dataset validation |
+| `BenchmarkRunnerTests.cs` | 35 | IR metrics (Recall@K, Precision@K, MRR, nDCG@K), 4 benchmark datasets, validation |
 | `CoreMemoryToolsTests.cs` | 20 | Store, search, delete memory tool endpoints |
 | `PhysicsEngineTests.cs` | 19 | Mass computation, gravitational force, slingshot |
 | `AccretionScannerTests.cs` | 18 | DBSCAN clustering, pending collapses |
