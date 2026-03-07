@@ -26,7 +26,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "store_memory")]
-    [Description("Store a cognitive memory entry with namespace isolation, categorical metadata, and lifecycle tracking. Entry starts in STM by default.")]
+    [Description("Store a cognitive memory entry with namespace isolation, categorical metadata, and lifecycle tracking. Entry starts in STM by default. Uses contextual prefix embedding by default to improve retrieval quality.")]
     public string StoreMemory(
         [Description("Unique identifier for this memory entry.")] string id,
         [Description("Namespace (e.g. 'work', 'personal').")] string ns,
@@ -39,7 +39,14 @@ public sealed class CoreMemoryTools
         try
         {
             using var _ = _metrics.StartTimer("store");
-            var resolved = ResolveVector(vector, text);
+            // Apply contextual prefix when embedding from text (not when vector is provided directly)
+            var textToEmbed = text;
+            if (vector is null && !string.IsNullOrWhiteSpace(text))
+            {
+                var prefix = BenchmarkRunner.BuildContextualPrefix(ns, category);
+                textToEmbed = prefix + text;
+            }
+            var resolved = ResolveVector(vector, textToEmbed);
             var entry = new CognitiveEntry(id, resolved, ns, text, category, metadata,
                 lifecycleState ?? "stm");
             _index.Upsert(entry);
@@ -61,7 +68,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "search_memory")]
-    [Description("Namespace-scoped vector similarity search with lifecycle awareness, summary-first mode, and optional physics-based gravity re-ranking (slingshot output). Set explain=true for full retrieval diagnostics.")]
+    [Description("Namespace-scoped vector similarity search with lifecycle awareness, summary-first mode, and optional physics-based gravity re-ranking (slingshot output). Supports hybrid search (BM25+vector fusion) and token-level reranking. Set explain=true for full retrieval diagnostics.")]
     public object SearchMemory(
         [Description("Namespace to search.")] string ns,
         [Description("The original text to search for.")] string? text = null,
@@ -72,7 +79,9 @@ public sealed class CoreMemoryTools
         [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null,
         [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
         [Description("When true, return physics-based slingshot output (Asteroid + Sun) instead of flat list.")] bool usePhysics = false,
-        [Description("When true, return detailed retrieval explanation with each result (cosine, physics, lifecycle breakdown).")] bool explain = false)
+        [Description("When true, return detailed retrieval explanation with each result (cosine, physics, lifecycle breakdown).")] bool explain = false,
+        [Description("When true, use hybrid search combining BM25 keyword matching with vector similarity via Reciprocal Rank Fusion.")] bool hybrid = false,
+        [Description("When true, apply token-level reranking to improve precision on the top results.")] bool rerank = false)
     {
         using var timer = _metrics.StartTimer("search");
 
@@ -95,7 +104,17 @@ public sealed class CoreMemoryTools
             : new HashSet<string> { "stm", "ltm" };
 
         var searchSw = Stopwatch.StartNew();
-        var results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst);
+        IReadOnlyList<CognitiveSearchResult> results;
+        if (hybrid && text is not null)
+        {
+            results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank);
+        }
+        else
+        {
+            results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst);
+            if (rerank && text is not null && results.Count > 1)
+                results = _index.Rerank(text, results);
+        }
         searchSw.Stop();
 
         // Side effect: record access for returned entries (namespace-scoped for efficiency)

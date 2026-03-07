@@ -23,12 +23,23 @@ public sealed class BenchmarkTools
     [McpServerTool(Name = "run_benchmark")]
     [Description("Run an IR quality benchmark: ingest seed entries, execute queries, compute Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. Uses an isolated namespace that is cleaned up after. Available datasets: 'default-v1' (25 seeds, 20 queries), 'paraphrase-v1' (25 seeds, 15 queries — rephrased queries), 'multihop-v1' (25 seeds, 15 queries — cross-topic), 'scale-v1' (80 seeds, 30 queries — stress test).")]
     public object RunBenchmark(
-        [Description("Dataset ID to run. Options: 'default-v1', 'paraphrase-v1', 'multihop-v1', 'scale-v1'. Default: 'default-v1'.")] string datasetId = "default-v1")
+        [Description("Dataset ID to run. Options: 'default-v1', 'paraphrase-v1', 'multihop-v1', 'scale-v1'. Default: 'default-v1'.")] string datasetId = "default-v1",
+        [Description("Search mode: 'vector' (default), 'hybrid' (BM25+vector RRF fusion), 'vector_rerank' (vector + token reranker), 'hybrid_rerank' (hybrid + token reranker).")] string mode = "vector",
+        [Description("When true, prepend category/namespace context to text before embedding (contextual retrieval). Default: false.")] bool contextualPrefix = false)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
         if (dataset is null)
             return $"Error: Unknown dataset '{datasetId}'. Available: {string.Join(", ", BenchmarkRunner.GetAvailableDatasets())}";
-        return _runner.Run(dataset);
+
+        var searchMode = mode.ToLowerInvariant() switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" or "vectorrerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            "hybrid_rerank" or "hybridrerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        return _runner.Run(dataset, searchMode, contextualPrefix);
     }
 
     [McpServerTool(Name = "get_metrics")]

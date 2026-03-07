@@ -17,6 +17,8 @@ public sealed class CognitiveIndex : IDisposable
     private readonly ReaderWriterLockSlim _lock = new();
     private readonly IStorageProvider _persistence;
     private readonly HashSet<string> _loadedNamespaces = new();
+    private readonly BM25Index _bm25 = new();
+    private readonly TokenReranker _reranker = new();
 
     public CognitiveIndex(IStorageProvider persistence)
     {
@@ -79,6 +81,7 @@ public sealed class CognitiveIndex : IDisposable
                 _namespaces[entry.Ns] = nsEntries;
             }
             nsEntries[entry.Id] = (entry, norm);
+            _bm25.Index(entry);
             ScheduleSave(entry.Ns);
         }
         finally { _lock.ExitWriteLock(); }
@@ -126,6 +129,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 if (entries.Remove(id))
                 {
+                    _bm25.Remove(id, ns);
                     ScheduleSave(ns);
                     return true;
                 }
@@ -212,6 +216,128 @@ public sealed class CognitiveIndex : IDisposable
                 e.IsSummaryNode, e.SourceClusterId, e.AccessCount);
         }
         return results;
+    }
+
+    /// <summary>
+    /// Hybrid search combining vector cosine similarity with BM25 keyword matching,
+    /// fused via Reciprocal Rank Fusion (RRF). Optionally applies token-level reranking.
+    /// </summary>
+    public IReadOnlyList<CognitiveSearchResult> HybridSearch(
+        float[] query,
+        string queryText,
+        string ns,
+        int k = 5,
+        float minScore = 0f,
+        string? category = null,
+        HashSet<string>? includeStates = null,
+        bool rerank = false,
+        int rrfK = 60)
+    {
+        // Stage 1: Get broader candidate sets from both retrieval methods
+        int candidateK = Math.Max(k * 4, 20);
+        var vectorResults = Search(query, ns, candidateK, minScore, category, includeStates);
+
+        // Build set of eligible IDs (those that pass lifecycle/category filters)
+        var eligibleIds = vectorResults.Select(r => r.Id).ToHashSet();
+
+        // Stage 2: BM25 search over eligible entries
+        var bm25Results = _bm25.Search(queryText, ns, candidateK, eligibleIds);
+        // Also include BM25 results that weren't in vector results (they may be keyword matches)
+        var bm25Unfiltered = _bm25.Search(queryText, ns, candidateK);
+
+        // Add BM25-only results that pass filters
+        foreach (var (id, _) in bm25Unfiltered)
+        {
+            if (!eligibleIds.Contains(id))
+            {
+                // Check if this entry passes lifecycle/category filters
+                var entry = Get(id, ns);
+                if (entry is not null)
+                {
+                    var states = includeStates ?? new HashSet<string> { "stm", "ltm" };
+                    if (states.Contains(entry.LifecycleState) &&
+                        (category is null || entry.Category == category))
+                    {
+                        eligibleIds.Add(id);
+                    }
+                }
+            }
+        }
+
+        // Stage 3: Reciprocal Rank Fusion
+        var vectorRanks = new Dictionary<string, int>();
+        for (int i = 0; i < vectorResults.Count; i++)
+            vectorRanks[vectorResults[i].Id] = i + 1;
+
+        var bm25Ranks = new Dictionary<string, int>();
+        for (int i = 0; i < bm25Unfiltered.Count; i++)
+            bm25Ranks[bm25Unfiltered[i].Id] = i + 1;
+
+        var allIds = vectorRanks.Keys.Union(bm25Ranks.Keys).ToList();
+        var rrfScores = new List<(string Id, float RrfScore)>(allIds.Count);
+
+        foreach (var id in allIds)
+        {
+            float score = 0f;
+            if (vectorRanks.TryGetValue(id, out int vRank))
+                score += 1f / (rrfK + vRank);
+            if (bm25Ranks.TryGetValue(id, out int bRank))
+                score += 1f / (rrfK + bRank);
+            rrfScores.Add((id, score));
+        }
+
+        rrfScores.Sort((a, b) => b.RrfScore.CompareTo(a.RrfScore));
+
+        // Stage 4: Build result objects with RRF scores
+        var vectorLookup = vectorResults.ToDictionary(r => r.Id);
+        var results = new List<CognitiveSearchResult>(Math.Min(k, rrfScores.Count));
+
+        foreach (var (id, rrfScore) in rrfScores.Take(rerank ? k * 2 : k))
+        {
+            if (vectorLookup.TryGetValue(id, out var vr))
+            {
+                results.Add(new CognitiveSearchResult(
+                    vr.Id, vr.Text, rrfScore,
+                    vr.LifecycleState, vr.ActivationEnergy,
+                    vr.Category, vr.Metadata,
+                    vr.IsSummaryNode, vr.SourceClusterId, vr.AccessCount));
+            }
+            else
+            {
+                // Entry found by BM25 only — look up metadata
+                var entry = Get(id, ns);
+                if (entry is not null)
+                {
+                    results.Add(new CognitiveSearchResult(
+                        entry.Id, entry.Text, rrfScore,
+                        entry.LifecycleState, entry.ActivationEnergy,
+                        entry.Category, entry.Metadata,
+                        entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
+                }
+            }
+        }
+
+        // Stage 5: Optional reranking
+        if (rerank && results.Count > 0)
+        {
+            results = _reranker.Rerank(queryText, results).Take(k).ToList();
+        }
+        else if (results.Count > k)
+        {
+            results = results.Take(k).ToList();
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Apply token-level reranking to existing search results.
+    /// </summary>
+    public IReadOnlyList<CognitiveSearchResult> Rerank(
+        string queryText,
+        IReadOnlyList<CognitiveSearchResult> results)
+    {
+        return _reranker.Rerank(queryText, results);
     }
 
     /// <summary>
@@ -493,6 +619,10 @@ public sealed class CognitiveIndex : IDisposable
                 _namespaces[ns][entry.Id] = (entry, norm);
             }
 
+            // Build BM25 index for this namespace
+            if (!_bm25.HasNamespace(ns))
+                _bm25.RebuildNamespace(ns, data.Entries);
+
             _loadedNamespaces.Add(ns);
         }
         finally { _lock.ExitWriteLock(); }
@@ -514,6 +644,10 @@ public sealed class CognitiveIndex : IDisposable
             float norm = Norm(entry.Vector);
             _namespaces[ns][entry.Id] = (entry, norm);
         }
+
+        // Build BM25 index for this namespace
+        if (!_bm25.HasNamespace(ns))
+            _bm25.RebuildNamespace(ns, data.Entries);
 
         _loadedNamespaces.Add(ns);
     }

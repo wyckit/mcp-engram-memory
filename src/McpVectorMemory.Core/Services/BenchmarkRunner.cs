@@ -22,7 +22,21 @@ public sealed class BenchmarkRunner
     /// Run a benchmark dataset: ingest seed entries, execute queries, compute metrics, clean up.
     /// Uses an isolated namespace to avoid contaminating real data.
     /// </summary>
-    public BenchmarkRunResult Run(BenchmarkDataset dataset)
+    /// <summary>
+    /// Build a contextual prefix from namespace/category to prepend before embedding.
+    /// Improves embedding specificity per Anthropic's contextual retrieval research.
+    /// </summary>
+    public static string BuildContextualPrefix(string? ns = null, string? category = null)
+    {
+        if (category is not null)
+            return $"[{category}] ";
+        if (ns is not null)
+            return $"[{ns}] ";
+        return "";
+    }
+
+    public BenchmarkRunResult Run(BenchmarkDataset dataset, SearchMode mode = SearchMode.Vector,
+        bool useContextualPrefix = false)
     {
         if (dataset.Queries.Count == 0)
             return new BenchmarkRunResult(dataset.DatasetId, DateTimeOffset.UtcNow,
@@ -35,7 +49,10 @@ public sealed class BenchmarkRunner
             // 1. Ingest seed entries
             foreach (var seed in dataset.SeedEntries)
             {
-                var vector = _embedding.Embed(seed.Text);
+                var textToEmbed = useContextualPrefix
+                    ? BuildContextualPrefix(category: seed.Category) + seed.Text
+                    : seed.Text;
+                var vector = _embedding.Embed(textToEmbed);
                 var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: "ltm");
                 _index.Upsert(entry);
             }
@@ -48,7 +65,17 @@ public sealed class BenchmarkRunner
                 var queryVector = _embedding.Embed(query.QueryText);
 
                 var sw = Stopwatch.StartNew();
-                var results = _index.Search(queryVector, ns, query.K);
+                IReadOnlyList<CognitiveSearchResult> results = mode switch
+                {
+                    SearchMode.Hybrid => _index.HybridSearch(
+                        queryVector, query.QueryText, ns, query.K),
+                    SearchMode.HybridRerank => _index.HybridSearch(
+                        queryVector, query.QueryText, ns, query.K, rerank: true),
+                    SearchMode.VectorRerank => _index.Rerank(
+                        query.QueryText, _index.Search(queryVector, ns, query.K * 2))
+                        .Take(query.K).ToList(),
+                    _ => _index.Search(queryVector, ns, query.K)
+                };
                 sw.Stop();
 
                 var actualIds = results.Select(r => r.Id).ToList();
@@ -86,6 +113,19 @@ public sealed class BenchmarkRunner
             foreach (var entry in _index.GetAllInNamespace(ns))
                 _index.Delete(entry.Id);
         }
+    }
+
+    /// <summary>Search modes for benchmarking.</summary>
+    public enum SearchMode
+    {
+        /// <summary>Pure vector cosine similarity (baseline).</summary>
+        Vector,
+        /// <summary>Hybrid BM25 + vector with RRF fusion.</summary>
+        Hybrid,
+        /// <summary>Vector search with token-level reranking.</summary>
+        VectorRerank,
+        /// <summary>Hybrid search with RRF fusion + token-level reranking.</summary>
+        HybridRerank
     }
 
     // ── IR Quality Metrics ──
