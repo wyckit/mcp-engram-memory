@@ -67,7 +67,7 @@ var results = index.Search(queryVector, "default", k: 5);
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
-## MCP Tools (33 total)
+## MCP Tools (34 total)
 
 ### Core Memory (3 tools)
 
@@ -159,11 +159,12 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 
 Four benchmark datasets covering programming languages, data structures, ML, databases, networking, systems, security, and DevOps topics. Relevance grades use a 0–3 scale (3 = highly relevant).
 
-### Maintenance (1 tool)
+### Maintenance (2 tools)
 
 | Tool | Description |
 |------|-------------|
 | `rebuild_embeddings` | Re-embed all entries in one or all namespaces using the current embedding model. Use after upgrading the embedding model to regenerate vectors from stored text. Entries without text are skipped. Preserves all metadata, lifecycle state, and timestamps. |
+| `compression_stats` | Show vector compression statistics for a namespace or all namespaces. Reports FP32 vs Int8 disk savings, quantization coverage, and memory footprint estimates. |
 
 ## Architecture
 
@@ -171,7 +172,7 @@ Four benchmark datasets covering programming languages, data structures, ML, dat
 
 | Service | Description |
 |---------|-------------|
-| `CognitiveIndex` | Thread-safe namespace-partitioned vector index with k-NN search, lifecycle filtering, duplicate detection, and access tracking |
+| `CognitiveIndex` | Thread-safe namespace-partitioned vector index with two-stage search (Int8 screening + FP32 reranking), lifecycle filtering, duplicate detection, and access tracking |
 | `KnowledgeGraph` | In-memory directed graph with adjacency lists, bidirectional edge support, and contradiction surfacing |
 | `ClusterManager` | Semantic cluster CRUD with automatic centroid computation |
 | `LifecycleEngine` | Activation energy computation, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
@@ -180,6 +181,7 @@ Four benchmark datasets covering programming languages, data structures, ML, dat
 | `BenchmarkRunner` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
 | `MetricsCollector` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
+| `VectorQuantizer` | Static Int8 scalar quantization: `Quantize`, `Dequantize`, SIMD-accelerated `Int8DotProduct`, `ApproximateCosine` |
 | `IStorageProvider` | Storage abstraction interface for persistence backends |
 | `PersistenceManager` | JSON file-based `IStorageProvider` implementation with debounced async writes (default 500ms) |
 | `OnnxEmbeddingService` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer |
@@ -193,10 +195,28 @@ Four benchmark datasets covering programming languages, data structures, ML, dat
 | `DecayBackgroundService` | 15 minutes | Runs activation energy decay on all namespaces using stored per-namespace configs |
 | `AccretionBackgroundService` | 30 minutes | Scans all namespaces for dense LTM clusters needing summarization |
 
+### Models
+
+| Model | Description |
+|-------|-------------|
+| `CognitiveEntry` | Core memory entry with vector, text, metadata, lifecycle state, and activation energy |
+| `QuantizedVector` | Int8 quantized vector with `sbyte[]` data, min/scale for reconstruction, and precomputed self-dot product |
+| `FloatArrayBase64Converter` | JSON converter for `float[]` — writes Base64 strings, reads both Base64 and legacy JSON arrays for backwards compatibility |
+
+### Searchable Compression
+
+Vectors use a lifecycle-driven compression pipeline:
+
+- **STM entries**: Full FP32 precision for maximum search accuracy
+- **LTM/archived entries**: Auto-quantized to Int8 (asymmetric min/max → [-128, 127]) on state transition
+- **Two-stage search**: Namespaces with 30+ entries use Int8 screening (top k×5 candidates) followed by FP32 exact cosine reranking
+- **SIMD acceleration**: `Int8DotProduct` uses `System.Numerics.Vector<T>` for portable hardware-accelerated dot products (sbyte→short→int widening pipeline)
+- **Base64 persistence**: Vectors are serialized as Base64 strings instead of JSON number arrays, reducing disk usage by ~60%. Legacy JSON arrays are still readable for backwards compatibility.
+
 ### Persistence
 
 Data is stored as JSON files in a `data/` directory:
-- `{namespace}.json` — entries (per namespace)
+- `{namespace}.json` — entries with Base64-encoded vectors (per namespace)
 - `_edges.json` — graph edges (global)
 - `_clusters.json` — semantic clusters (global)
 - `_collapse_history.json` — reversible collapse records (global)
@@ -231,7 +251,7 @@ dotnet test
 
 ### Tests
 
-19 test files with 288 test cases covering:
+21 test files with 325 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
@@ -245,11 +265,14 @@ dotnet test
 | `KnowledgeGraphTests.cs` | 17 | Edge operations, graph traversal, batch edge creation |
 | `DebateSessionManagerTests.cs` | 14 | Session management: alias registration, resolution, TTL purge, namespace generation |
 | `ClusterManagerTests.cs` | 14 | Cluster CRUD and centroid operations |
+| `VectorQuantizerTests.cs` | 12 | Int8 quantization, dequantization roundtrip, SIMD dot product, cosine preservation, edge cases |
 | `LifecycleEngineTests.cs` | 12 | State transitions, deep recall, decay cycles |
+| `QuantizedSearchTests.cs` | 9 | Two-stage search pipeline, lifecycle-driven quantization, mixed-state ranking, large namespace accuracy |
+| `FloatArrayBase64ConverterTests.cs` | 9 | Base64 serialization roundtrip, legacy JSON array reading, CognitiveEntry/NamespaceData roundtrip |
 | `PersistenceManagerTests.cs` | 9 | JSON serialization, debounced saves |
 | `RegressionTests.cs` | 9 | Integration and edge-case scenarios |
 | `MetricsCollectorTests.cs` | 8 | Latency recording, percentile computation, timer pattern |
-| `MaintenanceToolsTests.cs` | 7 | Rebuild embeddings: vector update, metadata preservation, namespace isolation |
+| `MaintenanceToolsTests.cs` | 7 | Rebuild embeddings, compression stats, vector update, metadata preservation |
 | `AccretionToolsTests.cs` | 7 | Accretion tool functionality |
 | `DecayBackgroundServiceTests.cs` | 2 | Background service decay cycles |
 | `AccretionBackgroundServiceTests.cs` | 2 | Background service lifecycle |
