@@ -21,6 +21,7 @@ builder.Services.AddSingleton<AccretionScanner>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<BenchmarkRunner>();
 builder.Services.AddSingleton<DebateSessionManager>();
+builder.Services.AddSingleton<ExpertDispatcher>();
 builder.Services.AddSingleton<OnnxEmbeddingService>();
 builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxEmbeddingService>());
 builder.Services.AddHostedService<EmbeddingWarmupService>();
@@ -40,6 +41,7 @@ builder.Services
     .WithTools<BenchmarkTools>()
     .WithTools<IntelligenceTools>()
     .WithTools<DebateTools>()
-    .WithTools<MaintenanceTools>();
+    .WithTools<MaintenanceTools>()
+    .WithTools<ExpertTools>();
 
 await builder.Build().RunAsync();

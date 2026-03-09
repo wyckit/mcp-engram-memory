@@ -67,7 +67,7 @@ var results = index.Search(queryVector, "default", k: 5);
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
-## MCP Tools (34 total)
+## MCP Tools (36 total)
 
 ### Core Memory (3 tools)
 
@@ -166,6 +166,15 @@ Four benchmark datasets covering programming languages, data structures, ML, dat
 | `rebuild_embeddings` | Re-embed all entries in one or all namespaces using the current embedding model. Use after upgrading the embedding model to regenerate vectors from stored text. Entries without text are skipped. Preserves all metadata, lifecycle state, and timestamps. |
 | `compression_stats` | Show vector compression statistics for a namespace or all namespaces. Reports FP32 vs Int8 disk savings, quantization coverage, and memory footprint estimates. |
 
+### Expert Routing (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `dispatch_task` | Route a query to the most relevant expert namespace via semantic similarity against the meta-index. Returns the expert profile and top memories from that namespace as context, or `needs_expert` status if no qualified expert is found. |
+| `create_expert` | Instantiate a new expert namespace and register it in the semantic routing meta-index. The persona description is embedded for future query routing. |
+
+Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expert` (define specialist) → `dispatch_task` (retry). The system maintains a hidden `_system_experts` meta-index that maps queries to specialized namespaces via cosine similarity (default threshold: 0.75). Experts within a 5% score margin of the top match are returned as candidates.
+
 ## Architecture
 
 ### Services
@@ -181,6 +190,7 @@ Four benchmark datasets covering programming languages, data structures, ML, dat
 | `BenchmarkRunner` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
 | `MetricsCollector` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
+| `ExpertDispatcher` | Semantic routing engine that maps queries to specialized expert namespaces via a hidden meta-index with JIT expert instantiation |
 | `VectorQuantizer` | Static Int8 scalar quantization: `Quantize`, `Dequantize`, SIMD-accelerated `Int8DotProduct`, `ApproximateCosine` |
 | `IStorageProvider` | Storage abstraction interface for persistence backends |
 | `PersistenceManager` | JSON file-based `IStorageProvider` implementation with debounced async writes (default 500ms) |
@@ -241,6 +251,218 @@ Configure the MCP server in your client (e.g. Claude Desktop, VS Code):
 }
 ```
 
+## Claude Setup
+
+To get the most out of this memory system, add the following to your `CLAUDE.md` (global or per-project). This teaches Claude Code how to recall, store, route, and manage memory lifecycle automatically.
+
+### Recall: Parallel Multi-Agent Search
+
+At conversation start, Claude should search vector memory from multiple angles simultaneously:
+
+```
+1. Agent 1 — Project context: search_memory in the project namespace with a task-relevant query
+2. Agent 2 — Cross-project patterns: search_memory in "work" and "synthesis" namespaces
+3. Agent 3 — Related topics: search_memory with alternative phrasings/keywords
+```
+
+### Tool Selection Guide
+
+Tell Claude which tool to use in each situation:
+
+| Situation | Tool | Why |
+|-----------|------|-----|
+| Starting a task, need project context | `search_memory` | Direct namespace search, fast and focused |
+| Complex cross-domain question | `dispatch_task` | Semantic routing finds the best expert namespace automatically |
+| Need multiple knowledge perspectives | `consult_expert_panel` | Parallel multi-namespace search with debate tracking |
+| Looking for archived/forgotten knowledge | `deep_recall` | Searches ALL lifecycle states; auto-resurrects high-scoring entries |
+| Checking for duplicate memories | `detect_duplicates` | Pairwise cosine similarity scan |
+| Suspect conflicting information | `find_contradictions` | Surfaces `contradicts` edges + high-similarity pairs |
+
+**Default to `search_memory`** for most recall tasks. Use `dispatch_task` when unsure which namespace holds the answer. Use `consult_expert_panel` for multi-perspective analysis.
+
+### Expert Routing
+
+The semantic routing system (`dispatch_task` / `create_expert`) works best when Claude:
+
+1. **Uses `dispatch_task` for open-ended questions** that span multiple domains — the system automatically finds the most relevant expert namespace
+2. **Creates experts for distinct knowledge domains** the user works in repeatedly (e.g., `rust_systems_engineer`, `database_architect`) — avoid over-fragmenting closely related topics
+3. **Seeds expert namespaces** after creation by storing domain knowledge into the expert's target namespace (e.g., `expert_rust_systems_engineer`)
+4. **Follows the JIT pattern**: `dispatch_task` → if `needs_expert` → `create_expert` → `dispatch_task` again
+
+### Store Quality
+
+Instruct Claude to write memory text for **future searchability**:
+- Include problem domain keywords (e.g., "SIMD", "quantization", "lock contention")
+- State both the problem and the solution — future queries might phrase either way
+- Be specific: "Fixed DLL lock by killing McpVectorMemory.exe before build" not "fixed the issue"
+
+### Duplicate and Contradiction Handling
+
+- When `store_memory` warns about near-duplicates: skip if existing is accurate, upsert (same ID) if outdated, or store + `link_memories` if both are distinct
+- Use `find_contradictions` periodically or before storing information that might conflict with existing knowledge
+
+### Lifecycle Promotion Triggers
+
+Tell Claude when to promote STM → LTM:
+- Memory has been recalled in 2+ separate conversations
+- Documents a stable architectural pattern or user preference
+- Captures a bug-fix that could recur
+- Records a user correction
+
+### Relationship Types
+
+When using `link_memories`, choose the right relation:
+
+| Relation | Use When |
+|----------|----------|
+| `parent_child` | Hierarchical: architecture → implementation detail |
+| `cross_reference` | Bidirectional relevance (auto-creates both directions) |
+| `similar_to` | Same topic, different angle |
+| `contradicts` | Conflicting information — flag for resolution |
+| `elaborates` | One memory expands on another |
+| `depends_on` | Prerequisite knowledge |
+
+### Namespace Conventions
+
+| Namespace | Purpose |
+|-----------|---------|
+| `{project-dir}` | Project-specific knowledge (e.g., `mcp-vector-memory`) |
+| `work` | Cross-project workflow preferences and tooling decisions |
+| `synthesis` | Cross-project architectural insights and patterns |
+| `expert_{id}` | Expert routing namespaces (auto-created by `create_expert`) |
+
+## Copilot Setup
+
+### MCP Server Configuration
+
+Add the vector memory server to your workspace at `.vscode/mcp.json`:
+
+```json
+{
+  "inputs": [],
+  "servers": {
+    "vector-memory": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
+    }
+  }
+}
+```
+
+### Custom Instructions
+
+Create `.github/copilot-instructions.md` in your repo root to teach Copilot how to use the memory tools:
+
+```markdown
+# Vector Memory
+
+You have access to a persistent vector memory system via the `vector-memory` MCP server.
+
+## Recall
+
+Before starting any task, search vector memory for relevant context:
+- Use `search_memory` with the project namespace and a query describing the current task
+- If the user references past decisions or bugs, search for them before answering
+
+## Store
+
+Store memories whenever you complete a task, fix a bug, learn a pattern, or receive a correction:
+- **namespace**: Use the project directory name (e.g., `mcp-vector-memory`)
+- **id**: Descriptive kebab-case (e.g., `fix-dll-lock-issue`)
+- **text**: Clear, self-contained description with domain keywords for future searchability
+- **category**: One of: `decision`, `pattern`, `bug-fix`, `architecture`, `preference`, `lesson`, `reference`
+
+## Tool Selection
+
+| Situation | Tool |
+|-----------|------|
+| Need project context | `search_memory` |
+| Cross-domain question, unsure which namespace | `dispatch_task` |
+| Need multiple expert perspectives | `consult_expert_panel` |
+| Looking for archived/forgotten knowledge | `deep_recall` |
+| Checking for duplicates | `detect_duplicates` |
+
+## Expert Routing
+
+- `dispatch_task` routes queries to the best expert namespace automatically
+- If it returns `needs_expert`, use `create_expert` to define a specialist
+- After creating an expert, populate its namespace with `store_memory`
+
+## Lifecycle
+
+- New memories default to STM; promote to LTM when stable and reused
+- Use `link_memories` to connect related memories with relation types:
+  `parent_child`, `cross_reference`, `similar_to`, `contradicts`, `elaborates`, `depends_on`
+```
+
+You can also create path-specific instructions at `.github/instructions/memory.instructions.md` for scoped behavior.
+
+## Antigravity Setup
+
+### MCP Server Configuration
+
+Add the vector memory server via **Settings > MCP > View raw config**, or edit `~/.gemini/antigravity/mcp_config.json` directly:
+
+```json
+{
+  "mcpServers": {
+    "vector-memory": {
+      "command": "dotnet",
+      "args": ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
+    }
+  }
+}
+```
+
+### Custom Instructions
+
+Add a `GEMINI.md` file in your workspace root (or `~/.gemini/GEMINI.md` for global rules) to teach Antigravity how to use the memory tools:
+
+```markdown
+# Vector Memory
+
+You have access to a persistent vector memory system via the `vector-memory` MCP server.
+
+## Recall
+
+Before starting any task, search vector memory for relevant context:
+- Use `search_memory` with the project namespace and a query describing the current task
+- If the user references past decisions or bugs, search for them before answering
+
+## Store
+
+Store memories whenever you complete a task, fix a bug, learn a pattern, or receive a correction:
+- **namespace**: Use the project directory name (e.g., `mcp-vector-memory`)
+- **id**: Descriptive kebab-case (e.g., `fix-dll-lock-issue`)
+- **text**: Clear, self-contained description with domain keywords for future searchability
+- **category**: One of: `decision`, `pattern`, `bug-fix`, `architecture`, `preference`, `lesson`, `reference`
+
+## Tool Selection
+
+| Situation | Tool |
+|-----------|------|
+| Need project context | `search_memory` |
+| Cross-domain question, unsure which namespace | `dispatch_task` |
+| Need multiple expert perspectives | `consult_expert_panel` |
+| Looking for archived/forgotten knowledge | `deep_recall` |
+| Checking for duplicates | `detect_duplicates` |
+
+## Expert Routing
+
+- `dispatch_task` routes queries to the best expert namespace automatically
+- If it returns `needs_expert`, use `create_expert` to define a specialist
+- After creating an expert, populate its namespace with `store_memory`
+
+## Lifecycle
+
+- New memories default to STM; promote to LTM when stable and reused
+- Use `link_memories` to connect related memories with relation types:
+  `parent_child`, `cross_reference`, `similar_to`, `contradicts`, `elaborates`, `depends_on`
+```
+
+You can also create Antigravity Skills for more structured memory workflows. Place a `SKILL.md` in a dedicated directory under `.antigravity/skills/` to define reusable memory operations.
+
 ## Build & Test
 
 ```bash
@@ -251,7 +473,7 @@ dotnet test
 
 ### Tests
 
-21 test files with 325 test cases covering:
+23 test files with 355 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
@@ -272,6 +494,8 @@ dotnet test
 | `PersistenceManagerTests.cs` | 9 | JSON serialization, debounced saves |
 | `RegressionTests.cs` | 9 | Integration and edge-case scenarios |
 | `MetricsCollectorTests.cs` | 8 | Latency recording, percentile computation, timer pattern |
+| `ExpertDispatcherTests.cs` | 15 | Expert creation, routing hits/misses, threshold handling, access tracking, meta-index management |
+| `ExpertToolsTests.cs` | 15 | dispatch_task/create_expert tools: validation, routing pipeline, context retrieval, full E2E workflows |
 | `MaintenanceToolsTests.cs` | 7 | Rebuild embeddings, compression stats, vector update, metadata preservation |
 | `AccretionToolsTests.cs` | 7 | Accretion tool functionality |
 | `DecayBackgroundServiceTests.cs` | 2 | Background service decay cycles |
