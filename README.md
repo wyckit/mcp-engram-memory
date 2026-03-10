@@ -1,6 +1,142 @@
-# MCP Vector Memory
+# MCP Engram Memory
 
 A cognitive memory MCP server that provides an LLM with namespace-isolated vector storage, k-nearest-neighbor search (cosine similarity), a knowledge graph, semantic clustering, lifecycle management with activation energy decay, and physics-based re-ranking. Data is persisted to disk as JSON with debounced writes.
+
+## Quickstart
+
+**Option 1 — dotnet (recommended)**
+
+```bash
+git clone https://github.com/wyckit/mcp-engram-memory.git
+cd mcp-engram-memory
+dotnet build
+```
+
+Add to your MCP client config (Claude Code, Copilot, etc.):
+
+```json
+{
+  "mcpServers": {
+    "engram-memory": {
+      "command": "dotnet",
+      "args": ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
+    }
+  }
+}
+```
+
+**Option 2 — Docker**
+
+```bash
+docker build -t mcp-engram-memory .
+docker run -i -v memory-data:/app/data mcp-engram-memory
+```
+
+**Option 3 — NuGet (embed in your app)**
+
+```bash
+dotnet add package McpEngramMemory.Core --version 0.3.0
+```
+
+That's it. The server exposes 37 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
+
+| Profile | Tools | Use case |
+|---------|-------|----------|
+| `minimal` | 5 | Simple store/search — drop-in memory for any agent |
+| `standard` | 18 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 37 | Everything including expert routing, debate, benchmarks (default) |
+
+```json
+{
+  "env": { "MEMORY_TOOL_PROFILE": "minimal" }
+}
+```
+
+See [`examples/`](examples/) for ready-to-use config files.
+
+## Architecture
+
+```mermaid
+graph TD
+    subgraph MCP["MCP Server (stdio)"]
+        Tools["11 Tool Classes<br/>37 MCP Tools"]
+    end
+
+    Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
+
+    CI --> RE["Retrieval"]
+    CI --> GR["Graph"]
+    CI --> LC["Lifecycle"]
+    CI --> IN["Intelligence"]
+    CI --> EX["Experts"]
+    CI --> EV["Evaluation"]
+
+    subgraph RE["Retrieval Engine"]
+        VS["VectorSearchEngine<br/><i>Two-stage Int8→FP32</i>"]
+        HS["HybridSearchEngine<br/><i>BM25 + Vector RRF</i>"]
+        QE["QueryExpander"]
+        TR["TokenReranker"]
+        VQ["VectorQuantizer<br/><i>SIMD Int8</i>"]
+    end
+
+    subgraph GR["Knowledge Graph"]
+        KG["KnowledgeGraph<br/><i>Directed edges, BFS</i>"]
+    end
+
+    subgraph LC["Lifecycle Engine"]
+        LE["LifecycleEngine<br/><i>Decay, state transitions</i>"]
+        PE["PhysicsEngine<br/><i>Gravitational re-ranking</i>"]
+    end
+
+    subgraph IN["Intelligence"]
+        CM["ClusterManager"]
+        AS["AccretionScanner<br/><i>DBSCAN</i>"]
+        DD["DuplicateDetector"]
+    end
+
+    subgraph EX["Expert Routing"]
+        ED["ExpertDispatcher"]
+        DM["DebateSessionManager"]
+    end
+
+    subgraph EV["Evaluation"]
+        BR["BenchmarkRunner<br/><i>MRR, nDCG, Recall@K</i>"]
+        MC["MetricsCollector<br/><i>P50/P95/P99</i>"]
+    end
+
+    CI --> NS["NamespaceStore<br/><i>Lazy loading, partitioned</i>"]
+    NS --> SP["Storage Provider"]
+
+    subgraph SP["Storage"]
+        PM["PersistenceManager<br/><i>JSON + SHA-256 checksums</i>"]
+        SQ["SqliteStorageProvider<br/><i>WAL mode</i>"]
+    end
+
+    NS --> EMB["OnnxEmbeddingService<br/><i>bge-micro-v2, 384-dim</i>"]
+
+    subgraph BG["Background Services"]
+        BG1["EmbeddingWarmup<br/><i>startup</i>"]
+        BG2["DecayService<br/><i>every 15 min</i>"]
+        BG3["AccretionService<br/><i>every 30 min</i>"]
+    end
+```
+
+### The Core Memory Loop
+
+```
+INGEST → INDEX → RETRIEVE → REINFORCE → DECAY → SUMMARIZE/COLLAPSE
+   │                                        │              │
+   └── store_memory              decay_cycle ┘    collapse_cluster
+       (embed + upsert)         (activation energy)  (DBSCAN → summary)
+```
+
+Memories move through lifecycle states based on usage:
+
+```
+STM (short-term) ──promote──→ LTM (long-term) ──decay──→ Archived
+                   ←─────────────────────────────────── deep_recall
+                              (auto-resurrect if score ≥ 0.7)
+```
 
 ## Project Structure
 
@@ -8,13 +144,13 @@ The solution is split into two projects:
 
 | Project | Type | Description |
 |---------|------|-------------|
-| `McpVectorMemory` | Executable | MCP server with stdio transport — register this in your MCP client |
-| `McpVectorMemory.Core` | NuGet Library | Core engine (vector index, graph, clustering, lifecycle, persistence) — use this to embed the memory engine in your own application |
+| `McpEngramMemory` | Executable | MCP server with stdio transport — register this in your MCP client |
+| `McpEngramMemory.Core` | NuGet Library | Core engine (vector index, graph, clustering, lifecycle, persistence) — use this to embed the memory engine in your own application |
 
 ```
 src/
-  McpVectorMemory/              # MCP server (Program.cs + Tool classes)
-  McpVectorMemory.Core/         # Core library
+  McpEngramMemory/              # MCP server (Program.cs + Tool classes)
+  McpEngramMemory.Core/         # Core library
     Models/                     # CognitiveEntry, SearchResults, MemoryLimitsConfig, etc.
     Services/
       CognitiveIndex.cs         # Thin facade: CRUD, locking, delegates to engines below
@@ -50,7 +186,7 @@ src/
         PersistenceManager.cs   #   JSON file backend with debounced writes
         SqliteStorageProvider.cs #   SQLite backend with WAL mode
 tests/
-  McpVectorMemory.Tests/        # xUnit tests (397 tests)
+  McpEngramMemory.Tests/        # xUnit tests (397 tests)
 benchmarks/
   baseline-v1.json              # IR quality baseline (MRR 1.0, nDCG@5 0.938, Recall@5 0.867)
   baseline-paraphrase-v1.json
@@ -64,18 +200,18 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpVectorMemory.Core --version 0.2.0
+dotnet add package McpEngramMemory.Core --version 0.3.0
 ```
 
 ### Library Usage
 
 ```csharp
-using McpVectorMemory.Core.Models;
-using McpVectorMemory.Core.Services;
-using McpVectorMemory.Core.Services.Graph;
-using McpVectorMemory.Core.Services.Intelligence;
-using McpVectorMemory.Core.Services.Lifecycle;
-using McpVectorMemory.Core.Services.Storage;
+using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services;
+using McpEngramMemory.Core.Services.Graph;
+using McpEngramMemory.Core.Services.Intelligence;
+using McpEngramMemory.Core.Services.Lifecycle;
+using McpEngramMemory.Core.Services.Storage;
 
 // Create services
 var persistence = new PersistenceManager();
@@ -295,6 +431,7 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (5 tools), `standard` (18 tools), `full` (37 tools) |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Maximum entries per namespace |
@@ -309,9 +446,9 @@ Configure the MCP server in your client (e.g. Claude Desktop, VS Code):
 ```json
 {
   "mcpServers": {
-    "vector-memory": {
+    "engram-memory": {
       "command": "dotnet",
-      "args": ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"],
+      "args": ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"],
       "env": {
         "MEMORY_STORAGE": "sqlite",
         "MEMORY_MAX_NAMESPACE_SIZE": "10000"
@@ -332,11 +469,11 @@ Each setup below is a single prompt you paste into the respective tool. The AI w
 Open Claude Code in your project directory and paste:
 
 ```
-Set up mcp-vector-memory as my persistent memory system. Do the following:
+Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Add the MCP server to my Claude Code config. The server runs via:
    command: dotnet
-   args: run --project /path/to/mcp-vector-memory/src/McpVectorMemory
+   args: run --project /path/to/mcp-engram-memory/src/McpEngramMemory
 
 2. Create or update my CLAUDE.md (global at ~/.claude/CLAUDE.md) with these sections:
 
@@ -386,12 +523,12 @@ Confirm each file you create and show me the final contents.
 Open VS Code with Copilot and paste in chat:
 
 ```
-Set up mcp-vector-memory as my persistent memory system. Do the following:
+Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Create .vscode/mcp.json with a stdio server entry:
-   name: vector-memory
+   name: engram-memory
    command: dotnet
-   args: ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
+   args: ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
 
 2. Create .github/copilot-instructions.md with vector memory instructions:
 
@@ -434,12 +571,12 @@ Confirm each file you create and show me the final contents.
 Open Gemini CLI and paste in chat:
 
 ```
-Set up mcp-vector-memory as my persistent memory system. Do the following:
+Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Add the MCP server to my Gemini CLI config (edit ~/.gemini/settings.json):
-   name: vector-memory
+   name: engram-memory
    command: dotnet
-   args: ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
+   args: ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
 
 2. Create GEMINI.md in my workspace root with vector memory instructions:
 
@@ -482,14 +619,14 @@ Confirm each file you create and show me the final contents.
 Open Codex CLI in your project directory and paste:
 
 ```
-Set up mcp-vector-memory as my persistent memory system. Do the following:
+Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Add the MCP server to my Codex config. Either run:
-   codex mcp add vector-memory -- dotnet run --project /path/to/mcp-vector-memory/src/McpVectorMemory
+   codex mcp add engram-memory -- dotnet run --project /path/to/mcp-engram-memory/src/McpEngramMemory
    Or add this to ~/.codex/config.toml (or .codex/config.toml for project-scoped):
-   [mcp_servers.vector-memory]
+   [mcp_servers.engram-memory]
    command = "dotnet"
-   args = ["run", "--project", "/path/to/mcp-vector-memory/src/McpVectorMemory"]
+   args = ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
 
 2. Create AGENTS.md in the project root with vector memory instructions:
 
@@ -530,7 +667,7 @@ Confirm each file you create and show me the final contents.
 ## Build & Test
 
 ```bash
-cd mcp-vector-memory
+cd mcp-engram-memory
 dotnet build
 dotnet test
 ```

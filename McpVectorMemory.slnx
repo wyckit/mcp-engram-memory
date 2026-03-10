@@ -1,9 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/McpVectorMemory/McpVectorMemory.csproj" />
-    <Project Path="src/McpVectorMemory.Core/McpVectorMemory.Core.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/McpVectorMemory.Tests/McpVectorMemory.Tests.csproj" />
-  </Folder>
-</Solution>

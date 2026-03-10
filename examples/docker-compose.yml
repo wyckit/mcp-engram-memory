@@ -1,0 +1,12 @@
+services:
+  engram-memory:
+    build: ..
+    volumes:
+      - memory-data:/app/data
+    environment:
+      - MEMORY_STORAGE=json
+      - MEMORY_TOOL_PROFILE=full
+    stdin_open: true
+
+volumes:
+  memory-data:

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/McpEngramMemory/McpEngramMemory.csproj" />
+    <Project Path="src/McpEngramMemory.Core/McpEngramMemory.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj" />
+  </Folder>
+</Solution>
