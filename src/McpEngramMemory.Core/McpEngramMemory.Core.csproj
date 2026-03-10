@@ -5,9 +5,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
+    <!-- Debugging Symbols -->
+    <DebugType>embedded</DebugType>
+    <EmbedAllSources>true</EmbedAllSources>
+
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Core</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>wyckit</Authors>
     <Description>Cognitive engram memory engine with semantic search, knowledge graphs, clustering, and lifecycle management. Core library for MCP Engram Memory.</Description>
     <PackageTags>mcp;engram;vector;memory;embeddings;semantic-search;knowledge-graph</PackageTags>
