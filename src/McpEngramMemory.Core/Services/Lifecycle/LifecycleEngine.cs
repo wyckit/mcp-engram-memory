@@ -157,6 +157,67 @@ public sealed class LifecycleEngine
         return $"Entry '{id}' transitioned: {previousState} -> {targetState}.";
     }
 
+    /// <summary>
+    /// Apply agent feedback to a memory entry. Positive feedback boosts activation energy
+    /// and records an access; negative feedback reduces activation energy. State transitions
+    /// are applied if the new energy crosses thresholds.
+    /// </summary>
+    /// <param name="id">Entry ID.</param>
+    /// <param name="delta">Feedback delta: positive values reinforce, negative values suppress. Clamped to [-10, 10].</param>
+    /// <param name="ns">Optional namespace hint for config lookup.</param>
+    public FeedbackResult? ApplyFeedback(string id, float delta, string? ns = null)
+    {
+        delta = Math.Clamp(delta, -10f, 10f);
+
+        var entry = _index.Get(id);
+        if (entry is null)
+            return null;
+
+        float previousEnergy = entry.ActivationEnergy;
+        string previousState = entry.LifecycleState;
+        float newEnergy = previousEnergy + delta;
+
+        // Positive feedback also records an access (boosts decay resistance)
+        if (delta > 0)
+            _index.RecordAccess(id);
+
+        // Resolve thresholds from stored config or defaults
+        float stmThreshold = 2.0f;
+        float archiveThreshold = -5.0f;
+        if (ns is not null)
+        {
+            var config = GetDecayConfig(ns);
+            if (config is not null)
+            {
+                stmThreshold = config.StmThreshold;
+                archiveThreshold = config.ArchiveThreshold;
+            }
+        }
+
+        // Determine state transition
+        string? newState = null;
+        switch (previousState)
+        {
+            case "stm" when newEnergy < stmThreshold && delta < 0:
+                newState = "ltm";
+                break;
+            case "ltm" when newEnergy < archiveThreshold:
+                newState = "archived";
+                break;
+            case "archived" when delta > 0 && newEnergy >= stmThreshold:
+                newState = "stm";
+                break;
+            case "archived" when delta > 0:
+                newState = "ltm";
+                break;
+        }
+
+        _index.SetActivationEnergyAndState(id, newEnergy, newState);
+
+        string finalState = newState ?? previousState;
+        return new FeedbackResult(id, previousEnergy, newEnergy, previousState, finalState, newState is not null);
+    }
+
     /// <summary>Deep recall: search all states and auto-resurrect high-scoring archived entries.</summary>
     public IReadOnlyList<CognitiveSearchResult> DeepRecall(
         float[] vector, string ns, int k = 10, float minScore = 0.3f,

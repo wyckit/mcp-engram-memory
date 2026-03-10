@@ -189,6 +189,7 @@ public class BenchmarkRunnerTests
     [InlineData("paraphrase-v1")]
     [InlineData("multihop-v1")]
     [InlineData("scale-v1")]
+    [InlineData("realworld-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -203,6 +204,7 @@ public class BenchmarkRunnerTests
     [InlineData("paraphrase-v1")]
     [InlineData("multihop-v1")]
     [InlineData("scale-v1")]
+    [InlineData("realworld-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -216,13 +218,14 @@ public class BenchmarkRunnerTests
     }
 
     [Fact]
-    public void GetAvailableDatasets_ContainsAllFour()
+    public void GetAvailableDatasets_ContainsAllFive()
     {
         var ids = BenchmarkRunner.GetAvailableDatasets();
         Assert.Contains("default-v1", ids);
         Assert.Contains("paraphrase-v1", ids);
         Assert.Contains("multihop-v1", ids);
         Assert.Contains("scale-v1", ids);
+        Assert.Contains("realworld-v1", ids);
     }
 
     [Fact]
@@ -253,6 +256,15 @@ public class BenchmarkRunnerTests
         var ds = BenchmarkRunner.CreateScaleDataset();
         Assert.Equal(80, ds.SeedEntries.Count);
         Assert.Equal(30, ds.Queries.Count);
+    }
+
+    [Fact]
+    public void RealWorldDataset_Has30Seeds20Queries()
+    {
+        var ds = BenchmarkRunner.CreateRealWorldDataset();
+        Assert.Equal(30, ds.SeedEntries.Count);
+        Assert.Equal(20, ds.Queries.Count);
+        Assert.Equal("realworld-v1", ds.DatasetId);
     }
 
     [Theory]

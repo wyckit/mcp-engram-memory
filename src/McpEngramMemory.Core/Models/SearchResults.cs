@@ -166,3 +166,14 @@ public sealed record AccretionScanResult(
     [property: JsonPropertyName("scannedCount")] int ScannedCount,
     [property: JsonPropertyName("clustersDetected")] int ClustersDetected,
     [property: JsonPropertyName("newCollapses")] IReadOnlyList<PendingCollapseInfo> NewCollapses);
+
+/// <summary>
+/// Result of a memory feedback operation.
+/// </summary>
+public sealed record FeedbackResult(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("previousActivationEnergy")] float PreviousActivationEnergy,
+    [property: JsonPropertyName("newActivationEnergy")] float NewActivationEnergy,
+    [property: JsonPropertyName("previousState")] string PreviousState,
+    [property: JsonPropertyName("newState")] string NewState,
+    [property: JsonPropertyName("stateChanged")] bool StateChanged);

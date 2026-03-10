@@ -647,7 +647,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -659,7 +659,96 @@ public sealed class BenchmarkRunner
             "paraphrase-v1" => CreateParaphraseDataset(),
             "multihop-v1" => CreateMultiHopDataset(),
             "scale-v1" => CreateScaleDataset(),
+            "realworld-v1" => CreateRealWorldDataset(),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Real-world benchmark dataset modeled after actual cognitive memory usage patterns.
+    /// Seeds represent architecture decisions, bug fixes, code patterns, user preferences,
+    /// and lessons learned. Queries test the retrieval patterns agents actually use.
+    /// </summary>
+    public static BenchmarkDataset CreateRealWorldDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            new("rw-sqlitewal", "SQLite WAL (Write-Ahead Logging) mode is enabled for crash safety and concurrent read access. WAL allows readers and writers to operate simultaneously without blocking, and ensures data integrity if the process crashes mid-write.", "architecture"),
+            new("rw-dlllock", "DLL lock issue caused by MCP server processes holding file handles after build. Multiple dotnet processes (PIDs) can lock the output DLL, preventing recompilation. Fix: kill the server processes before rebuilding, or build the Core project alone with BuildProjectReferences=false.", "bug-fix"),
+            new("rw-lockorder", "Lock ordering pattern for thread safety: always acquire the ReaderWriterLockSlim before accessing namespace data. The CognitiveIndex owns the lock; NamespaceStore is not thread-safe and relies on the caller holding the lock. Use EnterWriteLock for mutations, EnterUpgradeableReadLock for reads that may need to load data.", "pattern"),
+            new("rw-hybrid", "Hybrid search combines BM25 keyword matching with vector cosine similarity via Reciprocal Rank Fusion (RRF). BM25 captures exact keyword matches that embeddings may miss, while vector search captures semantic similarity. The fusion formula: RRF_score = sum(1/(k + rank_i)) across both result lists.", "architecture"),
+            new("rw-quantization", "Int8 quantization reduces vector storage from 4 bytes to 1 byte per dimension (4x reduction). Asymmetric min-max quantization maps FP32 values to [-128, 127] range. Used for two-stage screening: quick Int8 approximate cosine filters candidates, then exact FP32 reranks top results.", "architecture"),
+            new("rw-bm25rrf", "BM25 scoring uses term frequency, inverse document frequency, and document length normalization. Results from BM25 and vector search are fused using Reciprocal Rank Fusion with k=60. This avoids score normalization issues and provides robust rank-level fusion.", "pattern"),
+            new("rw-darkmode", "User prefers dark mode in all interfaces and terminal-based workflows. Minimal use of emojis unless explicitly requested. Prefer concise, direct communication style without unnecessary preamble.", "preference"),
+            new("rw-nocommit", "Never auto-commit code changes unless the user explicitly asks. Always show proposed changes first and wait for approval. Similarly, never push to remote repositories without explicit instruction.", "preference"),
+            new("rw-testguid", "Use Guid-based temporary paths for test isolation: Path.Combine(Path.GetTempPath(), $\"test_{Guid.NewGuid():N}\"). This prevents test interference and allows parallel test execution. Always clean up temp directories in finally blocks.", "pattern"),
+            new("rw-checksum", "SHA256 checksum verification prevents corrupted or tampered entries from being loaded. Each entry's JSON serialization is hashed on write and verified on read. Entries with mismatched checksums are silently skipped during LoadNamespace to maintain data integrity.", "architecture"),
+            new("rw-debounce", "Debounced writes use a 500ms Timer for batching multiple rapid mutations into a single disk write. The timer resets on each new mutation. When it fires, all pending changes are flushed in a single transaction. This dramatically reduces I/O for burst operations like batch imports.", "architecture"),
+            new("rw-decay", "Activation energy decay formula: ActivationEnergy = (accessCount * reinforcementWeight) - (hoursSinceLastAccess * decayRate). Default parameters: decayRate=0.1 per hour, reinforcementWeight=1.0 per access. Memories that aren't accessed gradually lose energy and transition through lifecycle states.", "pattern"),
+            new("rw-promote", "Memory promotion lifecycle: STM (short-term) is the default state for new memories. When activation energy drops below stmThreshold (default 2.0), STM entries transition to LTM (long-term). LTM entries that decay below archiveThreshold (default -5.0) are archived. Archived entries can be resurrected via deep_recall.", "architecture"),
+            new("rw-rerank", "Token-overlap reranker improves search precision by computing Jaccard similarity between query tokens and result text tokens. Applied as a second-stage ranker after vector or hybrid retrieval. Benchmarks show 3-5% precision improvement at minimal latency cost (~0.07ms).", "lesson"),
+            new("rw-simd", "SIMD-accelerated vector operations using System.Numerics.Vector<float> for dot product and norm calculations. On AVX2 hardware, processes 8 float elements per iteration (vs 1 for scalar). Int8 dot product uses Vector<sbyte> with widen-to-int accumulation for 32 elements per iteration.", "pattern"),
+            new("rw-migration", "Schema migration framework: sequential MigrateToVx methods run in a single transaction. GetSchemaVersion reads current version, RunMigrations applies needed upgrades. Each migration is idempotent (e.g., ALTER TABLE with duplicate column catch). Version is stored in schema_version table.", "architecture"),
+            new("rw-idlocator", "IdLocator reverse index provides O(1) entry-to-namespace resolution via a Dictionary<string, string> mapping entry IDs to namespace names. The TryResolveOrLoad helper first checks the locator, then falls back to LoadAll and retries, ensuring entries are found even if their namespace hasn't been loaded yet.", "pattern"),
+            new("rw-incremental", "Incremental SQLite writes via INSERT OR REPLACE allow single-entry updates without rewriting the entire namespace. The SqliteStorageProvider tracks pending upserts and deletes separately, flushing them in batched transactions. This replaces the old full-snapshot approach for SQLite backends.", "architecture"),
+            new("rw-namespace", "Namespaces isolate memory domains: each project gets its own namespace (e.g., 'mcp-engram-memory', 'wyckit-platform'). Cross-project knowledge uses shared namespaces: 'work' for workflow preferences, 'synthesis' for architectural insights, 'expert_{id}' for specialist routing.", "architecture"),
+            new("rw-collapse", "Cluster collapse summarizes groups of related memories into a single summary node. The original members are archived, and a new IsSummaryNode entry is created with the LLM-generated summary text. Collapse is reversible via uncollapse, which restores original member states.", "architecture"),
+            new("rw-expert", "Expert routing dispatches queries to specialized knowledge domains. Experts are created with create_expert providing an ID and persona description. dispatch_task embeds the query, finds the closest expert via cosine similarity, and searches that expert's namespace.", "architecture"),
+            new("rw-onnx", "ONNX bge-micro-v2 model provides 384-dimensional embeddings for semantic search. The model runs locally via Microsoft.ML.OnnxRuntime with no external API calls. FastBertTokenizer handles tokenization. Model file is loaded once at startup and shared across all embedding requests.", "reference"),
+            new("rw-retro", "Session retrospectives capture lessons learned at the end of significant work sessions. Store with category 'lesson' and ID pattern 'retro-YYYY-MM-DD-topic'. Include specific, actionable insights rather than vague observations. Link to related memories with 'elaborates' or 'cross_reference' relations.", "pattern"),
+            new("rw-graphedge", "Graph edges connect related memories with typed relations: parent_child (hierarchical), cross_reference (bidirectional, auto-creates reverse), similar_to, contradicts, elaborates, depends_on. Edges are stored globally and traversed via get_neighbors and traverse_graph tools.", "architecture"),
+            new("rw-flakytest", "Flaky test caused by ONNX initialization race condition: OnnxEmbeddingService constructor loads the model file, and when multiple test classes initialize in parallel, they compete for the file handle. The test passes in isolation but fails in full suite. Workaround: run affected tests sequentially.", "bug-fix"),
+            new("rw-contextual", "Contextual prefix embedding prepends category or namespace context to text before embedding, improving retrieval specificity. Format: '[category] text' or '[namespace] text'. Based on Anthropic's contextual retrieval research showing 49% fewer retrieval failures with context-enriched embeddings.", "pattern"),
+            new("rw-lifecycle", "Three lifecycle states manage memory retention: STM (short-term memory, default for new entries, not quantized), LTM (long-term memory, promoted entries, Int8 quantized for fast screening), Archived (dormant entries, quantized, excluded from default searches but findable via deep_recall).", "architecture"),
+            new("rw-benchmark", "Benchmark system tests retrieval quality using isolated namespaces with seed entries and graded queries. Four built-in datasets: default-v1 (general), paraphrase-v1 (rephrased queries), multihop-v1 (cross-topic), scale-v1 (80 seeds stress test). Metrics: Recall@K, Precision@K, MRR, nDCG@K, latency P95.", "reference"),
+            new("rw-contradiction", "Contradiction detection surfaces conflicting memories via two methods: (1) graph edges with 'contradicts' relation type, and (2) high cosine similarity scan between entries in the same namespace. Results are aggregated and returned for human resolution.", "architecture"),
+            new("rw-accretion", "Accretion scan detects dense clusters of related memories using pairwise cosine similarity within a namespace. When a cluster of entries exceeds the similarity threshold, it's flagged as a pending collapse candidate. The LLM generates a summary, and the cluster can be collapsed into a single summary node.", "architecture"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            new("rw-q01", "How to fix DLL file locking issues during build",
+                new() { ["rw-dlllock"] = 3, ["rw-lockorder"] = 1 }),
+            new("rw-q02", "What search modes are available and which performs best",
+                new() { ["rw-hybrid"] = 3, ["rw-bm25rrf"] = 2, ["rw-rerank"] = 2, ["rw-quantization"] = 1 }),
+            new("rw-q03", "How does memory decay and activation energy work",
+                new() { ["rw-decay"] = 3, ["rw-promote"] = 2, ["rw-lifecycle"] = 1 }),
+            new("rw-q04", "Database schema upgrade and migration process",
+                new() { ["rw-migration"] = 3, ["rw-sqlitewal"] = 1, ["rw-incremental"] = 1 }),
+            new("rw-q05", "Performance optimization for vector similarity search",
+                new() { ["rw-simd"] = 3, ["rw-quantization"] = 3, ["rw-rerank"] = 1 }),
+            new("rw-q06", "How are memories organized and isolated by project",
+                new() { ["rw-namespace"] = 3, ["rw-lifecycle"] = 2, ["rw-idlocator"] = 1 }),
+            new("rw-q07", "What embedding model is used and how does it work",
+                new() { ["rw-onnx"] = 3, ["rw-contextual"] = 2 }),
+            new("rw-q08", "How to prevent data corruption and ensure integrity",
+                new() { ["rw-checksum"] = 3, ["rw-sqlitewal"] = 2, ["rw-debounce"] = 1 }),
+            new("rw-q09", "Agent cognition expert routing and task dispatch",
+                new() { ["rw-expert"] = 3, ["rw-collapse"] = 1, ["rw-graphedge"] = 1 }),
+            new("rw-q10", "Testing best practices for isolation and reproducibility",
+                new() { ["rw-testguid"] = 3, ["rw-flakytest"] = 2 }),
+            new("rw-q11", "Batch write performance and debounced persistence",
+                new() { ["rw-debounce"] = 3, ["rw-incremental"] = 3, ["rw-sqlitewal"] = 1 }),
+            new("rw-q12", "Memory relationship types and knowledge graph structure",
+                new() { ["rw-graphedge"] = 3, ["rw-contradiction"] = 2, ["rw-collapse"] = 1 }),
+            new("rw-q13", "How does the benchmark system measure retrieval quality",
+                new() { ["rw-benchmark"] = 3, ["rw-rerank"] = 1 }),
+            new("rw-q14", "User workflow preferences and communication style",
+                new() { ["rw-nocommit"] = 3, ["rw-darkmode"] = 2, ["rw-retro"] = 1 }),
+            new("rw-q15", "Automatic memory maintenance cleanup and archival",
+                new() { ["rw-accretion"] = 3, ["rw-decay"] = 2, ["rw-collapse"] = 2 }),
+            new("rw-q16", "How to find entries across namespaces by ID",
+                new() { ["rw-idlocator"] = 3, ["rw-namespace"] = 2, ["rw-expert"] = 1 }),
+            new("rw-q17", "Memory clustering summarization and collapse",
+                new() { ["rw-collapse"] = 3, ["rw-accretion"] = 2, ["rw-graphedge"] = 1 }),
+            new("rw-q18", "Embedding quality contextual retrieval and prefix strategies",
+                new() { ["rw-contextual"] = 3, ["rw-onnx"] = 2, ["rw-hybrid"] = 1 }),
+            new("rw-q19", "What causes flaky tests and how to debug them",
+                new() { ["rw-flakytest"] = 3, ["rw-testguid"] = 1 }),
+            new("rw-q20", "Lessons learned from code reviews and retrospectives",
+                new() { ["rw-retro"] = 3, ["rw-rerank"] = 2, ["rw-lockorder"] = 1 }),
+        };
+
+        return new BenchmarkDataset("realworld-v1", "Real-World Cognitive Memory Patterns", seeds, queries);
     }
 }

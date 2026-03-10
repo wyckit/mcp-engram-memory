@@ -53,6 +53,19 @@ public sealed class LifecycleTools
         return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold);
     }
 
+    [McpServerTool(Name = "memory_feedback")]
+    [Description("Provide feedback on a memory's usefulness. Positive feedback boosts activation energy and records an access; negative feedback suppresses it. Closes the agent reinforcement loop — call this when a recalled memory was helpful or unhelpful.")]
+    public object MemoryFeedback(
+        [Description("Entry ID to provide feedback on.")] string id,
+        [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
+        [Description("Optional namespace for threshold config lookup.")] string? ns = null)
+    {
+        var result = _lifecycle.ApplyFeedback(id, delta, ns);
+        if (result is null)
+            return $"Error: Entry '{id}' not found.";
+        return result;
+    }
+
     [McpServerTool(Name = "decay_cycle")]
     [Description("Trigger activation energy recomputation and state transitions. Formula: ActivationEnergy = (accessCount * reinforcementWeight) - (hoursSinceLastAccess * decayRate)")]
     public DecayCycleResult DecayCycle(

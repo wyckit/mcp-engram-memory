@@ -12,9 +12,13 @@ namespace McpEngramMemory.Core.Services;
 /// </summary>
 internal sealed class NamespaceStore
 {
+    /// <summary>Minimum namespace size to activate HNSW indexing.</summary>
+    private const int HnswThreshold = 200;
+
     private readonly Dictionary<string, Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>> _namespaces = new();
     private readonly HashSet<string> _loadedNamespaces = new();
     private readonly Dictionary<string, string> _idToNamespace = new();
+    private readonly Dictionary<string, HnswIndex> _hnswIndices = new();
     private readonly IStorageProvider _persistence;
     private readonly BM25Index _bm25;
 
@@ -144,6 +148,51 @@ internal sealed class NamespaceStore
     /// <summary>Rebuild BM25 index for a namespace.</summary>
     public void RebuildBM25Namespace(string ns, List<CognitiveEntry> entries)
         => _bm25.RebuildNamespace(ns, entries);
+
+    // ── HNSW Index Management ──
+
+    /// <summary>Get the HNSW index for a namespace, or null if not built.</summary>
+    public HnswIndex? GetHnswIndex(string ns)
+        => _hnswIndices.TryGetValue(ns, out var idx) ? idx : null;
+
+    /// <summary>Add an entry to the per-namespace HNSW index, building the index if the namespace is large enough.</summary>
+    public void AddToHnsw(string ns, string id, float[] vector)
+    {
+        var nsEntries = GetNamespace(ns);
+        int count = nsEntries?.Count ?? 0;
+
+        if (!_hnswIndices.TryGetValue(ns, out var idx))
+        {
+            if (count < HnswThreshold)
+                return; // Not large enough yet
+
+            // Build HNSW from all existing entries
+            idx = new HnswIndex();
+            if (nsEntries is not null)
+            {
+                foreach (var (entry, _, _) in nsEntries.Values)
+                    idx.Add(entry.Id, entry.Vector);
+            }
+            _hnswIndices[ns] = idx;
+            return; // The new entry is already in nsEntries if called after dict update
+        }
+
+        idx.Add(id, vector);
+
+        if (idx.NeedsRebuild)
+            _hnswIndices[ns] = idx.Rebuild();
+    }
+
+    /// <summary>Remove an entry from the per-namespace HNSW index.</summary>
+    public void RemoveFromHnsw(string ns, string id)
+    {
+        if (_hnswIndices.TryGetValue(ns, out var idx))
+        {
+            idx.Remove(id);
+            if (idx.NeedsRebuild)
+                _hnswIndices[ns] = idx.Rebuild();
+        }
+    }
 
     private void LoadEntries(string ns, List<CognitiveEntry> entries)
     {

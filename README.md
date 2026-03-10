@@ -38,13 +38,13 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 dotnet add package McpEngramMemory.Core --version 0.3.0
 ```
 
-That's it. The server exposes 37 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
+That's it. The server exposes 38 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
 
 | Profile | Tools | Use case |
 |---------|-------|----------|
 | `minimal` | 5 | Simple store/search — drop-in memory for any agent |
 | `standard` | 18 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 37 | Everything including expert routing, debate, benchmarks (default) |
+| `full` | 38 | Everything including expert routing, debate, benchmarks (default) |
 
 ```json
 {
@@ -59,7 +59,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["11 Tool Classes<br/>37 MCP Tools"]
+        Tools["11 Tool Classes<br/>38 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -74,6 +74,7 @@ graph TD
     subgraph RE["Retrieval Engine"]
         VS["VectorSearchEngine<br/><i>Two-stage Int8→FP32</i>"]
         HS["HybridSearchEngine<br/><i>BM25 + Vector RRF</i>"]
+        HW["HnswIndex<br/><i>O(log N) ANN</i>"]
         QE["QueryExpander"]
         TR["TokenReranker"]
         VQ["VectorQuantizer<br/><i>SIMD Int8</i>"]
@@ -125,9 +126,11 @@ graph TD
 
 ```
 INGEST → INDEX → RETRIEVE → REINFORCE → DECAY → SUMMARIZE/COLLAPSE
-   │                                        │              │
-   └── store_memory              decay_cycle ┘    collapse_cluster
-       (embed + upsert)         (activation energy)  (DBSCAN → summary)
+   │                  │          │          │              │
+   └── store_memory   │   memory_feedback  │    collapse_cluster
+       (embed+upsert) │   (agent feedback) │    (DBSCAN → summary)
+                      └── search_memory    └── decay_cycle
+                          (k-NN/hybrid)    (activation energy)
 ```
 
 Memories move through lifecycle states based on usage:
@@ -159,6 +162,7 @@ src/
       Retrieval/                # Search pipeline
         VectorMath.cs           #   SIMD-accelerated dot product & norm
         VectorSearchEngine.cs   #   Two-stage Int8 screening + FP32 reranking
+        HnswIndex.cs            #   HNSW approximate nearest neighbor index
         HybridSearchEngine.cs   #   BM25 + vector RRF fusion
         BM25Index.cs            #   Keyword search index
         QueryExpander.cs        #   IDF-based query term expansion
@@ -186,7 +190,7 @@ src/
         PersistenceManager.cs   #   JSON file backend with debounced writes
         SqliteStorageProvider.cs #   SQLite backend with WAL mode
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (397 tests)
+  McpEngramMemory.Tests/        # xUnit tests (458 tests)
 benchmarks/
   baseline-v1.json              # IR quality baseline (MRR 1.0, nDCG@5 0.938, Recall@5 0.867)
   baseline-paraphrase-v1.json
@@ -242,7 +246,7 @@ var results = index.Search(queryVector, "default", k: 5);
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
-## MCP Tools (37 total)
+## MCP Tools (38 total)
 
 ### Core Memory (3 tools)
 
@@ -273,11 +277,12 @@ Supported relation types: `parent_child`, `cross_reference`, `similar_to`, `cont
 | `get_cluster` | Retrieve full cluster details including members and summary info. |
 | `list_clusters` | List all clusters in a namespace with summary status. |
 
-### Lifecycle Management (4 tools)
+### Lifecycle Management (5 tools)
 
 | Tool | Description |
 |------|-------------|
 | `promote_memory` | Manually transition a memory between lifecycle states (`stm`, `ltm`, `archived`). |
+| `memory_feedback` | Provide agent feedback on a memory's usefulness. Positive feedback boosts activation energy and records an access; negative feedback suppresses it. Triggers state transitions when thresholds are crossed. Closes the agent reinforcement loop. |
 | `deep_recall` | Search across ALL lifecycle states. Auto-resurrects high-scoring archived entries above the resurrection threshold. |
 | `decay_cycle` | Trigger activation energy recomputation and state transitions for a namespace. |
 | `configure_decay` | Set per-namespace decay parameters (decayRate, reinforcementWeight, stmThreshold, archiveThreshold). Used by background service and `decay_cycle` with `useStoredConfig=true`. |
@@ -329,11 +334,11 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 
 | Tool | Description |
 |------|-------------|
-| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
+| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries), `realworld-v1` (30 seeds, 20 queries — cognitive memory patterns). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
-Four benchmark datasets covering programming languages, data structures, ML, databases, networking, systems, security, and DevOps topics. Relevance grades use a 0–3 scale (3 = highly relevant).
+Five benchmark datasets: four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps) and one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned). Relevance grades use a 0–3 scale (3 = highly relevant).
 
 ### Maintenance (2 tools)
 
@@ -361,7 +366,8 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 |---------|-----------|-------------|
 | `CognitiveIndex` | `Services` | Thread-safe facade: CRUD, lifecycle state, access tracking, memory limits enforcement. Delegates search to engines below |
 | `NamespaceStore` | `Services` | Namespace-partitioned storage with lazy loading from disk and BM25 indexing |
-| `VectorSearchEngine` | `Retrieval` | Stateless k-NN search with two-stage Int8 screening (top k×5 candidates) → FP32 exact reranking |
+| `VectorSearchEngine` | `Retrieval` | Stateless k-NN search with HNSW ANN candidate generation (≥200 entries) or two-stage Int8 screening (≥30 entries) → FP32 exact reranking |
+| `HnswIndex` | `Retrieval` | Hierarchical Navigable Small World graph for O(log N) approximate nearest neighbor search with soft deletion and compacting rebuild |
 | `HybridSearchEngine` | `Retrieval` | Stateless BM25 + vector fusion via Reciprocal Rank Fusion (RRF) |
 | `BM25Index` | `Retrieval` | In-memory keyword search index with TF-IDF scoring |
 | `QueryExpander` | `Retrieval` | IDF-based query term expansion for improved recall |
@@ -372,14 +378,14 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 | `KnowledgeGraph` | `Graph` | In-memory directed graph with adjacency lists, bidirectional edge support, edge transfer, and contradiction surfacing |
 | `ClusterManager` | `Intelligence` | Semantic cluster CRUD with automatic centroid computation and membership transfer |
 | `AccretionScanner` | `Intelligence` | DBSCAN-based density scanning with reversible collapse history (persisted to disk) |
-| `LifecycleEngine` | `Lifecycle` | Activation energy computation, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
+| `LifecycleEngine` | `Lifecycle` | Activation energy computation, agent feedback reinforcement, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
 | `PhysicsEngine` | `Services` | Gravitational force re-ranking with "Asteroid" (semantic) + "Sun" (importance) output |
 | `BenchmarkRunner` | `Evaluation` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
 | `MetricsCollector` | `Evaluation` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | `Experts` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
 | `ExpertDispatcher` | `Experts` | Semantic routing engine that maps queries to specialized expert namespaces via a hidden meta-index |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, and crash recovery |
-| `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode for concurrent read/write |
+| `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, schema migration framework, and incremental per-entry writes |
 | `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer |
 | `HashEmbeddingService` | `Services` | Deterministic hash-based embeddings for testing/CI (no model dependency) |
 
@@ -405,7 +411,8 @@ Vectors use a lifecycle-driven compression pipeline:
 
 - **STM entries**: Full FP32 precision for maximum search accuracy
 - **LTM/archived entries**: Auto-quantized to Int8 (asymmetric min/max → [-128, 127]) on state transition
-- **Two-stage search**: Namespaces with 30+ entries use Int8 screening (top k×5 candidates) followed by FP32 exact cosine reranking
+- **HNSW index**: Namespaces with 200+ entries auto-build an HNSW graph for O(log N) approximate nearest neighbor candidate generation
+- **Two-stage search**: Namespaces with 30–199 entries use Int8 screening (top k×5 candidates) followed by FP32 exact cosine reranking
 - **SIMD acceleration**: `Int8DotProduct` uses `System.Numerics.Vector<T>` for portable hardware-accelerated dot products (sbyte→short→int widening pipeline)
 - **Base64 persistence**: Vectors are serialized as Base64 strings instead of JSON number arrays, reducing disk usage by ~60%. Legacy JSON arrays are still readable for backwards compatibility.
 
@@ -424,7 +431,8 @@ Two storage backends are available, selectable via environment variable:
 
 **SQLite backend** (`MEMORY_STORAGE=sqlite`):
 - Single `memory.db` file with WAL mode for concurrent read/write
-- Tables: `entries`, `edges`, `clusters`, `collapse_history`, `decay_configs`
+- Tables: `entries`, `edges`, `clusters`, `collapse_history`, `decay_configs`, `schema_version`
+- Automatic schema migrations (v1→v2 adds `lifecycle_state` column with backfill)
 - Suitable for higher-throughput or multi-process scenarios
 
 ### Environment Variables
@@ -674,12 +682,12 @@ dotnet test
 
 ### Tests
 
-26 test files with 397 test cases covering:
+28 test files with 458 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
 | `CognitiveIndexTests.cs` | 43 | Vector search, lifecycle filtering, persistence, memory limits |
-| `BenchmarkRunnerTests.cs` | 42 | IR metrics (Recall@K, Precision@K, MRR, nDCG@K), 4 benchmark datasets, ONNX benchmarks |
+| `BenchmarkRunnerTests.cs` | 46 | IR metrics (Recall@K, Precision@K, MRR, nDCG@K), 5 benchmark datasets, ONNX benchmarks, ablation study |
 | `IntelligenceTests.cs` | 39 | Duplicate detection, contradictions, reversible collapse, decay tuning, hash embeddings, merge memories |
 | `KnowledgeGraphTests.cs` | 20 | Edge operations, graph traversal, batch edge creation, edge transfer |
 | `CoreMemoryToolsTests.cs` | 20 | Store, search, delete memory tool endpoints |
@@ -704,4 +712,7 @@ dotnet test
 | `AccretionToolsTests.cs` | 7 | Accretion tool functionality |
 | `DecayBackgroundServiceTests.cs` | 2 | Background service decay cycles |
 | `AccretionBackgroundServiceTests.cs` | 2 | Background service lifecycle |
+| `HnswIndexTests.cs` | 13 | HNSW index: add/search/remove, high-dimensional recall, rebuild, edge cases |
+| `FeedbackTests.cs` | 13 | Agent feedback: energy boost/suppress, state transitions, access tracking, clamping, cumulative |
+| `InvariantTests.cs` | 27 | Structural invariants across JSON and SQLite backends |
 | `EmbeddingWarmupServiceTests.cs` | 2 | Embedding warmup startup behavior |

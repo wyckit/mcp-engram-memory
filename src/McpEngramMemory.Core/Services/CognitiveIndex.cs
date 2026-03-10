@@ -97,6 +97,7 @@ public sealed class CognitiveIndex : IDisposable
             nsEntries[entry.Id] = (entry, norm, quantized);
             _store.TrackEntry(entry.Id, entry.Ns);
             _store.IndexBM25(entry);
+            _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
             _store.ScheduleEntryUpsert(entry.Ns, entry);
         }
         finally { _lock.ExitWriteLock(); }
@@ -148,6 +149,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 _store.UntrackEntry(id);
                 _store.RemoveBM25(id, ns);
+                _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id);
                 return true;
             }
@@ -167,6 +169,7 @@ public sealed class CognitiveIndex : IDisposable
             throw new ArgumentOutOfRangeException(nameof(request), "K must be positive.");
 
         IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot;
+        HnswIndex? hnswIndex;
         _lock.EnterUpgradeableReadLock();
         try
         {
@@ -175,6 +178,7 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is null || nsEntries.Count == 0)
                 return Array.Empty<CognitiveSearchResult>();
             snapshot = nsEntries.Values.ToList();
+            hnswIndex = _store.GetHnswIndex(request.Namespace);
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
@@ -183,7 +187,7 @@ public sealed class CognitiveIndex : IDisposable
             int candidateK = Math.Max(request.K * 4, 20);
             var vectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
-                request.Category, request.IncludeStates, false);
+                request.Category, request.IncludeStates, false, hnswIndex);
             return _hybridSearch.HybridSearch(
                 vectorResults, request.QueryText, request.Namespace, request.K,
                 request.IncludeStates, request.Category,
@@ -192,7 +196,7 @@ public sealed class CognitiveIndex : IDisposable
 
         return _vectorSearch.Search(
             request.Query, snapshot, request.K, request.MinScore,
-            request.Category, request.IncludeStates, request.SummaryFirst);
+            request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
     }
 
     /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
