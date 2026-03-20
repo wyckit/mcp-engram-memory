@@ -1,0 +1,16 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "vector",
+  "runAt": "2026-03-20T18:19:44Z",
+  "meanRecallAtK": 0.706,
+  "meanPrecisionAtK": 0.440,
+  "meanMrr": 0.967,
+  "meanNdcgAtK": 0.837,
+  "meanLatencyMs": 0.202,
+  "p95LatencyMs": 0.134,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Scale stress test unchanged. s08 still 0 recall on pure vector."
+}

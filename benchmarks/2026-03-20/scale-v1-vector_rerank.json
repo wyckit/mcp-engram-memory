@@ -1,0 +1,16 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-03-20T18:19:44Z",
+  "meanRecallAtK": 0.716,
+  "meanPrecisionAtK": 0.447,
+  "meanMrr": 0.978,
+  "meanNdcgAtK": 0.860,
+  "meanLatencyMs": 0.189,
+  "p95LatencyMs": 0.214,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. V+Rerank still best at scale. s08 partially rescued (0.333 recall)."
+}

@@ -1,0 +1,14 @@
+{
+  "datasetId": "realworld-v1",
+  "mode": "hybrid",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.788,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 0.935,
+  "meanNdcgAtK": 0.842,
+  "totalEntries": 30,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Best mode for domain-specific cognitive memory. BM25 critical for technical jargon (SIMD, BM25, RRF, WAL). Opposite of scale-v1 findings."
+}

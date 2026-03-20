@@ -1,0 +1,14 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.900,
+  "meanPrecisionAtK": 0.450,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.953,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Vector+Rerank best mode for default dataset. Recall +0.033 over vector-only."
+}

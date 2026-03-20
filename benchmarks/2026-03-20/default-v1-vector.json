@@ -1,0 +1,25 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector",
+  "runAt": "2026-03-20T18:19:42Z",
+  "meanRecallAtK": 0.867,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.938,
+  "meanLatencyMs": 0.042,
+  "p95LatencyMs": 0.055,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "systemState": {
+    "totalEntries": 1501,
+    "ltmEntries": 1025,
+    "archivedEntries": 475,
+    "clusters": 81,
+    "edges": 752,
+    "namespaces": 160,
+    "expertNamespaces": 115
+  },
+  "notes": "Day 10 stability test. Zero regression vs March 10 baseline. System at 1,501 entries."
+}

@@ -1,0 +1,16 @@
+{
+  "datasetId": "realworld-v1",
+  "mode": "vector",
+  "runAt": "2026-03-20T18:19:45Z",
+  "meanRecallAtK": 0.742,
+  "meanPrecisionAtK": 0.400,
+  "meanMrr": 0.879,
+  "meanNdcgAtK": 0.819,
+  "meanLatencyMs": 0.044,
+  "p95LatencyMs": 0.047,
+  "totalEntries": 30,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Real-world vector baseline unchanged. rw-q15 still hardest (0.333 recall)."
+}

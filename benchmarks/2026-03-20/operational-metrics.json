@@ -1,0 +1,30 @@
+{
+  "runAt": "2026-03-20T18:19:00Z",
+  "systemState": {
+    "totalEntries": 1501,
+    "stmEntries": 1,
+    "ltmEntries": 1025,
+    "archivedEntries": 475,
+    "clusters": 81,
+    "edges": 752,
+    "namespaces": 160,
+    "expertNamespaces": 115,
+    "quantizedEntries": 1500,
+    "quantizationCoverage": 0.999,
+    "compressionSavingsRatio": 0.750,
+    "fp32Bytes": 2305536,
+    "compressedBytes": 577536
+  },
+  "operationalLatency": {
+    "search": {
+      "count": 3,
+      "meanMs": 15.661,
+      "p50Ms": 2.712,
+      "p95Ms": 38.757,
+      "p99Ms": 41.961,
+      "minMs": 1.510,
+      "maxMs": 42.762
+    }
+  },
+  "notes": "Day 10 operational snapshot. System grown from 0 to 1,501 entries over 10 days. 75% compression via Int8 quantization. P95 operational latency higher than benchmark latency due to real-world namespace sizes."
+}

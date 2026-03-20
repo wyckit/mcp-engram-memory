@@ -192,10 +192,12 @@ src/
 tests/
   McpEngramMemory.Tests/        # xUnit tests (458 tests)
 benchmarks/
-  baseline-v1.json              # IR quality baseline (MRR 1.0, nDCG@5 0.938, Recall@5 0.867)
+  baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json
   baseline-multihop-v1.json
   baseline-scale-v1.json
+  2026-03-10-ablation/          # First ONNX ablation study (10 configs across 5 datasets x 4 modes)
+  2026-03-20/                   # Day 10 stability test (12 configs + operational metrics)
   ideas/                        # Benchmark proposals and analysis
 ```
 
@@ -671,6 +673,115 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 Confirm each file you create and show me the final contents.
 ```
+
+## Sample Prompts
+
+Once the memory system is configured with your AI assistant, these sample prompts demonstrate how to leverage the full tool suite effectively. Copy and adapt them to your workflow.
+
+### Quick Reference Prompts
+
+**Search before you work** — recall context at the start of any task:
+```
+Search engram memory for anything related to [topic] in the [project] namespace.
+Use hybrid search with graph expansion to pull in connected knowledge.
+```
+
+**Store what you learn** — after completing a task or fixing a bug:
+```
+Store a memory about [what you did and why] in the [project] namespace.
+Category: [decision|pattern|bug-fix|architecture|lesson]. Link it to related memories.
+```
+
+**Check system health** — quick status overview:
+```
+Run cognitive_stats, get_metrics, and compression_stats to show me the current
+state of our engram memory system.
+```
+
+**Run benchmarks** — verify IR quality hasn't regressed:
+```
+Run all 5 benchmark datasets (default-v1, paraphrase-v1, multihop-v1, scale-v1,
+realworld-v1) and compare results against our stored baselines in benchmarks/.
+```
+
+### Power Prompts
+
+These are real-world prompts that exercise many tools in a single session — expert panels, parallel agents, memory management, and engineering execution.
+
+**Strategic planning with expert panel:**
+```
+Utilizing our engram memory and knowledge of the current state of our project,
+using our panel of experts, what do you think we should focus on next?
+```
+
+This prompt triggers: `search_memory` (project context recall), `consult_expert_panel` (multi-namespace parallel search), `dispatch_task` (expert routing), and synthesizes cross-domain perspectives into prioritized recommendations.
+
+**Full autonomous engineering session:**
+```
+I like the order you suggested. Go through P1, P2, P3, P4. Research to see if
+we need to upsert any experts with relevant subject area information. If our
+memories are getting too big and we need to prune them / reorganize to shrink
+and spread things out, please take some agents and do that. But for our main
+engineering, feel free to use up to 20 agent experts to accomplish these
+priority tasks. If you run into questions while you plan and implement, please
+use the engram panel of experts to resolve any questions you might have. Make
+sure everything builds correctly at the end and tests validate our functions
+as well as pass.
+```
+
+This prompt triggers the full tool suite:
+- **Expert management**: `dispatch_task`, `create_expert`, `search_memory` across expert namespaces
+- **Memory maintenance**: `detect_duplicates`, `merge_memories`, `trigger_accretion_scan`, `collapse_cluster`
+- **Parallel execution**: Multiple agents working on priority tasks concurrently
+- **Quality gates**: `consult_expert_panel` for architectural decisions, `find_contradictions` to resolve conflicts
+- **Validation**: Build and test verification at the end of the session
+
+### Prompt Patterns
+
+| Pattern | What it does | Key tools exercised |
+|---------|-------------|-------------------|
+| "Search memory for X" | Direct recall | `search_memory` |
+| "What do experts think about X" | Multi-perspective analysis | `consult_expert_panel`, `map_debate_graph`, `resolve_debate` |
+| "Route this question to the right expert" | Semantic routing | `dispatch_task`, `create_expert` |
+| "Clean up / prune memories in X namespace" | Memory maintenance | `detect_duplicates`, `merge_memories`, `trigger_accretion_scan` |
+| "Store what we just learned" | Knowledge capture | `store_memory`, `link_memories`, `promote_memory` |
+| "Run benchmarks and compare to baseline" | Quality validation | `run_benchmark`, `get_metrics`, `compression_stats` |
+| "Deep search including archived" | Full recall | `deep_recall` (auto-resurrects high-scoring archived entries) |
+
+## Benchmarks
+
+Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 5 datasets and 4 search modes.
+
+```
+benchmarks/
+  baseline-v1.json                    # Original Sprint 1 baseline (2026-03-07)
+  baseline-paraphrase-v1.json
+  baseline-multihop-v1.json
+  baseline-scale-v1.json
+  2026-03-10-ablation/                # First ONNX ablation study (10 configs)
+    default-v1-vector.json
+    scale-v1-vector_rerank.json
+    realworld-v1-hybrid.json
+    ...
+  2026-03-20/                         # Day 10 stability test (12 configs + ops)
+    default-v1-vector.json
+    scale-v1-hybrid_rerank.json
+    realworld-v1-hybrid.json
+    operational-metrics.json          # System state + live latency snapshot
+    ...
+```
+
+### Key Findings (as of 2026-03-20)
+
+| Dataset | Best Mode | Recall@K | MRR | Notes |
+|---------|-----------|----------|-----|-------|
+| default-v1 (25 seeds) | vector_rerank | 0.900 | 1.000 | Reranker adds +0.033 recall |
+| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | Strong paraphrase resilience |
+| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | Highest precision (0.587) |
+| scale-v1 (80 seeds) | vector_rerank | 0.716 | 0.978 | Hybrid hurts at scale |
+| realworld-v1 (30 seeds) | hybrid | 0.788 | 0.935 | BM25 critical for technical jargon |
+
+**Mode selection guide**: Default to `vector` for speed. Use `vector_rerank` for quality-critical queries. Use `hybrid` only for domain-specific technical data where keyword overlap matters. Avoid `hybrid_rerank` at scale.
 
 ## Build & Test
 

@@ -1,0 +1,16 @@
+{
+  "datasetId": "multihop-v1",
+  "mode": "vector",
+  "runAt": "2026-03-20T18:19:43Z",
+  "meanRecallAtK": 0.939,
+  "meanPrecisionAtK": 0.587,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.929,
+  "meanLatencyMs": 0.022,
+  "p95LatencyMs": 0.038,
+  "totalEntries": 25,
+  "totalQueries": 15,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Multi-hop cross-topic queries unchanged. Still highest precision dataset."
+}

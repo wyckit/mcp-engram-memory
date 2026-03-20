@@ -1,0 +1,16 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-03-20T18:25:16Z",
+  "meanRecallAtK": 0.614,
+  "meanPrecisionAtK": 0.380,
+  "meanMrr": 0.868,
+  "meanNdcgAtK": 0.715,
+  "meanLatencyMs": 0.229,
+  "p95LatencyMs": 0.287,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Still worst mode at scale (-0.092 recall). s21 total miss. Compounds BM25 noise."
+}

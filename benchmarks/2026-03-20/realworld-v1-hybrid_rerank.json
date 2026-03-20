@@ -1,0 +1,16 @@
+{
+  "datasetId": "realworld-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-03-20T18:19:46Z",
+  "meanRecallAtK": 0.779,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 0.910,
+  "meanNdcgAtK": 0.817,
+  "meanLatencyMs": 0.973,
+  "p95LatencyMs": 1.108,
+  "totalEntries": 30,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. H+Rerank slightly below hybrid-only for realworld. Reranker doesn't help here."
+}

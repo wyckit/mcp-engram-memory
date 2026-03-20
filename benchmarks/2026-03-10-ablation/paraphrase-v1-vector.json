@@ -1,0 +1,14 @@
+{
+  "datasetId": "paraphrase-v1",
+  "mode": "vector",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.944,
+  "meanPrecisionAtK": 0.360,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.977,
+  "totalEntries": 25,
+  "totalQueries": 15,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Strong paraphrase resilience — rephrased queries find correct entries 94.4% of the time."
+}

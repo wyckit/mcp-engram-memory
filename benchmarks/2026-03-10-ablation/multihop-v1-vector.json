@@ -1,0 +1,14 @@
+{
+  "datasetId": "multihop-v1",
+  "mode": "vector",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.939,
+  "meanPrecisionAtK": 0.587,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.929,
+  "totalEntries": 25,
+  "totalQueries": 15,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Cross-topic multi-hop queries. Highest precision of all datasets."
+}

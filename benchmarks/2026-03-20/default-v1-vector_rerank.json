@@ -1,0 +1,16 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-03-20T18:19:43Z",
+  "meanRecallAtK": 0.900,
+  "meanPrecisionAtK": 0.450,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.953,
+  "meanLatencyMs": 0.201,
+  "p95LatencyMs": 0.219,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. V+Rerank still best for default dataset. Zero regression."
+}

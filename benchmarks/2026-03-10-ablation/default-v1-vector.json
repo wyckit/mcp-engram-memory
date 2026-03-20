@@ -1,0 +1,16 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.867,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.938,
+  "meanLatencyMs": 0.114,
+  "p95LatencyMs": 0.145,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Initial baseline with ONNX bge-micro-v2 embeddings. Perfect MRR across all queries."
+}

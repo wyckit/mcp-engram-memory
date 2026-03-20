@@ -1,0 +1,14 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.614,
+  "meanPrecisionAtK": 0.380,
+  "meanMrr": 0.868,
+  "meanNdcgAtK": 0.715,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Worst mode at scale. Compounds BM25 noise with reranker. Recall -0.092 vs vector baseline."
+}

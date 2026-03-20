@@ -1,0 +1,16 @@
+{
+  "datasetId": "realworld-v1",
+  "mode": "hybrid",
+  "runAt": "2026-03-20T18:19:46Z",
+  "meanRecallAtK": 0.788,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 0.935,
+  "meanNdcgAtK": 0.842,
+  "meanLatencyMs": 0.081,
+  "p95LatencyMs": 0.144,
+  "totalEntries": 30,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Hybrid still best for domain-specific cognitive memory. BM25 helps technical jargon."
+}

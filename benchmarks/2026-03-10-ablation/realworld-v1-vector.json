@@ -1,0 +1,14 @@
+{
+  "datasetId": "realworld-v1",
+  "mode": "vector",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.742,
+  "meanPrecisionAtK": 0.400,
+  "meanMrr": 0.879,
+  "meanNdcgAtK": 0.819,
+  "totalEntries": 30,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Real-world cognitive memory patterns. Vector-only baseline for domain-specific data."
+}

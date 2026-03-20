@@ -1,0 +1,16 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "hybrid",
+  "runAt": "2026-03-20T18:25:16Z",
+  "meanRecallAtK": 0.689,
+  "meanPrecisionAtK": 0.427,
+  "meanMrr": 0.957,
+  "meanNdcgAtK": 0.831,
+  "meanLatencyMs": 0.137,
+  "p95LatencyMs": 0.272,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Day 10. Hybrid still hurts at scale (-0.017 recall vs vector). BM25 noise confirmed."
+}

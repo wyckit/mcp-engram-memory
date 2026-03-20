@@ -1,0 +1,14 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "hybrid",
+  "runAt": "2026-03-10T00:00:00Z",
+  "meanRecallAtK": 0.689,
+  "meanPrecisionAtK": 0.427,
+  "meanMrr": 0.957,
+  "meanNdcgAtK": 0.831,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Hybrid slightly hurts at scale. BM25 keyword matching introduces noise with 80 entries. Recall -0.017 vs vector."
+}
