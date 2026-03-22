@@ -54,6 +54,31 @@ That's it. The server exposes 49 MCP tools. To reduce tool count, set `MEMORY_TO
 
 See [`examples/`](examples/) for ready-to-use config files.
 
+## At a Glance
+
+| Metric | Value |
+|--------|-------|
+| MCP tools | 49 (profiles: 13 minimal / 32 standard / 49 full) |
+| Retrieval modes | vector, hybrid (BM25+vector), vector_rerank, hybrid_rerank |
+| Embedding model | bge-micro-v2 (384-dim, ONNX, MIT license) |
+| Best recall (scale, 80 seeds) | **0.771** hybrid — cascade retrieval eliminates BM25 noise |
+| Best recall (realworld, 30 seeds) | **0.792** hybrid — synonym expansion bridges vocab gaps |
+| Search latency (P50) | ~0.04 ms (benchmark), ~2.7 ms (production) |
+| Quantization | Int8 scalar, 75% disk reduction, SIMD-accelerated |
+| Storage backends | JSON (default) or SQLite (WAL mode) |
+| Target frameworks | net8.0, net9.0, net10.0 |
+| Tests | 609 across 37 test files |
+
+### System Layers
+
+| Layer | Stability | Components | Purpose |
+|-------|-----------|------------|---------|
+| **Core** | Stable | Storage, Embeddings, Retrieval, Lifecycle, Graph | Memory CRUD, search, decay, knowledge links |
+| **Advanced** | Stable | Clustering, Multi-Agent Sharing, Intelligence | Accretion/collapse, namespace permissions, dedup/contradictions |
+| **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks | Semantic dispatch, multi-perspective analysis, IR quality validation |
+
+**Core** is production-grade. **Advanced** is stable and well-tested. **Orchestration** is powerful but still evolving — treat as an extension layer.
+
 ## Architecture
 
 ```mermaid
