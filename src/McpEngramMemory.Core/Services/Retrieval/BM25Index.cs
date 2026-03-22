@@ -154,25 +154,49 @@ public sealed class BM25Index
     /// <summary>
     /// Tokenize text into lowercase terms. Splits on non-alphanumeric characters,
     /// filters short tokens, and removes common stop words.
+    /// Also handles compound tokens: hyphenated words like "time-stamped" emit
+    /// both the sub-parts ("time", "stamped") and the joined compound ("timestamped"),
+    /// improving recall for queries where hyphenation varies.
     /// </summary>
-    internal static string[] Tokenize(string text)
+    public static string[] Tokenize(string text)
     {
         var tokens = new List<string>();
         int start = -1;
 
         for (int i = 0; i <= text.Length; i++)
         {
-            bool isAlphaNum = i < text.Length && char.IsLetterOrDigit(text[i]);
-            if (isAlphaNum)
+            bool isAlphaOrHyphen = i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '-');
+            if (isAlphaOrHyphen)
             {
                 if (start < 0) start = i;
             }
             else if (start >= 0)
             {
-                var token = text.AsSpan(start, i - start).ToString().ToLowerInvariant();
-                if (token.Length >= 2 && !IsStopWord(token))
-                    tokens.Add(token);
+                var rawSpan = text.AsSpan(start, i - start);
+                var raw = rawSpan.ToString().ToLowerInvariant();
                 start = -1;
+
+                // Check if token contains internal hyphens (compound word)
+                if (raw.Contains('-'))
+                {
+                    // Emit sub-parts
+                    var parts = raw.Split('-', StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var part in parts)
+                    {
+                        if (part.Length >= 2 && !IsStopWord(part))
+                            tokens.Add(part);
+                    }
+                    // Emit joined compound form (e.g., "timestamped" from "time-stamped")
+                    var joined = string.Concat(parts);
+                    if (joined.Length >= 2 && !IsStopWord(joined))
+                        tokens.Add(joined);
+                }
+                else
+                {
+                    var token = raw.Trim('-');
+                    if (token.Length >= 2 && !IsStopWord(token))
+                        tokens.Add(token);
+                }
             }
         }
 

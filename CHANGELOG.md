@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.2] - 2026-03-22
+
+### Added
+- **Multi-Agent Memory Sharing (Phase 6)**: Cross-agent namespace sharing with permission control. Set `AGENT_ID` env var per agent instance to enable namespace ownership and access control.
+- **`cross_search` tool**: Search across multiple namespaces in a single call with Reciprocal Rank Fusion (RRF) merge. Results annotated with source namespace. Supports hybrid search and reranking.
+- **`share_namespace` tool**: Grant another agent read or write access to a namespace you own.
+- **`unshare_namespace` tool**: Revoke an agent's access to a namespace you own.
+- **`list_shared` tool**: List all namespaces shared with the current agent.
+- **`whoami` tool**: Return current agent identity and accessible namespaces summary.
+- **`NamespaceRegistry` service**: Manages namespace ownership and sharing permissions. Stores permission data in `_system_sharing` namespace. Backward compatible — default agent has unrestricted access.
+- **`SearchMultiple` method**: Cross-namespace search with per-namespace retrieval and RRF fusion in `CognitiveIndex`.
+- 26 new multi-agent tests (registry permissions, cross-search, sharing/unsharing, agent identity, backward compatibility).
+- Total tools: 49 (up from 44). Multi-agent tools included in all tool profiles.
+
 ## [0.5.1] - 2026-03-21
 
 ### Added

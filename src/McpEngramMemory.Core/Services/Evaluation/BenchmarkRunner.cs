@@ -647,7 +647,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -660,6 +660,7 @@ public sealed class BenchmarkRunner
             "multihop-v1" => CreateMultiHopDataset(),
             "scale-v1" => CreateScaleDataset(),
             "realworld-v1" => CreateRealWorldDataset(),
+            "compound-v1" => CreateCompoundDataset(),
             _ => null
         };
     }
@@ -750,5 +751,85 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("realworld-v1", "Real-World Cognitive Memory Patterns", seeds, queries);
+    }
+
+    /// <summary>
+    /// Compound tokenization and domain-jargon benchmark.
+    /// Tests hyphenated term matching, cross-domain vocabulary gaps,
+    /// and multi-agent/sharing terminology retrieval.
+    /// </summary>
+    public static BenchmarkDataset CreateCompoundDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // Hyphenated/compound terms (tests BM25 compound tokenization)
+            new("c-timeseries", "Time-series databases like InfluxDB and TimescaleDB optimize for timestamped data ingestion and real-time analytics"),
+            new("c-realtime", "Real-time event processing with sub-millisecond latency using in-memory stream processors"),
+            new("c-lowlatency", "Low-latency network protocols minimize round-trip time for high-frequency trading systems"),
+            new("c-crossplatform", "Cross-platform development frameworks like .NET MAUI and Flutter enable write-once deploy-anywhere mobile applications"),
+            new("c-multithread", "Multi-threaded concurrency with lock-free data structures and compare-and-swap atomic operations"),
+            new("c-keyvalue", "Key-value stores like Redis and DynamoDB provide O(1) lookup for session state and caching"),
+
+            // Domain jargon vs colloquial (tests semantic gap bridging)
+            new("c-accretion", "Accretion scan detects dense clusters of related memories using pairwise cosine similarity and DBSCAN density estimation"),
+            new("c-decay", "Activation energy decay formula applies exponential time-based reduction to memory salience scores"),
+            new("c-collapse", "Cluster collapse summarizes groups of semantically related memories into a single summary node with TF-IDF keyword extraction"),
+            new("c-consolidation", "Memory consolidation during sleep cycles transfers short-term episodic traces into long-term semantic knowledge"),
+            new("c-quantize", "Scalar quantization compresses 32-bit floating point vectors into 8-bit integers with min-max normalization for 75% storage reduction"),
+            new("c-embedding", "Dense vector embeddings encode semantic meaning into fixed-dimensional spaces where cosine similarity measures relatedness"),
+
+            // Multi-agent and sharing concepts
+            new("c-namespace", "Namespace isolation partitions memory entries into independent stores with separate indices and lifecycle management"),
+            new("c-permission", "Role-based access control grants read or write permissions to agents on a per-namespace basis"),
+            new("c-rrffusion", "Reciprocal Rank Fusion merges ranked lists from multiple retrieval systems by summing inverse rank scores"),
+            new("c-agentident", "Agent identity distinguishes between multiple AI instances sharing a memory server via unique identifiers"),
+            new("c-ownership", "Namespace ownership is established on first write and controls who can grant or revoke sharing permissions"),
+            new("c-crosssearch", "Cross-namespace search queries multiple namespaces simultaneously and merges results using rank fusion"),
+
+            // Hybrid retrieval concepts
+            new("c-bm25", "BM25 keyword scoring uses term frequency, inverse document frequency, and document length normalization"),
+            new("c-hybrid", "Hybrid retrieval combines sparse keyword matching with dense vector similarity for robust recall across query types"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Compound tokenization queries (should match hyphenated seeds via joined tokens)
+            new("c-q01", "Storing and querying time-stamped sensor data",
+                new() { ["c-timeseries"] = 3, ["c-realtime"] = 1 }),
+            new("c-q02", "Building a real-time event processing pipeline",
+                new() { ["c-realtime"] = 3, ["c-lowlatency"] = 2 }),
+            new("c-q03", "Low-latency high-frequency trading infrastructure",
+                new() { ["c-lowlatency"] = 3, ["c-realtime"] = 1 }),
+            new("c-q04", "Cross-platform mobile development frameworks",
+                new() { ["c-crossplatform"] = 3 }),
+            new("c-q05", "Multi-threaded lock-free concurrent programming",
+                new() { ["c-multithread"] = 3 }),
+            new("c-q06", "Key-value caching for session management",
+                new() { ["c-keyvalue"] = 3 }),
+
+            // Domain jargon queries (colloquial phrasing vs technical seeds)
+            new("c-q07", "Automatic memory maintenance cleanup and archival",
+                new() { ["c-accretion"] = 3, ["c-decay"] = 2, ["c-collapse"] = 2 }),
+            new("c-q08", "How does the system forget old unimportant memories",
+                new() { ["c-decay"] = 3, ["c-consolidation"] = 2, ["c-collapse"] = 1 }),
+            new("c-q09", "Compressing vectors to save storage space",
+                new() { ["c-quantize"] = 3, ["c-embedding"] = 1 }),
+            new("c-q10", "Converting text into searchable numeric representations",
+                new() { ["c-embedding"] = 3, ["c-bm25"] = 1, ["c-quantize"] = 1 }),
+
+            // Multi-agent queries
+            new("c-q11", "How do multiple agents share knowledge between each other",
+                new() { ["c-permission"] = 3, ["c-namespace"] = 2, ["c-crosssearch"] = 2, ["c-agentident"] = 1 }),
+            new("c-q12", "Searching across different knowledge domains in one query",
+                new() { ["c-crosssearch"] = 3, ["c-rrffusion"] = 2, ["c-namespace"] = 1 }),
+            new("c-q13", "Who owns a namespace and how are permissions controlled",
+                new() { ["c-ownership"] = 3, ["c-permission"] = 2, ["c-agentident"] = 1 }),
+            new("c-q14", "Merging search results from multiple sources into a single ranking",
+                new() { ["c-rrffusion"] = 3, ["c-hybrid"] = 2, ["c-crosssearch"] = 1 }),
+            new("c-q15", "Combining keyword search with semantic vector search",
+                new() { ["c-hybrid"] = 3, ["c-bm25"] = 2, ["c-embedding"] = 1, ["c-rrffusion"] = 1 }),
+        };
+
+        return new BenchmarkDataset("compound-v1", "Compound Tokenization, Domain Jargon & Multi-Agent Benchmark", seeds, queries);
     }
 }

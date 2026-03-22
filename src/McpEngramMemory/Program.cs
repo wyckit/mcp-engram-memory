@@ -6,6 +6,7 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,6 +48,11 @@ builder.Services.AddSingleton<QueryExpander>();
 builder.Services.AddSingleton<BenchmarkRunner>();
 builder.Services.AddSingleton<DebateSessionManager>();
 builder.Services.AddSingleton<ExpertDispatcher>();
+
+// Agent identity for multi-agent memory sharing (set AGENT_ID env var per agent)
+var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;
+builder.Services.AddSingleton(new AgentIdentity(agentId));
+builder.Services.AddSingleton<NamespaceRegistry>();
 builder.Services.AddSingleton<OnnxEmbeddingService>();
 builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxEmbeddingService>());
 builder.Services.AddHostedService<EmbeddingWarmupService>();
@@ -54,9 +60,9 @@ builder.Services.AddHostedService<DecayBackgroundService>();
 builder.Services.AddHostedService<AccretionBackgroundService>();
 
 // Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
-//   "minimal"  →  8 tools: core CRUD + admin + composite (store, search, delete, get_memory, cognitive_stats, remember, recall, reflect)
-//   "standard" → 27 tools: minimal + graph, lifecycle, clusters, intelligence
-//   "full"     → 44 tools: everything (default for backward compatibility)
+//   "minimal"  → 13 tools: core CRUD + admin + composite + multi-agent
+//   "standard" → 32 tools: minimal + graph, lifecycle, clusters, intelligence
+//   "full"     → 49 tools: everything (default for backward compatibility)
 var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "full";
 
 var mcpBuilder = builder.Services
@@ -67,7 +73,8 @@ var mcpBuilder = builder.Services
 mcpBuilder
     .WithTools<CoreMemoryTools>()
     .WithTools<AdminTools>()
-    .WithTools<CompositeTools>();
+    .WithTools<CompositeTools>()
+    .WithTools<MultiAgentTools>();
 
 if (toolProfile is "standard" or "full")
 {

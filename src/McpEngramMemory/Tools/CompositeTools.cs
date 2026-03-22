@@ -13,7 +13,7 @@ namespace McpEngramMemory.Tools;
 /// <summary>
 /// Tier-1 composite MCP tools: high-level operations that orchestrate multiple
 /// subsystems internally. Designed for models that don't need (or can't handle)
-/// the full 44-tool surface.
+/// the full 49-tool surface.
 ///
 /// remember — intelligent store with auto-dedup and auto-linking
 /// recall   — intelligent search with auto-routing and fallback

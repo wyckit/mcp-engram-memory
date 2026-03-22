@@ -22,6 +22,12 @@ public sealed class HybridSearchEngine
     /// <param name="bm25">BM25 index for keyword search.</param>
     /// <param name="reranker">Token reranker.</param>
     /// <param name="getEntry">Delegate to resolve entry by (id, ns) — used for BM25-only results.</param>
+    /// <summary>
+    /// Threshold above which vector results are considered high-confidence,
+    /// allowing the search to skip BM25 fusion for better P95 latency.
+    /// </summary>
+    private const float HighConfidenceThreshold = 0.85f;
+
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         IReadOnlyList<CognitiveSearchResult> vectorResults,
         string queryText,
@@ -35,6 +41,20 @@ public sealed class HybridSearchEngine
         IReranker reranker,
         Func<string, string, CognitiveEntry?> getEntry)
     {
+        // High-confidence early exit: if vector search returned strong results,
+        // skip BM25 fusion to reduce P95 latency. BM25 mainly helps when
+        // vector search struggles (semantic gap / keyword mismatch).
+        if (vectorResults.Count >= k &&
+            vectorResults[0].Score >= HighConfidenceThreshold)
+        {
+            var highConf = vectorResults.Take(rerank ? k * 2 : k).ToList();
+            if (rerank && highConf.Count > 0)
+                highConf = reranker.Rerank(queryText, highConf).Take(k).ToList();
+            else if (highConf.Count > k)
+                highConf.RemoveRange(k, highConf.Count - k);
+            return highConf;
+        }
+
         // Build set of eligible IDs from vector results
         var eligibleIds = vectorResults.Select(r => r.Id).ToHashSet();
 

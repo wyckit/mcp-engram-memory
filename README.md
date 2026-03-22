@@ -35,16 +35,16 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 3 — NuGet (embed in your app)**
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.1
+dotnet add package McpEngramMemory.Core --version 0.5.2
 ```
 
-That's it. The server exposes 44 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
+That's it. The server exposes 49 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
 
 | Profile | Tools | Use case |
 |---------|-------|----------|
-| `minimal` | 8 | Core CRUD + admin + composite tools — drop-in memory for any agent |
-| `standard` | 27 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 43 | Everything including expert routing, debate, benchmarks (default) |
+| `minimal` | 13 | Core CRUD + admin + composite + multi-agent tools — drop-in memory for any agent |
+| `standard` | 32 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 49 | Everything including expert routing, debate, benchmarks (default) |
 
 ```json
 {
@@ -59,7 +59,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["12 Tool Classes<br/>44 MCP Tools"]
+        Tools["13 Tool Classes<br/>49 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -190,7 +190,7 @@ src/
         PersistenceManager.cs   #   JSON file backend with debounced writes
         SqliteStorageProvider.cs #   SQLite backend with WAL mode
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (534 tests)
+  McpEngramMemory.Tests/        # xUnit tests (560+ tests)
 benchmarks/
   baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json
@@ -206,7 +206,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.1
+dotnet add package McpEngramMemory.Core --version 0.5.2
 ```
 
 ### Library Usage
@@ -373,6 +373,18 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 
 **Auto-classification**: When creating a leaf expert without specifying `parentNodeId`, the system automatically scores the persona description against all root and branch nodes to find the best placement. Results: `auto_linked` (>= 0.82 confidence — automatically placed), `suggested` (0.60–0.82 — placed but flagged for review), or `unclassified` (< 0.60 — left as orphan). Use `link_to_parent` to manually adjust placement.
 
+### Multi-Agent Sharing (5 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cross_search` | Search across multiple namespaces in a single call. Results are merged using Reciprocal Rank Fusion (RRF) and annotated with their source namespace. Supports hybrid search and reranking. |
+| `share_namespace` | Grant another agent read or write access to a namespace you own. |
+| `unshare_namespace` | Revoke an agent's access to a namespace you own. |
+| `list_shared` | List all namespaces shared with the current agent, showing owner and access level. |
+| `whoami` | Return the current agent identity and accessible namespaces summary. |
+
+Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Namespace ownership is established on first write. Use `share_namespace` to grant cross-agent access, `cross_search` to query across shared namespaces. The default agent (`AGENT_ID` not set) has unrestricted access for backward compatibility.
+
 ## Architecture
 
 ### Services
@@ -401,6 +413,7 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 | `MetricsCollector` | `Evaluation` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | `Experts` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
 | `ExpertDispatcher` | `Experts` | Semantic routing engine that maps queries to specialized expert namespaces via a hidden meta-index |
+| `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, and crash recovery |
 | `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, schema migration framework, and incremental per-entry writes |
 | `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer |
@@ -456,7 +469,8 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (8 tools), `standard` (27 tools), `full` (44 tools) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (13 tools), `standard` (32 tools), `full` (49 tools) |
+| `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Maximum entries per namespace |
@@ -532,6 +546,13 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    - Link related memories with link_memories using: parent_child, cross_reference,
      similar_to, contradicts, elaborates, depends_on
 
+   ## Multi-Agent Sharing
+   - Set AGENT_ID env var per agent instance to enable namespace ownership and permissions
+   - Use cross_search to search across multiple namespaces in one call (RRF merge)
+   - Use share_namespace / unshare_namespace to grant/revoke read or write access
+   - Use whoami to verify agent identity and list_shared to see accessible namespaces
+   - Default agent (no AGENT_ID) has unrestricted access for backward compatibility
+
    ## Session Retrospective
    - At the end of significant sessions, self-evaluate: what went well, what went wrong,
      what you'd do differently, key decisions made
@@ -583,6 +604,12 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    - Link related memories using: parent_child, cross_reference, similar_to, contradicts,
      elaborates, depends_on.
 
+   ## Multi-Agent Sharing
+   - Set AGENT_ID env var per agent instance to enable namespace ownership and permissions.
+   - Use cross_search to search across multiple namespaces in one call (RRF merge).
+   - Use share_namespace / unshare_namespace to grant/revoke read or write access.
+   - Use whoami to verify agent identity, list_shared to see accessible namespaces.
+
    ## Session Retrospective
    - At the end of significant sessions, store a self-evaluation: what went well, what
      went wrong, lessons learned. Use id "retro-YYYY-MM-DD-topic", category "lesson".
@@ -630,6 +657,12 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    - Lifecycle: promote STM to LTM when stable and reused across sessions.
    - Link related memories using: parent_child, cross_reference, similar_to, contradicts,
      elaborates, depends_on.
+
+   ## Multi-Agent Sharing
+   - Set AGENT_ID env var per agent instance to enable namespace ownership and permissions.
+   - Use cross_search to search across multiple namespaces in one call (RRF merge).
+   - Use share_namespace / unshare_namespace to grant/revoke read or write access.
+   - Use whoami to verify agent identity, list_shared to see accessible namespaces.
 
    ## Session Retrospective
    - At the end of significant sessions, store a self-evaluation: what went well, what
@@ -680,6 +713,12 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    - Lifecycle: promote STM to LTM when stable and reused across sessions.
    - Link related memories using: parent_child, cross_reference, similar_to, contradicts,
      elaborates, depends_on.
+
+   ## Multi-Agent Sharing
+   - Set AGENT_ID env var per agent instance to enable namespace ownership and permissions.
+   - Use cross_search to search across multiple namespaces in one call (RRF merge).
+   - Use share_namespace / unshare_namespace to grant/revoke read or write access.
+   - Use whoami to verify agent identity, list_shared to see accessible namespaces.
 
    ## Session Retrospective
    - At the end of significant sessions, store a self-evaluation: what went well, what
@@ -808,7 +847,7 @@ dotnet test
 
 ### Tests
 
-35 test files with 534 test cases covering:
+36 test files with 569 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
@@ -825,6 +864,7 @@ dotnet test
 | `ClusterManagerTests.cs` | 16 | Cluster CRUD, centroid operations, membership transfer |
 | `ExpertToolsTests.cs` | 15 | dispatch_task/create_expert tools: validation, routing pipeline, context retrieval, full E2E workflows |
 | `HierarchicalRoutingTests.cs` | 36 | HMoE domain tree: node creation, parent-child linking, tree walk routing, flat fallback, cross-domain, level filtering, backward compatibility, auto-classification |
+| `MultiAgentTests.cs` | 26 | Multi-agent sharing: namespace registry, ownership, permissions, cross-search, sharing/unsharing, agent identity, backward compatibility |
 | `ExpertDispatcherTests.cs` | 15 | Expert creation, routing hits/misses, threshold handling, access tracking, meta-index management |
 | `HnswIndexTests.cs` | 14 | HNSW index: add/search/remove, high-dimensional recall, rebuild, edge cases |
 | `DebateSessionManagerTests.cs` | 14 | Session management: alias registration, resolution, TTL purge, namespace generation |
@@ -834,7 +874,7 @@ dotnet test
 | `LifecycleEngineTests.cs` | 12 | State transitions, deep recall, decay cycles |
 | `FeedbackTests.cs` | 11 | Agent feedback: energy boost/suppress, state transitions, access tracking, clamping, cumulative |
 | `AutoSummarizerTests.cs` | 9 | Auto-summarization logic and cluster summary generation |
-| `QueryExpanderTests.cs` | 9 | IDF-based query expansion, term weighting |
+| `QueryExpanderTests.cs` | 14 | IDF-based query expansion, term weighting, BM25 compound tokenization (hyphen handling, s08 fix) |
 | `RegressionTests.cs` | 9 | Integration and edge-case scenarios |
 | `PersistenceManagerTests.cs` | 9 | JSON serialization, debounced saves, checksums |
 | `FloatArrayBase64ConverterTests.cs` | 9 | Base64 serialization roundtrip, legacy JSON array reading |

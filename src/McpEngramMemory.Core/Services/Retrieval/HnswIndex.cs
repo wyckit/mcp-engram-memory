@@ -118,13 +118,16 @@ public sealed class HnswIndex
         }
     }
 
+    /// <summary>Default search beam width. Lower than efConstruction for faster queries with minimal recall loss.</summary>
+    private const int DefaultEfSearch = 64;
+
     /// <summary>
     /// Search for the k nearest neighbors of the query vector.
     /// Returns (Id, CosineScore) pairs sorted by descending score.
     /// </summary>
     /// <param name="query">Query vector (does not need to be pre-normalized).</param>
     /// <param name="k">Number of results to return.</param>
-    /// <param name="ef">Search beam width (default: max(k, efConstruction)). Higher = better recall, slower search.</param>
+    /// <param name="ef">Search beam width (default: max(k, 64)). Higher = better recall, slower search.</param>
     public List<(string Id, float Score)> Search(float[] query, int k, int ef = -1)
     {
         if (_entryPoint == -1 || Count == 0)
@@ -134,7 +137,7 @@ public sealed class HnswIndex
         if (norm == 0f) return new();
 
         var normalizedQuery = Normalize(query, norm);
-        if (ef < 0) ef = Math.Max(k, _efConstruction);
+        if (ef < 0) ef = Math.Max(k, DefaultEfSearch);
 
         // Greedy search from top to layer 1
         int current = _entryPoint;

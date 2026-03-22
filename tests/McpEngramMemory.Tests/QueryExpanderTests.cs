@@ -134,4 +134,69 @@ public class QueryExpanderTests
         Assert.DoesNotContain(" AI ", " " + expanded + " ");
         Assert.DoesNotContain(" ML ", " " + expanded + " ");
     }
+
+    // ── BM25 compound tokenization tests ──
+
+    [Fact]
+    public void BM25Tokenize_HyphenatedWord_EmitsCompoundAndParts()
+    {
+        var tokens = BM25Index.Tokenize("time-stamped sensor data");
+
+        // Should emit sub-parts AND compound form
+        Assert.Contains("time", tokens);
+        Assert.Contains("stamped", tokens);
+        Assert.Contains("timestamped", tokens);
+        Assert.Contains("sensor", tokens);
+        Assert.Contains("data", tokens);
+    }
+
+    [Fact]
+    public void BM25Tokenize_MultipleHyphens_EmitsAllForms()
+    {
+        var tokens = BM25Index.Tokenize("long-running-task");
+
+        Assert.Contains("long", tokens);
+        Assert.Contains("running", tokens);
+        Assert.Contains("task", tokens);
+        Assert.Contains("longrunningtask", tokens);
+    }
+
+    [Fact]
+    public void BM25Tokenize_NoHyphens_NormalTokenization()
+    {
+        var tokens = BM25Index.Tokenize("vector search optimization");
+
+        Assert.Contains("vector", tokens);
+        Assert.Contains("search", tokens);
+        Assert.Contains("optimization", tokens);
+        Assert.DoesNotContain("-", tokens);
+    }
+
+    [Fact]
+    public void BM25Tokenize_HyphenatedQueryMatchesJoinedSeed()
+    {
+        // This is the s08 scenario: query has "time-stamped" but seed has "timestamped"
+        var queryTokens = BM25Index.Tokenize("time-stamped sensor data");
+        var seedTokens = BM25Index.Tokenize("timestamped data from InfluxDB");
+
+        // "timestamped" should appear in BOTH token sets
+        Assert.Contains("timestamped", queryTokens);
+        Assert.Contains("timestamped", seedTokens);
+    }
+
+    [Fact]
+    public void BM25Search_HyphenatedQueryFindsJoinedEntry()
+    {
+        // End-to-end BM25 test for s08 scenario
+        var bm25 = new BM25Index();
+        var entry = new CognitiveEntry("s-timeseries", new float[4], "test",
+            "Time-series databases like InfluxDB and TimescaleDB optimize for timestamped data ingestion",
+            lifecycleState: "ltm");
+        bm25.Index(entry);
+
+        var results = bm25.Search("Storing and querying time-stamped sensor data", "test", k: 5);
+
+        Assert.NotEmpty(results);
+        Assert.Equal("s-timeseries", results[0].Id);
+    }
 }

@@ -1,0 +1,127 @@
+using System.ComponentModel;
+using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services;
+using McpEngramMemory.Core.Services.Evaluation;
+using McpEngramMemory.Core.Services.Sharing;
+using ModelContextProtocol.Server;
+
+namespace McpEngramMemory.Tools;
+
+/// <summary>
+/// MCP tools for multi-agent memory sharing.
+/// cross_search searches across multiple namespaces.
+/// share_namespace / unshare_namespace manage access permissions.
+/// list_shared shows accessible namespaces.
+/// whoami returns current agent identity.
+/// </summary>
+[McpServerToolType]
+public sealed class MultiAgentTools
+{
+    private readonly CognitiveIndex _index;
+    private readonly IEmbeddingService _embedding;
+    private readonly MetricsCollector _metrics;
+    private readonly NamespaceRegistry _registry;
+    private readonly AgentIdentity _agent;
+
+    public MultiAgentTools(
+        CognitiveIndex index,
+        IEmbeddingService embedding,
+        MetricsCollector metrics,
+        NamespaceRegistry registry,
+        AgentIdentity agent)
+    {
+        _index = index;
+        _embedding = embedding;
+        _metrics = metrics;
+        _registry = registry;
+        _agent = agent;
+    }
+
+    [McpServerTool(Name = "cross_search")]
+    [Description("Search across multiple namespaces in a single call. Results are merged using " +
+        "Reciprocal Rank Fusion (RRF) and annotated with their source namespace. " +
+        "Supports hybrid search (BM25+vector) and reranking. " +
+        "Use this when you need to find information that may be spread across different knowledge domains.")]
+    public object CrossSearch(
+        [Description("Comma-separated list of namespaces to search (e.g. 'work,synthesis,mcp-engram-memory').")] string namespaces,
+        [Description("The text query to search for.")] string text,
+        [Description("Maximum number of results to return across all namespaces (default: 10).")] int k = 10,
+        [Description("When true, use hybrid BM25+vector search (default: false).")] bool hybrid = false,
+        [Description("When true, apply token-level reranking (default: false).")] bool rerank = false,
+        [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null)
+    {
+        if (string.IsNullOrWhiteSpace(namespaces))
+            return "Error: namespaces must not be empty.";
+        if (string.IsNullOrWhiteSpace(text))
+            return "Error: text must not be empty.";
+
+        using var timer = _metrics.StartTimer("cross_search");
+
+        var nsList = namespaces.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+        // Filter to namespaces the agent can access
+        var accessible = nsList.Where(ns => _registry.HasAccess(_agent.AgentId, ns)).ToList();
+        if (accessible.Count == 0)
+            return "Error: no accessible namespaces in the provided list.";
+
+        var states = includeStates is not null
+            ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            : new HashSet<string> { "stm", "ltm" };
+
+        var vector = _embedding.Embed(text);
+        var results = _index.SearchMultiple(
+            vector, accessible, queryText: text, k: k,
+            includeStates: states, hybrid: hybrid, rerank: rerank);
+
+        return new CrossSearchResponse(results, accessible.Count, results.Count);
+    }
+
+    [McpServerTool(Name = "share_namespace")]
+    [Description("Grant another agent read or write access to a namespace you own. " +
+        "Use this to enable multi-agent collaboration on shared knowledge.")]
+    public object ShareNamespace(
+        [Description("The namespace to share.")] string ns,
+        [Description("The agent ID to grant access to.")] string agentId,
+        [Description("Access level: 'read' (search only) or 'write' (search + store). Default: 'read'.")] string accessLevel = "read")
+    {
+        if (string.IsNullOrWhiteSpace(ns))
+            return "Error: namespace must not be empty.";
+        if (string.IsNullOrWhiteSpace(agentId))
+            return "Error: agentId must not be empty.";
+
+        using var timer = _metrics.StartTimer("share_namespace");
+        return _registry.Share(ns, _agent.AgentId, agentId, accessLevel);
+    }
+
+    [McpServerTool(Name = "unshare_namespace")]
+    [Description("Revoke an agent's access to a namespace you own.")]
+    public object UnshareNamespace(
+        [Description("The namespace to unshare.")] string ns,
+        [Description("The agent ID to revoke access from.")] string agentId)
+    {
+        if (string.IsNullOrWhiteSpace(ns))
+            return "Error: namespace must not be empty.";
+        if (string.IsNullOrWhiteSpace(agentId))
+            return "Error: agentId must not be empty.";
+
+        using var timer = _metrics.StartTimer("unshare_namespace");
+        return _registry.Unshare(ns, _agent.AgentId, agentId);
+    }
+
+    [McpServerTool(Name = "list_shared")]
+    [Description("List all namespaces shared with the current agent, showing owner and access level for each.")]
+    public object ListShared()
+    {
+        using var timer = _metrics.StartTimer("list_shared");
+        return _registry.GetAccessibleNamespaces(_agent.AgentId);
+    }
+
+    [McpServerTool(Name = "whoami")]
+    [Description("Return the current agent identity and a summary of accessible namespaces. " +
+        "Useful for verifying multi-agent configuration.")]
+    public object WhoAmI()
+    {
+        using var timer = _metrics.StartTimer("whoami");
+        return _registry.GetAccessibleNamespaces(_agent.AgentId);
+    }
+}

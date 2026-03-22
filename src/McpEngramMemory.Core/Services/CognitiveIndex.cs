@@ -234,6 +234,65 @@ public sealed class CognitiveIndex : IDisposable
             IncludeStates = AllStates
         });
 
+    /// <summary>
+    /// Search across multiple namespaces and merge results using Reciprocal Rank Fusion.
+    /// Returns results annotated with their source namespace.
+    /// </summary>
+    public IReadOnlyList<Models.CrossSearchResult> SearchMultiple(
+        float[] query, IReadOnlyList<string> namespaces, string? queryText = null,
+        int k = 5, float minScore = 0f, string? category = null,
+        HashSet<string>? includeStates = null, bool hybrid = false,
+        bool rerank = false, int rrfK = 60)
+    {
+        if (namespaces.Count == 0)
+            return Array.Empty<Models.CrossSearchResult>();
+
+        // Search each namespace independently
+        var allRanked = new Dictionary<string, (Models.CrossSearchResult Result, float RrfScore)>();
+
+        foreach (var ns in namespaces)
+        {
+            IReadOnlyList<CognitiveSearchResult> nsResults;
+            if (hybrid && queryText is not null)
+            {
+                nsResults = HybridSearch(query, queryText, ns, k, minScore, category, includeStates, rerank, rrfK);
+            }
+            else
+            {
+                nsResults = Search(query, ns, k, minScore, category, includeStates);
+            }
+
+            // Assign RRF scores based on rank within this namespace
+            for (int rank = 0; rank < nsResults.Count; rank++)
+            {
+                var r = nsResults[rank];
+                float rrfScore = 1.0f / (rrfK + rank + 1);
+                var key = $"{ns}:{r.Id}";
+
+                var crossResult = new Models.CrossSearchResult(
+                    r.Id, r.Text, r.Score, ns, r.LifecycleState,
+                    r.Category, r.Metadata, r.AccessCount);
+
+                if (allRanked.TryGetValue(key, out var existing))
+                {
+                    // Same entry found in multiple namespaces — sum RRF scores
+                    allRanked[key] = (crossResult, existing.RrfScore + rrfScore);
+                }
+                else
+                {
+                    allRanked[key] = (crossResult, rrfScore);
+                }
+            }
+        }
+
+        // Sort by RRF score descending, take top-K
+        return allRanked.Values
+            .OrderByDescending(x => x.RrfScore)
+            .Take(k)
+            .Select(x => x.Result)
+            .ToList();
+    }
+
     // ── Duplicate Detection (delegated to DuplicateDetector) ──
 
     /// <summary>Find near-duplicates for a single entry within its namespace (O(N) scan).</summary>
