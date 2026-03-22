@@ -1,6 +1,6 @@
 # MCP Engram Memory
 
-A cognitive memory MCP server that provides an LLM with namespace-isolated vector storage, k-nearest-neighbor search (cosine similarity), a knowledge graph, semantic clustering, lifecycle management with activation energy decay, and physics-based re-ranking. Data is persisted to disk as JSON with debounced writes.
+A local-first cognitive memory engine for AI agents, exposed as an MCP server. Provides namespace-isolated vector storage, high-quality hybrid retrieval (BM25 + vector fusion with Porter stemming, synonym expansion, cascade retrieval, and pseudo-relevance feedback), a knowledge graph, semantic clustering, lifecycle management with activation energy decay, hierarchical expert routing (HMoE), multi-agent namespace sharing, and physics-based re-ranking. Supports JSON and SQLite persistence backends.
 
 ## Quickstart
 
@@ -35,7 +35,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 3 — NuGet (embed in your app)**
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.2
+dotnet add package McpEngramMemory.Core --version 0.5.4
 ```
 
 That's it. The server exposes 49 MCP tools. To reduce tool count, set `MEMORY_TOOL_PROFILE`:
@@ -59,7 +59,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["13 Tool Classes<br/>49 MCP Tools"]
+        Tools["14 Tool Classes<br/>49 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -73,9 +73,13 @@ graph TD
 
     subgraph RE["Retrieval Engine"]
         VS["VectorSearchEngine<br/><i>Two-stage Int8→FP32</i>"]
-        HS["HybridSearchEngine<br/><i>BM25 + Vector RRF</i>"]
+        HS["HybridSearchEngine<br/><i>Adaptive RRF + Cascade</i>"]
         HW["HnswIndex<br/><i>O(log N) ANN</i>"]
-        QE["QueryExpander"]
+        BM["BM25Index<br/><i>Porter stemming</i>"]
+        SY["SynonymExpander<br/><i>98 mappings</i>"]
+        DE["DocumentEnricher<br/><i>47 reverse maps</i>"]
+        PS["PorterStemmer<br/><i>Steps 1-3</i>"]
+        QE["QueryExpander<br/><i>PRF</i>"]
         TR["TokenReranker"]
         VQ["VectorQuantizer<br/><i>SIMD Int8</i>"]
     end
@@ -96,8 +100,12 @@ graph TD
     end
 
     subgraph EX["Expert Routing"]
-        ED["ExpertDispatcher"]
+        ED["ExpertDispatcher<br/><i>HMoE tree walk</i>"]
         DM["DebateSessionManager"]
+    end
+
+    subgraph SH["Multi-Agent Sharing"]
+        NR["NamespaceRegistry<br/><i>Ownership + permissions</i>"]
     end
 
     subgraph EV["Evaluation"]
@@ -105,6 +113,7 @@ graph TD
         MC["MetricsCollector<br/><i>P50/P95/P99</i>"]
     end
 
+    CI --> SH
     CI --> NS["NamespaceStore<br/><i>Lazy loading, partitioned</i>"]
     NS --> SP["Storage Provider"]
 
@@ -125,12 +134,13 @@ graph TD
 ### The Core Memory Loop
 
 ```
-INGEST → INDEX → RETRIEVE → REINFORCE → DECAY → SUMMARIZE/COLLAPSE
-   │                  │          │          │              │
-   └── store_memory   │   memory_feedback  │    collapse_cluster
-       (embed+upsert) │   (agent feedback) │    (DBSCAN → summary)
-                      └── search_memory    └── decay_cycle
-                          (k-NN/hybrid)    (activation energy)
+INGEST → ENRICH → INDEX → RETRIEVE → REINFORCE → DECAY → SUMMARIZE/COLLAPSE
+   │        │                │           │           │              │
+   └── store_memory          │    memory_feedback    │    collapse_cluster
+       (embed + upsert)      │    (agent feedback)   │    (DBSCAN → summary)
+                │             └── search_memory       └── decay_cycle
+          DocumentEnricher        (hybrid pipeline)   (activation energy)
+          (auto-keywords)
 ```
 
 Memories move through lifecycle states based on usage:
@@ -140,6 +150,26 @@ STM (short-term) ──promote──→ LTM (long-term) ──decay──→ Arc
                    ←─────────────────────────────────── deep_recall
                               (auto-resurrect if score ≥ 0.7)
 ```
+
+### Retrieval Pipeline (v0.5.4)
+
+The hybrid search pipeline applies six stages to maximize recall without sacrificing precision:
+
+```
+Query → Synonym Expansion → Vector Search ──┐
+              │                              ├─→ Adaptive RRF Fusion ──→ Auto-PRF ──→ Category Boost ──→ Results
+              └──→ BM25 Search ──────────────┘         │
+                   (Porter stemming)              Cascade mode
+                                               (≥50 entries: BM25
+                                                boosts vector only)
+```
+
+1. **Synonym Expansion**: Query terms are expanded using 98 domain synonym mappings (e.g., "maintenance" → accretion/decay/collapse, "encrypt" → TLS/cipher/cryptography)
+2. **Dual-Path Search**: Vector cosine similarity (with HNSW for large namespaces) runs in parallel with BM25 keyword search (with Porter stemming and compound tokenization)
+3. **Adaptive RRF Fusion**: Confidence-gated Reciprocal Rank Fusion — high vector confidence (>0.70) suppresses BM25 noise, low confidence (<0.50) amplifies BM25 rescue. For namespaces ≥50 entries, cascade mode uses BM25 as a precision booster (up to 15%) instead of introducing new candidates
+4. **Auto-PRF**: When top result score is low (<0.015 RRF), Pseudo-Relevance Feedback extracts key terms from initial results and re-searches. Only used if PRF improves the top score
+5. **Category Boost**: 8% score boost when query tokens overlap with entry categories, improving disambiguation at scale
+6. **Document Enrichment** (at store time): `DocumentEnricher` auto-generates keyword aliases from entry text using 47 reverse synonym mappings, so BM25 indexes both technical text and colloquial equivalents
 
 ## Project Structure
 
@@ -163,9 +193,12 @@ src/
         VectorMath.cs           #   SIMD-accelerated dot product & norm
         VectorSearchEngine.cs   #   Two-stage Int8 screening + FP32 reranking
         HnswIndex.cs            #   HNSW approximate nearest neighbor index
-        HybridSearchEngine.cs   #   BM25 + vector RRF fusion
-        BM25Index.cs            #   Keyword search index
-        QueryExpander.cs        #   IDF-based query term expansion
+        HybridSearchEngine.cs   #   Adaptive RRF + cascade retrieval for large namespaces
+        BM25Index.cs            #   Keyword search with Porter stemming & compound tokenization
+        SynonymExpander.cs      #   Query-time domain synonym expansion (98 mappings)
+        DocumentEnricher.cs     #   Store-time keyword enrichment (47 reverse maps)
+        PorterStemmer.cs        #   Lightweight Porter stemmer (steps 1-3)
+        QueryExpander.cs        #   IDF-based query expansion + pseudo-relevance feedback
         TokenReranker.cs        #   Token-overlap reranker (implements IReranker)
         VectorQuantizer.cs      #   Int8 scalar quantization
         IReranker.cs            #   Pluggable reranker interface
@@ -175,6 +208,7 @@ src/
         ClusterManager.cs       #   Semantic cluster CRUD + centroid computation
         AccretionScanner.cs     #   DBSCAN density scanning + reversible collapse
         DuplicateDetector.cs    #   Pairwise cosine similarity duplicate detection
+        AutoSummarizer.cs       #   TF-IDF keyword extraction for cluster summaries
         AccretionBackgroundService.cs
       Lifecycle/
         LifecycleEngine.cs      #   Decay, state transitions, deep recall
@@ -189,8 +223,10 @@ src/
         IStorageProvider.cs     #   Storage abstraction interface
         PersistenceManager.cs   #   JSON file backend with debounced writes
         SqliteStorageProvider.cs #   SQLite backend with WAL mode
+      Sharing/
+        NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (560+ tests)
+  McpEngramMemory.Tests/        # xUnit tests (609 tests across 37 test files)
 benchmarks/
   baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json
@@ -206,7 +242,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.2
+dotnet add package McpEngramMemory.Core --version 0.5.4
 ```
 
 ### Library Usage
@@ -248,14 +284,14 @@ var results = index.Search(queryVector, "default", k: 5);
 - Microsoft.Extensions.Hosting 8.0.1
 - xUnit (tests)
 
-## MCP Tools (43 total)
+## MCP Tools (49 total)
 
 ### Core Memory (3 tools)
 
 | Tool | Description |
 |------|-------------|
 | `store_memory` | Store a vector embedding with text, category, and optional metadata. Defaults to STM lifecycle state. Warns if near-duplicates are detected. |
-| `search_memory` | k-NN search within a namespace with optional lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
+| `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, and auto-PRF), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
 | `delete_memory` | Remove a memory entry by ID. Cascades to remove associated graph edges and cluster memberships. |
 
 ### Composite Tools (3 tools)
@@ -345,11 +381,11 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 
 | Tool | Description |
 |------|-------------|
-| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries), `realworld-v1` (30 seeds, 20 queries — cognitive memory patterns). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
+| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries), `realworld-v1` (30 seeds, 20 queries — cognitive memory patterns), `compound-v1` (20 seeds, 15 queries — compound tokenization & domain jargon). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
-Five benchmark datasets: four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps) and one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned). Relevance grades use a 0–3 scale (3 = highly relevant).
+Six benchmark datasets: four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps), one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned), and one compound tokenization dataset testing BM25 handling of hyphenated terms and vocabulary gaps between technical jargon and colloquial phrasing. Relevance grades use a 0–3 scale (3 = highly relevant).
 
 ### Maintenance (2 tools)
 
@@ -397,9 +433,12 @@ Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Na
 | `NamespaceStore` | `Services` | Namespace-partitioned storage with lazy loading from disk and BM25 indexing |
 | `VectorSearchEngine` | `Retrieval` | Stateless k-NN search with HNSW ANN candidate generation (≥200 entries) or two-stage Int8 screening (≥30 entries) → FP32 exact reranking |
 | `HnswIndex` | `Retrieval` | Hierarchical Navigable Small World graph for O(log N) approximate nearest neighbor search with soft deletion and compacting rebuild |
-| `HybridSearchEngine` | `Retrieval` | Stateless BM25 + vector fusion via Reciprocal Rank Fusion (RRF) |
-| `BM25Index` | `Retrieval` | In-memory keyword search index with TF-IDF scoring |
-| `QueryExpander` | `Retrieval` | IDF-based query term expansion for improved recall |
+| `HybridSearchEngine` | `Retrieval` | Adaptive RRF fusion with confidence-gated k parameter. Two modes: parallel RRF for small namespaces (<50 entries), cascade mode for large namespaces (BM25 boosts vector results up to 15% instead of introducing new candidates). Auto-escalation to hybrid when vector-only confidence is low |
+| `BM25Index` | `Retrieval` | In-memory keyword search with TF-IDF scoring, Porter stemming for morphological normalization, and compound word tokenization (hyphen splitting + joining) |
+| `SynonymExpander` | `Retrieval` | Query-time domain synonym expansion (98 mappings) bridging colloquial and technical vocabulary across security, ML, systems, networking, data/storage, and general CS domains |
+| `DocumentEnricher` | `Retrieval` | Store-time keyword enrichment using reverse synonym mapping (47 entries). Auto-generates searchable keyword aliases so BM25 indexes both entry text and colloquial equivalents |
+| `PorterStemmer` | `Retrieval` | Lightweight Porter stemmer implementing steps 1-3 (plurals, verb forms, derivational suffixes including custom `-tion` → `-t` normalization). "encrypting" and "encryption" both stem to "encrypt" |
+| `QueryExpander` | `Retrieval` | IDF-based query term expansion with pseudo-relevance feedback (auto-PRF). PRF activates when hybrid top score is low (<0.015 RRF), extracting key terms from initial results to improve recall |
 | `TokenReranker` | `Retrieval` | Token-overlap reranker implementing `IReranker` |
 | `VectorMath` | `Retrieval` | SIMD-accelerated dot product and norm (static utility) |
 | `VectorQuantizer` | `Retrieval` | Int8 scalar quantization: `Quantize`, `Dequantize`, SIMD `Int8DotProduct`, `ApproximateCosine` |
@@ -407,12 +446,13 @@ Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Na
 | `KnowledgeGraph` | `Graph` | In-memory directed graph with adjacency lists, bidirectional edge support, edge transfer, and contradiction surfacing |
 | `ClusterManager` | `Intelligence` | Semantic cluster CRUD with automatic centroid computation and membership transfer |
 | `AccretionScanner` | `Intelligence` | DBSCAN-based density scanning with reversible collapse history (persisted to disk) |
+| `AutoSummarizer` | `Intelligence` | TF-IDF keyword extraction for auto-generated cluster summaries |
 | `LifecycleEngine` | `Lifecycle` | Activation energy computation, agent feedback reinforcement, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
 | `PhysicsEngine` | `Services` | Gravitational force re-ranking with "Asteroid" (semantic) + "Sun" (importance) output |
 | `BenchmarkRunner` | `Evaluation` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
 | `MetricsCollector` | `Evaluation` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | `Experts` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
-| `ExpertDispatcher` | `Experts` | Semantic routing engine that maps queries to specialized expert namespaces via a hidden meta-index |
+| `ExpertDispatcher` | `Experts` | Semantic routing engine with flat and hierarchical (HMoE) modes — maps queries to specialized expert namespaces via cosine similarity through a 3-level domain tree (root → branch → leaf). Zero LLM API calls |
 | `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, and crash recovery |
 | `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, schema migration framework, and incremental per-entry writes |
@@ -431,9 +471,11 @@ Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Na
 
 | Model | Description |
 |-------|-------------|
-| `CognitiveEntry` | Core memory entry with vector, text, metadata, lifecycle state, and activation energy |
+| `CognitiveEntry` | Core memory entry with vector, text, keywords (auto-enriched), metadata, lifecycle state, and activation energy |
 | `QuantizedVector` | Int8 quantized vector with `sbyte[]` data, min/scale for reconstruction, and precomputed self-dot product |
 | `FloatArrayBase64Converter` | JSON converter for `float[]` — writes Base64 strings, reads both Base64 and legacy JSON arrays for backwards compatibility |
+| `SearchRequest` | Search request model with options for hybrid, rerank, expand query, explain, physics, and summary-first modes |
+| `ExplainedSearchResult` | Extended search result with full retrieval diagnostics (cosine, physics, lifecycle breakdown) |
 
 ### Searchable Compression
 
@@ -804,7 +846,7 @@ This prompt triggers the full tool suite:
 
 ## Benchmarks
 
-Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 5 datasets and 4 search modes.
+Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 6 datasets and 4 search modes.
 
 ```
 benchmarks/
@@ -823,19 +865,24 @@ benchmarks/
     realworld-v1-hybrid.json
     operational-metrics.json          # System state + live latency snapshot
     ...
+  runner/                             # Benchmark execution infrastructure
+  ideas/                              # Benchmark proposals and analysis
 ```
 
-### Key Findings (as of 2026-03-20)
+### Key Findings (as of v0.5.4, 2026-03-22)
 
-| Dataset | Best Mode | Recall@K | MRR | Notes |
-|---------|-----------|----------|-----|-------|
-| default-v1 (25 seeds) | vector_rerank | 0.900 | 1.000 | Reranker adds +0.033 recall |
-| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | Strong paraphrase resilience |
-| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | Highest precision (0.587) |
-| scale-v1 (80 seeds) | vector_rerank | 0.716 | 0.978 | Hybrid hurts at scale |
-| realworld-v1 (30 seeds) | hybrid | 0.788 | 0.935 | BM25 critical for technical jargon |
+| Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
+|---------|-----------|----------|-----|--------|-------|
+| default-v1 (25 seeds) | vector_rerank | 0.900 | 1.000 | 0.953 | Reranker adds +0.033 recall |
+| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | 0.964 | Strong paraphrase resilience |
+| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | 0.952 | Highest precision (0.587) |
+| scale-v1 (80 seeds) | hybrid | 0.771 | 1.000 | 0.903 | Cascade retrieval eliminates BM25 noise (+11.9% vs v0.5.3) |
+| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | Synonym expansion bridges vocabulary gaps (+4.5% vs v0.5.3) |
+| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | Compound tokenization + stemming |
 
-**Mode selection guide**: Default to `vector` for speed. Use `vector_rerank` for quality-critical queries. Use `hybrid` only for domain-specific technical data where keyword overlap matters. Avoid `hybrid_rerank` at scale.
+**v0.5.4 improvements**: Porter stemming, expanded synonyms (98 mappings), cascade retrieval (for namespaces ≥50 entries), auto-PRF, and category-aware score boosting dramatically improved hybrid search at scale. scale-v1 hybrid recall jumped from 0.689 → 0.771 (+11.9%) with perfect MRR.
+
+**Mode selection guide**: Default to `hybrid` — it is now the best mode across most datasets thanks to cascade retrieval and synonym expansion. Use `vector` for minimal-latency queries. Use `hybrid_rerank` for maximum precision. The v0.5.4 cascade mode automatically prevents BM25 noise in large namespaces (≥50 entries) while preserving BM25 rescue for small namespaces.
 
 ## Build & Test
 
@@ -847,7 +894,7 @@ dotnet test
 
 ### Tests
 
-36 test files with 569 test cases covering:
+37 test files with 609 test cases covering:
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
@@ -875,6 +922,7 @@ dotnet test
 | `FeedbackTests.cs` | 11 | Agent feedback: energy boost/suppress, state transitions, access tracking, clamping, cumulative |
 | `AutoSummarizerTests.cs` | 9 | Auto-summarization logic and cluster summary generation |
 | `QueryExpanderTests.cs` | 14 | IDF-based query expansion, term weighting, BM25 compound tokenization (hyphen handling, s08 fix) |
+| `RetrievalImprovementTests.cs` | 40 | Synonym expansion (13), document enrichment (9), Porter stemming (7), BM25 stemming integration (2), category boost (1), auto-PRF (1), adaptive RRF, auto-escalation, Keywords field |
 | `RegressionTests.cs` | 9 | Integration and edge-case scenarios |
 | `PersistenceManagerTests.cs` | 9 | JSON serialization, debounced saves, checksums |
 | `FloatArrayBase64ConverterTests.cs` | 9 | Base64 serialization roundtrip, legacy JSON array reading |

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.4] - 2026-03-22
+
+### Added
+- **Porter Stemming for BM25**: Lightweight Porter stemmer (steps 1-3) normalizes morphological variants in the BM25 tokenizer. "encrypting", "encryption", and "encrypted" all stem to "encrypt", dramatically improving keyword recall. Handles plurals (-s/-es/-ies), verb forms (-ed/-ing), and derivational suffixes (-tion/-ation/-ize/-ness/-ful/-ive/-al).
+- **Expanded Synonym Maps**: 60+ new synonym mappings covering security (encrypt→TLS/cipher), ML (sequence→RNN/LSTM), systems (monitoring→observability/Prometheus), networking (protocol→HTTP/TCP), data/storage (cache→Redis/CDN), and general CS vocabulary bridges. Corresponding reverse maps added to DocumentEnricher for bidirectional vocabulary bridging.
+- **Two-Stage Cascade Retrieval**: For namespaces ≥50 entries, hybrid search switches from parallel RRF fusion to cascade mode — BM25 boosts vector results (up to 15%) instead of introducing new candidates, eliminating BM25 noise at scale. Smaller namespaces retain full RRF fusion.
+- **Auto-PRF Engagement**: Pseudo-Relevance Feedback automatically activates when hybrid search top score is low (<0.015 RRF). Extracts key terms from initial results and re-searches for improved recall. Only used if PRF improves the top score.
+- **Category-Aware Score Boost**: 8% score boost when query tokens overlap with entry categories, improving disambiguation at scale (e.g., "security" query boosts entries categorized as "security").
+- 19 new tests (Porter stemmer, BM25 stemming integration, expanded synonyms, expanded enrichment, category boost, auto-PRF).
+- Total tests: 609 (up from 590).
+
+## [0.5.3] - 2026-03-22
+
+### Added
+- **Adaptive RRF Fusion**: Confidence-gated hybrid search — dynamically adjusts RRF k parameter based on vector search confidence. High confidence (>0.70) suppresses BM25 noise, low confidence (<0.50) amplifies BM25 rescue. Eliminates hybrid regression on clean vector matches.
+- **Synonym Expansion Layer**: Query-time domain synonym mapping bridges vocabulary gaps between colloquial user queries and technical terminology. Directly fixes rw-q15 and c-q07 semantic gaps (e.g., "maintenance cleanup" → "accretion decay collapse").
+- **Document Enrichment**: Auto-generates keyword aliases at store time using reverse synonym mapping. BM25 indexes both entry text and enrichment keywords for improved recall on informal queries.
+- **Auto-Escalation Search**: Vector-only searches with low confidence (top score <0.50) automatically escalate to hybrid+synonym search, picking the best strategy without caller configuration.
+- **`Keywords` field on `CognitiveEntry`**: Searchable keyword aliases for document enrichment. BM25 indexes keywords alongside main text. Auto-populated on upsert via `DocumentEnricher`.
+- 21 new retrieval improvement tests (synonym expansion, document enrichment, adaptive RRF, auto-escalation, Keywords integration).
+- Total tests: 590 (up from 569).
+
 ## [0.5.2] - 2026-03-22
 
 ### Added

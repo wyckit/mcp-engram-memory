@@ -27,6 +27,8 @@ public sealed class HybridSearchEngine
     /// allowing the search to skip BM25 fusion for better P95 latency.
     /// </summary>
     private const float HighConfidenceThreshold = 0.85f;
+    private const float LowConfidenceThreshold = 0.50f;
+    private const int CascadeThreshold = 50;
 
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         IReadOnlyList<CognitiveSearchResult> vectorResults,
@@ -39,7 +41,8 @@ public sealed class HybridSearchEngine
         int rrfK,
         BM25Index bm25,
         IReranker reranker,
-        Func<string, string, CognitiveEntry?> getEntry)
+        Func<string, string, CognitiveEntry?> getEntry,
+        int entryCount = 0)
     {
         // High-confidence early exit: if vector search returned strong results,
         // skip BM25 fusion to reduce P95 latency. BM25 mainly helps when
@@ -53,6 +56,56 @@ public sealed class HybridSearchEngine
             else if (highConf.Count > k)
                 highConf.RemoveRange(k, highConf.Count - k);
             return highConf;
+        }
+
+        // Adaptive RRF: modulate BM25 influence based on vector confidence.
+        // High vector confidence → increase rrfK to suppress BM25 noise.
+        // Low vector confidence → decrease rrfK to amplify BM25 rescue.
+        int adaptiveRrfK = rrfK;
+        if (vectorResults.Count > 0)
+        {
+            float topScore = vectorResults[0].Score;
+            if (topScore >= 0.70f)
+                adaptiveRrfK = Math.Max(rrfK, 120); // suppress BM25
+            else if (topScore < LowConfidenceThreshold)
+                adaptiveRrfK = Math.Min(rrfK, 30); // amplify BM25
+        }
+
+        // Cascade mode: for large namespaces, use BM25 as a precision booster
+        // instead of parallel fusion, to avoid BM25 noise diluting vector results.
+        if (entryCount >= CascadeThreshold)
+        {
+            // Get BM25 scores for vector results only (no new candidates)
+            var vectorIds = vectorResults.Select(r => r.Id).ToHashSet();
+            var bm25Scores = bm25.Search(queryText, ns, vectorResults.Count * 2, vectorIds);
+            var bm25ScoreLookup = bm25Scores.ToDictionary(x => x.Id, x => x.Score);
+
+            // Boost vector results that also score well in BM25
+            float maxBm25 = bm25Scores.Count > 0 ? bm25Scores.Max(x => x.Score) : 1f;
+            if (maxBm25 <= 0f) maxBm25 = 1f;
+
+            var boosted = new List<CognitiveSearchResult>(vectorResults.Count);
+            foreach (var vr in vectorResults)
+            {
+                float boost = 1f;
+                if (bm25ScoreLookup.TryGetValue(vr.Id, out float bm25Score))
+                    boost = 1f + 0.15f * (bm25Score / maxBm25); // Up to 15% boost
+
+                boosted.Add(new CognitiveSearchResult(
+                    vr.Id, vr.Text, vr.Score * boost,
+                    vr.LifecycleState, vr.ActivationEnergy,
+                    vr.Category, vr.Metadata,
+                    vr.IsSummaryNode, vr.SourceClusterId, vr.AccessCount));
+            }
+
+            boosted.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+            if (rerank && boosted.Count > 0)
+                boosted = reranker.Rerank(queryText, boosted).Take(k).ToList();
+            else if (boosted.Count > k)
+                boosted.RemoveRange(k, boosted.Count - k);
+
+            return boosted;
         }
 
         // Build set of eligible IDs from vector results
@@ -99,9 +152,9 @@ public sealed class HybridSearchEngine
         {
             float score = 0f;
             if (vectorRanks.TryGetValue(id, out int vRank))
-                score += 1f / (rrfK + vRank);
+                score += 1f / (adaptiveRrfK + vRank);
             if (bm25Ranks.TryGetValue(id, out int bRank))
-                score += 1f / (rrfK + bRank);
+                score += 1f / (adaptiveRrfK + bRank);
             rrfScores.Add((id, score));
         }
 

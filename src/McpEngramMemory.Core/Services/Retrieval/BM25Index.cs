@@ -18,10 +18,14 @@ public sealed class BM25Index
     /// <summary>Index or re-index an entry's text.</summary>
     public void Index(CognitiveEntry entry)
     {
-        if (string.IsNullOrWhiteSpace(entry.Text)) return;
+        if (string.IsNullOrWhiteSpace(entry.Text) && string.IsNullOrWhiteSpace(entry.Keywords)) return;
 
         var nsIndex = GetOrCreateNamespace(entry.Ns);
-        var tokens = Tokenize(entry.Text);
+        // Index both text and keywords for document enrichment
+        var indexableText = entry.Text ?? "";
+        if (!string.IsNullOrWhiteSpace(entry.Keywords))
+            indexableText += " " + entry.Keywords;
+        var tokens = Tokenize(indexableText);
 
         // Remove old posting if exists
         Remove(entry.Id, entry.Ns);
@@ -184,18 +188,18 @@ public sealed class BM25Index
                     foreach (var part in parts)
                     {
                         if (part.Length >= 2 && !IsStopWord(part))
-                            tokens.Add(part);
+                            tokens.Add(PorterStemmer.Stem(part));
                     }
                     // Emit joined compound form (e.g., "timestamped" from "time-stamped")
                     var joined = string.Concat(parts);
                     if (joined.Length >= 2 && !IsStopWord(joined))
-                        tokens.Add(joined);
+                        tokens.Add(PorterStemmer.Stem(joined));
                 }
                 else
                 {
                     var token = raw.Trim('-');
                     if (token.Length >= 2 && !IsStopWord(token))
-                        tokens.Add(token);
+                        tokens.Add(PorterStemmer.Stem(token));
                 }
             }
         }

@@ -21,6 +21,9 @@ public sealed class CognitiveIndex : IDisposable
     private readonly VectorSearchEngine _vectorSearch = new();
     private readonly HybridSearchEngine _hybridSearch = new();
     private readonly DuplicateDetector _duplicateDetector = new();
+    private readonly SynonymExpander _synonymExpander = new();
+    private readonly DocumentEnricher _documentEnricher = new();
+    private readonly QueryExpander _queryExpander = new();
     private readonly MemoryLimitsConfig _limits;
 
     public CognitiveIndex(IStorageProvider persistence, MemoryLimitsConfig? limits = null)
@@ -72,6 +75,11 @@ public sealed class CognitiveIndex : IDisposable
     public void Upsert(CognitiveEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        // Auto-enrich keywords for BM25 vocabulary bridging
+        if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
+            entry.Keywords = _documentEnricher.Enrich(entry.Text);
+
         float norm = VectorMath.Norm(entry.Vector);
         var quantized = entry.LifecycleState is "ltm" or "archived"
             ? VectorQuantizer.Quantize(entry.Vector)
@@ -184,19 +192,64 @@ public sealed class CognitiveIndex : IDisposable
 
         if (request.Hybrid && request.QueryText is not null)
         {
+            // Expand query with domain synonyms for BM25 vocabulary bridging
+            var expandedQueryText = _synonymExpander.Expand(request.QueryText);
+
             int candidateK = Math.Max(request.K * 4, 20);
             var vectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
                 request.Category, request.IncludeStates, false, hnswIndex);
-            return _hybridSearch.HybridSearch(
-                vectorResults, request.QueryText, request.Namespace, request.K,
+            var hybridResults = _hybridSearch.HybridSearch(
+                vectorResults, expandedQueryText, request.Namespace, request.K,
                 request.IncludeStates, request.Category,
-                request.Rerank, request.RrfK, _bm25, _reranker, Get);
+                request.Rerank, request.RrfK, _bm25, _reranker, Get, snapshot.Count);
+
+            // Auto-PRF: if top hybrid result is low confidence, expand query with
+            // terms from initial results and re-search for improved recall
+            if (hybridResults.Count > 0 &&
+                hybridResults[0].Score < 0.015f &&
+                hybridResults.Count >= 3)
+            {
+                var prfQuery = _queryExpander.Expand(expandedQueryText, hybridResults, maxTerms: 4, minDocFreq: 2);
+                if (prfQuery != expandedQueryText)
+                {
+                    var prfResults = _hybridSearch.HybridSearch(
+                        vectorResults, prfQuery, request.Namespace, request.K,
+                        request.IncludeStates, request.Category,
+                        request.Rerank, request.RrfK, _bm25, _reranker, Get, snapshot.Count);
+                    // Use PRF results if they improve top score
+                    if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
+                        return ApplyCategoryBoost(prfResults, request.QueryText);
+                }
+            }
+
+            return ApplyCategoryBoost(hybridResults, request.QueryText);
         }
 
-        return _vectorSearch.Search(
+        // Vector-only search with auto-escalation to hybrid when confidence is low
+        var vectorOnlyResults = _vectorSearch.Search(
             request.Query, snapshot, request.K, request.MinScore,
             request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
+
+        // Auto-escalate: if top vector result is low confidence and we have query text,
+        // retry as hybrid search to let BM25 rescue keyword-dependent queries
+        if (request.QueryText is not null &&
+            vectorOnlyResults.Count > 0 &&
+            vectorOnlyResults[0].Score < 0.50f &&
+            !request.SummaryFirst)
+        {
+            int candidateK = Math.Max(request.K * 4, 20);
+            var broadVectorResults = _vectorSearch.Search(
+                request.Query, snapshot, candidateK, request.MinScore,
+                request.Category, request.IncludeStates, false, hnswIndex);
+            var expandedQueryText = _synonymExpander.Expand(request.QueryText);
+            return ApplyCategoryBoost(_hybridSearch.HybridSearch(
+                broadVectorResults, expandedQueryText, request.Namespace, request.K,
+                request.IncludeStates, request.Category,
+                false, request.RrfK, _bm25, _reranker, Get, snapshot.Count), request.QueryText);
+        }
+
+        return vectorOnlyResults;
     }
 
     /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
@@ -607,6 +660,44 @@ public sealed class CognitiveIndex : IDisposable
     public void Dispose() => _lock.Dispose();
 
     // ── Internal Helpers ──
+
+    /// <summary>Apply a small score boost when query terms overlap with entry categories.</summary>
+    private static IReadOnlyList<CognitiveSearchResult> ApplyCategoryBoost(
+        IReadOnlyList<CognitiveSearchResult> results, string? queryText)
+    {
+        if (queryText is null || results.Count == 0)
+            return results;
+
+        var queryTokens = BM25Index.Tokenize(queryText).ToHashSet();
+        if (queryTokens.Count == 0) return results;
+
+        var boosted = new List<CognitiveSearchResult>(results.Count);
+        foreach (var r in results)
+        {
+            float boost = 1f;
+            if (r.Category is not null)
+            {
+                var catTokens = BM25Index.Tokenize(r.Category);
+                foreach (var ct in catTokens)
+                {
+                    if (queryTokens.Contains(ct))
+                    {
+                        boost = 1.08f; // 8% category match boost
+                        break;
+                    }
+                }
+            }
+
+            boosted.Add(new CognitiveSearchResult(
+                r.Id, r.Text, r.Score * boost,
+                r.LifecycleState, r.ActivationEnergy,
+                r.Category, r.Metadata,
+                r.IsSummaryNode, r.SourceClusterId, r.AccessCount));
+        }
+
+        boosted.Sort((a, b) => b.Score.CompareTo(a.Score));
+        return boosted;
+    }
 
     private static void UpdateQuantization(
         Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> entries,

@@ -26,6 +26,13 @@ public sealed class CognitiveEntry
     [JsonPropertyName("metadata")]
     public Dictionary<string, string> Metadata { get; }
 
+    /// <summary>
+    /// Searchable keyword aliases for document enrichment.
+    /// BM25 indexes these alongside the main text to bridge vocabulary gaps.
+    /// </summary>
+    [JsonPropertyName("keywords")]
+    public string? Keywords { get; set; }
+
     // Layer 4: Cognitive Lifecycle
     [JsonPropertyName("lifecycleState")]
     public string LifecycleState { get; set; }
@@ -56,7 +63,8 @@ public sealed class CognitiveEntry
         string? text = null,
         string? category = null,
         Dictionary<string, string>? metadata = null,
-        string lifecycleState = "stm")
+        string lifecycleState = "stm",
+        string? keywords = null)
     {
         if (string.IsNullOrWhiteSpace(id))
             throw new ArgumentException("Id must not be empty.", nameof(id));
@@ -76,6 +84,7 @@ public sealed class CognitiveEntry
         LastAccessedAt = DateTimeOffset.UtcNow;
         AccessCount = 1;
         ActivationEnergy = 0f;
+        Keywords = keywords;
     }
 
     [JsonConstructor]
@@ -92,7 +101,8 @@ public sealed class CognitiveEntry
         int accessCount,
         float activationEnergy,
         bool isSummaryNode,
-        string? sourceClusterId)
+        string? sourceClusterId,
+        string? keywords = null)
     {
         Id = id;
         Vector = vector;
@@ -107,5 +117,6 @@ public sealed class CognitiveEntry
         ActivationEnergy = activationEnergy;
         IsSummaryNode = isSummaryNode;
         SourceClusterId = sourceClusterId;
+        Keywords = keywords;
     }
 }

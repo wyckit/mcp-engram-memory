@@ -142,10 +142,10 @@ public class QueryExpanderTests
     {
         var tokens = BM25Index.Tokenize("time-stamped sensor data");
 
-        // Should emit sub-parts AND compound form
+        // Should emit sub-parts (stemmed) AND compound form (stemmed)
         Assert.Contains("time", tokens);
-        Assert.Contains("stamped", tokens);
-        Assert.Contains("timestamped", tokens);
+        Assert.Contains("stamp", tokens); // "stamped" → "stamp" via Porter stemmer
+        Assert.Contains("timestamp", tokens); // "timestamped" → "timestamp" via stemmer
         Assert.Contains("sensor", tokens);
         Assert.Contains("data", tokens);
     }
@@ -156,9 +156,9 @@ public class QueryExpanderTests
         var tokens = BM25Index.Tokenize("long-running-task");
 
         Assert.Contains("long", tokens);
-        Assert.Contains("running", tokens);
+        Assert.Contains("run", tokens); // "running" → "run" via Porter stemmer
         Assert.Contains("task", tokens);
-        Assert.Contains("longrunningtask", tokens);
+        Assert.Contains("longrunningtask", tokens); // joined compound, stemmed
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class QueryExpanderTests
 
         Assert.Contains("vector", tokens);
         Assert.Contains("search", tokens);
-        Assert.Contains("optimization", tokens);
+        Assert.Contains("optimize", tokens); // "optimization" → "optimize" via Porter stemmer
         Assert.DoesNotContain("-", tokens);
     }
 
@@ -179,9 +179,9 @@ public class QueryExpanderTests
         var queryTokens = BM25Index.Tokenize("time-stamped sensor data");
         var seedTokens = BM25Index.Tokenize("timestamped data from InfluxDB");
 
-        // "timestamped" should appear in BOTH token sets
-        Assert.Contains("timestamped", queryTokens);
-        Assert.Contains("timestamped", seedTokens);
+        // "timestamp" (stemmed from "timestamped") should appear in BOTH token sets
+        Assert.Contains("timestamp", queryTokens);
+        Assert.Contains("timestamp", seedTokens);
     }
 
     [Fact]
