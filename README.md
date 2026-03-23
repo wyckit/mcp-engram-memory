@@ -52,7 +52,17 @@ That's it. The server exposes 49 MCP tools. To reduce tool count, set `MEMORY_TO
 }
 ```
 
-See [`examples/`](examples/) for ready-to-use config files.
+See [`examples/`](examples/) for ready-to-use config and harness files:
+
+| File | Purpose |
+|------|---------|
+| `claude-code.json` | MCP server config for Claude Code (full profile) |
+| `claude-code-minimal.json` | MCP server config for Claude Code (minimal profile) |
+| `CLAUDE.md` | Reference harness for Claude Code with cost-optimized model routing |
+| `copilot-instructions.md` | Reference harness for GitHub Copilot |
+| `AGENTS.md` | Reference harness for OpenAI Codex |
+| `vscode-copilot.json` | MCP server config for VS Code Copilot |
+| `docker-compose.yml` | Docker deployment example |
 
 ## At a Glance
 
@@ -568,11 +578,16 @@ The `env` block is optional. Omit it to use the JSON file backend with no memory
 
 ## AI Assistant Setup
 
-Each setup below is a single prompt you paste into the respective tool. The AI will read this README, create all config files, and write the custom instructions for you.
+Two options for each tool:
+
+1. **Copy the reference harness** from [`examples/`](examples/) — ready to use, includes cost-optimized patterns
+2. **Paste the setup prompt** below — the AI will generate the config and instructions for you
 
 ### Claude Code Setup
 
-Open Claude Code in your project directory and paste:
+**Quick start**: Copy [`examples/CLAUDE.md`](examples/CLAUDE.md) to `~/.claude/CLAUDE.md` and [`examples/claude-code.json`](examples/claude-code.json) to your MCP config.
+
+**Or** open Claude Code in your project directory and paste:
 
 ```
 Set up mcp-engram-memory as my persistent memory system. Do the following:
@@ -584,30 +599,47 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 2. Create or update my CLAUDE.md (global at ~/.claude/CLAUDE.md) with these sections:
 
    ## Recall: Search Before You Work
-   - At conversation start, search vector memory using up to 3 parallel agents:
-     Agent 1: search_memory in the project namespace for the current task
-       (use hybrid: true and expandGraph: true for richer recall)
-     Agent 2: search_memory in "work" and "synthesis" namespaces for cross-project patterns
-     Agent 3: search_memory with alternative phrasings/keywords in the project namespace
-       (use hybrid: true for keyword+vector fusion)
+   - At conversation start, search vector memory using up to 2 parallel agents
+     with model: "haiku" (recall agents only call MCP tools — no reasoning needed):
+     Agent 1: cross_search across [project_namespace, "work", "synthesis"] with
+       hybrid: true — combines multi-namespace search into a single RRF-merged call
+     Agent 2: search_memory in the project namespace with alternative phrasings/keywords
+       (use hybrid: true and expandGraph: true for keyword+vector fusion and graph neighbors)
    - For graph-connected knowledge, use expandGraph: true to pull in linked memories
    - Tool selection: search_memory for project context, dispatch_task for cross-domain
      questions, consult_expert_panel for multi-perspective analysis, deep_recall for
      archived knowledge, detect_duplicates and find_contradictions for quality checks
+
+   ## Model Routing for Cost Efficiency
+   Route engram operations to the cheapest model that can handle them.
+   Sub-agents inherit the parent model by default — always override for memory ops:
+   - Tier 1 (model: "haiku"): search_memory, cross_search, store_memory, delete_memory,
+     link_memories, detect_duplicates, whoami, list_shared, get_neighbors, traverse_graph,
+     get_domain_tree — simple MCP tool calls, just relay results
+   - Tier 2 (model: "sonnet"): dispatch_task, deep_recall, find_contradictions,
+     merge_memories — moderate analysis of search results needed
+   - Tier 3 (main thread / Opus): consult_expert_panel, create_expert, session
+     retrospectives, complex multi-step memory workflows — requires deep reasoning
+   Anti-patterns: never launch Opus sub-agents for simple searches; never process
+   large search result sets in the main Opus thread; delegate store_memory calls
+   to haiku sub-agents with pre-composed payloads
 
    ## Store: Save What You Learn
    - Store memories after completing tasks, fixing bugs, learning patterns, or receiving
      corrections. Use the project directory name as namespace, kebab-case IDs, include
      domain keywords in text for searchability, and categorize as one of: decision, pattern,
      bug-fix, architecture, preference, lesson, reference
+   - For routine stores, spawn a model: "haiku" sub-agent with all fields pre-composed.
+     Only keep stores in the main thread when reasoning about what to store is needed
    - Pre-store quality checks: verify text is self-contained, includes domain keywords,
      doesn't duplicate existing memories, and has the correct category
    - When store_memory warns about duplicates: skip if existing is accurate, upsert same
      ID if outdated, or store and link if both are distinct
 
    ## Expert Routing
-   - Use dispatch_task for open-ended questions. If it returns needs_expert,
-     call create_expert with a detailed persona, then seed that expert's namespace
+   - Use dispatch_task for open-ended questions (via model: "sonnet" sub-agent).
+     If it returns needs_expert, call create_expert with a detailed persona in the main
+     thread, then seed that expert's namespace
    - Lifecycle: promote STM to LTM when recalled 2+ times, documents a stable pattern,
      captures a recurring bug fix, or records a user correction
    - Link related memories with link_memories using: parent_child, cross_reference,
@@ -622,9 +654,10 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 
    ## Session Retrospective
    - At the end of significant sessions, self-evaluate: what went well, what went wrong,
-     what you'd do differently, key decisions made
+     what you'd do differently, key decisions made (keep in main Opus thread — needs judgment)
    - Store retrospective with: id "retro-YYYY-MM-DD-topic", category "lesson",
      specific actionable lessons (not vague observations)
+   - Delegate the final store_memory call to a model: "haiku" sub-agent once text is composed
    - Link retrospectives to related bug fixes, patterns, or decisions
    - Search past retrospectives before starting similar work
 
@@ -633,7 +666,9 @@ Confirm each file you create and show me the final contents.
 
 ### GitHub Copilot Setup
 
-Open VS Code with Copilot and paste in chat:
+**Quick start**: Copy [`examples/copilot-instructions.md`](examples/copilot-instructions.md) to `.github/copilot-instructions.md` and [`examples/vscode-copilot.json`](examples/vscode-copilot.json) to `.vscode/mcp.json`.
+
+**Or** open VS Code with Copilot and paste in chat:
 
 ```
 Set up mcp-engram-memory as my persistent memory system. Do the following:
@@ -646,9 +681,10 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 2. Create .github/copilot-instructions.md with vector memory instructions:
 
    ## Recall
-   - Before starting any task, use search_memory with the project namespace to recall
-     relevant context. Use hybrid: true for keyword+vector fusion and expandGraph: true
-     to pull in linked memories. Search for past decisions and bugs before answering.
+   - Before starting any task, use cross_search across [project_namespace, "work",
+     "synthesis"] with hybrid: true to recall context from all namespaces in a single
+     RRF-merged call. Follow up with search_memory using alternative phrasings and
+     expandGraph: true to pull in graph neighbors.
    - Tool selection: search_memory for project context, dispatch_task for cross-domain
      questions (auto-routes to best expert namespace), consult_expert_panel for multiple
      perspectives, deep_recall for archived/forgotten knowledge, detect_duplicates and
@@ -687,7 +723,9 @@ Confirm each file you create and show me the final contents.
 
 ### Google Gemini CLI Setup
 
-Open Gemini CLI and paste in chat:
+**Quick start**: Copy [`GEMINI.md`](GEMINI.md) to your workspace root.
+
+**Or** open Gemini CLI and paste in chat:
 
 ```
 Set up mcp-engram-memory as my persistent memory system. Do the following:
@@ -700,9 +738,10 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 2. Create GEMINI.md in my workspace root with vector memory instructions:
 
    ## Recall
-   - Before starting any task, use search_memory with the project namespace to recall
-     relevant context. Use hybrid: true for keyword+vector fusion and expandGraph: true
-     to pull in linked memories. Search for past decisions and bugs before answering.
+   - Before starting any task, use cross_search across [project_namespace, "work",
+     "synthesis"] with hybrid: true to recall context from all namespaces in a single
+     RRF-merged call. Follow up with search_memory using alternative phrasings and
+     expandGraph: true to pull in graph neighbors.
    - Tool selection: search_memory for project context, dispatch_task for cross-domain
      questions (auto-routes to best expert namespace), consult_expert_panel for multiple
      perspectives, deep_recall for archived/forgotten knowledge, detect_duplicates and
@@ -741,7 +780,9 @@ Confirm each file you create and show me the final contents.
 
 ### OpenAI Codex Setup
 
-Open Codex CLI in your project directory and paste:
+**Quick start**: Copy [`examples/AGENTS.md`](examples/AGENTS.md) to your project root.
+
+**Or** open Codex CLI in your project directory and paste:
 
 ```
 Set up mcp-engram-memory as my persistent memory system. Do the following:
@@ -756,9 +797,10 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 2. Create AGENTS.md in the project root with vector memory instructions:
 
    ## Recall
-   - Before starting any task, use search_memory with the project namespace to recall
-     relevant context. Use hybrid: true for keyword+vector fusion and expandGraph: true
-     to pull in linked memories. Search for past decisions and bugs before answering.
+   - Before starting any task, use cross_search across [project_namespace, "work",
+     "synthesis"] with hybrid: true to recall context from all namespaces in a single
+     RRF-merged call. Follow up with search_memory using alternative phrasings and
+     expandGraph: true to pull in graph neighbors.
    - Tool selection: search_memory for project context, dispatch_task for cross-domain
      questions (auto-routes to best expert namespace), consult_expert_panel for multiple
      perspectives, deep_recall for archived/forgotten knowledge, detect_duplicates and
