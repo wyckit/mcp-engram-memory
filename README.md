@@ -598,48 +598,42 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 2. Create or update my CLAUDE.md (global at ~/.claude/CLAUDE.md) with these sections:
 
+   ## Model Routing
+   All engram memory operations MUST use model: "sonnet" sub-agents. This keeps the
+   main Opus thread for actual work (coding, analysis, decisions) and routes all memory
+   I/O to Sonnet's separate usage bucket (~5x cheaper). Only consult_expert_panel and
+   create_expert may stay in the main Opus thread when they need multi-step orchestration.
+
    ## Recall: Search Before You Work
-   - At conversation start, search vector memory using up to 2 parallel agents
-     with model: "haiku" (recall agents only call MCP tools — no reasoning needed):
+   - At conversation start, search vector memory using up to 3 parallel agents
+     with model: "sonnet":
      Agent 1: cross_search across [project_namespace, "work", "synthesis"] with
        hybrid: true — combines multi-namespace search into a single RRF-merged call
      Agent 2: search_memory in the project namespace with alternative phrasings/keywords
        (use hybrid: true and expandGraph: true for keyword+vector fusion and graph neighbors)
+     Agent 3: dispatch_task with a description of the current task to find the best
+       expert namespace (use hierarchical: true if domain tree is populated)
    - For graph-connected knowledge, use expandGraph: true to pull in linked memories
-   - Tool selection: search_memory for project context, dispatch_task for cross-domain
-     questions, consult_expert_panel for multi-perspective analysis, deep_recall for
-     archived knowledge, detect_duplicates and find_contradictions for quality checks
-
-   ## Model Routing for Cost Efficiency
-   Route engram operations to the cheapest model that can handle them.
-   Sub-agents inherit the parent model by default — always override for memory ops:
-   - Tier 1 (model: "haiku"): search_memory, cross_search, store_memory, delete_memory,
-     link_memories, detect_duplicates, whoami, list_shared, get_neighbors, traverse_graph,
-     get_domain_tree — simple MCP tool calls, just relay results
-   - Tier 2 (model: "sonnet"): dispatch_task, deep_recall, find_contradictions,
-     merge_memories — moderate analysis of search results needed
-   - Tier 3 (main thread / Opus): consult_expert_panel, create_expert, session
-     retrospectives, complex multi-step memory workflows — requires deep reasoning
-   Anti-patterns: never launch Opus sub-agents for simple searches; never process
-   large search result sets in the main Opus thread; delegate store_memory calls
-   to haiku sub-agents with pre-composed payloads
+   - Tool selection: cross_search for broad context, search_memory for focused lookups,
+     dispatch_task for cross-domain questions, consult_expert_panel for multi-perspective
+     analysis, deep_recall for archived knowledge
 
    ## Store: Save What You Learn
    - Store memories after completing tasks, fixing bugs, learning patterns, or receiving
      corrections. Use the project directory name as namespace, kebab-case IDs, include
      domain keywords in text for searchability, and categorize as one of: decision, pattern,
      bug-fix, architecture, preference, lesson, reference
-   - For routine stores, spawn a model: "haiku" sub-agent with all fields pre-composed.
-     Only keep stores in the main thread when reasoning about what to store is needed
+   - All stores go through model: "sonnet" sub-agents — compose fields in main thread,
+     hand off the store_memory call to Sonnet
    - Pre-store quality checks: verify text is self-contained, includes domain keywords,
      doesn't duplicate existing memories, and has the correct category
    - When store_memory warns about duplicates: skip if existing is accurate, upsert same
      ID if outdated, or store and link if both are distinct
 
    ## Expert Routing
-   - Use dispatch_task for open-ended questions (via model: "sonnet" sub-agent).
+   - Use dispatch_task via model: "sonnet" sub-agent for open-ended questions.
      If it returns needs_expert, call create_expert with a detailed persona in the main
-     thread, then seed that expert's namespace
+     Opus thread, then seed that expert's namespace
    - Lifecycle: promote STM to LTM when recalled 2+ times, documents a stable pattern,
      captures a recurring bug fix, or records a user correction
    - Link related memories with link_memories using: parent_child, cross_reference,
@@ -653,11 +647,10 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    - Default agent (no AGENT_ID) has unrestricted access for backward compatibility
 
    ## Session Retrospective
-   - At the end of significant sessions, self-evaluate: what went well, what went wrong,
-     what you'd do differently, key decisions made (keep in main Opus thread — needs judgment)
-   - Store retrospective with: id "retro-YYYY-MM-DD-topic", category "lesson",
-     specific actionable lessons (not vague observations)
-   - Delegate the final store_memory call to a model: "haiku" sub-agent once text is composed
+   - At the end of significant sessions, self-evaluate in the main Opus thread: what went
+     well, what went wrong, what you'd do differently, key decisions made
+   - Store retrospective via model: "sonnet" sub-agent with: id "retro-YYYY-MM-DD-topic",
+     category "lesson", specific actionable lessons (not vague observations)
    - Link retrospectives to related bug fixes, patterns, or decisions
    - Search past retrospectives before starting similar work
 

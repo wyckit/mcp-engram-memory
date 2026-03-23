@@ -2,45 +2,27 @@
 
 You have access to a persistent engram memory system via the `engram-memory` MCP server. Use it as your primary long-term memory for storing and recalling knowledge across sessions.
 
+## Model Routing
+
+All engram memory operations MUST use `model: "sonnet"` sub-agents. This keeps the main Opus thread for your actual work (coding, analysis, decisions) and routes all memory I/O to Sonnet's separate usage bucket (~5x cheaper).
+
+- **Main thread (Opus)**: Coding, architecture, reasoning, expert creation, retrospective evaluation
+- **Sub-agents (Sonnet)**: All `search_memory`, `cross_search`, `store_memory`, `dispatch_task`, `deep_recall`, `link_memories`, `detect_duplicates`, `find_contradictions`, `merge_memories`, and any other engram MCP tool calls
+
+The only exception: `consult_expert_panel` and `create_expert` may stay in the main Opus thread when they require multi-step orchestration or judgment about persona design.
+
 ## Recall: Search Before You Work
 
 At the start of every conversation, search engram memory for relevant context using **parallel multi-agent recall**:
 
 1. Identify the project namespace from the working directory name (e.g., `my-project`, `web-app`)
-2. Launch **up to 2 parallel Agent subagents using `model: "haiku"`**, each searching a different angle:
+2. Launch **up to 3 parallel Agent subagents using `model: "sonnet"`**, each searching a different angle:
    - **Agent 1 — Broad context**: Use `cross_search` across `[project_namespace, "work", "synthesis"]` with `hybrid: true` and a query describing the current task. This combines multi-namespace search into a single RRF-merged call.
    - **Agent 2 — Related topics**: `search_memory` in the project namespace with alternative phrasings or related keywords (e.g., if the task is about "search performance", also search for "indexing", "SIMD", "benchmarks"). Use `hybrid: true` and `expandGraph: true` for keyword+vector fusion and graph neighbors.
+   - **Agent 3 — Expert routing**: `dispatch_task` with a description of the current task to find the best-matching expert namespace. Use `hierarchical: true` if the domain tree is populated.
 3. Combine results from all agents before proceeding — this gives you broader recall than a single query
 4. If the user references past decisions, patterns, or bugs — search for them before answering
-5. For graph-connected knowledge, use `expandGraph: true` to automatically pull in linked memories
-
-> **Cost optimization**: Recall agents MUST use `model: "haiku"` — they only call MCP tools and relay results, no complex reasoning needed. This uses the separate Sonnet/Haiku usage bucket and is ~60x cheaper than Opus per token.
-
-## Model Routing for Cost Efficiency
-
-Route engram memory operations to the cheapest model that can handle them. **Opus costs ~5x Sonnet and ~60x Haiku** per token, and Sonnet has its own separate usage bucket on Pro/Max plans.
-
-### Routing Tiers
-
-| Tier | Model | Operations | Why |
-|------|-------|-----------|-----|
-| **Tier 1 — Haiku** | `model: "haiku"` | `search_memory`, `cross_search`, `whoami`, `list_shared`, `get_neighbors`, `traverse_graph`, `get_domain_tree`, `store_memory`, `delete_memory`, `link_memories`, `detect_duplicates` | Simple MCP tool calls — no reasoning, just relay results |
-| **Tier 2 — Sonnet** | `model: "sonnet"` | `dispatch_task`, `deep_recall`, `find_contradictions`, `merge_memories` | Moderate analysis of search results needed |
-| **Tier 3 — Opus** | Main thread (no sub-agent) | `consult_expert_panel`, `create_expert`, session retrospectives, complex multi-step memory workflows | Requires deep reasoning or multi-step orchestration |
-
-### How to Apply
-
-- **Recall sub-agents** (session start): Always `model: "haiku"` — they just call search tools and return text
-- **Mid-task lookups** (user asks about past decisions): Spawn a `model: "haiku"` sub-agent to search, process results in the main Opus thread
-- **Store after task completion**: Spawn a `model: "haiku"` sub-agent with the memory payload — it just calls `store_memory` and confirms
-- **Retrospectives and expert creation**: Keep in the main Opus thread — these require judgment about what to store and how to structure it
-- **dispatch_task / deep_recall**: Use `model: "sonnet"` sub-agents — these return richer results that benefit from moderate analysis before relaying
-
-### Anti-Patterns to Avoid
-
-- **Never launch Opus sub-agents for simple searches** — this is the #1 waste
-- **Never process large search result sets in the main Opus thread** — delegate to a cheaper sub-agent and have it return only the relevant findings
-- **Don't skip sub-agents for store operations** just because they seem simple — the Opus tokens spent formatting the store_memory call and processing the response add up across sessions
+5. For graph-connected knowledge, use `expandGraph: true` to automatically pull in linked memories (neighbors, cluster members)
 
 ## Tool Selection: Which Search Tool to Use
 
@@ -48,7 +30,7 @@ Pick the right tool for the situation:
 
 | Situation | Tool | Why |
 |-----------|------|-----|
-| Starting a task, need project context | `cross_search` | RRF-merged multi-namespace search in one call |
+| Starting a task, need broad context | `cross_search` | RRF-merged multi-namespace search in one call |
 | Focused search in one namespace | `search_memory` | Direct namespace search, fast and focused |
 | Complex cross-domain question | `dispatch_task` | Semantic routing finds the best expert namespace automatically |
 | Cross-domain with populated domain tree | `dispatch_task` with `hierarchical: true` | Coarse-to-fine tree walk: root -> branch -> leaf |
@@ -78,7 +60,7 @@ Store memories into engram memory whenever you:
 - **Receive a correction** — store the correct approach so you don't repeat the mistake
 - **Make an architectural decision** — store the rationale with context
 
-> **Cost optimization**: For routine stores, spawn a `model: "haiku"` sub-agent with all the fields pre-composed. The sub-agent just calls `store_memory` and confirms success. Only keep stores in the main Opus thread when you need to reason about *what* to store (e.g., retrospectives, deciding between update vs new entry).
+All stores should go through a `model: "sonnet"` sub-agent. Compose the fields in the main Opus thread, then hand off the `store_memory` call to Sonnet.
 
 ### How to Store
 
@@ -116,9 +98,9 @@ The `text` field is embedded and used for semantic search. Write it so **future 
 
 The system supports **semantic expert routing** via `dispatch_task`, `create_expert`, and `get_domain_tree`:
 
-- **`dispatch_task`**: Describe a problem -> the system finds the best-matching expert namespace and returns relevant context. Use via `model: "sonnet"` sub-agent.
+- **`dispatch_task`**: Describe a problem -> the system finds the best-matching expert namespace and returns relevant context. Run via `model: "sonnet"` sub-agent.
 - **`create_expert`**: Register a new expert or domain node. Keep in main Opus thread — requires judgment about persona design.
-- **`get_domain_tree`**: Inspect the routing topology. Use via `model: "haiku"` sub-agent.
+- **`get_domain_tree`**: Inspect the routing topology. Run via `model: "sonnet"` sub-agent.
 
 ### Lifecycle Management
 
@@ -138,22 +120,19 @@ When multiple agents share the same engram-memory server, set `AGENT_ID` env var
 
 ## Session Retrospective: Learn From Each Session
 
-> **Cost note**: Retrospectives are Tier 3 (Opus) — keep in the main thread. The reasoning about what went well/wrong requires judgment. Only the final `store_memory` call can be delegated to a Haiku sub-agent once the text is composed.
-
 At the end of significant work sessions:
 
-1. **Evaluate** — what went well, what went wrong, what you'd do differently
-2. **Store** — id `retro-YYYY-MM-DD-topic`, category `lesson`, specific actionable lessons
-3. **Link** — connect to related bug fixes, patterns, or decisions via `link_memories`
+1. **Evaluate** (main Opus thread — requires judgment): what went well, what went wrong, what you'd do differently, key decisions made
+2. **Store** via `model: "sonnet"` sub-agent: id `retro-YYYY-MM-DD-topic`, category `lesson`, specific actionable lessons
+3. **Link** to related bug fixes, patterns, or decisions via `link_memories`
 4. **Search past retrospectives** before starting similar work
 
 ## Context Compaction Bridge
 
-During long sessions that may hit context limits, store incremental progress memories:
+During long sessions that may hit context limits, store incremental progress memories via `model: "sonnet"` sub-agents:
 - Before a complex task, store a `reference` memory with the plan and current state
 - After major milestones, store a `decision` or `pattern` memory capturing what was done
 - Use descriptive IDs like `wip-YYYY-MM-DD-task-name` for in-progress snapshots
-- **Use `model: "haiku"` sub-agents** for all compaction bridge stores — pre-composed payloads with no reasoning needed
 
 ## Namespace Guide
 
