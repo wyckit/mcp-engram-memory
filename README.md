@@ -599,10 +599,15 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 2. Create or update my CLAUDE.md (global at ~/.claude/CLAUDE.md) with these sections:
 
    ## Model Routing
-   All engram memory operations MUST use model: "sonnet" sub-agents. This keeps the
-   main Opus thread for actual work (coding, analysis, decisions) and routes all memory
-   I/O to Sonnet's separate usage bucket (~5x cheaper). Only consult_expert_panel and
-   create_expert may stay in the main Opus thread when they need multi-step orchestration.
+   Route sub-agents by purpose to maximize your subscription:
+   - Main thread (Opus): Coding, architecture, reasoning, expert creation, retrospectives
+   - Memory sub-agents (model: "sonnet"): All engram MCP tool calls — search, store,
+     dispatch_task, deep_recall, link, merge, detect_duplicates, etc.
+   - Utility sub-agents (model: "haiku"): Explore agents, codebase searches, file
+     reading/grepping, research lookups — anything that doesn't need engram tools or
+     complex reasoning
+   Rules: engram operations → Sonnet, codebase exploration/research → Haiku,
+   consult_expert_panel and create_expert may stay in the main Opus thread.
 
    ## Recall: Search Before You Work
    - At conversation start, search vector memory using up to 3 parallel agents

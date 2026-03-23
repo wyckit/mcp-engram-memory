@@ -4,12 +4,19 @@ You have access to a persistent engram memory system via the `engram-memory` MCP
 
 ## Model Routing
 
-All engram memory operations MUST use `model: "sonnet"` sub-agents. This keeps the main Opus thread for your actual work (coding, analysis, decisions) and routes all memory I/O to Sonnet's separate usage bucket (~5x cheaper).
+Route sub-agents by purpose to maximize your subscription:
 
-- **Main thread (Opus)**: Coding, architecture, reasoning, expert creation, retrospective evaluation
-- **Sub-agents (Sonnet)**: All `search_memory`, `cross_search`, `store_memory`, `dispatch_task`, `deep_recall`, `link_memories`, `detect_duplicates`, `find_contradictions`, `merge_memories`, and any other engram MCP tool calls
+| Tier | Model | What runs here |
+|------|-------|----------------|
+| **Main thread** | Opus | Coding, architecture, reasoning, expert creation, retrospective evaluation |
+| **Memory sub-agents** | Sonnet (`model: "sonnet"`) | All engram MCP tool calls: `search_memory`, `cross_search`, `store_memory`, `dispatch_task`, `deep_recall`, `link_memories`, `detect_duplicates`, `find_contradictions`, `merge_memories`, etc. |
+| **Utility sub-agents** | Haiku (`model: "haiku"`) | Explore agents, codebase searches, file reading/grepping, research lookups, any sub-agent that doesn't need engram tools or complex reasoning |
 
-The only exception: `consult_expert_panel` and `create_expert` may stay in the main Opus thread when they require multi-step orchestration or judgment about persona design.
+**Rules**:
+- When spawning an Agent for engram memory operations → `model: "sonnet"`
+- When spawning an Agent for codebase exploration, file searches, or general research → `model: "haiku"`
+- `consult_expert_panel` and `create_expert` may stay in the main Opus thread when they require multi-step orchestration or judgment about persona design
+- When in doubt, default to Haiku for read-only tasks, Sonnet for memory tasks
 
 ## Recall: Search Before You Work
 
