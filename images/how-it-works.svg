@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <linearGradient id="store-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="search-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="link-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#a78bfa"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="route-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#c084fc"/>
+      <stop offset="100%" style="stop-color:#a855f7"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="400" rx="12" fill="url(#bg2)"/>
+
+  <!-- Title -->
+  <text x="450" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="700" fill="#f8fafc">How It Works</text>
+  <text x="450" y="70" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" fill="#64748b">The core memory loop — store, search, link, route</text>
+
+  <!-- Step 1: Store -->
+  <g transform="translate(65, 105)" filter="url(#shadow)">
+    <rect width="170" height="200" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="170" height="4" rx="2" fill="url(#store-grad)" y="0"/>
+    <circle cx="85" cy="55" r="28" fill="#6366f1" opacity="0.15"/>
+    <g transform="translate(70, 40)" stroke="#6366f1" stroke-width="2" fill="none" stroke-linecap="round">
+      <rect x="2" y="2" width="26" height="26" rx="4"/>
+      <line x1="10" y1="10" x2="20" y2="10"/>
+      <line x1="10" y1="15" x2="20" y2="15"/>
+      <line x1="10" y1="20" x2="16" y2="20"/>
+      <path d="M22 18 L28 24" stroke-width="2.5"/>
+    </g>
+    <text x="85" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#e2e8f0">Store</text>
+    <text x="85" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Embed text as vectors</text>
+    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Auto-detect duplicates</text>
+    <text x="85" y="162" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Enrich keywords</text>
+    <rect x="25" y="175" width="120" height="20" rx="4" fill="#6366f1" opacity="0.12"/>
+    <text x="85" y="189" text-anchor="middle" font-family="monospace" font-size="10" fill="#818cf8">store_memory</text>
+  </g>
+
+  <!-- Arrow 1→2 -->
+  <line x1="245" y1="205" x2="275" y2="205" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: Search -->
+  <g transform="translate(285, 105)" filter="url(#shadow)">
+    <rect width="170" height="200" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="170" height="4" rx="2" fill="url(#search-grad)" y="0"/>
+    <circle cx="85" cy="55" r="28" fill="#8b5cf6" opacity="0.15"/>
+    <g transform="translate(70, 40)" stroke="#8b5cf6" stroke-width="2" fill="none" stroke-linecap="round">
+      <circle cx="13" cy="13" r="10"/>
+      <line x1="20" y1="20" x2="28" y2="28" stroke-width="2.5"/>
+    </g>
+    <text x="85" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#e2e8f0">Search</text>
+    <text x="85" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Hybrid BM25 + vector</text>
+    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Synonym expansion</text>
+    <text x="85" y="162" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Cross-namespace RRF</text>
+    <rect x="25" y="175" width="120" height="20" rx="4" fill="#8b5cf6" opacity="0.12"/>
+    <text x="85" y="189" text-anchor="middle" font-family="monospace" font-size="10" fill="#a78bfa">search_memory</text>
+  </g>
+
+  <!-- Arrow 2→3 -->
+  <line x1="465" y1="205" x2="495" y2="205" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: Link -->
+  <g transform="translate(505, 105)" filter="url(#shadow)">
+    <rect width="170" height="200" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="170" height="4" rx="2" fill="url(#link-grad)" y="0"/>
+    <circle cx="85" cy="55" r="28" fill="#a78bfa" opacity="0.15"/>
+    <g transform="translate(68, 38)" stroke="#a78bfa" stroke-width="2" fill="none" stroke-linecap="round">
+      <circle cx="8" cy="8" r="5" fill="#a78bfa" opacity="0.3"/>
+      <circle cx="26" cy="8" r="5" fill="#a78bfa" opacity="0.3"/>
+      <circle cx="17" cy="24" r="5" fill="#a78bfa" opacity="0.3"/>
+      <line x1="12" y1="10" x2="22" y2="10"/>
+      <line x1="10" y1="12" x2="14" y2="20"/>
+      <line x1="24" y1="12" x2="20" y2="20"/>
+    </g>
+    <text x="85" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#e2e8f0">Link</text>
+    <text x="85" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Knowledge graph edges</text>
+    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Semantic clusters</text>
+    <text x="85" y="162" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Multi-hop traversal</text>
+    <rect x="25" y="175" width="120" height="20" rx="4" fill="#a78bfa" opacity="0.12"/>
+    <text x="85" y="189" text-anchor="middle" font-family="monospace" font-size="10" fill="#c4b5fd">link_memories</text>
+  </g>
+
+  <!-- Arrow 3→4 -->
+  <line x1="685" y1="205" x2="715" y2="205" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Route -->
+  <g transform="translate(725, 105)" filter="url(#shadow)">
+    <rect width="170" height="200" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="170" height="4" rx="2" fill="url(#route-grad)" y="0"/>
+    <circle cx="85" cy="55" r="28" fill="#c084fc" opacity="0.15"/>
+    <g transform="translate(70, 40)" stroke="#c084fc" stroke-width="2" fill="none" stroke-linecap="round">
+      <circle cx="15" cy="5" r="4" fill="#c084fc" opacity="0.3"/>
+      <circle cx="5" cy="20" r="4" fill="#c084fc" opacity="0.3"/>
+      <circle cx="25" cy="20" r="4" fill="#c084fc" opacity="0.3"/>
+      <line x1="13" y1="9" x2="7" y2="16"/>
+      <line x1="17" y1="9" x2="23" y2="16"/>
+      <path d="M15 1 L15 -3 M11 2 L8 -1 M19 2 L22 -1" stroke-width="1.5" opacity="0.5"/>
+    </g>
+    <text x="85" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#e2e8f0">Route</text>
+    <text x="85" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Expert dispatch (HMoE)</text>
+    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Domain tree routing</text>
+    <text x="85" y="162" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Zero LLM API calls</text>
+    <rect x="25" y="175" width="120" height="20" rx="4" fill="#c084fc" opacity="0.12"/>
+    <text x="85" y="189" text-anchor="middle" font-family="monospace" font-size="10" fill="#d8b4fe">dispatch_task</text>
+  </g>
+
+  <!-- Bottom lifecycle bar -->
+  <g transform="translate(65, 330)">
+    <rect width="830" height="50" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="30" y="20" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#64748b">LIFECYCLE</text>
+
+    <!-- STM -->
+    <rect x="120" y="12" width="70" height="26" rx="13" fill="#22c55e" opacity="0.15" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1"/>
+    <text x="155" y="30" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#4ade80">STM</text>
+
+    <!-- Arrow -->
+    <text x="205" y="30" font-family="system-ui, sans-serif" font-size="14" fill="#475569">&#x2192;</text>
+
+    <!-- LTM -->
+    <rect x="225" y="12" width="70" height="26" rx="13" fill="#3b82f6" opacity="0.15" stroke="#3b82f6" stroke-opacity="0.3" stroke-width="1"/>
+    <text x="260" y="30" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#60a5fa">LTM</text>
+
+    <!-- Arrow -->
+    <text x="310" y="30" font-family="system-ui, sans-serif" font-size="14" fill="#475569">&#x2192;</text>
+
+    <!-- Archived -->
+    <rect x="330" y="12" width="90" height="26" rx="13" fill="#f59e0b" opacity="0.15" stroke="#f59e0b" stroke-opacity="0.3" stroke-width="1"/>
+    <text x="375" y="30" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="500" fill="#fbbf24">Archived</text>
+
+    <!-- Deep recall arrow back -->
+    <text x="440" y="30" font-family="system-ui, sans-serif" font-size="11" fill="#475569">&#x2190; deep_recall auto-resurrects</text>
+
+    <!-- Decay info -->
+    <text x="680" y="30" font-family="system-ui, sans-serif" font-size="11" fill="#64748b">activation energy decay</text>
+  </g>
+</svg>

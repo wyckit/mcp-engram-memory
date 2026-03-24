@@ -9,10 +9,10 @@
 
     <Target Name="AttachBgeMicroModelFiles" BeforeTargets="AssignTargetPaths" DependsOnTargets="AcquireBgeMicroModel; AcquireBgeMicroVocab">
         <ItemGroup>
-            <Content CopyToOutputDirectory="PreserveNewest" Pack="false"
+            <Content CopyToOutputDirectory="PreserveNewest" Pack="true"
                      Include="$(BgeMicroModelPath)"
                      TargetPath="LocalEmbeddingsModel\default\model.onnx" />
-            <Content CopyToOutputDirectory="PreserveNewest" Pack="false"
+            <Content CopyToOutputDirectory="PreserveNewest" Pack="true"
                      Include="$(BgeMicroVocabPath)"
                      TargetPath="LocalEmbeddingsModel\default\vocab.txt" />
         </ItemGroup>

@@ -5,7 +5,26 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- dotnet global tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>engram-memory</ToolCommandName>
+
+    <!-- NuGet Package -->
+    <PackageId>McpEngramMemory</PackageId>
+    <Version>0.5.4</Version>
+    <Authors>wyckit</Authors>
+    <Description>Cognitive memory MCP server with vector search, knowledge graph, lifecycle management, and hierarchical expert routing. Install as a dotnet global tool for single-line setup.</Description>
+    <PackageTags>mcp;engram;memory;ai;vector-search;knowledge-graph;expert-routing;model-context-protocol;dotnet-tool</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/wyckit/mcp-engram-memory</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />

@@ -5,7 +5,7 @@
       "command": "dotnet",
       "args": ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"],
       "env": {
-        "MEMORY_TOOL_PROFILE": "standard"
+        "MEMORY_TOOL_PROFILE": "minimal"
       }
     }
   }
