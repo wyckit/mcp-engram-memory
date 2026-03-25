@@ -1,0 +1,84 @@
+{
+  "datasetId": "distractor-v1",
+  "description": "Negative/Distractor Resilience Benchmark — 22 seeds with homonym pairs (Python lang/snake, Java lang/island/coffee, Spring framework/season/mechanical, Rust lang/corrosion, etc.). 15 queries with explicit grade-0 distractors that should NOT be retrieved. Tests false-positive avoidance.",
+  "capturedAt": "2026-03-25",
+  "version": "v0.5.4+distractor",
+  "embedding": "bge-micro-v2 (384-dim, ONNX)",
+  "seeds": 22,
+  "queries": 15,
+  "results": {
+    "vector": {
+      "recallAt5": 0.723,
+      "precisionAt5": 0.373,
+      "mrr": 1.000,
+      "ndcgAt5": 0.988,
+      "meanLatencyMs": 0.294,
+      "p95LatencyMs": 1.261
+    },
+    "hybrid": {
+      "recallAt5": 0.723,
+      "precisionAt5": 0.373,
+      "mrr": 0.933,
+      "ndcgAt5": 0.929,
+      "meanLatencyMs": 0.664,
+      "p95LatencyMs": 2.739
+    },
+    "vector_rerank": {
+      "recallAt5": 0.737,
+      "precisionAt5": 0.387,
+      "mrr": 1.000,
+      "ndcgAt5": 0.988,
+      "meanLatencyMs": 1.271,
+      "p95LatencyMs": 4.025
+    },
+    "hybrid_rerank": {
+      "recallAt5": 0.737,
+      "precisionAt5": 0.387,
+      "mrr": 1.000,
+      "ndcgAt5": 0.988,
+      "meanLatencyMs": 0.500,
+      "p95LatencyMs": 0.600
+    }
+  },
+  "bestMode": "vector_rerank / hybrid_rerank (tied at 0.737 recall)",
+  "distractorAnalysis": {
+    "description": "Custom metric: how often grade-0 distractors appear in top-5 results",
+    "observations": [
+      "d-q01 (Python ML): d-python-snake appears at rank 2 in vector mode — homonym not fully separated",
+      "d-q02 (Python snake): d-python-lang appears at rank 2 — symmetric leakage, expected for homonyms",
+      "d-q03 (Java+Spring enterprise): d-java-island leaks in at rank 4 in vector, d-spring-mechanical at rank 4-5",
+      "d-q05 (Mars rover): d-mars-candy appears at rank 2 across all modes — strong false positive",
+      "d-q09 (iron corrosion): d-rust-lang appears at rank 2 — Rust programming concept leaks",
+      "d-q13 (LaTeX typesetting): d-latex-material appears at rank 3 — moderate leakage",
+      "d-q15 (toxic metals): d-rust-lang appears in results — 'rust' triggers programming association"
+    ]
+  },
+  "weakQueries": [
+    {
+      "queryId": "d-q06",
+      "query": "Dependency injection and inversion of control in application frameworks",
+      "bestRecall": 0.33,
+      "analysis": "Only finds d-spring-framework. Query is too technical/specific — only 1 relevant seed out of 3 possible grades."
+    },
+    {
+      "queryId": "d-q07",
+      "query": "Hooke's law and elastic deformation in mechanical systems",
+      "bestRecall": 0.33,
+      "analysis": "Only finds d-spring-mechanical. Single relevant seed, recall denominator includes only 1 relevant entry."
+    },
+    {
+      "queryId": "d-q08",
+      "query": "Memory safety and ownership in systems programming languages",
+      "bestRecall": 0.50,
+      "analysis": "Finds d-rust-lang but d-rust-corrosion not retrieved as distractor (good). Low recall because only 1 relevant seed."
+    }
+  ],
+  "keyFindings": [
+    "nDCG is extremely high (0.988) — when the correct answer is found, it's always ranked #1 (perfect MRR for vector modes)",
+    "Recall is lower (0.723-0.737) because many queries have only 1 relevant seed — the denominator includes grade-0 entries",
+    "Distractors frequently appear in top-5 but NEVER at rank 1 — the system distinguishes the correct sense for top ranking",
+    "BM25 hybrid mode slightly degrades MRR (0.933) — keyword overlap on homonyms introduces noise",
+    "Mars candy bar is the strongest false positive — appears at rank 2 in all modes for the planet query",
+    "Programming language homonyms (Python, Rust, Java) consistently leak into top-5 results for non-tech queries"
+  ]
+}

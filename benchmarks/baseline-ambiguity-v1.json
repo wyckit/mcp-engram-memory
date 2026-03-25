@@ -1,0 +1,65 @@
+{
+  "datasetId": "ambiguity-v1",
+  "description": "Cross-Domain Ambiguity Benchmark — 24 seeds with ambiguous terms (network, tree, memory, model, kernel, port, pipeline, table, branch) across different CS domains. 15 queries testing disambiguation.",
+  "capturedAt": "2026-03-25",
+  "version": "v0.5.4+ambiguity",
+  "embedding": "bge-micro-v2 (384-dim, ONNX)",
+  "seeds": 24,
+  "queries": 15,
+  "results": {
+    "vector": {
+      "recallAt5": 0.844,
+      "precisionAt5": 0.427,
+      "mrr": 1.000,
+      "ndcgAt5": 0.898,
+      "meanLatencyMs": 0.306,
+      "p95LatencyMs": 1.309
+    },
+    "hybrid": {
+      "recallAt5": 0.867,
+      "precisionAt5": 0.440,
+      "mrr": 1.000,
+      "ndcgAt5": 0.915,
+      "meanLatencyMs": 0.092,
+      "p95LatencyMs": 0.123
+    },
+    "vector_rerank": {
+      "recallAt5": 0.922,
+      "precisionAt5": 0.467,
+      "mrr": 1.000,
+      "ndcgAt5": 0.941,
+      "meanLatencyMs": 0.676,
+      "p95LatencyMs": 1.289
+    },
+    "hybrid_rerank": {
+      "recallAt5": 0.878,
+      "precisionAt5": 0.453,
+      "mrr": 0.933,
+      "ndcgAt5": 0.862,
+      "meanLatencyMs": 1.061,
+      "p95LatencyMs": 3.070
+    }
+  },
+  "bestMode": "vector_rerank",
+  "weakQueries": [
+    {
+      "queryId": "a-q05",
+      "query": "DDR5 RAM bandwidth and the memory hierarchy",
+      "bestRecall": 0.50,
+      "analysis": "Consistently misses a-pipe-cpu (CPU pipeline, grade 1). Memory terms dominate, CPU pipeline connection too weak for embedding model."
+    },
+    {
+      "queryId": "a-q13",
+      "query": "Using tables to store and look up data efficiently",
+      "bestRecall": 0.67,
+      "analysis": "Retrieves a-table-db and a-table-hash but misses a-table-route (grade 1). Routing tables too far from storage/lookup semantics."
+    }
+  ],
+  "keyFindings": [
+    "Reranker provides strong disambiguation lift: vector_rerank Recall 0.922 vs vector 0.844 (+9.2%)",
+    "MRR is perfect for 3/4 modes — system consistently gets the top result right even under ambiguity",
+    "Hybrid_rerank degrades MRR to 0.933 — BM25 keyword matching can introduce noise on ambiguous terms",
+    "Ambiguous queries (a-q07 through a-q12) generally perform well — model handles polysemy better than expected",
+    "Category boost helps: category-tagged seeds in the same ambiguity group are correctly separated"
+  ]
+}

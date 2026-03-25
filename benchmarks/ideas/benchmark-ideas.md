@@ -1,6 +1,6 @@
 # Benchmark Ideas
 
-10 proposals for expanding the IR quality benchmark suite. Three have been implemented (paraphrase-v1, multihop-v1, scale-v1). Seven remain as future candidates.
+10 proposals for expanding the IR quality benchmark suite. Five have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1). Five remain as future candidates.
 
 ## Current Baselines
 
@@ -13,12 +13,11 @@
 
 ## Ideas
 
-### 1. Cross-Domain Ambiguity
+### 1. Cross-Domain Ambiguity — IMPLEMENTED as `ambiguity-v1`
 
 Queries where the same term has different meanings across domains. Tests whether the system retrieves the correct semantic context rather than surface-level keyword matches.
 
-**Example seeds:** "Tree (data structure)", "Tree (file system hierarchy)", "Tree (DOM in web browsers)"
-**Example query:** "How do I traverse a tree?" — should retrieve all three with appropriate ranking.
+**Dataset:** 24 seeds using 10 ambiguous term groups (network, tree, memory, model, kernel, port, pipeline, table, branch, node) across different CS domains. 15 queries: 6 unambiguous (clear domain context), 6 ambiguous (no context), 3 cross-domain.
 
 **Measures:** Precision under ambiguity, whether the system diversifies results.
 
@@ -35,12 +34,11 @@ Queries that are heavy paraphrases or indirect descriptions of seed content. Tes
 
 ---
 
-### 3. Negative / Distractor Resilience
+### 3. Negative / Distractor Resilience — IMPLEMENTED as `distractor-v1`
 
 Queries that are superficially similar to seeds but semantically different. Tests whether the system avoids false positives.
 
-**Example seed:** "Python is a high-level programming language..."
-**Example query:** "Python snake species native to Southeast Asia" — should NOT retrieve bench-python highly.
+**Dataset:** 22 seeds with 10 homonym groups (Python lang/snake, Java lang/island/coffee, Mars planet/candy, Spring framework/season/mechanical, Rust lang/corrosion, Docker tech/worker, Shell CLI/sea, Apache server/helicopter, LaTeX typeset/material, Mercury planet/element). 15 queries with explicit grade-0 distractors.
 
 **Measures:** Precision (low false-positive rate), ability to distinguish homonyms.
 
@@ -136,8 +134,8 @@ Intentionally inject near-duplicate seeds (slightly reworded versions of the sam
 | High | 2. Paraphrase Robustness | **Implemented** — `paraphrase-v1` |
 | High | 4. Multi-Hop Reasoning | **Implemented** — `multihop-v1` |
 | High | 8. Scale Stress Test | **Implemented** — `scale-v1` |
-| Medium | 1. Cross-Domain Ambiguity | Not started |
-| Medium | 3. Negative/Distractor | Not started |
+| Medium | 1. Cross-Domain Ambiguity | **Implemented** — `ambiguity-v1` |
+| Medium | 3. Negative/Distractor | **Implemented** — `distractor-v1` |
 | Medium | 5. Specificity Gradient | Not started |
 | Medium | 9. Physics Re-ranking | Not started |
 | Low | 6. Lifecycle-Aware | Not started |

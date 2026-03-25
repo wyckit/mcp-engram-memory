@@ -647,7 +647,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -661,6 +661,8 @@ public sealed class BenchmarkRunner
             "scale-v1" => CreateScaleDataset(),
             "realworld-v1" => CreateRealWorldDataset(),
             "compound-v1" => CreateCompoundDataset(),
+            "ambiguity-v1" => CreateAmbiguityDataset(),
+            "distractor-v1" => CreateDistractorDataset(),
             _ => null
         };
     }
@@ -831,5 +833,204 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("compound-v1", "Compound Tokenization, Domain Jargon & Multi-Agent Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Cross-Domain Ambiguity benchmark: seeds where the same term has different meanings
+    /// across domains. Tests whether the system retrieves the correct semantic context
+    /// rather than surface-level keyword matches.
+    /// </summary>
+    public static BenchmarkDataset CreateAmbiguityDataset()
+    {
+        // Ambiguous term groups:
+        //   "network"  → computer networking vs neural networks
+        //   "tree"     → data structure vs file system vs DOM
+        //   "memory"   → RAM/hardware vs memory management vs cognitive memory
+        //   "model"    → ML model vs data model vs design pattern (MVC)
+        //   "kernel"   → OS kernel vs ML kernel vs image processing kernel
+        //   "port"     → network port vs software porting vs hardware port
+        //   "pipeline" → CI/CD vs data pipeline vs CPU pipeline
+        //   "table"    → database table vs hash table vs routing table
+        //   "branch"   → git branch vs tree branch vs conditional branch
+        //   "node"     → network node vs tree node vs Node.js
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // "network" group
+            new("a-net-comp", "Computer networks connect devices using routers, switches, and protocols like TCP/IP and Ethernet. Network topology describes how nodes are physically or logically arranged — star, mesh, ring, or bus.", "networking"),
+            new("a-net-neural", "Neural networks are layered computational graphs where artificial neurons apply weighted sums and activation functions. Deep neural networks with many hidden layers can learn hierarchical feature representations from raw data.", "ml"),
+
+            // "tree" group
+            new("a-tree-ds", "A tree data structure organizes elements hierarchically with a root node and child nodes. Binary search trees, AVL trees, red-black trees, and B-trees each optimize for different access patterns and balance guarantees.", "data-structures"),
+            new("a-tree-fs", "A file system tree organizes directories and files in a hierarchical structure starting from the root directory. Commands like ls, cd, and find navigate the tree. Inodes track metadata for each node in the hierarchy.", "systems"),
+            new("a-tree-dom", "The Document Object Model (DOM) tree represents an HTML page as a hierarchy of element nodes. JavaScript manipulates the DOM tree to dynamically update web page content, structure, and styling.", "web"),
+
+            // "memory" group
+            new("a-mem-hw", "Computer memory includes RAM for fast volatile storage and ROM for firmware. DDR5 SDRAM operates at higher bandwidth than DDR4. The memory hierarchy spans registers, L1/L2/L3 cache, main memory, and disk.", "hardware"),
+            new("a-mem-mgmt", "Memory management in programming involves allocating heap and stack memory, tracking references, and freeing unused allocations. Memory leaks occur when allocated memory is never freed, gradually exhausting available resources.", "systems"),
+            new("a-mem-cognitive", "Cognitive memory systems model how biological brains store and retrieve information. Short-term memory has limited capacity, while long-term memory consolidates through rehearsal and sleep. Semantic memory stores facts and episodic memory stores experiences.", "cognitive-science"),
+
+            // "model" group
+            new("a-model-ml", "Machine learning models are trained on data to make predictions. Model architectures include linear regression, decision trees, random forests, SVMs, and deep neural networks. Hyperparameter tuning and cross-validation optimize model performance.", "ml"),
+            new("a-model-data", "Data models define the structure of information in databases and applications. Entity-relationship diagrams, UML class diagrams, and schema definitions describe entities, attributes, and relationships between data objects.", "databases"),
+            new("a-model-mvc", "The Model-View-Controller (MVC) design pattern separates application logic into three components. The Model manages data and business rules, the View renders the UI, and the Controller handles user input and coordinates between them.", "architecture"),
+
+            // "kernel" group
+            new("a-kernel-os", "The operating system kernel manages hardware resources, process scheduling, memory allocation, and system calls. Linux, Windows NT, and XNU are monolithic or hybrid kernels that mediate between user space and hardware.", "systems"),
+            new("a-kernel-ml", "Kernel methods in machine learning map data into higher-dimensional feature spaces. The kernel trick enables SVMs to find non-linear decision boundaries efficiently. Common kernels include RBF (Gaussian), polynomial, and sigmoid.", "ml"),
+            new("a-kernel-img", "Image processing kernels are small matrices convolved with images to apply effects. A 3x3 Gaussian kernel blurs images, a Sobel kernel detects edges, and a sharpening kernel enhances detail. Convolutional neural networks learn these kernels automatically.", "image-processing"),
+
+            // "port" group
+            new("a-port-net", "Network ports are numbered endpoints for communication. TCP port 80 serves HTTP, port 443 serves HTTPS, and port 22 serves SSH. Firewalls filter traffic by port number to control network access.", "networking"),
+            new("a-port-sw", "Software porting adapts a program to run on a different platform or operating system. Porting involves handling differences in system calls, endianness, compiler behavior, and hardware-specific instructions.", "systems"),
+
+            // "pipeline" group
+            new("a-pipe-cicd", "CI/CD pipelines automate building, testing, and deploying software. GitHub Actions, Jenkins, and GitLab CI define pipeline stages that run on each commit — linting, unit tests, integration tests, and deployment to staging or production.", "devops"),
+            new("a-pipe-data", "Data pipelines extract, transform, and load (ETL) data between systems. Apache Kafka streams events in real-time, Apache Spark processes batch data, and Airflow orchestrates complex multi-step data workflows.", "data-engineering"),
+            new("a-pipe-cpu", "CPU instruction pipelines overlap fetch, decode, execute, and write-back stages to increase throughput. Pipeline hazards — data dependencies, control flow changes, and structural conflicts — cause stalls that reduce performance.", "hardware"),
+
+            // "table" group
+            new("a-table-db", "Database tables store data in rows and columns with defined schemas. Primary keys uniquely identify rows, foreign keys reference other tables, and indexes speed up queries. Normalization eliminates data redundancy.", "databases"),
+            new("a-table-hash", "Hash tables implement associative arrays by mapping keys through a hash function to bucket indices. Collision resolution strategies include chaining (linked lists per bucket) and open addressing (linear or quadratic probing).", "data-structures"),
+            new("a-table-route", "Routing tables in network devices map destination IP addresses to next-hop routers and interfaces. Protocols like OSPF, BGP, and RIP dynamically update routing tables as network topology changes.", "networking"),
+
+            // "branch" group
+            new("a-branch-git", "Git branches are lightweight pointers to commits that enable parallel development. Feature branches isolate changes, merge commits integrate them, and rebasing replays commits onto a new base for linear history.", "devops"),
+            new("a-branch-cpu", "Branch prediction in CPUs speculates which path a conditional instruction will take. Mispredictions flush the pipeline, wasting cycles. Modern predictors use pattern history tables and neural-inspired perceptron predictors.", "hardware"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Unambiguous queries — clear domain context should retrieve correct sense
+            new("a-q01", "How do routers forward packets across a computer network",
+                new() { ["a-net-comp"] = 3, ["a-table-route"] = 2, ["a-port-net"] = 1 }),
+            new("a-q02", "Training deep neural networks with backpropagation",
+                new() { ["a-net-neural"] = 3, ["a-model-ml"] = 2, ["a-kernel-ml"] = 1 }),
+            new("a-q03", "Navigating the file system directory hierarchy",
+                new() { ["a-tree-fs"] = 3, ["a-tree-ds"] = 1 }),
+            new("a-q04", "How JavaScript updates the DOM to render dynamic content",
+                new() { ["a-tree-dom"] = 3, ["a-tree-ds"] = 1 }),
+            new("a-q05", "DDR5 RAM bandwidth and the memory hierarchy",
+                new() { ["a-mem-hw"] = 3, ["a-pipe-cpu"] = 1 }),
+            new("a-q06", "Preventing memory leaks in C++ heap allocations",
+                new() { ["a-mem-mgmt"] = 3, ["a-mem-hw"] = 1 }),
+
+            // Ambiguous queries — the ambiguous term appears without clear domain context
+            new("a-q07", "How do networks learn and adapt",
+                new() { ["a-net-neural"] = 3, ["a-net-comp"] = 2 }),
+            new("a-q08", "Working with trees and traversal algorithms",
+                new() { ["a-tree-ds"] = 3, ["a-tree-fs"] = 1, ["a-tree-dom"] = 1 }),
+            new("a-q09", "Understanding different types of memory and their roles",
+                new() { ["a-mem-hw"] = 3, ["a-mem-mgmt"] = 2, ["a-mem-cognitive"] = 2 }),
+            new("a-q10", "Using kernel functions for pattern recognition",
+                new() { ["a-kernel-ml"] = 3, ["a-kernel-img"] = 2 }),
+            new("a-q11", "How models are structured and validated",
+                new() { ["a-model-ml"] = 2, ["a-model-data"] = 2, ["a-model-mvc"] = 2 }),
+            new("a-q12", "Designing efficient pipelines for throughput",
+                new() { ["a-pipe-cicd"] = 2, ["a-pipe-data"] = 2, ["a-pipe-cpu"] = 2 }),
+
+            // Cross-domain queries — intentionally span two ambiguous senses
+            new("a-q13", "Using tables to store and look up data efficiently",
+                new() { ["a-table-db"] = 3, ["a-table-hash"] = 3, ["a-table-route"] = 1 }),
+            new("a-q14", "Branch management in development workflows and version control",
+                new() { ["a-branch-git"] = 3, ["a-branch-cpu"] = 0 }),
+            new("a-q15", "Porting software across different operating system kernels",
+                new() { ["a-port-sw"] = 3, ["a-kernel-os"] = 2, ["a-port-net"] = 0 }),
+        };
+
+        return new BenchmarkDataset("ambiguity-v1", "Cross-Domain Ambiguity Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Negative/Distractor Resilience benchmark: queries that are superficially similar to seeds
+    /// but semantically different. Tests whether the system avoids false positives by distinguishing
+    /// homonyms, false friends, and surface-level keyword overlap from genuine semantic relevance.
+    /// Focuses on Precision (low false-positive rate) rather than Recall.
+    /// </summary>
+    public static BenchmarkDataset CreateDistractorDataset()
+    {
+        // Each seed group has a "target" (what the query actually wants) and "distractors"
+        // (entries that share surface terms but are semantically unrelated to the query).
+        // Grade 0 marks explicit distractors that should NOT appear in top results.
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // "Python" — programming language vs snake
+            new("d-python-lang", "Python is a high-level interpreted programming language created by Guido van Rossum. It emphasizes code readability with significant whitespace and supports multiple programming paradigms including procedural, object-oriented, and functional.", "programming"),
+            new("d-python-snake", "The python is a large non-venomous snake found in Africa, Asia, and Australia. Reticulated pythons can exceed 6 meters in length. They kill prey by constriction, wrapping their muscular body around the animal and squeezing.", "biology"),
+
+            // "Java" — programming language vs island vs coffee
+            new("d-java-lang", "Java is a class-based, object-oriented programming language designed to be platform-independent. The JVM (Java Virtual Machine) enables write-once-run-anywhere portability. Java is widely used for enterprise applications, Android development, and backend services.", "programming"),
+            new("d-java-island", "Java is an Indonesian island and one of the most densely populated places on Earth. Its capital Jakarta is a major economic hub. The island has numerous volcanoes including the historically active Mount Merapi.", "geography"),
+            new("d-java-coffee", "Java coffee refers to coffee grown on the Indonesian island of Java. Known for its heavy body, low acidity, and earthy flavor profile, Java coffee has been cultivated since Dutch colonial times and remains a premium single-origin variety.", "food"),
+
+            // "Mars" — planet vs candy bar vs Roman god
+            new("d-mars-planet", "Mars is the fourth planet from the Sun with a thin atmosphere of mostly carbon dioxide. Its reddish appearance comes from iron oxide on the surface. NASA's Perseverance rover is currently exploring Jezero Crater for signs of ancient microbial life.", "astronomy"),
+            new("d-mars-candy", "Mars is a chocolate bar manufactured by Mars, Incorporated. It consists of nougat topped with caramel and coated in milk chocolate. The Mars bar was first produced in 1932 in Slough, England.", "food"),
+
+            // "Spring" — Java framework vs season vs mechanical spring
+            new("d-spring-framework", "Spring Framework is a comprehensive Java application framework providing dependency injection, aspect-oriented programming, and MVC web support. Spring Boot auto-configures applications with embedded servers and production-ready features.", "programming"),
+            new("d-spring-season", "Spring is the season between winter and summer when temperatures rise, plants bloom, and daylight hours increase. The vernal equinox marks the astronomical beginning of spring in the Northern Hemisphere around March 20.", "nature"),
+            new("d-spring-mechanical", "A mechanical spring stores elastic potential energy when deformed. Hooke's law states that force is proportional to displacement (F = -kx). Springs are used in suspension systems, watches, mattresses, and industrial shock absorbers.", "physics"),
+
+            // "Rust" — programming language vs corrosion
+            new("d-rust-lang", "Rust is a systems programming language emphasizing memory safety without garbage collection. Its ownership system with borrowing and lifetimes prevents data races at compile time. Rust is used for operating systems, game engines, and WebAssembly.", "programming"),
+            new("d-rust-corrosion", "Rust is an iron oxide formed by the reaction of iron and oxygen in the presence of water or moisture. The electrochemical process of rusting gradually weakens metal structures. Galvanization, paint coatings, and stainless steel alloys prevent corrosion.", "chemistry"),
+
+            // "Docker" — containerization vs dockworker
+            new("d-docker-tech", "Docker is a platform for developing, shipping, and running applications in containers. Docker images package code with dependencies, and Docker Compose orchestrates multi-container applications. Kubernetes manages Docker containers at scale in production.", "devops"),
+            new("d-docker-worker", "A docker or dockworker is a person who loads and unloads cargo from ships at ports. Historically known as longshoremen or stevedores, dockworkers operate cranes, forklifts, and cargo handling equipment in maritime shipping facilities.", "occupation"),
+
+            // "Shell" — command shell vs seashell vs Shell oil
+            new("d-shell-cli", "A command-line shell interprets user commands and scripts. Bash, Zsh, and PowerShell provide job control, variable expansion, piping, and redirection. Shell scripts automate system administration, build processes, and deployment tasks.", "systems"),
+            new("d-shell-sea", "Seashells are the hard protective outer layers of marine mollusks. Gastropod shells spiral from a central axis, while bivalve shells have two hinged halves. Shells are composed of calcium carbonate secreted by the mantle tissue.", "biology"),
+
+            // "Apache" — web server vs helicopter vs indigenous people
+            new("d-apache-server", "Apache HTTP Server is the world's most widely used web server software. It supports virtual hosting, URL rewriting, SSL/TLS, and modules for PHP and Python. Apache is maintained by the Apache Software Foundation as open-source.", "web"),
+            new("d-apache-helicopter", "The AH-64 Apache is a twin-engine attack helicopter used by the United States Army. Armed with Hellfire missiles, Hydra rockets, and a 30mm chain gun, it provides close air support and anti-armor capability in combat operations.", "military"),
+
+            // "Latex" — typesetting vs material
+            new("d-latex-typeset", "LaTeX is a document preparation system for high-quality typesetting. Built on TeX, it excels at mathematical notation, academic papers, and technical documents. BibTeX manages bibliographic references and citations.", "publishing"),
+            new("d-latex-material", "Latex is a milky fluid produced by rubber trees (Hevea brasiliensis). Natural latex is harvested by tapping the bark and collected in cups. It is processed into rubber for gloves, balloons, tires, and medical equipment.", "materials"),
+
+            // "Mercury" — planet vs element vs Roman god
+            new("d-mercury-planet", "Mercury is the smallest planet and closest to the Sun. It has virtually no atmosphere and extreme temperature swings from 430°C during the day to -180°C at night. MESSENGER spacecraft mapped its heavily cratered surface.", "astronomy"),
+            new("d-mercury-element", "Mercury is a chemical element (Hg) and the only metal that is liquid at room temperature. It was historically used in thermometers and dental amalgams but is now regulated due to neurotoxicity. Mercury vapor is particularly hazardous.", "chemistry"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Queries that should retrieve the programming/tech sense, NOT the non-tech distractor
+            new("d-q01", "Python libraries for data science and machine learning",
+                new() { ["d-python-lang"] = 3, ["d-python-snake"] = 0 }),
+            new("d-q02", "Reticulated python habitat and behavior in Southeast Asia",
+                new() { ["d-python-snake"] = 3, ["d-python-lang"] = 0 }),
+            new("d-q03", "Building enterprise microservices with Java and Spring Boot",
+                new() { ["d-java-lang"] = 3, ["d-spring-framework"] = 2, ["d-java-island"] = 0, ["d-java-coffee"] = 0, ["d-spring-season"] = 0 }),
+            new("d-q04", "Coffee varieties and flavor profiles from Indonesian islands",
+                new() { ["d-java-coffee"] = 3, ["d-java-island"] = 2, ["d-java-lang"] = 0, ["d-spring-framework"] = 0 }),
+            new("d-q05", "Exploring the surface of Mars with robotic rovers",
+                new() { ["d-mars-planet"] = 3, ["d-mercury-planet"] = 1, ["d-mars-candy"] = 0 }),
+            new("d-q06", "Dependency injection and inversion of control in application frameworks",
+                new() { ["d-spring-framework"] = 3, ["d-spring-season"] = 0, ["d-spring-mechanical"] = 0 }),
+            new("d-q07", "Hooke's law and elastic deformation in mechanical systems",
+                new() { ["d-spring-mechanical"] = 3, ["d-spring-framework"] = 0, ["d-spring-season"] = 0 }),
+            new("d-q08", "Memory safety and ownership in systems programming languages",
+                new() { ["d-rust-lang"] = 3, ["d-rust-corrosion"] = 0 }),
+            new("d-q09", "Preventing iron corrosion with protective coatings",
+                new() { ["d-rust-corrosion"] = 3, ["d-rust-lang"] = 0 }),
+            new("d-q10", "Container orchestration and deployment pipelines",
+                new() { ["d-docker-tech"] = 3, ["d-docker-worker"] = 0 }),
+            new("d-q11", "Writing Bash scripts for server automation",
+                new() { ["d-shell-cli"] = 3, ["d-shell-sea"] = 0, ["d-apache-server"] = 1 }),
+            new("d-q12", "Configuring virtual hosts on a web server",
+                new() { ["d-apache-server"] = 3, ["d-apache-helicopter"] = 0 }),
+            new("d-q13", "Formatting equations and bibliographies in academic papers",
+                new() { ["d-latex-typeset"] = 3, ["d-latex-material"] = 0 }),
+            new("d-q14", "Harvesting natural rubber from tropical trees",
+                new() { ["d-latex-material"] = 3, ["d-latex-typeset"] = 0 }),
+            new("d-q15", "Toxic heavy metals and their health effects",
+                new() { ["d-mercury-element"] = 3, ["d-mercury-planet"] = 0, ["d-rust-corrosion"] = 1 }),
+        };
+
+        return new BenchmarkDataset("distractor-v1", "Negative/Distractor Resilience Benchmark", seeds, queries);
     }
 }

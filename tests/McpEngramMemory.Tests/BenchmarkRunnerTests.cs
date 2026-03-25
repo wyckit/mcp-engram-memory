@@ -190,6 +190,9 @@ public class BenchmarkRunnerTests
     [InlineData("multihop-v1")]
     [InlineData("scale-v1")]
     [InlineData("realworld-v1")]
+    [InlineData("compound-v1")]
+    [InlineData("ambiguity-v1")]
+    [InlineData("distractor-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -205,6 +208,9 @@ public class BenchmarkRunnerTests
     [InlineData("multihop-v1")]
     [InlineData("scale-v1")]
     [InlineData("realworld-v1")]
+    [InlineData("compound-v1")]
+    [InlineData("ambiguity-v1")]
+    [InlineData("distractor-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -218,7 +224,7 @@ public class BenchmarkRunnerTests
     }
 
     [Fact]
-    public void GetAvailableDatasets_ContainsAllFive()
+    public void GetAvailableDatasets_ContainsAll()
     {
         var ids = BenchmarkRunner.GetAvailableDatasets();
         Assert.Contains("default-v1", ids);
@@ -226,6 +232,9 @@ public class BenchmarkRunnerTests
         Assert.Contains("multihop-v1", ids);
         Assert.Contains("scale-v1", ids);
         Assert.Contains("realworld-v1", ids);
+        Assert.Contains("compound-v1", ids);
+        Assert.Contains("ambiguity-v1", ids);
+        Assert.Contains("distractor-v1", ids);
     }
 
     [Fact]
@@ -267,6 +276,122 @@ public class BenchmarkRunnerTests
         Assert.Equal("realworld-v1", ds.DatasetId);
     }
 
+    [Fact]
+    public void AmbiguityDataset_Has24Seeds15Queries()
+    {
+        var ds = BenchmarkRunner.CreateAmbiguityDataset();
+        Assert.Equal(24, ds.SeedEntries.Count);
+        Assert.Equal(15, ds.Queries.Count);
+        Assert.Equal("ambiguity-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void AmbiguityDataset_AllSeedsHaveCategories()
+    {
+        var ds = BenchmarkRunner.CreateAmbiguityDataset();
+        foreach (var seed in ds.SeedEntries)
+            Assert.False(string.IsNullOrEmpty(seed.Category),
+                $"Ambiguity seed '{seed.Id}' should have a category for disambiguation testing");
+    }
+
+    [Fact]
+    public void AmbiguityDataset_HasAmbiguousTermGroups()
+    {
+        var ds = BenchmarkRunner.CreateAmbiguityDataset();
+        var seedIds = ds.SeedEntries.Select(s => s.Id).ToHashSet();
+        // Verify key ambiguous term groups exist
+        Assert.Contains("a-net-comp", seedIds);
+        Assert.Contains("a-net-neural", seedIds);
+        Assert.Contains("a-tree-ds", seedIds);
+        Assert.Contains("a-tree-fs", seedIds);
+        Assert.Contains("a-tree-dom", seedIds);
+        Assert.Contains("a-mem-hw", seedIds);
+        Assert.Contains("a-mem-mgmt", seedIds);
+        Assert.Contains("a-mem-cognitive", seedIds);
+    }
+
+    [Fact]
+    public void DistractorDataset_Has22Seeds15Queries()
+    {
+        var ds = BenchmarkRunner.CreateDistractorDataset();
+        Assert.Equal(22, ds.SeedEntries.Count);
+        Assert.Equal(15, ds.Queries.Count);
+        Assert.Equal("distractor-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void DistractorDataset_AllQueriesHaveGrade0Distractors()
+    {
+        var ds = BenchmarkRunner.CreateDistractorDataset();
+        foreach (var query in ds.Queries)
+        {
+            var hasDistractor = query.RelevanceGrades.Values.Any(v => v == 0);
+            Assert.True(hasDistractor,
+                $"Query '{query.QueryId}' should have at least one grade-0 distractor entry");
+        }
+    }
+
+    [Fact]
+    public void DistractorDataset_HasHomonymPairs()
+    {
+        var ds = BenchmarkRunner.CreateDistractorDataset();
+        var seedIds = ds.SeedEntries.Select(s => s.Id).ToHashSet();
+        // Verify key homonym pairs exist
+        Assert.Contains("d-python-lang", seedIds);
+        Assert.Contains("d-python-snake", seedIds);
+        Assert.Contains("d-rust-lang", seedIds);
+        Assert.Contains("d-rust-corrosion", seedIds);
+        Assert.Contains("d-spring-framework", seedIds);
+        Assert.Contains("d-spring-season", seedIds);
+        Assert.Contains("d-spring-mechanical", seedIds);
+    }
+
+    [Theory]
+    [InlineData("distractor-v1", "vector")]
+    [InlineData("distractor-v1", "hybrid")]
+    [InlineData("distractor-v1", "vector_rerank")]
+    [InlineData("distractor-v1", "hybrid_rerank")]
+    public void RunDistractorBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] (ONNX bge-micro-v2) ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+        _output.WriteLine($"  Latency:     {result.MeanLatencyMs:F3}ms (P95: {result.P95LatencyMs:F3}ms)");
+
+        foreach (var q in result.QueryScores)
+        {
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds)}]");
+        }
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
     [Theory]
     [InlineData("default-v1")]
     [InlineData("paraphrase-v1")]
@@ -295,6 +420,52 @@ public class BenchmarkRunnerTests
         Assert.True(result.MeanMRR >= 0f);
         Assert.Equal(dataset.SeedEntries.Count, result.TotalEntries);
         Assert.Equal(dataset.Queries.Count, result.TotalQueries);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    [Theory]
+    [InlineData("ambiguity-v1", "vector")]
+    [InlineData("ambiguity-v1", "hybrid")]
+    [InlineData("ambiguity-v1", "vector_rerank")]
+    [InlineData("ambiguity-v1", "hybrid_rerank")]
+    public void RunAmbiguityBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] (ONNX bge-micro-v2) ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+        _output.WriteLine($"  Latency:     {result.MeanLatencyMs:F3}ms (P95: {result.P95LatencyMs:F3}ms)");
+
+        foreach (var q in result.QueryScores)
+        {
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds)}]");
+        }
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
 
         index.Dispose();
         persistence.Dispose();
