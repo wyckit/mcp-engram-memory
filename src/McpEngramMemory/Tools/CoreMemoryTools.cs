@@ -35,7 +35,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "store_memory")]
-    [Description("Store a cognitive memory entry with namespace isolation, categorical metadata, and lifecycle tracking. Entry starts in STM by default. Uses contextual prefix embedding by default to improve retrieval quality.")]
+    [Description("Low-level store with explicit vector/text control. Use remember instead for auto-dedup and auto-linking. Supports namespace isolation, categorical metadata, and lifecycle tracking.")]
     public string StoreMemory(
         [Description("Unique identifier for this memory entry.")] string id,
         [Description("Namespace (e.g. 'work', 'personal').")] string ns,
@@ -76,8 +76,65 @@ public sealed class CoreMemoryTools
         }
     }
 
+    [McpServerTool(Name = "store_batch")]
+    [Description("Bulk-store multiple entries in one write-lock. Faster than repeated store_memory calls. Each entry gets contextual prefix embedding. Returns stored count and duplicate warnings.")]
+    public object StoreBatch(
+        [Description("Namespace for all entries.")] string ns,
+        [Description("Array of entries to store. Each must have 'id' and 'text' fields. Optional: 'category', 'metadata', 'lifecycleState'.")] BatchEntry[] entries,
+        [Description("Check for near-duplicates within the batch (default: true).")] bool checkDuplicates = true)
+    {
+        if (entries is null || entries.Length == 0)
+            return new { status = "error", message = "No entries provided." };
+
+        using var timer = _metrics.StartTimer("store_batch");
+
+        // Embed all entries
+        var cognitiveEntries = new List<CognitiveEntry>(entries.Length);
+        foreach (var e in entries)
+        {
+            if (string.IsNullOrWhiteSpace(e.Id) || string.IsNullOrWhiteSpace(e.Text))
+                continue;
+
+            var prefix = BenchmarkRunner.BuildContextualPrefix(ns, e.Category);
+            var vector = _embedding.Embed(prefix + e.Text);
+            var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category, e.Metadata,
+                e.LifecycleState ?? "stm");
+            cognitiveEntries.Add(entry);
+        }
+
+        if (cognitiveEntries.Count == 0)
+            return new { status = "error", message = "No valid entries (each needs 'id' and 'text')." };
+
+        // Batch upsert with single lock
+        int stored = _index.UpsertBatch(cognitiveEntries);
+
+        // Optional duplicate check
+        var warnings = new List<string>();
+        if (checkDuplicates && stored > 0)
+        {
+            foreach (var entry in cognitiveEntries)
+            {
+                var dups = _index.FindDuplicatesForEntry(ns, entry.Id, threshold: 0.95f);
+                if (dups.Count > 0)
+                {
+                    var dupIds = dups.Select(d => d.IdA == entry.Id ? d.IdB : d.IdA);
+                    warnings.Add($"{entry.Id}: near-duplicate(s) [{string.Join(", ", dupIds)}]");
+                }
+            }
+        }
+
+        return new
+        {
+            status = "stored",
+            ns,
+            entriesStored = stored,
+            entriesSkipped = entries.Length - stored,
+            duplicateWarnings = warnings.Count > 0 ? warnings : null
+        };
+    }
+
     [McpServerTool(Name = "search_memory")]
-    [Description("Namespace-scoped vector similarity search with lifecycle awareness, summary-first mode, and optional physics-based gravity re-ranking (slingshot output). Supports hybrid search (BM25+vector fusion), token-level reranking, query expansion (PRF), and graph expansion. Set explain=true for full retrieval diagnostics.")]
+    [Description("Low-level namespace search with full parameter control. Use recall instead for auto-routing and fallback. Supports hybrid BM25+vector, reranking, query expansion, graph expansion, physics re-ranking, and explain mode.")]
     public object SearchMemory(
         [Description("Namespace to search.")] string ns,
         [Description("The original text to search for.")] string? text = null,
@@ -254,7 +311,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "delete_memory")]
-    [Description("Delete a memory entry by ID, with cascading removal of graph edges and cluster memberships.")]
+    [Description("Delete a memory entry by ID. Cascades to remove graph edges and cluster memberships.")]
     public string DeleteMemory(
         [Description("The identifier of the entry to delete.")] string id,
         KnowledgeGraph graph,
@@ -283,4 +340,19 @@ public sealed class CoreMemoryTools
 
         throw new ArgumentException("Either 'vector' or 'text' must be provided.");
     }
+}
+
+/// <summary>A single entry in a store_batch call.</summary>
+public sealed class BatchEntry
+{
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+    [System.Text.Json.Serialization.JsonPropertyName("text")]
+    public string Text { get; set; } = "";
+    [System.Text.Json.Serialization.JsonPropertyName("category")]
+    public string? Category { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("metadata")]
+    public Dictionary<string, string>? Metadata { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("lifecycleState")]
+    public string? LifecycleState { get; set; }
 }

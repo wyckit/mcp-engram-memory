@@ -36,10 +36,8 @@ public sealed class DebateTools
     }
 
     [McpServerTool(Name = "consult_expert_panel")]
-    [Description("Consult a panel of experts by running parallel searches across multiple expert namespaces. " +
-        "Stores each perspective in an active-debate namespace and returns integer-aliased results " +
-        "so the LLM can reference nodes without managing UUIDs. " +
-        "Replaces multiple search_memory + store_memory calls with a single macro-command.")]
+    [Description("Search multiple expert namespaces in parallel and collect perspectives into a debate session. " +
+        "Returns integer-aliased nodes for easy reference. Use for multi-expert deliberation on a problem.")]
     public object ConsultExpertPanel(
         [Description("The problem or question to present to the panel.")] string problemStatement,
         [Description("List of expert namespace names to consult (e.g. ['expert-arch', 'expert-sec']).")] string[] experts,
@@ -128,9 +126,8 @@ public sealed class DebateTools
     }
 
     [McpServerTool(Name = "map_debate_graph")]
-    [Description("Map logical relationships between debate nodes using integer aliases from consult_expert_panel. " +
-        "Translates aliases to UUIDs internally and creates knowledge graph edges. " +
-        "Replaces multiple link_memories calls with a single macro-command.")]
+    [Description("Create knowledge graph edges between debate nodes using integer aliases. " +
+        "Call after consult_expert_panel to map agreements, contradictions, and dependencies between perspectives.")]
     public object MapDebateGraph(
         [Description("The debate session ID from consult_expert_panel.")] string sessionId,
         [Description("List of edges to create. Each edge has: sourceNode (int), targetNode (int), relation (string), weight (float 0-1).")] DebateEdge[] edges)
@@ -180,9 +177,7 @@ public sealed class DebateTools
     }
 
     [McpServerTool(Name = "resolve_debate")]
-    [Description("Resolve a debate by storing a consensus summary as LTM, linking it to the winning perspective, " +
-        "and archiving all raw debate nodes. Cleans up the session state. " +
-        "Replaces manual store + link + promote calls with a single macro-command.")]
+    [Description("Finalize a debate: store consensus as LTM, link to winning perspective, archive debate nodes, and clean up session.")]
     public object ResolveDebate(
         [Description("The debate session ID.")] string sessionId,
         [Description("Integer alias of the winning/primary perspective node.")] int winningNode,

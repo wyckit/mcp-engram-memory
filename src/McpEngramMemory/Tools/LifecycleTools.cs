@@ -22,7 +22,7 @@ public sealed class LifecycleTools
     }
 
     [McpServerTool(Name = "promote_memory")]
-    [Description("Manually change an entry's lifecycle state (e.g. archive, consolidate, resurrect).")]
+    [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
     public string PromoteMemory(
         [Description("Entry ID.")] string id,
         [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
@@ -31,14 +31,16 @@ public sealed class LifecycleTools
     }
 
     [McpServerTool(Name = "deep_recall")]
-    [Description("Search ALL states including archived. Auto-resurrects high-scoring archived entries to STM.")]
+    [Description("Search ALL lifecycle states including archived. Auto-resurrects high-scoring archived entries to STM. Use when specifically recovering forgotten memories — recall handles this automatically for most cases.")]
     public object DeepRecall(
         [Description("Namespace to search.")] string ns,
         [Description("The original text to search for.")] string? text = null,
         [Description("Query embedding vector.")] float[]? vector = null,
         [Description("Max results (default: 10).")] int k = 10,
         [Description("Min similarity (default: 0.3).")] float minScore = 0.3f,
-        [Description("Score above which archived entries auto-resurrect to STM (default: 0.7).")] float resurrectionThreshold = 0.7f)
+        [Description("Score above which archived entries auto-resurrect to STM (default: 0.7).")] float resurrectionThreshold = 0.7f,
+        [Description("Use hybrid BM25+vector search for better keyword recall (default: false).")] bool hybrid = false,
+        [Description("Apply token-level reranking to improve precision (default: false).")] bool rerank = false)
     {
         float[] resolved;
         try
@@ -50,11 +52,12 @@ public sealed class LifecycleTools
             return $"Error: {ex.Message}";
         }
 
-        return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold);
+        return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold,
+            queryText: text, hybrid: hybrid, rerank: rerank);
     }
 
     [McpServerTool(Name = "memory_feedback")]
-    [Description("Provide feedback on a memory's usefulness. Positive feedback boosts activation energy and records an access; negative feedback suppresses it. Closes the agent reinforcement loop — call this when a recalled memory was helpful or unhelpful.")]
+    [Description("Reinforce or suppress a memory. Call after recall: positive delta boosts activation energy, negative suppresses. Drives lifecycle transitions via threshold crossing.")]
     public object MemoryFeedback(
         [Description("Entry ID to provide feedback on.")] string id,
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
@@ -67,7 +70,7 @@ public sealed class LifecycleTools
     }
 
     [McpServerTool(Name = "decay_cycle")]
-    [Description("Trigger activation energy recomputation and state transitions. Formula: ActivationEnergy = (accessCount * reinforcementWeight) - (hoursSinceLastAccess * decayRate)")]
+    [Description("Run activation energy decay and state transitions for a namespace. Demotes stale STM to LTM and LTM to archived based on configurable thresholds.")]
     public DecayCycleResult DecayCycle(
         [Description("Namespace ('*' for all).")] string ns,
         [Description("Decay per hour (default: 0.1).")] float decayRate = 0.1f,
@@ -79,7 +82,7 @@ public sealed class LifecycleTools
     }
 
     [McpServerTool(Name = "configure_decay")]
-    [Description("Set per-namespace decay parameters. These are used by the background decay service and when decay_cycle is called with useStoredConfig=true.")]
+    [Description("Set per-namespace decay parameters. Applied by background decay service and decay_cycle with useStoredConfig=true.")]
     public object ConfigureDecay(
         [Description("Namespace to configure.")] string ns,
         [Description("Decay per hour (default: 0.1).")] float? decayRate = null,

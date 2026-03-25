@@ -29,7 +29,7 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "get_memory")]
-    [Description("Retrieve full cognitive context of a single entry (lifecycle, edges, clusters). Does NOT count as an access.")]
+    [Description("Inspect a single entry's full context: lifecycle state, graph edges, cluster memberships. Does not count as an access.")]
     public object GetMemory(
         [Description("Entry ID.")] string id)
     {
@@ -54,7 +54,7 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "cognitive_stats")]
-    [Description("System overview: entry counts by state, cluster count, edge count, namespaces.")]
+    [Description("Get system overview: entry counts by lifecycle state, cluster count, edge count, and namespace list.")]
     public LifecycleStats CognitiveStats(
         [Description("Namespace ('*' for all, default).")] string ns = "*")
     {
@@ -71,7 +71,7 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "purge_debates")]
-    [Description("Purge stale active-debate namespaces. Lists debate namespaces older than the specified age (default 24 hours) and deletes them including all entries, edges, and cluster memberships.")]
+    [Description("Clean up stale debate namespaces older than maxAgeHours. Deletes entries, edges, and cluster memberships. Defaults to dry-run mode.")]
     public async Task<object> PurgeDebates(
         [Description("Maximum age in hours before a debate namespace is considered stale (default: 24).")] int maxAgeHours = 24,
         [Description("If true, only list what would be purged without deleting (default: true).")] bool dryRun = true)

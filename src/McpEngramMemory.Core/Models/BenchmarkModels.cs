@@ -10,7 +10,9 @@ public sealed record BenchmarkSeedEntry(
     [property: JsonPropertyName("text")] string Text,
     [property: JsonPropertyName("category")] string? Category = null,
     [property: JsonPropertyName("lifecycleState")] string? LifecycleState = null,
-    [property: JsonPropertyName("accessCount")] int? AccessCount = null);
+    [property: JsonPropertyName("accessCount")] int? AccessCount = null,
+    [property: JsonPropertyName("isSummaryNode")] bool? IsSummaryNode = null,
+    [property: JsonPropertyName("sourceClusterId")] string? SourceClusterId = null);
 
 /// <summary>
 /// A benchmark query with expected results and graded relevance judgments.
@@ -20,7 +22,8 @@ public sealed record BenchmarkQuery(
     [property: JsonPropertyName("queryId")] string QueryId,
     [property: JsonPropertyName("queryText")] string QueryText,
     [property: JsonPropertyName("relevanceGrades")] Dictionary<string, int> RelevanceGrades,
-    [property: JsonPropertyName("k")] int K = 5);
+    [property: JsonPropertyName("k")] int K = 5,
+    [property: JsonPropertyName("summaryFirst")] bool SummaryFirst = false);
 
 /// <summary>
 /// A complete benchmark dataset with seed entries and queries.

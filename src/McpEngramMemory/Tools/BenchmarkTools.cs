@@ -22,9 +22,9 @@ public sealed class BenchmarkTools
     }
 
     [McpServerTool(Name = "run_benchmark")]
-    [Description("Run an IR quality benchmark: ingest seed entries, execute queries, compute Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. Uses an isolated namespace that is cleaned up after. Available datasets: 'default-v1' (25 seeds, 20 queries), 'paraphrase-v1' (25 seeds, 15 queries — rephrased queries), 'multihop-v1' (25 seeds, 15 queries — cross-topic), 'scale-v1' (80 seeds, 30 queries — stress test), 'realworld-v1' (30 seeds, 20 queries — cognitive memory patterns), 'compound-v1' (20 seeds, 15 queries — compound tokenization, domain jargon & multi-agent concepts).")]
+    [Description("Run an IR quality benchmark in an isolated namespace. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. Namespace is cleaned up after.")]
     public object RunBenchmark(
-        [Description("Dataset ID to run. Options: 'default-v1', 'paraphrase-v1', 'multihop-v1', 'scale-v1', 'realworld-v1', 'compound-v1'. Default: 'default-v1'.")] string datasetId = "default-v1",
+        [Description("Dataset ID: 'default-v1' (25 seeds, 20 queries), 'paraphrase-v1' (rephrased), 'multihop-v1' (cross-topic), 'scale-v1' (80 seeds stress test), 'realworld-v1' (cognitive patterns), 'compound-v1' (domain jargon), 'lifecycle-v1', 'adversarial-v1', 'accretion-v1', 'cluster-summary-v1'.")] string datasetId = "default-v1",
         [Description("Search mode: 'vector' (default), 'hybrid' (BM25+vector RRF fusion), 'vector_rerank' (vector + token reranker), 'hybrid_rerank' (hybrid + token reranker).")] string mode = "vector",
         [Description("When true, prepend category/namespace context to text before embedding (contextual retrieval). Default: false.")] bool contextualPrefix = false)
     {
@@ -44,7 +44,7 @@ public sealed class BenchmarkTools
     }
 
     [McpServerTool(Name = "get_metrics")]
-    [Description("Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations.")]
+    [Description("Get operational metrics: P50/P95/P99 latency, throughput, and call counts per operation type.")]
     public IReadOnlyList<MetricsSummary> GetMetrics(
         [Description("Operation type to filter (e.g. 'search', 'store'). Leave empty for all.")] string? operationType = null)
     {
@@ -57,7 +57,7 @@ public sealed class BenchmarkTools
     }
 
     [McpServerTool(Name = "reset_metrics")]
-    [Description("Reset collected operational metrics. Optionally filter by operation type.")]
+    [Description("Reset operational metrics counters. Optionally filter by operation type.")]
     public string ResetMetrics(
         [Description("Operation type to reset. Leave empty to reset all.")] string? operationType = null)
     {

@@ -22,7 +22,7 @@ public sealed class ClusterTools
     }
 
     [McpServerTool(Name = "create_cluster")]
-    [Description("Group entries into a semantic cluster with computed centroid.")]
+    [Description("Group entries into a semantic cluster with auto-computed centroid. Use for manual clustering when accretion scan isn't suitable.")]
     public string CreateCluster(
         [Description("Cluster identifier.")] string clusterId,
         [Description("Namespace.")] string ns,
@@ -41,7 +41,7 @@ public sealed class ClusterTools
     }
 
     [McpServerTool(Name = "update_cluster")]
-    [Description("Add/remove members or update label. Centroid recomputed automatically.")]
+    [Description("Add or remove cluster members and update label. Centroid recomputes automatically.")]
     public string UpdateCluster(
         [Description("Cluster to modify.")] string clusterId,
         [Description("Comma-separated entry IDs to add.")] string? addMemberIds = null,
@@ -54,7 +54,7 @@ public sealed class ClusterTools
     }
 
     [McpServerTool(Name = "store_cluster_summary")]
-    [Description("Store an LLM-generated summary as a searchable entry tied to a cluster.")]
+    [Description("Store an LLM-generated summary as a searchable entry tied to a cluster. Enables summaryFirst search mode for the cluster.")]
     public string StoreClusterSummary(
         [Description("Cluster to summarize.")] string clusterId,
         [Description("Generated summary text.")] string summaryText,
@@ -69,7 +69,7 @@ public sealed class ClusterTools
     }
 
     [McpServerTool(Name = "get_cluster")]
-    [Description("Retrieve cluster details, members, and summary.")]
+    [Description("Get cluster details: members, centroid, summary, and label.")]
     public object GetCluster(
         [Description("Cluster ID.")] string clusterId)
     {

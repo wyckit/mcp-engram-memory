@@ -20,7 +20,7 @@ public sealed class GraphTools
     }
 
     [McpServerTool(Name = "link_memories")]
-    [Description("Create a directed edge between two memory entries. 'cross_reference' auto-creates reverse edge.")]
+    [Description("Create a directed graph edge between two entries. Use 'cross_reference' for bidirectional links (auto-creates reverse edge).")]
     public string LinkMemories(
         [Description("Edge origin entry ID.")] string sourceId,
         [Description("Edge destination entry ID.")] string targetId,
@@ -50,7 +50,7 @@ public sealed class GraphTools
     }
 
     [McpServerTool(Name = "get_neighbors")]
-    [Description("Get directly connected entries in the knowledge graph.")]
+    [Description("Get entries directly connected to a node in the knowledge graph. Use to explore relationships around a specific memory.")]
     public GetNeighborsResult GetNeighbors(
         [Description("Entry ID to find neighbors for.")] string id,
         [Description("Filter by relation type.")] string? relation = null,
@@ -60,7 +60,7 @@ public sealed class GraphTools
     }
 
     [McpServerTool(Name = "traverse_graph")]
-    [Description("Multi-hop graph traversal from a starting entry.")]
+    [Description("Multi-hop graph traversal from a starting entry. Use to discover transitive relationships and knowledge chains.")]
     public TraversalResult TraverseGraph(
         [Description("Starting entry ID.")] string startId,
         [Description("Maximum hops (default: 2, max: 5).")] int maxDepth = 2,

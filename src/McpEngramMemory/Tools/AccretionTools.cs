@@ -27,7 +27,7 @@ public sealed class AccretionTools
     }
 
     [McpServerTool(Name = "get_pending_collapses")]
-    [Description("List dense clusters detected by background accretion scanner awaiting LLM summarization.")]
+    [Description("List dense clusters awaiting LLM summarization. Check this to find clusters ready for collapse_cluster.")]
     public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(
         [Description("Namespace to check for pending collapses.")] string ns)
     {
@@ -35,7 +35,7 @@ public sealed class AccretionTools
     }
 
     [McpServerTool(Name = "collapse_cluster")]
-    [Description("Execute a pending collapse: store LLM-generated summary, archive original members, create cluster.")]
+    [Description("Execute a pending collapse: store summary as a searchable entry, archive original members, register the cluster. Reversible via uncollapse_cluster.")]
     public string CollapseCluster(
         [Description("The pending collapse ID to execute.")] string collapseId,
         [Description("LLM-generated summary text for the cluster.")] string summaryText,
@@ -57,7 +57,7 @@ public sealed class AccretionTools
     }
 
     [McpServerTool(Name = "trigger_accretion_scan")]
-    [Description("Manually trigger an accretion scan for a namespace. Scans LTM-tier entries for dense clusters using DBSCAN. Set autoSummarize=true to auto-generate cluster summaries (GraphRAG-style) without archiving members.")]
+    [Description("Scan LTM entries for dense clusters using DBSCAN. Detected clusters appear in get_pending_collapses. Set autoSummarize=true to auto-generate summaries without archiving.")]
     public AccretionScanResult TriggerAccretionScan(
         [Description("Namespace to scan.")] string ns,
         [Description("DBSCAN distance threshold (default: 0.15). Lower values require tighter clusters.")] float epsilon = 0.15f,

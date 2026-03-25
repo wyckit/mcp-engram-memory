@@ -25,9 +25,7 @@ public sealed class MaintenanceTools
     }
 
     [McpServerTool(Name = "rebuild_embeddings")]
-    [Description("Re-embed all entries in one or all namespaces using the current embedding model. " +
-        "Use after upgrading the embedding model to regenerate vectors from stored text. " +
-        "Entries without text are skipped. Preserves all metadata, lifecycle state, and timestamps.")]
+    [Description("Re-embed all entries using the current model. Use after upgrading the embedding model. Skips entries without text, preserves all metadata.")]
     public object RebuildEmbeddings(
         [Description("Namespace to rebuild ('*' for all namespaces, default: '*').")] string ns = "*")
     {
@@ -53,8 +51,7 @@ public sealed class MaintenanceTools
     }
 
     [McpServerTool(Name = "compression_stats")]
-    [Description("Show vector compression statistics for a namespace or all namespaces. " +
-        "Reports FP32 vs Base64 disk savings, Int8 quantization coverage, and memory footprint estimates.")]
+    [Description("Show vector compression stats: FP32 vs Int8 savings, quantization coverage, and memory footprint per namespace.")]
     public object CompressionStats(
         [Description("Namespace to inspect ('*' for all, default: '*').")] string ns = "*")
     {

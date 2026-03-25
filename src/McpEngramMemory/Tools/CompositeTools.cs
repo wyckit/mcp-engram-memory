@@ -42,7 +42,7 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "remember")]
-    [Description("Intelligent store: saves a memory with auto-generated embedding, duplicate detection, and auto-linking to related existing memories. Use this instead of store_memory + detect_duplicates + link_memories.")]
+    [Description("Default way to store memories. Auto-embeds text, blocks near-duplicates, and links to related entries. Use this instead of store_memory unless you need raw vector control.")]
     public object Remember(
         [Description("Unique identifier for this memory (kebab-case recommended).")] string id,
         [Description("Namespace (e.g. project directory name, 'work', 'synthesis').")] string ns,
@@ -108,29 +108,37 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "recall")]
-    [Description("Intelligent search: auto-routes to the best retrieval strategy. Searches the given namespace with hybrid+graph expansion, falls back to deep_recall for archived memories, and routes to expert namespaces when no namespace is specified. Use this instead of search_memory / deep_recall / dispatch_task.")]
+    [Description("Default search tool. Searches a namespace with hybrid+graph expansion and falls back to deep_recall for archived entries. Omit namespace to auto-route via expert dispatcher. Use search_memory only for low-level queries without fallback.")]
     public object Recall(
         [Description("What to search for.")] string query,
         [Description("Namespace to search (omit to auto-route via expert dispatcher).")] string? ns = null,
         [Description("Maximum results (default: 5).")] int k = 5,
-        [Description("Minimum similarity score (default: 0.3).")] float minScore = 0.3f)
+        [Description("Minimum similarity score (default: 0.3).")] float minScore = 0.3f,
+        [Description("Use hybrid BM25+vector search (default: true).")] bool hybrid = true,
+        [Description("Apply token-level reranking (default: true).")] bool rerank = true,
+        [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
+        [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true)
     {
         using var timer = _metrics.StartTimer("recall");
         var vector = _embedding.Embed(query);
         var strategy = "direct";
 
-        // Strategy 1: If namespace provided, search directly with hybrid + graph expansion
+        // Strategy 1: If namespace provided, search directly with optional hybrid + graph expansion
         if (ns is not null)
         {
             var states = new HashSet<string> { "stm", "ltm" };
-            var results = _index.HybridSearch(vector, query, ns, k, minScore, rerank: true);
+            IReadOnlyList<CognitiveSearchResult> results = hybrid
+                ? _index.HybridSearch(vector, query, ns, k, minScore, rerank: rerank)
+                : (rerank
+                    ? _index.Rerank(query, _index.Search(vector, ns, k * 2, minScore, summaryFirst: summaryFirst)).Take(k).ToList()
+                    : _index.Search(vector, ns, k, minScore, summaryFirst: summaryFirst));
 
             // Record access for returned entries
             foreach (var r in results)
                 _index.RecordAccess(r.Id, ns);
 
             // Expand with graph neighbors
-            var expanded = ExpandWithGraph(results, states);
+            var expanded = expandGraph ? ExpandWithGraph(results, states) : results;
 
             // Fallback: if poor results, try deep_recall
             if (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f))
@@ -155,8 +163,9 @@ public sealed class CompositeTools
             var bestExpert = experts[0];
             _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
-            var expertResults = _index.HybridSearch(
-                vector, query, bestExpert.TargetNamespace, k, minScore, rerank: true);
+            IReadOnlyList<CognitiveSearchResult> expertResults = hybrid
+                ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace, k, minScore, rerank: rerank)
+                : _index.Search(vector, bestExpert.TargetNamespace, k, minScore, summaryFirst: summaryFirst);
 
             foreach (var r in expertResults)
                 _index.RecordAccess(r.Id, bestExpert.TargetNamespace);
@@ -181,7 +190,7 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "reflect")]
-    [Description("Store a lesson learned or retrospective with auto-linking to related memories. Use this at the end of work sessions to capture what went well, what went wrong, and key decisions. Auto-links to referenced memories and promotes stable knowledge.")]
+    [Description("Store a lesson or retrospective as LTM with auto-linking. Use at the end of work sessions to capture what went well, what went wrong, and key decisions.")]
     public object Reflect(
         [Description("The lesson or reflection text. Be specific about what happened and what was learned.")] string text,
         [Description("Namespace (project directory name).")] string ns,

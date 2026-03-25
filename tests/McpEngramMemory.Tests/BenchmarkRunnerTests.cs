@@ -197,6 +197,7 @@ public class BenchmarkRunnerTests
     [InlineData("physics-v1")]
     [InlineData("lifecycle-v1")]
     [InlineData("contamination-v1")]
+    [InlineData("cluster-summary-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -219,6 +220,7 @@ public class BenchmarkRunnerTests
     [InlineData("physics-v1")]
     [InlineData("lifecycle-v1")]
     [InlineData("contamination-v1")]
+    [InlineData("cluster-summary-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -247,6 +249,7 @@ public class BenchmarkRunnerTests
         Assert.Contains("physics-v1", ids);
         Assert.Contains("lifecycle-v1", ids);
         Assert.Contains("contamination-v1", ids);
+        Assert.Contains("cluster-summary-v1", ids);
     }
 
     [Fact]
@@ -876,6 +879,89 @@ public class BenchmarkRunnerTests
         foreach (var q in result.QueryScores)
         {
             _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms]");
+        }
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    // --- Cluster Summary Benchmark Tests ---
+
+    [Fact]
+    public void ClusterSummaryDataset_Has18Seeds10Queries()
+    {
+        var ds = BenchmarkRunner.CreateClusterSummaryDataset();
+        Assert.Equal(18, ds.SeedEntries.Count);
+        Assert.Equal(10, ds.Queries.Count);
+    }
+
+    [Fact]
+    public void ClusterSummaryDataset_Has3SummaryNodes()
+    {
+        var ds = BenchmarkRunner.CreateClusterSummaryDataset();
+        var summaries = ds.SeedEntries.Where(s => s.IsSummaryNode == true).ToList();
+        Assert.Equal(3, summaries.Count);
+        Assert.All(summaries, s => Assert.NotNull(s.SourceClusterId));
+        var members = ds.SeedEntries.Where(s => s.IsSummaryNode != true).ToList();
+        Assert.Equal(15, members.Count);
+    }
+
+    [Fact]
+    public void ClusterSummaryDataset_Has3Clusters()
+    {
+        var ds = BenchmarkRunner.CreateClusterSummaryDataset();
+        var summaries = ds.SeedEntries.Where(s => s.IsSummaryNode == true).ToList();
+        var clusterIds = summaries.Select(s => s.SourceClusterId).Distinct().ToList();
+        Assert.Equal(3, clusterIds.Count);
+    }
+
+    [Fact]
+    public void ClusterSummaryDataset_SummaryFirstQueriesExist()
+    {
+        var ds = BenchmarkRunner.CreateClusterSummaryDataset();
+        var sfQueries = ds.Queries.Where(q => q.SummaryFirst).ToList();
+        Assert.True(sfQueries.Count >= 3, "Expected at least 3 summaryFirst queries");
+        // Each summaryFirst query should grade the summary node as highest (3)
+        foreach (var q in sfQueries)
+        {
+            var maxGrade = q.RelevanceGrades.Max(kvp => kvp.Value);
+            var topGradeKeys = q.RelevanceGrades.Where(kvp => kvp.Value == maxGrade).Select(kvp => kvp.Key).ToList();
+            Assert.True(topGradeKeys.Any(k => k.Contains("summary")),
+                $"Query '{q.QueryId}' summaryFirst=true but no summary seed has max grade");
+        }
+    }
+
+    [Theory]
+    [InlineData("cluster-summary-v1", "vector")]
+    [InlineData("cluster-summary-v1", "vector_rerank")]
+    public void RunClusterSummaryBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} / {mode} ===");
+        _output.WriteLine($"Recall@K={result.MeanRecallAtK:F3} Precision@K={result.MeanPrecisionAtK:F3} MRR={result.MeanMRR:F3} nDCG@K={result.MeanNdcgAtK:F3}");
+        _output.WriteLine($"Mean latency={result.MeanLatencyMs:F2}ms, P95={result.P95LatencyMs:F2}ms");
+        foreach (var q in result.QueryScores)
+        {
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds)}]");
         }
 
         Assert.True(result.MeanRecallAtK >= 0f);

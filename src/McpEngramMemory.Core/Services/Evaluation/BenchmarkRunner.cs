@@ -19,6 +19,10 @@ public sealed class BenchmarkRunner
         var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: effectiveState);
         if (seed.AccessCount is int ac)
             entry.AccessCount = ac;
+        if (seed.IsSummaryNode == true)
+            entry.IsSummaryNode = true;
+        if (seed.SourceClusterId is not null)
+            entry.SourceClusterId = seed.SourceClusterId;
         _index.Upsert(entry);
     }
 
@@ -81,9 +85,11 @@ public sealed class BenchmarkRunner
                     SearchMode.HybridRerank => _index.HybridSearch(
                         queryVector, query.QueryText, ns, query.K, rerank: true),
                     SearchMode.VectorRerank => _index.Rerank(
-                        query.QueryText, _index.Search(queryVector, ns, query.K * 2))
+                        query.QueryText, _index.Search(queryVector, ns, query.K * 2,
+                            summaryFirst: query.SummaryFirst))
                         .Take(query.K).ToList(),
-                    _ => _index.Search(queryVector, ns, query.K)
+                    _ => _index.Search(queryVector, ns, query.K,
+                        summaryFirst: query.SummaryFirst)
                 };
                 sw.Stop();
 
@@ -192,9 +198,10 @@ public sealed class BenchmarkRunner
                 {
                     SearchMode.Hybrid => _index.HybridSearch(queryVector, query.QueryText, ns, query.K),
                     SearchMode.HybridRerank => _index.HybridSearch(queryVector, query.QueryText, ns, query.K, rerank: true),
-                    SearchMode.VectorRerank => _index.Rerank(query.QueryText, _index.Search(queryVector, ns, query.K * 2))
+                    SearchMode.VectorRerank => _index.Rerank(query.QueryText,
+                        _index.Search(queryVector, ns, query.K * 2, summaryFirst: query.SummaryFirst))
                         .Take(query.K).ToList(),
-                    _ => _index.Search(queryVector, ns, query.K)
+                    _ => _index.Search(queryVector, ns, query.K, summaryFirst: query.SummaryFirst)
                 };
                 sw.Stop();
 
@@ -652,7 +659,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1", "physics-v1", "lifecycle-v1", "contamination-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1", "physics-v1", "lifecycle-v1", "contamination-v1", "cluster-summary-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -672,6 +679,7 @@ public sealed class BenchmarkRunner
             "physics-v1" => CreatePhysicsDataset(),
             "lifecycle-v1" => CreateLifecycleDataset(),
             "contamination-v1" => CreateContaminationDataset(),
+            "cluster-summary-v1" => CreateClusterSummaryDataset(),
             _ => null
         };
     }
@@ -1375,5 +1383,79 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("contamination-v1", "Near-Duplicate Contamination Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Cluster Summary Quality Benchmark: 18 seeds (15 member entries in 3 clusters + 3 summary nodes),
+    /// 10 queries. Tests whether summaryFirst mode correctly prioritizes cluster summaries over
+    /// individual member entries, and whether summaries rank appropriately in normal mode.
+    /// </summary>
+    public static BenchmarkDataset CreateClusterSummaryDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // Cluster 1: Web Development (5 members + 1 summary)
+            new("cs-web-01", "HTML5 provides semantic elements like header, nav, article, and section for structured web page markup. Supports multimedia via audio and video tags without plugins.", "web"),
+            new("cs-web-02", "CSS Flexbox and Grid enable responsive layouts. Flexbox handles one-dimensional alignment, Grid manages two-dimensional layouts with rows and columns.", "web"),
+            new("cs-web-03", "JavaScript async/await simplifies asynchronous code. Promises chain operations, while async functions allow sequential-looking code for non-blocking I/O.", "web"),
+            new("cs-web-04", "React uses a virtual DOM for efficient UI updates. Components are reusable building blocks with props for data flow and hooks for state management.", "web"),
+            new("cs-web-05", "Web accessibility (a11y) requires semantic HTML, ARIA labels, keyboard navigation, and sufficient color contrast. WCAG 2.1 defines AA and AAA compliance levels.", "web"),
+            new("cs-web-summary", "Web development encompasses front-end technologies (HTML5 semantic markup, CSS Flexbox/Grid layouts, JavaScript async patterns), component frameworks (React virtual DOM, hooks, props), and accessibility standards (WCAG 2.1, ARIA, keyboard navigation). Modern web apps combine responsive design with non-blocking I/O for performant, inclusive user experiences.", "web",
+                IsSummaryNode: true, SourceClusterId: "cluster-web"),
+
+            // Cluster 2: Machine Learning (5 members + 1 summary)
+            new("cs-ml-01", "Gradient descent optimizes neural network weights by computing loss gradients and updating parameters in the direction that minimizes error. Learning rate controls step size.", "ml"),
+            new("cs-ml-02", "Convolutional neural networks (CNNs) use learnable filters to detect spatial features in images. Pooling layers reduce dimensionality while preserving important patterns.", "ml"),
+            new("cs-ml-03", "Transfer learning reuses pretrained model weights for new tasks. Fine-tuning adjusts later layers while freezing early feature extractors, reducing training data requirements.", "ml"),
+            new("cs-ml-04", "Regularization techniques prevent overfitting: L1/L2 weight penalties, dropout randomly zeroes neurons during training, and early stopping halts when validation loss increases.", "ml"),
+            new("cs-ml-05", "Transformer architecture uses self-attention mechanisms to process sequences in parallel. Multi-head attention captures different relationship types across token positions.", "ml"),
+            new("cs-ml-summary", "Machine learning spans neural network optimization (gradient descent, learning rates), architecture design (CNNs for spatial features, transformers for sequential attention), training strategies (transfer learning, fine-tuning frozen layers), and regularization (L1/L2, dropout, early stopping). Modern ML leverages pretrained models and attention mechanisms for efficient learning across domains.", "ml",
+                IsSummaryNode: true, SourceClusterId: "cluster-ml"),
+
+            // Cluster 3: Database Systems (5 members + 1 summary)
+            new("cs-db-01", "SQL joins combine rows from multiple tables: INNER JOIN returns matching rows, LEFT JOIN preserves all left rows, and CROSS JOIN produces the Cartesian product.", "databases"),
+            new("cs-db-02", "Database indexes use B-tree or hash structures for fast lookups. Composite indexes cover multi-column queries. Index selectivity affects query planner decisions.", "databases"),
+            new("cs-db-03", "ACID transactions guarantee atomicity, consistency, isolation, and durability. Isolation levels (read uncommitted, read committed, repeatable read, serializable) trade consistency for concurrency.", "databases"),
+            new("cs-db-04", "Database normalization reduces redundancy through normal forms (1NF through BCNF). Denormalization strategically adds redundancy for read performance in analytical workloads.", "databases"),
+            new("cs-db-05", "PostgreSQL supports JSONB for semi-structured data, full-text search with tsvector/tsquery, window functions for analytics, and CTEs for recursive queries.", "databases"),
+            new("cs-db-summary", "Database systems encompass relational operations (SQL joins, normalization to BCNF), performance optimization (B-tree/hash indexes, composite indexes, denormalization), transaction guarantees (ACID, isolation levels from read uncommitted to serializable), and advanced features (PostgreSQL JSONB, full-text search, window functions, CTEs). Design balances data integrity with read/write performance.", "databases",
+                IsSummaryNode: true, SourceClusterId: "cluster-db"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Queries where summary should be the best single answer (summaryFirst=true)
+            new("cs-q01", "Overview of modern web development technologies and practices",
+                new() { ["cs-web-summary"] = 3, ["cs-web-01"] = 1, ["cs-web-02"] = 1, ["cs-web-03"] = 1, ["cs-web-04"] = 1, ["cs-web-05"] = 1 },
+                SummaryFirst: true),
+            new("cs-q02", "Comprehensive guide to machine learning concepts and techniques",
+                new() { ["cs-ml-summary"] = 3, ["cs-ml-01"] = 1, ["cs-ml-02"] = 1, ["cs-ml-03"] = 1, ["cs-ml-04"] = 1, ["cs-ml-05"] = 1 },
+                SummaryFirst: true),
+            new("cs-q03", "Database systems design principles and advanced features",
+                new() { ["cs-db-summary"] = 3, ["cs-db-01"] = 1, ["cs-db-02"] = 1, ["cs-db-03"] = 1, ["cs-db-04"] = 1, ["cs-db-05"] = 1 },
+                SummaryFirst: true),
+
+            // Queries where summary should rank well even without summaryFirst
+            new("cs-q04", "How do web frameworks handle responsive design and component rendering",
+                new() { ["cs-web-summary"] = 2, ["cs-web-02"] = 3, ["cs-web-04"] = 3 }),
+            new("cs-q05", "Training neural networks with gradient-based optimization and regularization",
+                new() { ["cs-ml-summary"] = 2, ["cs-ml-01"] = 3, ["cs-ml-04"] = 3 }),
+            new("cs-q06", "Database indexing strategies and query performance optimization",
+                new() { ["cs-db-summary"] = 2, ["cs-db-02"] = 3, ["cs-db-04"] = 2 }),
+
+            // Specific member queries where summary should NOT dominate
+            new("cs-q07", "How does CSS Flexbox differ from Grid for page layouts",
+                new() { ["cs-web-02"] = 3, ["cs-web-summary"] = 1 }),
+            new("cs-q08", "Explain transformer self-attention and multi-head attention",
+                new() { ["cs-ml-05"] = 3, ["cs-ml-summary"] = 1 }),
+            new("cs-q09", "ACID transaction isolation levels and their concurrency tradeoffs",
+                new() { ["cs-db-03"] = 3, ["cs-db-summary"] = 1 }),
+
+            // Cross-cluster query
+            new("cs-q10", "How are neural network models deployed in web applications",
+                new() { ["cs-web-summary"] = 2, ["cs-ml-summary"] = 2, ["cs-web-03"] = 1, ["cs-ml-03"] = 1 }),
+        };
+
+        return new BenchmarkDataset("cluster-summary-v1", "Cluster Summary Quality Benchmark", seeds, queries);
     }
 }

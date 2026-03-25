@@ -35,7 +35,7 @@ public sealed class IntelligenceTools
     }
 
     [McpServerTool(Name = "detect_duplicates")]
-    [Description("Find near-duplicate memory entries within a namespace by pairwise cosine similarity. Returns pairs above the threshold sorted by similarity.")]
+    [Description("Scan a namespace for near-duplicate entries by pairwise cosine similarity. Use before bulk imports or periodic cleanup to find redundant memories.")]
     public object DetectDuplicates(
         [Description("Namespace to scan.")] string ns,
         [Description("Cosine similarity threshold (default: 0.95). Entries above this are flagged as duplicates.")] float threshold = 0.95f,
@@ -69,7 +69,7 @@ public sealed class IntelligenceTools
     }
 
     [McpServerTool(Name = "find_contradictions")]
-    [Description("Surface contradictions in a namespace: entries explicitly linked with 'contradicts' edges, plus high-similarity entry pairs that may need review. Set a query to find contradictions relevant to a topic.")]
+    [Description("Surface conflicting memories: explicit 'contradicts' graph edges plus high-similarity pairs that may disagree. Use when information seems inconsistent.")]
     public object FindContradictions(
         [Description("Namespace to search.")] string ns,
         [Description("Optional topic text to focus contradiction search.")] string? topic = null,
@@ -154,7 +154,7 @@ public sealed class IntelligenceTools
     }
 
     [McpServerTool(Name = "uncollapse_cluster")]
-    [Description("Reverse a previously executed accretion collapse: restore archived members to their pre-collapse lifecycle state, delete the summary entry, and clean up the cluster.")]
+    [Description("Reverse an accretion collapse: restore archived members, delete the summary entry, and clean up the cluster.")]
     public string UncollapseCluster(
         [Description("The collapse ID to reverse.")] string collapseId)
     {
@@ -170,7 +170,7 @@ public sealed class IntelligenceTools
     }
 
     [McpServerTool(Name = "merge_memories")]
-    [Description("Merge two duplicate memory entries. Keeps the first entry's vector, combines metadata and access counts, transfers graph edges and cluster memberships, and archives the second entry.")]
+    [Description("Merge two duplicate entries into one. Keeps first entry's vector, combines metadata/access counts, transfers edges and clusters, archives the second. Use after detect_duplicates.")]
     public string MergeMemories(
         [Description("ID of the entry to keep.")] string keepId,
         [Description("ID of the duplicate entry to archive.")] string archiveId,

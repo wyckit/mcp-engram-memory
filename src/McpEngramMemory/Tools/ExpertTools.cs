@@ -34,11 +34,9 @@ public sealed class ExpertTools
     }
 
     [McpServerTool(Name = "dispatch_task")]
-    [Description("Route a query to the most relevant expert namespace via semantic similarity against the meta-index. " +
-        "If a qualified expert is found (cosine similarity >= threshold), returns the expert profile and top memories " +
-        "from that expert's namespace as context. If no expert qualifies, returns 'needs_expert' status — " +
-        "use create_expert to instantiate a specialist for the domain. " +
-        "Set hierarchical=true to use coarse-to-fine tree routing through domain nodes (root → branch → leaf).")]
+    [Description("Route a query to the best-matching expert namespace. Returns expert profile and top memories as context. " +
+        "Use when you need domain-specific knowledge but don't know which namespace holds it. " +
+        "Set hierarchical=true for tree routing (root → branch → leaf).")]
     public object DispatchTask(
         [Description("The core problem, question, or task to route to an expert.")] string taskDescription,
         [Description("How many memories to retrieve from the matched expert's namespace (default: 3).")] int autoSearchK = 3,
@@ -88,21 +86,17 @@ public sealed class ExpertTools
     }
 
     [McpServerTool(Name = "create_expert")]
-    [Description("Instantiate a new expert namespace and register it in the semantic routing meta-index. " +
-        "The persona description is embedded and used for future query routing. " +
-        "Provide a detailed paragraph outlining the expert's domain, principles, and perspective. " +
-        "Use level='root' or 'branch' to create domain nodes for hierarchical routing. " +
-        "When parentNodeId is omitted for leaf experts, auto-classification places the expert " +
-        "into the domain tree: 'auto_linked' (>=0.82 confidence), 'suggested' (0.60-0.82), " +
-        "or 'unclassified' (<0.60). The placement result is included in the response.")]
+    [Description("Register a new expert in the semantic routing meta-index. " +
+        "Embeds the persona description for future query routing via dispatch_task. " +
+        "Use level='root'/'branch' for domain nodes, 'leaf' (default) for actual experts.")]
     public object CreateExpert(
         [Description("Snake_case identifier for the expert (e.g., 'rust_systems_engineer', 'quantum_physicist').")] string expertId,
-        [Description("Detailed paragraph describing the expert's domain expertise, specialization, and perspective. " +
-            "This text is embedded and used for semantic matching during dispatch.")] string personaDescription,
+        [Description("Detailed paragraph describing domain expertise, specialization, and perspective. " +
+            "Embedded for semantic matching during dispatch_task routing.")] string personaDescription,
         [Description("Hierarchy level: 'leaf' (default) for actual experts, 'root' for top-level domains, " +
             "'branch' for mid-level groupings. Root and branch nodes are routing-only domain nodes.")] string level = "leaf",
-        [Description("Parent node ID for branch or leaf nodes to establish tree hierarchy. " +
-            "Required for 'branch' level, optional for 'leaf'.")] string? parentNodeId = null)
+        [Description("Parent node ID. Required for 'branch', optional for 'leaf'. " +
+            "Omitting for leaf triggers auto-classification: auto_linked (>=0.82), suggested (0.60-0.82), or unclassified (<0.60).")] string? parentNodeId = null)
     {
         if (string.IsNullOrWhiteSpace(expertId))
             return "Error: expertId must not be empty.";
@@ -150,8 +144,7 @@ public sealed class ExpertTools
     }
 
     [McpServerTool(Name = "link_to_parent")]
-    [Description("Link an existing leaf expert to a parent node (root or branch) in the domain tree. " +
-        "Use this to organize existing experts into the hierarchical routing topology.")]
+    [Description("Link a leaf expert to a parent domain node. Use to organize experts in the hierarchical routing tree.")]
     public object LinkToParent(
         [Description("The expert ID to link.")] string expertId,
         [Description("The parent node ID (root or branch) to link under.")] string parentNodeId)
@@ -170,8 +163,7 @@ public sealed class ExpertTools
     }
 
     [McpServerTool(Name = "get_domain_tree")]
-    [Description("Get the full expert domain tree showing root domains, branches, and leaf experts " +
-        "with their hierarchical relationships. Useful for understanding the routing topology.")]
+    [Description("Show the full expert domain tree: root domains, branches, and leaf experts with hierarchy.")]
     public object GetDomainTree()
     {
         using var timer = _metrics.StartTimer("get_domain_tree");

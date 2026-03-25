@@ -1,6 +1,6 @@
 # Benchmark Ideas
 
-10 proposals for expanding the IR quality benchmark suite. Nine have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1, specificity-v1, physics-v1, lifecycle-v1, contamination-v1). One remains as a future candidate.
+10 proposals for expanding the IR quality benchmark suite. All 10 have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1, specificity-v1, physics-v1, lifecycle-v1, contamination-v1, cluster-summary-v1).
 
 ## Current Baselines
 
@@ -78,15 +78,13 @@ Benchmark that stores seeds across STM, LTM, and archived states, then queries w
 
 ---
 
-### 7. Cluster Summary Quality
+### 7. Cluster Summary Quality — IMPLEMENTED as `cluster-summary-v1`
 
 Store cluster summaries alongside member entries, then query to verify summaries rank appropriately with and without `summaryFirst` mode.
 
-**Setup:** 15 member entries grouped into 3 clusters, each with a stored summary.
-**Queries:** Topic queries where the summary should be the best single answer.
-**Expected:** With summaryFirst=true, summaries rank above individual members.
+**Dataset:** 18 seeds (15 member entries in 3 clusters — web, ML, databases — plus 3 summary nodes with IsSummaryNode=true). 10 queries: 3 with summaryFirst=true (summary should rank #1), 3 topic queries (summary should rank well naturally), 3 specific queries (member should outrank summary), 1 cross-cluster.
 
-**Measures:** Summary ranking lift, nDCG improvement with summaryFirst.
+**Measures:** Summary ranking lift, nDCG improvement with summaryFirst, summary vs member precision.
 
 ---
 
@@ -134,5 +132,5 @@ Intentionally inject near-duplicate seeds (slightly reworded versions of the sam
 | Medium | 5. Specificity Gradient | **Implemented** — `specificity-v1` |
 | Medium | 9. Physics Re-ranking | **Implemented** — `physics-v1` |
 | Low | 6. Lifecycle-Aware | **Implemented** — `lifecycle-v1` |
-| Low | 7. Cluster Summary | Not started |
+| Low | 7. Cluster Summary | **Implemented** — `cluster-summary-v1` |
 | Low | 10. Duplicate Contamination | **Implemented** — `contamination-v1` |

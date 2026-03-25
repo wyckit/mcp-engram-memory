@@ -221,9 +221,11 @@ public sealed class LifecycleEngine
     /// <summary>Deep recall: search all states and auto-resurrect high-scoring archived entries.</summary>
     public IReadOnlyList<CognitiveSearchResult> DeepRecall(
         float[] vector, string ns, int k = 10, float minScore = 0.3f,
-        float resurrectionThreshold = 0.7f)
+        float resurrectionThreshold = 0.7f,
+        string? queryText = null, bool hybrid = false, bool rerank = false)
     {
-        var results = _index.SearchAllStates(vector, ns, k, minScore);
+        var results = _index.SearchAllStates(vector, ns, k, minScore,
+            queryText: queryText, hybrid: hybrid, rerank: rerank);
 
         // Auto-resurrect high-scoring archived entries and return updated results
         var updatedResults = new List<CognitiveSearchResult>(results.Count);

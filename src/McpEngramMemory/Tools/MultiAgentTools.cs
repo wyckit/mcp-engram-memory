@@ -38,17 +38,16 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "cross_search")]
-    [Description("Search across multiple namespaces in a single call. Results are merged using " +
-        "Reciprocal Rank Fusion (RRF) and annotated with their source namespace. " +
-        "Supports hybrid search (BM25+vector) and reranking. " +
-        "Use this when you need to find information that may be spread across different knowledge domains.")]
+    [Description("Search multiple namespaces in one call with RRF-merged results. " +
+        "Use when information may span multiple knowledge domains. Supports hybrid search and reranking.")]
     public object CrossSearch(
         [Description("Comma-separated list of namespaces to search (e.g. 'work,synthesis,mcp-engram-memory').")] string namespaces,
         [Description("The text query to search for.")] string text,
         [Description("Maximum number of results to return across all namespaces (default: 10).")] int k = 10,
         [Description("When true, use hybrid BM25+vector search (default: false).")] bool hybrid = false,
         [Description("When true, apply token-level reranking (default: false).")] bool rerank = false,
-        [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null)
+        [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null,
+        [Description("Prioritize cluster summaries over individual members (default: false).")] bool summaryFirst = false)
     {
         if (string.IsNullOrWhiteSpace(namespaces))
             return "Error: namespaces must not be empty.";
@@ -71,14 +70,14 @@ public sealed class MultiAgentTools
         var vector = _embedding.Embed(text);
         var results = _index.SearchMultiple(
             vector, accessible, queryText: text, k: k,
-            includeStates: states, hybrid: hybrid, rerank: rerank);
+            includeStates: states, hybrid: hybrid, rerank: rerank,
+            summaryFirst: summaryFirst);
 
         return new CrossSearchResponse(results, accessible.Count, results.Count);
     }
 
     [McpServerTool(Name = "share_namespace")]
-    [Description("Grant another agent read or write access to a namespace you own. " +
-        "Use this to enable multi-agent collaboration on shared knowledge.")]
+    [Description("Grant another agent read or write access to a namespace you own.")]
     public object ShareNamespace(
         [Description("The namespace to share.")] string ns,
         [Description("The agent ID to grant access to.")] string agentId,
@@ -117,8 +116,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "whoami")]
-    [Description("Return the current agent identity and a summary of accessible namespaces. " +
-        "Useful for verifying multi-agent configuration.")]
+    [Description("Return current agent identity and accessible namespaces. Use to verify multi-agent configuration.")]
     public object WhoAmI()
     {
         using var timer = _metrics.StartTimer("whoami");

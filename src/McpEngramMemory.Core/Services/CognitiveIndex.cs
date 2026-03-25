@@ -111,6 +111,54 @@ public sealed class CognitiveIndex : IDisposable
         finally { _lock.ExitWriteLock(); }
     }
 
+    /// <summary>Batch upsert entries with a single write-lock acquisition.</summary>
+    public int UpsertBatch(IReadOnlyList<CognitiveEntry> entries)
+    {
+        if (entries.Count == 0) return 0;
+
+        // Pre-compute enrichment, norms, and quantization outside the lock
+        var prepared = new List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
+                entry.Keywords = _documentEnricher.Enrich(entry.Text);
+            float norm = VectorMath.Norm(entry.Vector);
+            var quantized = entry.LifecycleState is "ltm" or "archived"
+                ? VectorQuantizer.Quantize(entry.Vector)
+                : null;
+            prepared.Add((entry, norm, quantized));
+        }
+
+        int count = 0;
+        _lock.EnterWriteLock();
+        try
+        {
+            foreach (var (entry, norm, quantized) in prepared)
+            {
+                _store.EnsureLoaded(entry.Ns);
+                var nsEntries = _store.GetOrCreateNamespace(entry.Ns);
+
+                if (!nsEntries.ContainsKey(entry.Id))
+                {
+                    if (nsEntries.Count >= _limits.MaxNamespaceSize)
+                        continue; // skip entries that would exceed namespace limit
+                    if (_store.TotalCount >= _limits.MaxTotalCount)
+                        break; // stop if total limit reached
+                }
+
+                nsEntries[entry.Id] = (entry, norm, quantized);
+                _store.TrackEntry(entry.Id, entry.Ns);
+                _store.IndexBM25(entry);
+                _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
+                _store.ScheduleEntryUpsert(entry.Ns, entry);
+                count++;
+            }
+        }
+        finally { _lock.ExitWriteLock(); }
+
+        return count;
+    }
+
     /// <summary>Get an entry by ID, searching all namespaces.</summary>
     public CognitiveEntry? Get(string id)
     {
@@ -280,11 +328,13 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Search ALL states including archived (for deep_recall).</summary>
     public IReadOnlyList<CognitiveSearchResult> SearchAllStates(
-        float[] query, string ns, int k = 10, float minScore = 0.3f)
+        float[] query, string ns, int k = 10, float minScore = 0.3f,
+        string? queryText = null, bool hybrid = false, bool rerank = false)
         => Search(new SearchRequest
         {
             Query = query, Namespace = ns, K = k, MinScore = minScore,
-            IncludeStates = AllStates
+            IncludeStates = AllStates,
+            QueryText = queryText ?? string.Empty, Hybrid = hybrid, Rerank = rerank
         });
 
     /// <summary>
@@ -295,7 +345,7 @@ public sealed class CognitiveIndex : IDisposable
         float[] query, IReadOnlyList<string> namespaces, string? queryText = null,
         int k = 5, float minScore = 0f, string? category = null,
         HashSet<string>? includeStates = null, bool hybrid = false,
-        bool rerank = false, int rrfK = 60)
+        bool rerank = false, int rrfK = 60, bool summaryFirst = false)
     {
         if (namespaces.Count == 0)
             return Array.Empty<Models.CrossSearchResult>();
@@ -312,7 +362,7 @@ public sealed class CognitiveIndex : IDisposable
             }
             else
             {
-                nsResults = Search(query, ns, k, minScore, category, includeStates);
+                nsResults = Search(query, ns, k, minScore, category, includeStates, summaryFirst);
             }
 
             // Assign RRF scores based on rank within this namespace
