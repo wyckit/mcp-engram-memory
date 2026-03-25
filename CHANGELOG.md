@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.5] - 2026-03-25
+
+### Added
+- **HNSW Graph Persistence**: HNSW indices are now serialized to disk as topology-only snapshots (`{ns}.hnsw.json` for JSON backend, `global_data` for SQLite). Vectors are reconstructed from namespace entries on load, avoiding the O(N log N) rebuild cost on cold start for namespaces with 200+ entries. Snapshots are saved alongside namespace data and cleaned up on namespace deletion.
+- **`store_batch` tool**: Bulk-store multiple entries in a single write-lock. Faster than repeated `store_memory` calls for batch imports. Each entry gets contextual prefix embedding. Returns stored count and duplicate warnings.
+- **Storage Version Validation (JSON)**: `PersistenceManager` now validates `storageVersion` on load — rejects files from newer server versions (forward-compatibility guard), runs sequential migrations for older versions. Follows the same `RunMigrations()` pattern as `SqliteStorageProvider`. Current version bumped to v2.
+- **`ToolError` structured error type**: Standard `{ status, error }` record for consistent MCP tool error responses. `FromException()` hides internal stack traces.
+- **BM25 Semantic Gate**: Hybrid search now gates BM25 candidates through semantic similarity before RRF fusion, eliminating noise from keyword-only matches that are semantically irrelevant.
+- **52-combination Regression Baseline**: Theory test covering all 13 IR benchmark datasets x 4 search modes (vector, hybrid, vector_rerank, hybrid_rerank) with minimum thresholds for Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15.
+- 7 new IR benchmark datasets: ambiguity-v1, distractor-v1, specificity-v1, scale-v1, compound-v1, contamination-v1, cluster-summary-v1.
+- 125 new tests (total: 734 across 3 frameworks, up from 609).
+
+### Changed
+- **Tool Description Audit**: All 50 MCP tool descriptions rewritten for better LLM routing — shorter top-level descriptions (under 200 chars), "when to use" guidance, routing hints between similar tools (e.g., `remember` vs `store_memory`, `recall` vs `search_memory`).
+- **Scale Recall Tuning**: Hybrid search cascade and RRF fusion parameters retuned for improved recall on large namespaces (500+ entries).
+- Fixed stack trace leak in `ClusterTools.CreateCluster` error responses.
+- Total tools: 50 (up from 49).
+
 ## [0.5.4] - 2026-03-22
 
 ### Added

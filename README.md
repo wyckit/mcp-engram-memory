@@ -6,8 +6,8 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-609%20passed-brightgreen" alt="Tests"/>
-  <img src="https://img.shields.io/badge/MCP%20tools-49-blue" alt="MCP Tools"/>
+  <img src="https://img.shields.io/badge/tests-734%20passed-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/MCP%20tools-50-blue" alt="MCP Tools"/>
 </p>
 
 **Give your AI agent persistent memory that survives across sessions.** Store decisions, recall context, and build expertise — all locally, no cloud required.
@@ -38,7 +38,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 3 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.4
+dotnet add package McpEngramMemory.Core --version 0.5.5
 ```
 
 Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
@@ -155,7 +155,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 The core engine is available as a NuGet package for embedding in your own .NET applications:
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.4
+dotnet add package McpEngramMemory.Core --version 0.5.5
 ```
 
 ```csharp
