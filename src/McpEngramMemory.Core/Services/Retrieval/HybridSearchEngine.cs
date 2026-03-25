@@ -28,7 +28,7 @@ public sealed class HybridSearchEngine
     /// </summary>
     private const float HighConfidenceThreshold = 0.85f;
     private const float LowConfidenceThreshold = 0.50f;
-    private const int CascadeThreshold = 50;
+    private const int CascadeThreshold = 100;
 
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         IReadOnlyList<CognitiveSearchResult> vectorResults,
@@ -42,6 +42,7 @@ public sealed class HybridSearchEngine
         BM25Index bm25,
         IReranker reranker,
         Func<string, string, CognitiveEntry?> getEntry,
+        float[]? queryVector = null,
         int entryCount = 0)
     {
         // High-confidence early exit: if vector search returned strong results,
@@ -65,7 +66,7 @@ public sealed class HybridSearchEngine
         if (vectorResults.Count > 0)
         {
             float topScore = vectorResults[0].Score;
-            if (topScore >= 0.70f)
+            if (topScore >= 0.80f)
                 adaptiveRrfK = Math.Max(rrfK, 120); // suppress BM25
             else if (topScore < LowConfidenceThreshold)
                 adaptiveRrfK = Math.Min(rrfK, 30); // amplify BM25
@@ -133,14 +134,53 @@ public sealed class HybridSearchEngine
             }
         }
 
+        // Semantic gate: filter BM25-only results by cosine similarity to query vector.
+        // Prevents low-relevance keyword matches from polluting RRF fusion.
+        // Only apply when vector results show reasonable confidence (real embeddings).
+        const float Bm25SemanticGate = 0.30f;
+        var vectorIdSet = vectorResults.Select(r => r.Id).ToHashSet();
+        var bm25Gated = new List<(string Id, float Score)>(bm25Unfiltered.Count);
+        bool applyGate = queryVector is not null &&
+            vectorResults.Count > 0 && vectorResults[0].Score >= Bm25SemanticGate;
+
+        if (applyGate)
+        {
+            float queryNorm = VectorMath.Norm(queryVector!);
+            foreach (var (id, bm25Score) in bm25Unfiltered)
+            {
+                if (vectorIdSet.Contains(id))
+                {
+                    bm25Gated.Add((id, bm25Score));
+                    continue;
+                }
+
+                if (resolvedEntries.TryGetValue(id, out var entry))
+                {
+                    float cosine = VectorMath.Dot(queryVector!, entry.Vector) /
+                        (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
+                    if (cosine >= Bm25SemanticGate)
+                        bm25Gated.Add((id, bm25Score));
+                }
+                else
+                {
+                    bm25Gated.Add((id, bm25Score));
+                }
+            }
+        }
+        else
+        {
+            foreach (var item in bm25Unfiltered)
+                bm25Gated.Add(item);
+        }
+
         // Reciprocal Rank Fusion
         var vectorRanks = new Dictionary<string, int>(vectorResults.Count);
         for (int i = 0; i < vectorResults.Count; i++)
             vectorRanks[vectorResults[i].Id] = i + 1;
 
-        var bm25Ranks = new Dictionary<string, int>(bm25Unfiltered.Count);
-        for (int i = 0; i < bm25Unfiltered.Count; i++)
-            bm25Ranks[bm25Unfiltered[i].Id] = i + 1;
+        var bm25Ranks = new Dictionary<string, int>(bm25Gated.Count);
+        for (int i = 0; i < bm25Gated.Count; i++)
+            bm25Ranks[bm25Gated[i].Id] = i + 1;
 
         // Merge unique IDs from both sources
         var allIds = new HashSet<string>(vectorRanks.Keys);

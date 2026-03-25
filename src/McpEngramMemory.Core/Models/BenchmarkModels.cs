@@ -8,7 +8,9 @@ namespace McpEngramMemory.Core.Models;
 public sealed record BenchmarkSeedEntry(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("text")] string Text,
-    [property: JsonPropertyName("category")] string? Category = null);
+    [property: JsonPropertyName("category")] string? Category = null,
+    [property: JsonPropertyName("lifecycleState")] string? LifecycleState = null,
+    [property: JsonPropertyName("accessCount")] int? AccessCount = null);
 
 /// <summary>
 /// A benchmark query with expected results and graded relevance judgments.

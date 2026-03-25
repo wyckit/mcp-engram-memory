@@ -1,6 +1,6 @@
 # Benchmark Ideas
 
-10 proposals for expanding the IR quality benchmark suite. Six have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1, specificity-v1). Four remain as future candidates.
+10 proposals for expanding the IR quality benchmark suite. Nine have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1, specificity-v1, physics-v1, lifecycle-v1, contamination-v1). One remains as a future candidate.
 
 ## Current Baselines
 
@@ -68,15 +68,13 @@ Queries at 3 specificity tiers (broad, medium, narrow) on 6 topic clusters. Test
 
 ---
 
-### 6. Lifecycle-Aware Retrieval
+### 6. Lifecycle-Aware Retrieval — IMPLEMENTED as `lifecycle-v1`
 
 Benchmark that stores seeds across STM, LTM, and archived states, then queries with different lifecycle filters to verify filtering works correctly.
 
-**Setup:** 10 seeds in STM, 10 in LTM, 5 archived.
-**Queries:** Same query text with different `includeStates` filters.
-**Expected:** Results change based on filter; archived entries excluded by default.
+**Dataset:** 25 seeds (10 STM, 10 LTM, 5 archived) covering patterns, databases, networking, security, devops, architecture, and tooling. 15 queries: 3 targeting STM, 4 targeting LTM, 3 cross-state, 5 targeting archived entries (testing exclusion from default search).
 
-**Measures:** Filter correctness, deep_recall resurrection accuracy.
+**Measures:** Filter correctness, archived entry exclusion, deep_recall resurrection accuracy.
 
 ---
 
@@ -104,25 +102,21 @@ Store cluster summaries alongside member entries, then query to verify summaries
 
 ---
 
-### 9. Temporal / Recency Bias (Physics Re-ranking)
+### 9. Temporal / Recency Bias (Physics Re-ranking) — IMPLEMENTED as `physics-v1`
 
 Seeds with varying access counts and creation times. Tests whether physics-based re-ranking (gravitational force) properly boosts high-activation entries.
 
-**Setup:** Duplicate-topic seeds where one has high accessCount (frequently accessed) and one has low.
-**Queries:** Run with `usePhysics=true` and `usePhysics=false`.
-**Expected:** Physics mode boosts the high-activation entry; non-physics mode ranks purely by cosine.
+**Dataset:** 20 seeds (10 topic pairs with cold/hot activation profiles). Hot seeds have AccessCount 50-80, cold seeds have AccessCount 0-2. 10 queries targeting both seeds in each pair, with hot seed graded higher.
 
-**Measures:** Rank shift between physics/non-physics, activation energy correlation with rank.
+**Measures:** Rank shift between physics/non-physics, activation energy correlation with rank, nDCG improvement when high-activation seeds are expected first.
 
 ---
 
-### 10. Near-Duplicate Contamination
+### 10. Near-Duplicate Contamination — IMPLEMENTED as `contamination-v1`
 
 Intentionally inject near-duplicate seeds (slightly reworded versions of the same content) and verify the system still returns diverse results.
 
-**Setup:** 15 unique seeds + 10 near-duplicates (paraphrases of existing seeds).
-**Queries:** Standard topic queries.
-**Expected:** Results should not be dominated by duplicates of the same entry. Duplicate detection warning should fire on ingest.
+**Dataset:** 25 seeds (15 unique + 10 near-duplicate paraphrases of seeds 1-10) across data-structures, devops, ml, security, networking, databases, patterns, and systems. 12 queries with unique seeds graded 3 and duplicates graded 2.
 
 **Measures:** Result diversity (unique topics in top-5), duplicate detection recall, precision impact of contamination.
 
@@ -138,7 +132,7 @@ Intentionally inject near-duplicate seeds (slightly reworded versions of the sam
 | Medium | 1. Cross-Domain Ambiguity | **Implemented** — `ambiguity-v1` |
 | Medium | 3. Negative/Distractor | **Implemented** — `distractor-v1` |
 | Medium | 5. Specificity Gradient | **Implemented** — `specificity-v1` |
-| Medium | 9. Physics Re-ranking | Not started |
-| Low | 6. Lifecycle-Aware | Not started |
+| Medium | 9. Physics Re-ranking | **Implemented** — `physics-v1` |
+| Low | 6. Lifecycle-Aware | **Implemented** — `lifecycle-v1` |
 | Low | 7. Cluster Summary | Not started |
-| Low | 10. Duplicate Contamination | Not started |
+| Low | 10. Duplicate Contamination | **Implemented** — `contamination-v1` |

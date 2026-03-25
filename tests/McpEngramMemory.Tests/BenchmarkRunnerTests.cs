@@ -194,6 +194,9 @@ public class BenchmarkRunnerTests
     [InlineData("ambiguity-v1")]
     [InlineData("distractor-v1")]
     [InlineData("specificity-v1")]
+    [InlineData("physics-v1")]
+    [InlineData("lifecycle-v1")]
+    [InlineData("contamination-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -213,6 +216,9 @@ public class BenchmarkRunnerTests
     [InlineData("ambiguity-v1")]
     [InlineData("distractor-v1")]
     [InlineData("specificity-v1")]
+    [InlineData("physics-v1")]
+    [InlineData("lifecycle-v1")]
+    [InlineData("contamination-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -238,6 +244,9 @@ public class BenchmarkRunnerTests
         Assert.Contains("ambiguity-v1", ids);
         Assert.Contains("distractor-v1", ids);
         Assert.Contains("specificity-v1", ids);
+        Assert.Contains("physics-v1", ids);
+        Assert.Contains("lifecycle-v1", ids);
+        Assert.Contains("contamination-v1", ids);
     }
 
     [Fact]
@@ -633,6 +642,200 @@ public class BenchmarkRunnerTests
     }
 
     // ── ONNX Benchmarks ──
+
+    // ── Physics Re-Ranking Tests ──
+
+    [Fact]
+    public void PhysicsDataset_Has20Seeds10Queries()
+    {
+        var ds = BenchmarkRunner.CreatePhysicsDataset();
+        Assert.Equal(20, ds.SeedEntries.Count);
+        Assert.Equal(10, ds.Queries.Count);
+        Assert.Equal("physics-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void PhysicsDataset_HasPairedActivationProfiles()
+    {
+        var ds = BenchmarkRunner.CreatePhysicsDataset();
+        var coldSeeds = ds.SeedEntries.Where(s => s.Id.Contains("-cold")).ToList();
+        var hotSeeds = ds.SeedEntries.Where(s => s.Id.Contains("-hot")).ToList();
+        Assert.Equal(10, coldSeeds.Count);
+        Assert.Equal(10, hotSeeds.Count);
+
+        // Hot seeds should have higher access counts than cold seeds
+        foreach (var hot in hotSeeds)
+            Assert.True(hot.AccessCount >= 50, $"Hot seed '{hot.Id}' should have AccessCount >= 50, has {hot.AccessCount}");
+        foreach (var cold in coldSeeds)
+            Assert.True(cold.AccessCount <= 2, $"Cold seed '{cold.Id}' should have AccessCount <= 2, has {cold.AccessCount}");
+    }
+
+    [Theory]
+    [InlineData("physics-v1", "vector")]
+    [InlineData("physics-v1", "vector_rerank")]
+    public void RunPhysicsBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] (ONNX bge-micro-v2) ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+
+        foreach (var q in result.QueryScores)
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} → [{string.Join(", ", q.ActualResultIds)}]");
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    // ── Lifecycle-Aware Tests ──
+
+    [Fact]
+    public void LifecycleDataset_Has25Seeds15Queries()
+    {
+        var ds = BenchmarkRunner.CreateLifecycleDataset();
+        Assert.Equal(25, ds.SeedEntries.Count);
+        Assert.Equal(15, ds.Queries.Count);
+        Assert.Equal("lifecycle-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void LifecycleDataset_Has3LifecycleStates()
+    {
+        var ds = BenchmarkRunner.CreateLifecycleDataset();
+        var stm = ds.SeedEntries.Where(s => s.LifecycleState == "stm").ToList();
+        var ltm = ds.SeedEntries.Where(s => s.LifecycleState == "ltm").ToList();
+        var archived = ds.SeedEntries.Where(s => s.LifecycleState == "archived").ToList();
+        Assert.Equal(10, stm.Count);
+        Assert.Equal(10, ltm.Count);
+        Assert.Equal(5, archived.Count);
+    }
+
+    [Theory]
+    [InlineData("lifecycle-v1", "vector")]
+    [InlineData("lifecycle-v1", "vector_rerank")]
+    public void RunLifecycleBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+
+        foreach (var q in result.QueryScores)
+        {
+            // Tag archived queries for visibility
+            string tag = q.QueryId.CompareTo("lc-q11") >= 0 ? " [ARCHIVED-TARGET]" : "";
+            _output.WriteLine($"    {q.QueryId}{tag}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} → [{string.Join(", ", q.ActualResultIds)}]");
+        }
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    // ── Near-Duplicate Contamination Tests ──
+
+    [Fact]
+    public void ContaminationDataset_Has25Seeds12Queries()
+    {
+        var ds = BenchmarkRunner.CreateContaminationDataset();
+        Assert.Equal(25, ds.SeedEntries.Count);
+        Assert.Equal(12, ds.Queries.Count);
+        Assert.Equal("contamination-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void ContaminationDataset_Has15UniquePlus10Duplicates()
+    {
+        var ds = BenchmarkRunner.CreateContaminationDataset();
+        var unique = ds.SeedEntries.Count(s => s.Id.StartsWith("dup-u"));
+        var dups = ds.SeedEntries.Count(s => s.Id.StartsWith("dup-d"));
+        Assert.Equal(15, unique);
+        Assert.Equal(10, dups);
+    }
+
+    [Theory]
+    [InlineData("contamination-v1", "vector")]
+    [InlineData("contamination-v1", "hybrid")]
+    [InlineData("contamination-v1", "vector_rerank")]
+    public void RunContaminationBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+
+        foreach (var q in result.QueryScores)
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} → [{string.Join(", ", q.ActualResultIds)}]");
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
 
     [Theory]
     [InlineData("default-v1", "vector")]

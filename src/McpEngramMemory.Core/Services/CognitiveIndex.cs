@@ -195,28 +195,28 @@ public sealed class CognitiveIndex : IDisposable
             // Expand query with domain synonyms for BM25 vocabulary bridging
             var expandedQueryText = _synonymExpander.Expand(request.QueryText);
 
-            int candidateK = Math.Max(request.K * 4, 20);
+            int candidateK = Math.Max(request.K * 6, 30);
             var vectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
                 request.Category, request.IncludeStates, false, hnswIndex);
             var hybridResults = _hybridSearch.HybridSearch(
                 vectorResults, expandedQueryText, request.Namespace, request.K,
                 request.IncludeStates, request.Category,
-                request.Rerank, request.RrfK, _bm25, _reranker, Get, snapshot.Count);
+                request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
 
             // Auto-PRF: if top hybrid result is low confidence, expand query with
             // terms from initial results and re-search for improved recall
             if (hybridResults.Count > 0 &&
-                hybridResults[0].Score < 0.015f &&
+                hybridResults[0].Score < 0.04f &&
                 hybridResults.Count >= 3)
             {
-                var prfQuery = _queryExpander.Expand(expandedQueryText, hybridResults, maxTerms: 4, minDocFreq: 2);
+                var prfQuery = _queryExpander.Expand(expandedQueryText, hybridResults, maxTerms: 6, minDocFreq: 2);
                 if (prfQuery != expandedQueryText)
                 {
                     var prfResults = _hybridSearch.HybridSearch(
                         vectorResults, prfQuery, request.Namespace, request.K,
                         request.IncludeStates, request.Category,
-                        request.Rerank, request.RrfK, _bm25, _reranker, Get, snapshot.Count);
+                        request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
                     // Use PRF results if they improve top score
                     if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
                         return ApplyCategoryBoost(prfResults, request.QueryText);
@@ -238,7 +238,7 @@ public sealed class CognitiveIndex : IDisposable
             vectorOnlyResults[0].Score < 0.50f &&
             !request.SummaryFirst)
         {
-            int candidateK = Math.Max(request.K * 4, 20);
+            int candidateK = Math.Max(request.K * 5, 25);
             var broadVectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
                 request.Category, request.IncludeStates, false, hnswIndex);
@@ -246,7 +246,7 @@ public sealed class CognitiveIndex : IDisposable
             return ApplyCategoryBoost(_hybridSearch.HybridSearch(
                 broadVectorResults, expandedQueryText, request.Namespace, request.K,
                 request.IncludeStates, request.Category,
-                false, request.RrfK, _bm25, _reranker, Get, snapshot.Count), request.QueryText);
+                false, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count), request.QueryText);
         }
 
         return vectorOnlyResults;
@@ -682,7 +682,7 @@ public sealed class CognitiveIndex : IDisposable
                 {
                     if (queryTokens.Contains(ct))
                     {
-                        boost = 1.08f; // 8% category match boost
+                        boost = 1.15f; // 15% category match boost
                         break;
                     }
                 }

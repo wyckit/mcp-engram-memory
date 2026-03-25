@@ -53,7 +53,10 @@ public sealed class BenchmarkRunner
                     ? BuildContextualPrefix(category: seed.Category) + seed.Text
                     : seed.Text;
                 var vector = _embedding.Embed(textToEmbed);
-                var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: lifecycleState);
+                var effectiveState = seed.LifecycleState ?? lifecycleState;
+                var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: effectiveState);
+                if (seed.AccessCount is int ac)
+                    entry.AccessCount = ac;
                 _index.Upsert(entry);
             }
 
@@ -172,7 +175,10 @@ public sealed class BenchmarkRunner
             for (int i = 0; i < dataset.SeedEntries.Count; i++)
             {
                 var seed = dataset.SeedEntries[i];
-                var entry = new CognitiveEntry(seed.Id, seedVectors[i], ns, seed.Text, seed.Category, lifecycleState: lifecycleState);
+                var effectiveState = seed.LifecycleState ?? lifecycleState;
+                var entry = new CognitiveEntry(seed.Id, seedVectors[i], ns, seed.Text, seed.Category, lifecycleState: effectiveState);
+                if (seed.AccessCount is int ac)
+                    entry.AccessCount = ac;
                 _index.Upsert(entry);
             }
 
@@ -647,7 +653,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1", "physics-v1", "lifecycle-v1", "contamination-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -664,6 +670,9 @@ public sealed class BenchmarkRunner
             "ambiguity-v1" => CreateAmbiguityDataset(),
             "distractor-v1" => CreateDistractorDataset(),
             "specificity-v1" => CreateSpecificityDataset(),
+            "physics-v1" => CreatePhysicsDataset(),
+            "lifecycle-v1" => CreateLifecycleDataset(),
+            "contamination-v1" => CreateContaminationDataset(),
             _ => null
         };
     }
@@ -1133,5 +1142,239 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("specificity-v1", "Specificity Gradient Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Physics Re-Ranking Benchmark: 20 seeds (10 topic pairs with high/low activation),
+    /// 10 queries. Tests whether physics-based gravitational re-ranking properly boosts
+    /// frequently-accessed entries over cold duplicates on the same topic.
+    /// </summary>
+    public static BenchmarkDataset CreatePhysicsDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // Pair 1: Database indexing
+            new("p-idx-cold", "Database indexes speed up queries using B-tree or hash structures for fast lookups on table columns.", "databases", AccessCount: 1),
+            new("p-idx-hot", "Database indexing strategies: B-tree indexes for range queries, hash indexes for equality lookups, composite indexes for multi-column filters. Index selectivity and cardinality determine query plan choices.", "databases", AccessCount: 50),
+
+            // Pair 2: Memory leaks
+            new("p-memleak-cold", "Memory leaks occur when allocated memory is never freed, causing gradual resource exhaustion in long-running processes.", "systems", AccessCount: 1),
+            new("p-memleak-hot", "Memory leak detection and prevention: use weak references, implement IDisposable, profile with dotMemory or Valgrind. Common causes include event handler subscriptions, static collections, and unclosed streams.", "systems", AccessCount: 80),
+
+            // Pair 3: REST API design
+            new("p-rest-cold", "REST APIs use HTTP methods to perform CRUD operations on resources identified by URLs.", "networking", AccessCount: 2),
+            new("p-rest-hot", "REST API design best practices: resource-oriented URLs, proper HTTP status codes (201 Created, 404 Not Found), content negotiation via Accept headers, pagination with cursor tokens, rate limiting, and API versioning via URL path or headers.", "networking", AccessCount: 60),
+
+            // Pair 4: Thread safety
+            new("p-thread-cold", "Thread safety ensures correct behavior when multiple threads access shared data concurrently.", "systems", AccessCount: 1),
+            new("p-thread-hot", "Thread safety patterns: lock ordering to prevent deadlocks, ReaderWriterLockSlim for read-heavy workloads, ConcurrentDictionary for lock-free reads, Interlocked operations for atomic counters, and immutable data structures to eliminate shared mutable state.", "systems", AccessCount: 55),
+
+            // Pair 5: JSON parsing
+            new("p-json-cold", "JSON is a lightweight data interchange format used for serialization and configuration.", "data-formats", AccessCount: 0),
+            new("p-json-hot", "JSON parsing in .NET: System.Text.Json offers high-performance zero-allocation parsing via Utf8JsonReader. JsonSerializer handles object mapping with source generators for AOT. JsonDocument provides DOM access. Use JsonSerializerOptions for naming policies and converters.", "data-formats", AccessCount: 70),
+
+            // Pair 6: Error handling
+            new("p-error-cold", "Error handling manages unexpected conditions in software through exceptions and error codes.", "patterns", AccessCount: 2),
+            new("p-error-hot", "Error handling best practices: use Result<T> types for expected failures, exceptions for unexpected ones. Implement global exception middleware. Log structured error context. Use Polly for retry policies with exponential backoff. Never catch and swallow exceptions silently.", "patterns", AccessCount: 75),
+
+            // Pair 7: Caching strategies
+            new("p-cache-cold", "Caching stores frequently accessed data in fast memory to reduce latency and database load.", "architecture", AccessCount: 1),
+            new("p-cache-hot", "Caching strategies: cache-aside (lazy loading), write-through (synchronous update), write-behind (async batching). Use Redis for distributed caching, MemoryCache for in-process. Set appropriate TTLs, implement cache invalidation via pub/sub, and monitor hit rates.", "architecture", AccessCount: 65),
+
+            // Pair 8: Logging patterns
+            new("p-log-cold", "Logging records application events for debugging and monitoring purposes.", "observability", AccessCount: 0),
+            new("p-log-hot", "Structured logging with Serilog: use message templates with named properties, configure sinks for console/file/Seq/Elasticsearch. Enrich with correlation IDs. Log at appropriate levels: Debug for development, Information for business events, Warning for recoverable issues, Error for failures.", "observability", AccessCount: 50),
+
+            // Pair 9: Configuration management
+            new("p-config-cold", "Configuration management handles application settings across different deployment environments.", "devops", AccessCount: 1),
+            new("p-config-hot", "Configuration in .NET: IConfiguration with JSON/env/command-line providers. Use Options pattern with IOptions<T> for typed settings. Store secrets in Azure Key Vault or user-secrets. Support hot reload via IOptionsMonitor. Layer configs: appsettings.json < appsettings.{env}.json < env vars.", "devops", AccessCount: 55),
+
+            // Pair 10: Dependency injection
+            new("p-di-cold", "Dependency injection provides objects their dependencies rather than having them create dependencies themselves.", "patterns", AccessCount: 0),
+            new("p-di-hot", "Dependency injection in .NET: register services as Transient (new per request), Scoped (per HTTP request), or Singleton (app lifetime). Use constructor injection. Avoid the service locator anti-pattern. Register open generics. Use Scrutor for assembly scanning and decorator patterns.", "patterns", AccessCount: 70),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            new("p-q01", "How do database indexes improve query performance?",
+                new() { ["p-idx-hot"] = 3, ["p-idx-cold"] = 2 }),
+            new("p-q02", "What causes memory leaks in long-running applications?",
+                new() { ["p-memleak-hot"] = 3, ["p-memleak-cold"] = 2 }),
+            new("p-q03", "Best practices for designing REST APIs",
+                new() { ["p-rest-hot"] = 3, ["p-rest-cold"] = 2 }),
+            new("p-q04", "Ensuring thread safety in concurrent code",
+                new() { ["p-thread-hot"] = 3, ["p-thread-cold"] = 2 }),
+            new("p-q05", "Parsing and handling JSON data structures",
+                new() { ["p-json-hot"] = 3, ["p-json-cold"] = 2 }),
+            new("p-q06", "Proper error handling and exception management",
+                new() { ["p-error-hot"] = 3, ["p-error-cold"] = 2 }),
+            new("p-q07", "Cache implementation strategies for performance",
+                new() { ["p-cache-hot"] = 3, ["p-cache-cold"] = 2 }),
+            new("p-q08", "Logging and debugging techniques",
+                new() { ["p-log-hot"] = 3, ["p-log-cold"] = 2 }),
+            new("p-q09", "Configuration management across environments",
+                new() { ["p-config-hot"] = 3, ["p-config-cold"] = 2 }),
+            new("p-q10", "Dependency injection container patterns",
+                new() { ["p-di-hot"] = 3, ["p-di-cold"] = 2 }),
+        };
+
+        return new BenchmarkDataset("physics-v1", "Physics Re-Ranking Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Lifecycle-Aware Benchmark: 25 seeds across 3 lifecycle states (10 STM, 10 LTM, 5 archived).
+    /// Tests whether search correctly filters by lifecycle state and whether archived entries
+    /// are excluded from default searches but findable via all-state queries.
+    /// </summary>
+    public static BenchmarkDataset CreateLifecycleDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // ── STM entries (10) — recent, not yet consolidated ──
+            new("lc-stm-01", "Just learned about the builder pattern for constructing complex objects step by step with a fluent API.", "pattern", "stm"),
+            new("lc-stm-02", "Docker compose file for local development: postgres, redis, and the API server with hot-reload.", "devops", "stm"),
+            new("lc-stm-03", "Found a race condition in the event dispatcher when two handlers modify shared state concurrently.", "bug", "stm"),
+            new("lc-stm-04", "GraphQL subscriptions use WebSockets for real-time data push from server to connected clients.", "networking", "stm"),
+            new("lc-stm-05", "Benchmarked the new SIMD dot product: 4.2x faster than scalar on AVX2 hardware.", "performance", "stm"),
+            new("lc-stm-06", "React Server Components render on the server and stream HTML to the client, reducing JavaScript bundle size.", "frontend", "stm"),
+            new("lc-stm-07", "The CQRS pattern separates read and write models for independent scaling and optimization.", "architecture", "stm"),
+            new("lc-stm-08", "Tried Deno's built-in test runner: simpler than Jest but lacks snapshot testing support.", "tooling", "stm"),
+            new("lc-stm-09", "Feature flags in LaunchDarkly support percentage rollouts and user segment targeting.", "devops", "stm"),
+            new("lc-stm-10", "Learned about consistent hashing for distributed cache key routing with minimal re-mapping on node changes.", "architecture", "stm"),
+
+            // ── LTM entries (10) — consolidated, frequently referenced ──
+            new("lc-ltm-01", "The repository pattern abstracts data access behind a collection-like interface, enabling testable domain logic.", "pattern", "ltm"),
+            new("lc-ltm-02", "PostgreSQL EXPLAIN ANALYZE shows actual execution times and row counts for query plan optimization.", "databases", "ltm"),
+            new("lc-ltm-03", "OAuth 2.0 authorization code flow with PKCE is the recommended pattern for public clients like SPAs.", "security", "ltm"),
+            new("lc-ltm-04", "Kubernetes readiness probes prevent traffic to pods that aren't ready; liveness probes restart unhealthy pods.", "devops", "ltm"),
+            new("lc-ltm-05", "The mediator pattern decouples request senders from handlers, commonly implemented via MediatR in .NET.", "pattern", "ltm"),
+            new("lc-ltm-06", "Redis Streams provide persistent, consumer-group-based message processing similar to Kafka but simpler to operate.", "databases", "ltm"),
+            new("lc-ltm-07", "gRPC uses HTTP/2 multiplexing and Protocol Buffers for efficient, typed inter-service communication.", "networking", "ltm"),
+            new("lc-ltm-08", "Structured logging with correlation IDs enables distributed tracing across microservice boundaries.", "observability", "ltm"),
+            new("lc-ltm-09", "The circuit breaker pattern prevents cascading failures by short-circuiting calls to degraded downstream services.", "pattern", "ltm"),
+            new("lc-ltm-10", "Branch-by-abstraction enables large refactorings to land incrementally behind feature toggles.", "architecture", "ltm"),
+
+            // ── Archived entries (5) — dormant, excluded from default search ──
+            new("lc-arc-01", "The singleton pattern ensures a class has only one instance and provides a global access point to it.", "pattern", "archived"),
+            new("lc-arc-02", "XML-based SOAP web services use WSDL for contract definition and envelope-based message formatting.", "networking", "archived"),
+            new("lc-arc-03", "CVS and Subversion are centralized version control systems, largely replaced by distributed VCS like Git.", "tooling", "archived"),
+            new("lc-arc-04", "jQuery simplified DOM manipulation and AJAX calls before modern frameworks like React and Vue emerged.", "frontend", "archived"),
+            new("lc-arc-05", "Waterfall methodology follows sequential phases: requirements, design, implementation, testing, deployment.", "process", "archived"),
+        };
+
+        // Queries test filter correctness: default search (STM+LTM) vs all-state search
+        var queries = new List<BenchmarkQuery>
+        {
+            // Queries targeting STM entries (should find in default search)
+            new("lc-q01", "Builder pattern for constructing complex objects with fluent API",
+                new() { ["lc-stm-01"] = 3, ["lc-ltm-01"] = 1, ["lc-ltm-05"] = 1 }),
+            new("lc-q02", "Docker compose setup for local development environment",
+                new() { ["lc-stm-02"] = 3, ["lc-ltm-04"] = 1 }),
+            new("lc-q03", "SIMD vectorized operations and AVX2 performance optimization",
+                new() { ["lc-stm-05"] = 3 }),
+
+            // Queries targeting LTM entries (should find in default search)
+            new("lc-q04", "Repository pattern for abstracting data access in domain-driven design",
+                new() { ["lc-ltm-01"] = 3, ["lc-stm-01"] = 1 }),
+            new("lc-q05", "OAuth 2.0 authorization code flow with PKCE for single-page applications",
+                new() { ["lc-ltm-03"] = 3 }),
+            new("lc-q06", "Circuit breaker pattern for preventing cascading failures in microservices",
+                new() { ["lc-ltm-09"] = 3, ["lc-ltm-05"] = 1 }),
+            new("lc-q07", "PostgreSQL query plan analysis and performance tuning",
+                new() { ["lc-ltm-02"] = 3, ["lc-ltm-06"] = 1 }),
+
+            // Cross-state queries (relevant entries in both STM and LTM)
+            new("lc-q08", "Design patterns for software architecture and code organization",
+                new() { ["lc-stm-01"] = 2, ["lc-stm-07"] = 2, ["lc-stm-10"] = 1, ["lc-ltm-01"] = 2, ["lc-ltm-05"] = 2, ["lc-ltm-09"] = 1, ["lc-ltm-10"] = 1 }),
+            new("lc-q09", "Inter-service communication protocols and message passing",
+                new() { ["lc-stm-04"] = 2, ["lc-ltm-07"] = 3, ["lc-ltm-06"] = 2, ["lc-ltm-08"] = 1 }),
+            new("lc-q10", "DevOps practices for deployment and infrastructure management",
+                new() { ["lc-stm-02"] = 2, ["lc-stm-09"] = 2, ["lc-ltm-04"] = 2, ["lc-ltm-10"] = 1 }),
+
+            // Queries whose best answer is archived (should MISS in default search, test deep_recall)
+            new("lc-q11", "Singleton pattern for global instance access and resource management",
+                new() { ["lc-arc-01"] = 3, ["lc-ltm-01"] = 1, ["lc-ltm-05"] = 1 }),
+            new("lc-q12", "SOAP web services with WSDL contracts and XML message envelopes",
+                new() { ["lc-arc-02"] = 3, ["lc-ltm-07"] = 1 }),
+            new("lc-q13", "jQuery and legacy JavaScript DOM manipulation techniques",
+                new() { ["lc-arc-04"] = 3, ["lc-stm-06"] = 1 }),
+            new("lc-q14", "Centralized version control systems like SVN and CVS",
+                new() { ["lc-arc-03"] = 3 }),
+            new("lc-q15", "Waterfall software development methodology and sequential phases",
+                new() { ["lc-arc-05"] = 3 }),
+        };
+
+        return new BenchmarkDataset("lifecycle-v1", "Lifecycle-Aware Retrieval Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Near-Duplicate Contamination Benchmark: 15 unique seeds + 10 near-duplicate paraphrases.
+    /// Tests whether results are dominated by duplicates and whether the system maintains
+    /// diverse, high-quality rankings despite contamination.
+    /// </summary>
+    public static BenchmarkDataset CreateContaminationDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // ── 15 unique seeds across diverse topics ──
+            new("dup-u01", "Binary search trees maintain sorted order with each node having at most two children. They enable O(log n) lookup, insertion, and deletion when balanced.", "data-structures"),
+            new("dup-u02", "Kubernetes orchestrates containerized workloads across clusters, managing scheduling, horizontal scaling, service discovery, and self-healing.", "devops"),
+            new("dup-u03", "Gradient descent is an iterative optimization algorithm that adjusts parameters by moving in the direction of steepest loss reduction.", "ml"),
+            new("dup-u04", "SQL injection exploits unsanitized user input in database queries. Parameterized queries and prepared statements are the primary defense.", "security"),
+            new("dup-u05", "WebSockets establish full-duplex communication channels over a single TCP connection for real-time bidirectional data transfer.", "networking"),
+            new("dup-u06", "Redis is an in-memory key-value store supporting strings, hashes, lists, sets, and sorted sets with optional persistence and pub/sub.", "databases"),
+            new("dup-u07", "The observer pattern defines a one-to-many dependency so that when one object changes state, all dependents are notified automatically.", "patterns"),
+            new("dup-u08", "Docker containers package applications with their dependencies into portable, isolated units that share the host OS kernel.", "devops"),
+            new("dup-u09", "Transformers use multi-head self-attention to process all positions in a sequence simultaneously, enabling parallel training.", "ml"),
+            new("dup-u10", "JWT (JSON Web Tokens) encode claims as digitally signed JSON for stateless authentication across distributed services.", "security"),
+            new("dup-u11", "Async/await enables non-blocking I/O by suspending execution until results are ready, avoiding thread-per-request overhead.", "systems"),
+            new("dup-u12", "PostgreSQL supports JSONB columns with GIN indexes for efficient querying of semi-structured document data within a relational database.", "databases"),
+            new("dup-u13", "The strategy pattern encapsulates interchangeable algorithms behind a common interface, allowing runtime behavior selection.", "patterns"),
+            new("dup-u14", "Load balancers distribute incoming requests across backend servers using round-robin, least-connections, or consistent hashing.", "networking"),
+            new("dup-u15", "Transfer learning reuses features from a model trained on one task to improve performance on a different but related task.", "ml"),
+
+            // ── 10 near-duplicate paraphrases of seeds u01-u10 ──
+            new("dup-d01", "A tree data structure where each parent has at most two child nodes, maintaining a sorted invariant for logarithmic-time search and insert operations.", "data-structures"),
+            new("dup-d02", "Container orchestration platform that automates deployment, scaling, and management of containerized applications across server clusters.", "devops"),
+            new("dup-d03", "An optimization technique that iteratively minimizes a cost function by computing gradients and updating model parameters in the steepest descent direction.", "ml"),
+            new("dup-d04", "A web security vulnerability where attackers inject malicious SQL through user inputs. Prevention relies on parameterized statements and input validation.", "security"),
+            new("dup-d05", "A protocol enabling persistent, two-way communication between client and server over a single TCP socket for low-latency real-time messaging.", "networking"),
+            new("dup-d06", "An in-memory data structure store used as a database, cache, and message broker, supporting diverse data types with sub-millisecond latency.", "databases"),
+            new("dup-d07", "A behavioral design pattern establishing a subscription mechanism where multiple objects listen for and react to events from a subject.", "patterns"),
+            new("dup-d08", "Lightweight OS-level virtualization that bundles application code and dependencies into self-contained units sharing the host kernel.", "devops"),
+            new("dup-d09", "A neural architecture that replaces recurrence with self-attention mechanisms, computing representations of all input positions in parallel.", "ml"),
+            new("dup-d10", "A compact, URL-safe token format carrying digitally signed JSON claims for decentralized authentication without server-side session state.", "security"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Each query should prefer the unique seed; duplicates are marginally relevant
+            new("dup-q01", "How do balanced binary search trees maintain O(log n) operations?",
+                new() { ["dup-u01"] = 3, ["dup-d01"] = 2 }),
+            new("dup-q02", "Container orchestration and automatic scaling with Kubernetes",
+                new() { ["dup-u02"] = 3, ["dup-d02"] = 2, ["dup-u08"] = 1, ["dup-d08"] = 1 }),
+            new("dup-q03", "How gradient descent optimizes neural network training",
+                new() { ["dup-u03"] = 3, ["dup-d03"] = 2, ["dup-u09"] = 1 }),
+            new("dup-q04", "Preventing SQL injection attacks in web applications",
+                new() { ["dup-u04"] = 3, ["dup-d04"] = 2 }),
+            new("dup-q05", "Real-time communication with WebSocket protocol",
+                new() { ["dup-u05"] = 3, ["dup-d05"] = 2 }),
+            new("dup-q06", "Redis as an in-memory cache and data store",
+                new() { ["dup-u06"] = 3, ["dup-d06"] = 2, ["dup-u12"] = 1 }),
+            new("dup-q07", "Observer and event-driven design patterns",
+                new() { ["dup-u07"] = 3, ["dup-d07"] = 2, ["dup-u13"] = 1 }),
+            new("dup-q08", "Docker containerization for application deployment",
+                new() { ["dup-u08"] = 3, ["dup-d08"] = 2, ["dup-u02"] = 1 }),
+            new("dup-q09", "Transformer architecture and self-attention mechanisms",
+                new() { ["dup-u09"] = 3, ["dup-d09"] = 2, ["dup-u15"] = 1 }),
+            new("dup-q10", "JWT token-based stateless authentication",
+                new() { ["dup-u10"] = 3, ["dup-d10"] = 2 }),
+            new("dup-q11", "Asynchronous programming with async/await patterns",
+                new() { ["dup-u11"] = 3 }),
+            new("dup-q12", "Transfer learning and fine-tuning pretrained models",
+                new() { ["dup-u15"] = 3, ["dup-u09"] = 1, ["dup-d09"] = 1 }),
+        };
+
+        return new BenchmarkDataset("contamination-v1", "Near-Duplicate Contamination Benchmark", seeds, queries);
     }
 }
