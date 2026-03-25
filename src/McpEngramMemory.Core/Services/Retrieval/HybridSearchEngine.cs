@@ -109,8 +109,9 @@ public sealed class HybridSearchEngine
             return boosted;
         }
 
-        // Build set of eligible IDs from vector results
-        var eligibleIds = vectorResults.Select(r => r.Id).ToHashSet();
+        // Build set of vector result IDs (used for both eligibility tracking and semantic gate)
+        var vectorIdSet = vectorResults.Select(r => r.Id).ToHashSet();
+        var eligibleIds = new HashSet<string>(vectorIdSet);
 
         // BM25 search
         int candidateK = Math.Max(k * 4, 20);
@@ -138,7 +139,6 @@ public sealed class HybridSearchEngine
         // Prevents low-relevance keyword matches from polluting RRF fusion.
         // Only apply when vector results show reasonable confidence (real embeddings).
         const float Bm25SemanticGate = 0.30f;
-        var vectorIdSet = vectorResults.Select(r => r.Id).ToHashSet();
         var bm25Gated = new List<(string Id, float Score)>(bm25Unfiltered.Count);
         bool applyGate = queryVector is not null &&
             vectorResults.Count > 0 && vectorResults[0].Score >= Bm25SemanticGate;

@@ -12,6 +12,16 @@ public sealed class BenchmarkRunner
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
 
+    /// <summary>Ingest a seed entry into the index with per-seed lifecycle state and access count.</summary>
+    private void IngestSeed(BenchmarkSeedEntry seed, float[] vector, string ns, string lifecycleState)
+    {
+        var effectiveState = seed.LifecycleState ?? lifecycleState;
+        var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: effectiveState);
+        if (seed.AccessCount is int ac)
+            entry.AccessCount = ac;
+        _index.Upsert(entry);
+    }
+
     public BenchmarkRunner(CognitiveIndex index, IEmbeddingService embedding)
     {
         _index = index;
@@ -53,11 +63,7 @@ public sealed class BenchmarkRunner
                     ? BuildContextualPrefix(category: seed.Category) + seed.Text
                     : seed.Text;
                 var vector = _embedding.Embed(textToEmbed);
-                var effectiveState = seed.LifecycleState ?? lifecycleState;
-                var entry = new CognitiveEntry(seed.Id, vector, ns, seed.Text, seed.Category, lifecycleState: effectiveState);
-                if (seed.AccessCount is int ac)
-                    entry.AccessCount = ac;
-                _index.Upsert(entry);
+                IngestSeed(seed, vector, ns, lifecycleState);
             }
 
             // 2. Run queries and score
@@ -173,14 +179,7 @@ public sealed class BenchmarkRunner
         try
         {
             for (int i = 0; i < dataset.SeedEntries.Count; i++)
-            {
-                var seed = dataset.SeedEntries[i];
-                var effectiveState = seed.LifecycleState ?? lifecycleState;
-                var entry = new CognitiveEntry(seed.Id, seedVectors[i], ns, seed.Text, seed.Category, lifecycleState: effectiveState);
-                if (seed.AccessCount is int ac)
-                    entry.AccessCount = ac;
-                _index.Upsert(entry);
-            }
+                IngestSeed(dataset.SeedEntries[i], seedVectors[i], ns, lifecycleState);
 
             var scores = new List<QueryScore>(dataset.Queries.Count);
             for (int i = 0; i < dataset.Queries.Count; i++)
