@@ -13,7 +13,7 @@ The solution is split into two projects:
 src/
   McpEngramMemory/              # MCP server (Program.cs + Tool classes)
   McpEngramMemory.Core/         # Core library
-    Models/                     # CognitiveEntry, SearchResults, MemoryLimitsConfig, etc.
+    Models/                     # CognitiveEntry, SearchResults, HnswSnapshot, ToolError, etc.
     Services/
       CognitiveIndex.cs         # Thin facade: CRUD, locking, delegates to engines below
       NamespaceStore.cs         # Namespace-partitioned storage with lazy loading
@@ -55,7 +55,7 @@ src/
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (609 tests across 37 test files)
+  McpEngramMemory.Tests/        # xUnit tests (734 tests across 37 test files)
 benchmarks/
   baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json
@@ -71,7 +71,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.4
+dotnet add package McpEngramMemory.Core --version 0.5.5
 ```
 
 ### Library Usage

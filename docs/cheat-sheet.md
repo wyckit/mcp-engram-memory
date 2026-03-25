@@ -8,9 +8,11 @@ Think of it this way: **namespaces = folders, memories = documents, search = sma
 
 | Tool | What it does | Example use |
 |------|-------------|-------------|
-| `store_memory` | Save a memory to a namespace | After fixing a bug |
-| `search_memory` | Semantic + keyword search in one namespace | Start of every task |
-| `get_memory` | Fetch one memory by ID | When you know the exact ID |
+| `remember` | Intelligent store: auto-dedup, auto-link | After fixing a bug |
+| `recall` | Intelligent search: auto-routes to best namespace | Start of every task |
+| `store_memory` | Low-level vector store with full control | When you need specific ID/metadata |
+| `store_batch` | Bulk-store multiple entries in one write-lock | Batch imports |
+| `search_memory` | Semantic + keyword search in one namespace | Focused namespace search |
 | `cross_search` | Search multiple namespaces at once, RRF-merged | Cross-project recall |
 | `dispatch_task` | Describe a problem → system finds the right expert | Unknown domain routing |
 | `deep_recall` | Search including archived memories; auto-resurrects | Finding forgotten context |
@@ -19,8 +21,8 @@ Think of it this way: **namespaces = folders, memories = documents, search = sma
 
 | If you want to... | Use this tool |
 |-------------------|---------------|
-| Save what you just learned | `store_memory` |
-| Find context before starting a task | `search_memory` with `hybrid: true` |
+| Save what you just learned | `remember` (or `store_memory` for full control) |
+| Find context before starting a task | `recall` (or `search_memory` with `hybrid: true`) |
 | Search across multiple projects | `cross_search` |
 | Find related memories you didn't know existed | `search_memory` with `expandGraph: true` |
 | Route a question to the best knowledge domain | `dispatch_task` |
@@ -64,8 +66,8 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 
 | Profile | Tools | What's included |
 |---------|-------|----------------|
-| `minimal` | 14 | Core CRUD, admin, composite tools, multi-agent sharing |
-| `standard` | 33 | Adds graph, lifecycle, clustering, intelligence tools |
-| `full` | 49 | Everything: expert routing, debate, benchmarks (default) |
+| `minimal` | 15 | Core CRUD, admin, composite tools, multi-agent sharing |
+| `standard` | 34 | Adds graph, lifecycle, clustering, intelligence tools |
+| `full` | 50 | Everything: expert routing, debate, benchmarks (default) |
 
 Use `minimal` or `standard` to reduce context window pressure on smaller models.

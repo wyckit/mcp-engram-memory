@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 6 datasets and 4 search modes.
+Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 13 datasets and 4 search modes.
 
 ## Directory Structure
 
@@ -18,7 +18,7 @@ benchmarks/
   ideas/                              # Benchmark proposals and analysis
 ```
 
-## Key Findings (v0.5.4)
+## Key Findings (v0.5.5)
 
 | Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
 |---------|-----------|----------|-----|--------|-------|
@@ -28,6 +28,16 @@ benchmarks/
 | scale-v1 (80 seeds) | hybrid | 0.771 | 1.000 | 0.903 | Cascade retrieval eliminates BM25 noise |
 | realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | Synonym expansion bridges vocab gaps |
 | compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | Compound tokenization + stemming |
+| ambiguity-v1 | hybrid | — | — | — | Ambiguous query disambiguation |
+| distractor-v1 | hybrid | — | — | — | Noise resistance with grade-0 distractors |
+| specificity-v1 | hybrid | — | — | — | Precise vs. broad retrieval |
+| scale-v1 (extended) | hybrid | — | — | — | Large namespace stress test |
+| contamination-v1 | hybrid | — | — | — | Cross-domain contamination resistance |
+| cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
+
+## v0.5.5 Improvements
+
+BM25 semantic gate filters keyword-only matches through semantic similarity before RRF fusion, eliminating noise from irrelevant BM25 hits. 52-combination regression baseline (13 datasets x 4 search modes) ensures no metric drops below Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15. HNSW graph snapshots now persist to disk, avoiding O(N log N) rebuild cost on cold start.
 
 ## v0.5.4 Improvements
 
@@ -37,6 +47,10 @@ Porter stemming, expanded synonyms (98 mappings), cascade retrieval (for namespa
 
 Default to `hybrid` — it is now the best mode across most datasets thanks to cascade retrieval and synonym expansion. Use `vector` for minimal-latency queries. Use `hybrid_rerank` for maximum precision. The cascade mode automatically prevents BM25 noise in large namespaces (>= 50 entries) while preserving BM25 rescue for small namespaces.
 
-## Six Benchmark Datasets
+## Thirteen Benchmark Datasets
 
-Four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps), one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned), and one compound tokenization dataset testing BM25 handling of hyphenated terms and vocabulary gaps. Relevance grades use a 0-3 scale (3 = highly relevant).
+Six core datasets: four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps), one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned), and one compound tokenization dataset testing BM25 handling of hyphenated terms and vocabulary gaps.
+
+Seven additional stress-test datasets (v0.5.5): ambiguity-v1 (ambiguous query disambiguation), distractor-v1 (noise resistance with grade-0 distractors), specificity-v1 (precise vs. broad retrieval), scale-v1 extended (large namespace stress), compound-v1 extended, contamination-v1 (cross-domain contamination resistance), and cluster-summary-v1 (cluster summary retrieval quality).
+
+All datasets use a 0-3 relevance grade scale (3 = highly relevant). The 52-combination regression baseline covers all 13 datasets x 4 search modes (vector, hybrid, vector_rerank, hybrid_rerank) with minimum thresholds.

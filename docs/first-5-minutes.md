@@ -27,7 +27,7 @@ Add to your MCP client config:
 }
 ```
 
-> **Note:** First build downloads a ~50MB embedding model — subsequent builds are instant.
+> **Note:** First build downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent builds are instant.
 
 ## 2. Store Your First Memory
 

@@ -60,9 +60,9 @@ builder.Services.AddHostedService<DecayBackgroundService>();
 builder.Services.AddHostedService<AccretionBackgroundService>();
 
 // Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
-//   "minimal"  → 14 tools: core CRUD + admin + composite + multi-agent
-//   "standard" → 33 tools: minimal + graph, lifecycle, clusters, intelligence
-//   "full"     → 49 tools: everything (default for backward compatibility)
+//   "minimal"  → 15 tools: core CRUD + admin + composite + multi-agent
+//   "standard" → 34 tools: minimal + graph, lifecycle, clusters, intelligence
+//   "full"     → 50 tools: everything (default for backward compatibility)
 var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "full";
 
 var mcpBuilder = builder.Services

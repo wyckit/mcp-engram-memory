@@ -26,7 +26,7 @@ state of our engram memory system.
 
 **Run benchmarks** — verify IR quality hasn't regressed:
 ```
-Run all 6 benchmark datasets and compare results against our stored baselines in benchmarks/.
+Run all 13 benchmark datasets and compare results against our stored baselines in benchmarks/.
 ```
 
 ## Power Prompts

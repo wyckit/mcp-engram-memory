@@ -1,13 +1,14 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (49 tools)
+# MCP Tools Reference (50 tools)
 
-### Core Memory (3 tools)
+### Core Memory (4 tools)
 
 | Tool | Description |
 |------|-------------|
 | `store_memory` | Store a vector embedding with text, category, and optional metadata. Defaults to STM lifecycle state. Warns if near-duplicates are detected. |
-| `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, and auto-PRF), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
+| `store_batch` | Bulk-store multiple entries in a single write-lock. Faster than repeated `store_memory` calls for batch imports. Each entry gets contextual prefix embedding. Returns stored count and duplicate warnings. |
+| `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, BM25 semantic gate, and auto-PRF), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
 | `delete_memory` | Remove a memory entry by ID. Cascades to remove associated graph edges and cluster memberships. |
 
 ### Composite Tools (3 tools)
@@ -56,7 +57,7 @@ Activation energy formula: `(accessCount x reinforcementWeight) - (hoursSinceLas
 | Tool | Description |
 |------|-------------|
 | `get_memory` | Retrieve full cognitive context for an entry (lifecycle, edges, clusters). Does not count as an access. |
-| `cognitive_stats` | System overview: entry counts by state, cluster count, edge count, and namespace list. |
+| `cognitive_stats` | System overview: entry counts by state, cluster count, edge count, namespace list, and HNSW index status. |
 | `purge_debates` | Delete stale `active-debate-*` namespaces older than a configurable age (default: 24 hours). Supports dry-run mode. |
 
 ### Accretion (4 tools)
@@ -97,11 +98,11 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 
 | Tool | Description |
 |------|-------------|
-| `run_benchmark` | Run an IR quality benchmark. Datasets: `default-v1` (25 seeds, 20 queries), `paraphrase-v1` (25 seeds, 15 queries), `multihop-v1` (25 seeds, 15 queries), `scale-v1` (80 seeds, 30 queries), `realworld-v1` (30 seeds, 20 queries — cognitive memory patterns), `compound-v1` (20 seeds, 15 queries — compound tokenization & domain jargon). Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
+| `run_benchmark` | Run an IR quality benchmark. 13 datasets including `default-v1`, `paraphrase-v1`, `multihop-v1`, `scale-v1`, `realworld-v1`, `compound-v1`, `ambiguity-v1`, `distractor-v1`, `specificity-v1`, `contamination-v1`, `cluster-summary-v1`. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
-Six benchmark datasets: four covering generic CS topics (programming languages, data structures, ML, databases, networking, systems, security, DevOps), one real-world dataset modeled after actual cognitive memory entries (architecture decisions, bug fixes, code patterns, user preferences, lessons learned), and one compound tokenization dataset testing BM25 handling of hyphenated terms and vocabulary gaps between technical jargon and colloquial phrasing. Relevance grades use a 0–3 scale (3 = highly relevant).
+Thirteen benchmark datasets: six core datasets (default, paraphrase, multihop, scale, realworld, compound) plus seven stress-test datasets (ambiguity, distractor, specificity, scale extended, contamination, cluster-summary). All use a 0–3 relevance grade scale (3 = highly relevant). A 52-combination regression baseline (13 datasets x 4 modes) enforces minimum thresholds: Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15.
 
 ### Maintenance (2 tools)
 

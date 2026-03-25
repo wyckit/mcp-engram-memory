@@ -65,22 +65,22 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 
 | Profile | Tools | What's included |
 |---------|-------|-----------------|
-| `minimal` | 14 | Core CRUD + composite + admin + multi-agent — recommended starting point |
-| `standard` | 33 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 49 | Everything including expert routing, debate, benchmarks (default) |
+| `minimal` | 15 | Core CRUD + composite + admin + multi-agent — recommended starting point |
+| `standard` | 34 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 50 | Everything including expert routing, debate, benchmarks (default) |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 49 (profiles: 14 / 33 / 49) |
+| MCP tools | 50 (profiles: 15 / 34 / 50) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 609 across 37 files |
+| Tests | 734 across 37 files |
 
 ### System Layers
 
@@ -119,11 +119,11 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (49)
+## MCP Tools (50)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
-| Core Memory | `store_memory`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation and lifecycle-aware search |
+| Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
 | Composite | `remember`, `recall`, `reflect` | High-level wrappers with auto-dedup, auto-linking, and expert routing |
 | Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS traversal |
 | Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
@@ -181,7 +181,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 49 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 50 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |
@@ -189,14 +189,14 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 | [AI Assistant Setup](docs/ai-assistant-setup.md) | Step-by-step setup prompts for each tool |
 | [Sample Prompts](docs/prompts.md) | Power prompts and usage patterns |
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
-| [Testing](docs/testing.md) | Test coverage breakdown (609 tests) |
+| [Testing](docs/testing.md) | Test coverage breakdown (734 tests) |
 
 ## Build & Test
 
 ```bash
 cd mcp-engram-memory
 dotnet build
-dotnet test    # 609 tests across 37 files
+dotnet test    # 734 tests across 37 files
 ```
 
 ## Tech Stack
