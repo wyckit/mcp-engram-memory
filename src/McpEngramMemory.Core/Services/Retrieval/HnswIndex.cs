@@ -1,3 +1,5 @@
+using McpEngramMemory.Core.Models;
+
 namespace McpEngramMemory.Core.Services.Retrieval;
 
 /// <summary>
@@ -207,6 +209,124 @@ public sealed class HnswIndex
             rebuilt.Add(_ids[i], original);
         }
         return rebuilt;
+    }
+
+    // ── Serialization ──
+
+    /// <summary>
+    /// Create a topology-only snapshot for persistence. Vectors are excluded —
+    /// they are reconstructed from namespace entries on restore.
+    /// </summary>
+    public HnswSnapshot CreateSnapshot()
+    {
+        var connections = new List<List<List<int>>>(_connections.Count);
+        for (int i = 0; i < _connections.Count; i++)
+        {
+            var nodeConns = new List<List<int>>(_connections[i].Count);
+            foreach (var layer in _connections[i])
+                nodeConns.Add(layer.ToList());
+            connections.Add(nodeConns);
+        }
+
+        return new HnswSnapshot
+        {
+            M = _m,
+            EfConstruction = _efConstruction,
+            EntryPoint = _entryPoint,
+            MaxLevel = _maxLevel,
+            NodeIds = new List<string>(_ids),
+            NodeLevels = new List<int>(_nodeLevels),
+            Connections = connections,
+            Deleted = _deleted.ToList()
+        };
+    }
+
+    /// <summary>
+    /// Restore an HNSW index from a persisted snapshot.
+    /// Vectors are looked up from entries via the provided callback.
+    /// Returns null if the snapshot is stale (any node ID missing from entries).
+    /// </summary>
+    /// <param name="snapshot">The persisted graph topology.</param>
+    /// <param name="vectorLookup">Callback to resolve entry ID → raw vector. Return null if entry no longer exists.</param>
+    public static HnswIndex? RestoreFromSnapshot(HnswSnapshot snapshot, Func<string, float[]?> vectorLookup)
+    {
+        if (snapshot.NodeIds.Count == 0)
+            return null;
+
+        var index = new HnswIndex(snapshot.M, snapshot.EfConstruction);
+        var deletedSet = new HashSet<int>(snapshot.Deleted);
+
+        for (int i = 0; i < snapshot.NodeIds.Count; i++)
+        {
+            var id = snapshot.NodeIds[i];
+            var rawVector = vectorLookup(id);
+
+            if (rawVector == null)
+            {
+                // Entry was deleted — mark as deleted in the restored index.
+                // We still need a placeholder to keep indices aligned.
+                index._vectors.Add(Array.Empty<float>());
+                index._originalNorms.Add(0f);
+                index._ids.Add(id);
+                index._nodeLevels.Add(snapshot.NodeLevels[i]);
+                deletedSet.Add(i);
+
+                var emptyConns = new List<HashSet<int>>();
+                if (i < snapshot.Connections.Count)
+                    foreach (var _ in snapshot.Connections[i])
+                        emptyConns.Add(new HashSet<int>());
+                index._connections.Add(emptyConns);
+                continue;
+            }
+
+            float norm = VectorMath.Norm(rawVector);
+            if (norm == 0f)
+            {
+                index._vectors.Add(Array.Empty<float>());
+                index._originalNorms.Add(0f);
+                index._ids.Add(id);
+                index._nodeLevels.Add(snapshot.NodeLevels[i]);
+                deletedSet.Add(i);
+                index._connections.Add(new List<HashSet<int>>());
+                continue;
+            }
+
+            var normalized = Normalize(rawVector, norm);
+            index._vectors.Add(normalized);
+            index._originalNorms.Add(norm);
+            index._ids.Add(id);
+            index._idToIndex[id] = i;
+            index._nodeLevels.Add(snapshot.NodeLevels[i]);
+
+            // Restore connections
+            var nodeConns = new List<HashSet<int>>();
+            if (i < snapshot.Connections.Count)
+            {
+                foreach (var layer in snapshot.Connections[i])
+                    nodeConns.Add(new HashSet<int>(layer));
+            }
+            index._connections.Add(nodeConns);
+        }
+
+        index._entryPoint = snapshot.EntryPoint;
+        index._maxLevel = snapshot.MaxLevel;
+
+        foreach (var d in deletedSet)
+            index._deleted.Add(d);
+
+        // Validate entry point
+        if (index._entryPoint >= index._vectors.Count)
+            return null;
+
+        if (index._entryPoint >= 0 && index._deleted.Contains(index._entryPoint))
+        {
+            var newEp = index.FindNonDeletedEntryPoint();
+            if (newEp == -1) return null;
+            index._entryPoint = newEp;
+            index._maxLevel = index._nodeLevels[newEp];
+        }
+
+        return index;
     }
 
     // ── Private Helpers ──

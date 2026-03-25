@@ -1,3 +1,4 @@
+using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Retrieval;
 
 namespace McpEngramMemory.Tests;
@@ -217,5 +218,156 @@ public class HnswIndexTests
         var results = index.Search(new float[] { 0, 1, 0 }, 1);
         Assert.Single(results);
         Assert.Equal("b", results[0].Id);
+    }
+
+    // ── Snapshot serialization tests ──
+
+    [Fact]
+    public void CreateSnapshot_CapturesState()
+    {
+        var index = new HnswIndex();
+        index.Add("a", new float[] { 1, 0, 0 });
+        index.Add("b", new float[] { 0, 1, 0 });
+        index.Add("c", new float[] { 0, 0, 1 });
+
+        var snapshot = index.CreateSnapshot();
+
+        Assert.Equal(3, snapshot.NodeIds.Count);
+        Assert.Contains("a", snapshot.NodeIds);
+        Assert.Contains("b", snapshot.NodeIds);
+        Assert.Contains("c", snapshot.NodeIds);
+        Assert.Equal(3, snapshot.NodeLevels.Count);
+        Assert.Equal(3, snapshot.Connections.Count);
+        Assert.Equal(16, snapshot.M);
+        Assert.Equal(200, snapshot.EfConstruction);
+        Assert.True(snapshot.EntryPoint >= 0);
+    }
+
+    [Fact]
+    public void RestoreFromSnapshot_PreservesSearchResults()
+    {
+        var rng = new Random(42);
+        var vectors = new Dictionary<string, float[]>();
+        var index = new HnswIndex();
+
+        for (int i = 0; i < 30; i++)
+        {
+            var v = RandomVector(16, rng);
+            vectors[$"v{i}"] = v;
+            index.Add($"v{i}", v);
+        }
+
+        var query = RandomVector(16, rng);
+        var originalResults = index.Search(query, 5);
+
+        // Snapshot and restore
+        var snapshot = index.CreateSnapshot();
+        var restored = HnswIndex.RestoreFromSnapshot(snapshot, id =>
+            vectors.TryGetValue(id, out var v) ? v : null);
+
+        Assert.NotNull(restored);
+        Assert.Equal(index.Count, restored!.Count);
+
+        var restoredResults = restored.Search(query, 5);
+        Assert.Equal(originalResults.Count, restoredResults.Count);
+        // Top result should match
+        Assert.Equal(originalResults[0].Id, restoredResults[0].Id);
+    }
+
+    [Fact]
+    public void RestoreFromSnapshot_WithDeletedEntries()
+    {
+        var vectors = new Dictionary<string, float[]>
+        {
+            ["a"] = new float[] { 1, 0, 0 },
+            ["b"] = new float[] { 0, 1, 0 },
+            ["c"] = new float[] { 0, 0, 1 }
+        };
+
+        var index = new HnswIndex();
+        foreach (var (id, v) in vectors)
+            index.Add(id, v);
+
+        index.Remove("b");
+
+        var snapshot = index.CreateSnapshot();
+        Assert.Contains(1, snapshot.Deleted);
+
+        var restored = HnswIndex.RestoreFromSnapshot(snapshot, id =>
+            vectors.TryGetValue(id, out var v) ? v : null);
+
+        Assert.NotNull(restored);
+        Assert.Equal(2, restored!.Count); // a and c
+
+        var results = restored.Search(new float[] { 0, 1, 0 }, 5);
+        Assert.DoesNotContain(results, r => r.Id == "b");
+    }
+
+    [Fact]
+    public void RestoreFromSnapshot_MissingEntry_MarksDeleted()
+    {
+        var vectors = new Dictionary<string, float[]>
+        {
+            ["a"] = new float[] { 1, 0, 0 },
+            ["b"] = new float[] { 0, 1, 0 },
+            ["c"] = new float[] { 0, 0, 1 }
+        };
+
+        var index = new HnswIndex();
+        foreach (var (id, v) in vectors)
+            index.Add(id, v);
+
+        var snapshot = index.CreateSnapshot();
+
+        // Simulate entry "b" being deleted from namespace
+        var restored = HnswIndex.RestoreFromSnapshot(snapshot, id =>
+            id == "b" ? null : vectors.GetValueOrDefault(id));
+
+        Assert.NotNull(restored);
+        Assert.Equal(2, restored!.Count);
+
+        var results = restored.Search(new float[] { 0, 1, 0 }, 5);
+        Assert.DoesNotContain(results, r => r.Id == "b");
+    }
+
+    [Fact]
+    public void RestoreFromSnapshot_EmptySnapshot_ReturnsNull()
+    {
+        var snapshot = new HnswSnapshot();
+        var restored = HnswIndex.RestoreFromSnapshot(snapshot, _ => null);
+        Assert.Null(restored);
+    }
+
+    [Fact]
+    public void Snapshot_RoundTrip_WithHighDimensional()
+    {
+        var rng = new Random(99);
+        var vectors = new Dictionary<string, float[]>();
+        var index = new HnswIndex(m: 8, efConstruction: 50);
+
+        for (int i = 0; i < 100; i++)
+        {
+            var v = RandomVector(384, rng);
+            vectors[$"v{i}"] = v;
+            index.Add($"v{i}", v);
+        }
+
+        // Delete some
+        for (int i = 0; i < 10; i++)
+            index.Remove($"v{i}");
+
+        var query = RandomVector(384, rng);
+        var originalResults = index.Search(query, 5);
+
+        var snapshot = index.CreateSnapshot();
+        var restored = HnswIndex.RestoreFromSnapshot(snapshot, id =>
+            vectors.TryGetValue(id, out var v) ? v : null);
+
+        Assert.NotNull(restored);
+        Assert.Equal(90, restored!.Count);
+
+        var restoredResults = restored.Search(query, 5);
+        // Top result should match
+        Assert.Equal(originalResults[0].Id, restoredResults[0].Id);
     }
 }

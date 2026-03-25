@@ -972,4 +972,98 @@ public class BenchmarkRunnerTests
         if (Directory.Exists(dataPath))
             Directory.Delete(dataPath, true);
     }
+
+    // ── Full Regression Baseline ──
+
+    [Theory]
+    [InlineData("default-v1", "vector")]
+    [InlineData("default-v1", "hybrid")]
+    [InlineData("default-v1", "vector_rerank")]
+    [InlineData("default-v1", "hybrid_rerank")]
+    [InlineData("paraphrase-v1", "vector")]
+    [InlineData("paraphrase-v1", "hybrid")]
+    [InlineData("paraphrase-v1", "vector_rerank")]
+    [InlineData("paraphrase-v1", "hybrid_rerank")]
+    [InlineData("multihop-v1", "vector")]
+    [InlineData("multihop-v1", "hybrid")]
+    [InlineData("multihop-v1", "vector_rerank")]
+    [InlineData("multihop-v1", "hybrid_rerank")]
+    [InlineData("scale-v1", "vector")]
+    [InlineData("scale-v1", "hybrid")]
+    [InlineData("scale-v1", "vector_rerank")]
+    [InlineData("scale-v1", "hybrid_rerank")]
+    [InlineData("realworld-v1", "vector")]
+    [InlineData("realworld-v1", "hybrid")]
+    [InlineData("realworld-v1", "vector_rerank")]
+    [InlineData("realworld-v1", "hybrid_rerank")]
+    [InlineData("compound-v1", "vector")]
+    [InlineData("compound-v1", "hybrid")]
+    [InlineData("compound-v1", "vector_rerank")]
+    [InlineData("compound-v1", "hybrid_rerank")]
+    [InlineData("ambiguity-v1", "vector")]
+    [InlineData("ambiguity-v1", "hybrid")]
+    [InlineData("ambiguity-v1", "vector_rerank")]
+    [InlineData("ambiguity-v1", "hybrid_rerank")]
+    [InlineData("distractor-v1", "vector")]
+    [InlineData("distractor-v1", "hybrid")]
+    [InlineData("distractor-v1", "vector_rerank")]
+    [InlineData("distractor-v1", "hybrid_rerank")]
+    [InlineData("specificity-v1", "vector")]
+    [InlineData("specificity-v1", "hybrid")]
+    [InlineData("specificity-v1", "vector_rerank")]
+    [InlineData("specificity-v1", "hybrid_rerank")]
+    [InlineData("physics-v1", "vector")]
+    [InlineData("physics-v1", "hybrid")]
+    [InlineData("physics-v1", "vector_rerank")]
+    [InlineData("physics-v1", "hybrid_rerank")]
+    [InlineData("lifecycle-v1", "vector")]
+    [InlineData("lifecycle-v1", "hybrid")]
+    [InlineData("lifecycle-v1", "vector_rerank")]
+    [InlineData("lifecycle-v1", "hybrid_rerank")]
+    [InlineData("contamination-v1", "vector")]
+    [InlineData("contamination-v1", "hybrid")]
+    [InlineData("contamination-v1", "vector_rerank")]
+    [InlineData("contamination-v1", "hybrid_rerank")]
+    [InlineData("cluster-summary-v1", "vector")]
+    [InlineData("cluster-summary-v1", "hybrid")]
+    [InlineData("cluster-summary-v1", "vector_rerank")]
+    [InlineData("cluster-summary-v1", "hybrid_rerank")]
+    public void RegressionBaseline(string datasetId, string modeStr)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"regression_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var mode = modeStr switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, mode);
+
+        _output.WriteLine($"=== REGRESSION: {datasetId} / {modeStr} ===");
+        _output.WriteLine($"Recall@K={result.MeanRecallAtK:F3} Precision@K={result.MeanPrecisionAtK:F3} MRR={result.MeanMRR:F3} nDCG@K={result.MeanNdcgAtK:F3}");
+        _output.WriteLine($"Latency: mean={result.MeanLatencyMs:F2}ms P95={result.P95LatencyMs:F2}ms");
+        foreach (var q in result.QueryScores)
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms]");
+
+        // Minimum quality thresholds — any dataset/mode combo must meet these
+        Assert.True(result.MeanRecallAtK >= 0.20f,
+            $"{datasetId}/{modeStr}: Recall@K {result.MeanRecallAtK:F3} below minimum threshold 0.20");
+        Assert.True(result.MeanMRR >= 0.20f,
+            $"{datasetId}/{modeStr}: MRR {result.MeanMRR:F3} below minimum threshold 0.20");
+        Assert.True(result.MeanNdcgAtK >= 0.15f,
+            $"{datasetId}/{modeStr}: nDCG@K {result.MeanNdcgAtK:F3} below minimum threshold 0.15");
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
 }

@@ -112,6 +112,6 @@ public class ChecksumTests : IDisposable
         _persistence.SaveNamespaceSync("vertest", new NamespaceData { Entries = [entry] });
 
         var loaded = _persistence.LoadNamespace("vertest");
-        Assert.Equal(1, loaded.StorageVersion);
+        Assert.Equal(PersistenceManager.CurrentStorageVersion, loaded.StorageVersion);
     }
 }

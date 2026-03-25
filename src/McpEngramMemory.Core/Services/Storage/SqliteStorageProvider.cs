@@ -290,6 +290,50 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
+    // ── HNSW snapshot persistence ──
+
+    public HnswSnapshot? LoadHnswSnapshot(string ns)
+        => LoadGlobalData<HnswSnapshot>($"hnsw_{ns}");
+
+    public void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
+            var checksum = ComputeChecksum(json);
+            using var conn = OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT OR REPLACE INTO global_data (key, json_data, checksum)
+                VALUES (@key, @json, @checksum)
+                """;
+            cmd.Parameters.AddWithValue("@key", $"hnsw_{ns}");
+            cmd.Parameters.AddWithValue("@json", json);
+            cmd.Parameters.AddWithValue("@checksum", checksum);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save HNSW snapshot for namespace '{Namespace}'", ns);
+        }
+    }
+
+    public void DeleteHnswSnapshot(string ns)
+    {
+        try
+        {
+            using var conn = OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM global_data WHERE key = @key";
+            cmd.Parameters.AddWithValue("@key", $"hnsw_{ns}");
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to delete HNSW snapshot for namespace '{Namespace}'", ns);
+        }
+    }
+
     // ── Save methods (debounced) ──
 
     public void ScheduleSave(string ns, Func<NamespaceData> dataProvider)
@@ -666,6 +710,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
         cmd.CommandText = "DELETE FROM entries WHERE ns = @ns";
         cmd.Parameters.AddWithValue("@ns", ns);
         await cmd.ExecuteNonQueryAsync();
+        DeleteHnswSnapshot(ns);
     }
 
     // ── Flush + Dispose ──

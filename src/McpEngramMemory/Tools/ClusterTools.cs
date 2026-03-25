@@ -3,6 +3,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Intelligence;
 using ModelContextProtocol.Server;
+using static McpEngramMemory.Core.Models.ToolError;
 
 namespace McpEngramMemory.Tools;
 
@@ -23,7 +24,7 @@ public sealed class ClusterTools
 
     [McpServerTool(Name = "create_cluster")]
     [Description("Group entries into a semantic cluster with auto-computed centroid. Use for manual clustering when accretion scan isn't suitable.")]
-    public string CreateCluster(
+    public object CreateCluster(
         [Description("Cluster identifier.")] string clusterId,
         [Description("Namespace.")] string ns,
         [Description("Comma-separated initial member entry IDs.")] string memberIds,
@@ -36,7 +37,7 @@ public sealed class ClusterTools
         }
         catch (Exception ex)
         {
-            return $"Error: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}";
+            return FromException(ex);
         }
     }
 

@@ -57,6 +57,7 @@ internal sealed class NamespaceStore
         _loadedNamespaces.Remove(ns);
         _bm25.ClearNamespace(ns);
         _hnswIndices.Remove(ns);
+        _persistence.DeleteHnswSnapshot(ns);
     }
 
     /// <summary>All namespace dictionaries (for cross-namespace operations).</summary>
@@ -89,6 +90,10 @@ internal sealed class NamespaceStore
         if (!_bm25.HasNamespace(ns))
             _bm25.RebuildNamespace(ns, data.Entries);
 
+        // Try to restore HNSW from persisted snapshot (avoids O(N log N) rebuild)
+        if (data.Entries.Count >= HnswThreshold && !_hnswIndices.ContainsKey(ns))
+            TryRestoreHnsw(ns);
+
         _loadedNamespaces.Add(ns);
     }
 
@@ -107,6 +112,9 @@ internal sealed class NamespaceStore
             data.Entries = entries.Values.Select(t => t.Entry).ToList();
 
         _persistence.ScheduleSave(ns, () => data);
+
+        // Persist HNSW snapshot alongside namespace data
+        ScheduleHnswSave(ns);
     }
 
     /// <summary>Schedule an incremental upsert (SQLite) or full snapshot (JSON) for a single entry.</summary>
@@ -205,6 +213,37 @@ internal sealed class NamespaceStore
             idx.Remove(id);
             if (idx.NeedsRebuild)
                 _hnswIndices[ns] = idx.Rebuild();
+        }
+    }
+
+    /// <summary>Try to restore HNSW index from a persisted snapshot. Falls back to lazy rebuild if snapshot is stale.</summary>
+    private void TryRestoreHnsw(string ns)
+    {
+        var snapshot = _persistence.LoadHnswSnapshot(ns);
+        if (snapshot == null) return;
+
+        var nsEntries = GetNamespace(ns);
+        if (nsEntries == null) return;
+
+        var restored = Retrieval.HnswIndex.RestoreFromSnapshot(snapshot, id =>
+        {
+            if (nsEntries.TryGetValue(id, out var tuple))
+                return tuple.Entry.Vector;
+            return null;
+        });
+
+        if (restored != null)
+            _hnswIndices[ns] = restored;
+        // else: snapshot was stale, HNSW will be lazily rebuilt on first AddToHnsw call
+    }
+
+    /// <summary>Persist the current HNSW index snapshot for a namespace (if one exists).</summary>
+    private void ScheduleHnswSave(string ns)
+    {
+        if (_hnswIndices.TryGetValue(ns, out var idx))
+        {
+            var snapshot = idx.CreateSnapshot();
+            _persistence.SaveHnswSnapshotSync(ns, snapshot);
         }
     }
 

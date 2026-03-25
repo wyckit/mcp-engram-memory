@@ -212,6 +212,9 @@ file sealed class InMemoryStorageProvider : IStorageProvider
     public bool SupportsIncrementalWrites => false;
     public void ScheduleUpsertEntry(string ns, CognitiveEntry entry) { }
     public void ScheduleDeleteEntry(string ns, string entryId) { }
+    public HnswSnapshot? LoadHnswSnapshot(string ns) => null;
+    public void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot) { }
+    public void DeleteHnswSnapshot(string ns) { }
     public Task DeleteNamespaceAsync(string ns) { _data.Remove(ns); return Task.CompletedTask; }
     public void Flush() { }
     public void Dispose() { }

@@ -12,6 +12,9 @@ namespace McpEngramMemory.Core.Services.Storage;
 /// </summary>
 public sealed class PersistenceManager : IStorageProvider
 {
+    /// <summary>Current storage format version. Increment when making breaking changes to the JSON schema.</summary>
+    public const int CurrentStorageVersion = 2;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -69,7 +72,7 @@ public sealed class PersistenceManager : IStorageProvider
     {
         var path = GetNamespacePath(ns);
         if (!File.Exists(path))
-            return new NamespaceData();
+            return new NamespaceData { StorageVersion = CurrentStorageVersion };
 
         try
         {
@@ -78,13 +81,51 @@ public sealed class PersistenceManager : IStorageProvider
             {
                 _logger?.LogWarning("Checksum mismatch for namespace '{Namespace}', data may be corrupted", ns);
             }
-            return JsonSerializer.Deserialize<NamespaceData>(json, JsonOptions) ?? new NamespaceData();
+            var data = JsonSerializer.Deserialize<NamespaceData>(json, JsonOptions) ?? new NamespaceData();
+
+            // Forward-compatibility guard: reject files from newer versions
+            if (data.StorageVersion > CurrentStorageVersion)
+            {
+                _logger?.LogError(
+                    "Namespace '{Namespace}' has storage version {FileVersion} but this server supports up to version {CurrentVersion}. " +
+                    "Upgrade the server or use the version that created this data.",
+                    ns, data.StorageVersion, CurrentStorageVersion);
+                return new NamespaceData { StorageVersion = CurrentStorageVersion };
+            }
+
+            // Run migrations for older versions
+            if (data.StorageVersion < CurrentStorageVersion)
+            {
+                data = RunMigrations(data, ns);
+            }
+
+            return data;
         }
         catch (JsonException ex)
         {
             _logger?.LogWarning(ex, "Corrupted JSON in namespace '{Namespace}', returning empty data", ns);
-            return new NamespaceData();
+            return new NamespaceData { StorageVersion = CurrentStorageVersion };
         }
+    }
+
+    /// <summary>
+    /// Run sequential migrations from the data's version to CurrentStorageVersion.
+    /// Follows the same pattern as SqliteStorageProvider.RunMigrations.
+    /// </summary>
+    private NamespaceData RunMigrations(NamespaceData data, string ns)
+    {
+        int fromVersion = data.StorageVersion;
+
+        // v1 → v2: No structural changes needed — v1 data is compatible.
+        // Future migrations add cases here:
+        // if (data.StorageVersion < 3) MigrateToV3(data);
+
+        data.StorageVersion = CurrentStorageVersion;
+        _logger?.LogInformation("Namespace '{Namespace}' migrated from storage v{From} to v{To}", ns, fromVersion, CurrentStorageVersion);
+
+        // Persist the migrated data immediately
+        SaveNamespaceSync(ns, data);
+        return data;
     }
 
     /// <summary>
@@ -284,6 +325,7 @@ public sealed class PersistenceManager : IStorageProvider
     /// </summary>
     public void SaveNamespaceSync(string ns, NamespaceData data)
     {
+        data.StorageVersion = CurrentStorageVersion;
         var path = GetNamespacePath(ns);
         var json = JsonSerializer.Serialize(data, JsonOptions);
         AtomicWriteAllText(path, json);
@@ -298,6 +340,7 @@ public sealed class PersistenceManager : IStorageProvider
             return Array.Empty<string>();
 
         return Directory.GetFiles(_basePath, "*.json")
+            .Where(f => !f.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
             .Select(Path.GetFileNameWithoutExtension)
             .Where(n => n != null && !n.StartsWith("_") && !n.StartsWith("__"))
             .Select(n => n!)
@@ -361,6 +404,44 @@ public sealed class PersistenceManager : IStorageProvider
             WriteDecayConfigs(decayConfigProvider);
     }
 
+    /// <summary>Load persisted HNSW graph snapshot for a namespace.</summary>
+    public HnswSnapshot? LoadHnswSnapshot(string ns)
+    {
+        var path = GetHnswPath(ns);
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            if (!VerifyChecksum(path, json))
+                _logger?.LogWarning("Checksum mismatch for HNSW snapshot '{Namespace}'", ns);
+            return JsonSerializer.Deserialize<HnswSnapshot>(json, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogWarning(ex, "Corrupted HNSW snapshot for namespace '{Namespace}', will rebuild", ns);
+            return null;
+        }
+    }
+
+    /// <summary>Save an HNSW graph snapshot for a namespace.</summary>
+    public void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot)
+    {
+        var path = GetHnswPath(ns);
+        var json = JsonSerializer.Serialize(snapshot, JsonOptions);
+        AtomicWriteAllText(path, json);
+    }
+
+    /// <summary>Delete persisted HNSW snapshot for a namespace.</summary>
+    public void DeleteHnswSnapshot(string ns)
+    {
+        var path = GetHnswPath(ns);
+        if (File.Exists(path)) File.Delete(path);
+        var checksumPath = path + ".sha256";
+        if (File.Exists(checksumPath)) File.Delete(checksumPath);
+    }
+
     /// <summary>Delete all entries in a namespace by removing its JSON and checksum files from disk.</summary>
     public Task DeleteNamespaceAsync(string ns)
     {
@@ -368,6 +449,7 @@ public sealed class PersistenceManager : IStorageProvider
         if (File.Exists(path)) File.Delete(path);
         var checksumPath = path + ".sha256";
         if (File.Exists(checksumPath)) File.Delete(checksumPath);
+        DeleteHnswSnapshot(ns);
         return Task.CompletedTask;
     }
 
@@ -389,6 +471,18 @@ public sealed class PersistenceManager : IStorageProvider
         var path = Path.Combine(_basePath, $"{safe}.json");
 
         // Guard against path traversal
+        if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(_basePath), StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Invalid namespace: '{ns}'");
+
+        return path;
+    }
+
+    private string GetHnswPath(string ns)
+    {
+        var safe = string.Join("_", ns.Split(Path.GetInvalidFileNameChars()));
+        safe = safe.Replace("..", "_");
+        var path = Path.Combine(_basePath, $"{safe}.hnsw.json");
+
         if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(_basePath), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException($"Invalid namespace: '{ns}'");
 

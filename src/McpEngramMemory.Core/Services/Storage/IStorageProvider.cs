@@ -34,6 +34,15 @@ public interface IStorageProvider : IDisposable
     Dictionary<string, DecayConfig> LoadDecayConfigs();
     void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider);
 
+    /// <summary>Load persisted HNSW graph snapshot for a namespace. Returns null if none exists.</summary>
+    HnswSnapshot? LoadHnswSnapshot(string ns);
+
+    /// <summary>Save an HNSW graph snapshot for a namespace.</summary>
+    void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot);
+
+    /// <summary>Delete persisted HNSW snapshot for a namespace.</summary>
+    void DeleteHnswSnapshot(string ns);
+
     /// <summary>Delete all entries in a namespace from the backing store.</summary>
     Task DeleteNamespaceAsync(string ns);
 
