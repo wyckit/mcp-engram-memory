@@ -193,6 +193,7 @@ public class BenchmarkRunnerTests
     [InlineData("compound-v1")]
     [InlineData("ambiguity-v1")]
     [InlineData("distractor-v1")]
+    [InlineData("specificity-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -211,6 +212,7 @@ public class BenchmarkRunnerTests
     [InlineData("compound-v1")]
     [InlineData("ambiguity-v1")]
     [InlineData("distractor-v1")]
+    [InlineData("specificity-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -235,6 +237,7 @@ public class BenchmarkRunnerTests
         Assert.Contains("compound-v1", ids);
         Assert.Contains("ambiguity-v1", ids);
         Assert.Contains("distractor-v1", ids);
+        Assert.Contains("specificity-v1", ids);
     }
 
     [Fact]
@@ -462,6 +465,118 @@ public class BenchmarkRunnerTests
         foreach (var q in result.QueryScores)
         {
             _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds)}]");
+        }
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanMRR >= 0f);
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    // ── Specificity Gradient Tests ──
+
+    [Fact]
+    public void SpecificityDataset_Has30Seeds18Queries()
+    {
+        var ds = BenchmarkRunner.CreateSpecificityDataset();
+        Assert.Equal(30, ds.SeedEntries.Count);
+        Assert.Equal(18, ds.Queries.Count);
+        Assert.Equal("specificity-v1", ds.DatasetId);
+    }
+
+    [Fact]
+    public void SpecificityDataset_AllSeedsHaveCategories()
+    {
+        var ds = BenchmarkRunner.CreateSpecificityDataset();
+        foreach (var seed in ds.SeedEntries)
+            Assert.False(string.IsNullOrEmpty(seed.Category),
+                $"Seed '{seed.Id}' should have a category");
+    }
+
+    [Fact]
+    public void SpecificityDataset_Has6TopicClusters()
+    {
+        var ds = BenchmarkRunner.CreateSpecificityDataset();
+        var categories = ds.SeedEntries.Select(s => s.Category).Distinct().ToList();
+        Assert.Equal(6, categories.Count);
+        Assert.Contains("languages", categories);
+        Assert.Contains("web", categories);
+        Assert.Contains("databases", categories);
+        Assert.Contains("ml", categories);
+        Assert.Contains("systems", categories);
+        Assert.Contains("security", categories);
+    }
+
+    [Fact]
+    public void SpecificityDataset_Has3QueryTiers()
+    {
+        var ds = BenchmarkRunner.CreateSpecificityDataset();
+        // Broad queries (sp-q01 through sp-q06) have 4-5 relevant seeds each
+        var broadQueries = ds.Queries.Where(q =>
+            int.Parse(q.QueryId.Replace("sp-q", "")) <= 6).ToList();
+        Assert.Equal(6, broadQueries.Count);
+        Assert.All(broadQueries, q =>
+            Assert.True(q.RelevanceGrades.Count >= 4,
+                $"Broad query '{q.QueryId}' should reference 4+ seeds, has {q.RelevanceGrades.Count}"));
+
+        // Medium queries (sp-q07 through sp-q12) have 2-5 relevant seeds
+        var mediumQueries = ds.Queries.Where(q =>
+        {
+            var num = int.Parse(q.QueryId.Replace("sp-q", ""));
+            return num >= 7 && num <= 12;
+        }).ToList();
+        Assert.Equal(6, mediumQueries.Count);
+
+        // Narrow queries (sp-q13 through sp-q18) have 1-3 relevant seeds
+        var narrowQueries = ds.Queries.Where(q =>
+            int.Parse(q.QueryId.Replace("sp-q", "")) >= 13).ToList();
+        Assert.Equal(6, narrowQueries.Count);
+        Assert.All(narrowQueries, q =>
+            Assert.True(q.RelevanceGrades.Count <= 4,
+                $"Narrow query '{q.QueryId}' should reference ≤4 seeds, has {q.RelevanceGrades.Count}"));
+    }
+
+    [Theory]
+    [InlineData("specificity-v1", "vector")]
+    [InlineData("specificity-v1", "hybrid")]
+    [InlineData("specificity-v1", "vector_rerank")]
+    [InlineData("specificity-v1", "hybrid_rerank")]
+    public void RunSpecificityBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"onnx_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
+            "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== {datasetId} [{mode}] (ONNX bge-micro-v2) ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F3}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F3}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F3}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F3}");
+        _output.WriteLine($"  Latency:     {result.MeanLatencyMs:F3}ms (P95: {result.P95LatencyMs:F3}ms)");
+
+        // Per-query breakdown with tier labels
+        foreach (var q in result.QueryScores)
+        {
+            var num = int.Parse(q.QueryId.Replace("sp-q", ""));
+            var tier = num <= 6 ? "BROAD" : num <= 12 ? "MEDIUM" : "NARROW";
+            _output.WriteLine($"    [{tier}] {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds)}]");
         }
 
         Assert.True(result.MeanRecallAtK >= 0f);

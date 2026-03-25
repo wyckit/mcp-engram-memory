@@ -647,7 +647,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -663,6 +663,7 @@ public sealed class BenchmarkRunner
             "compound-v1" => CreateCompoundDataset(),
             "ambiguity-v1" => CreateAmbiguityDataset(),
             "distractor-v1" => CreateDistractorDataset(),
+            "specificity-v1" => CreateSpecificityDataset(),
             _ => null
         };
     }
@@ -1032,5 +1033,105 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("distractor-v1", "Negative/Distractor Resilience Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Specificity Gradient Benchmark — 30 seeds across 6 topic clusters at varying abstraction levels.
+    /// 18 queries at 3 specificity tiers (broad, medium, narrow) testing how retrieval precision and
+    /// ranking change as queries move from general to highly specific.
+    /// </summary>
+    public static BenchmarkDataset CreateSpecificityDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // ── Programming Languages cluster ──
+            new("sp-lang-python", "Python is a high-level interpreted programming language emphasizing readability and rapid prototyping. Its extensive standard library and package ecosystem (pip, PyPI) make it popular for scripting, automation, data science, and web development with frameworks like Django and Flask.", "languages"),
+            new("sp-lang-javascript", "JavaScript is a dynamic, prototype-based scripting language that runs in web browsers and Node.js. It powers interactive websites, single-page applications, and server-side APIs. Key features include closures, the event loop, promises, and async/await for asynchronous programming.", "languages"),
+            new("sp-lang-rust", "Rust is a systems programming language focused on memory safety without garbage collection. Its ownership model with borrowing and lifetimes prevents data races at compile time. Rust is used for operating systems, game engines, WebAssembly, and high-performance network services.", "languages"),
+            new("sp-lang-csharp", "C# is a statically-typed, object-oriented programming language developed by Microsoft for the .NET platform. It supports generics, LINQ, async/await, pattern matching, and records. C# is used for enterprise applications, game development (Unity), and cloud services.", "languages"),
+            new("sp-lang-go", "Go (Golang) is a statically-typed compiled language designed at Google for simplicity and concurrency. Goroutines and channels provide lightweight concurrent programming. Go is widely used for cloud infrastructure, microservices, CLI tools, and container orchestration (Docker, Kubernetes).", "languages"),
+
+            // ── Web Development cluster ──
+            new("sp-web-http", "HTTP (Hypertext Transfer Protocol) is the foundation of data communication on the web. HTTP/1.1 introduced persistent connections and chunked transfer encoding. HTTP/2 added multiplexing and header compression. HTTP/3 uses QUIC over UDP for reduced latency.", "web"),
+            new("sp-web-rest", "REST (Representational State Transfer) is an architectural style for designing web APIs. RESTful APIs use HTTP methods (GET, POST, PUT, DELETE) to operate on resources identified by URIs. Key principles include statelessness, uniform interface, and hypermedia as the engine of application state (HATEOAS).", "web"),
+            new("sp-web-react", "React is a JavaScript library for building user interfaces through composable components. It uses a virtual DOM for efficient updates, JSX for declarative markup, and hooks (useState, useEffect) for state management. React powers single-page applications and can render server-side with Next.js.", "web"),
+            new("sp-web-css", "CSS (Cascading Style Sheets) controls the visual presentation of HTML documents. Modern CSS includes Flexbox and Grid for layout, custom properties (variables), media queries for responsive design, animations, and transitions. Preprocessors like Sass extend CSS with nesting, mixins, and functions.", "web"),
+            new("sp-web-auth", "Web authentication secures user access to web applications. Common approaches include session cookies, JWT (JSON Web Tokens), OAuth 2.0 for delegated authorization, and OpenID Connect for identity. Multi-factor authentication (MFA) adds security layers beyond passwords.", "web"),
+
+            // ── Data & Databases cluster ──
+            new("sp-data-sql", "SQL (Structured Query Language) is the standard language for relational database management. Core operations include SELECT, INSERT, UPDATE, DELETE with JOIN, GROUP BY, and subqueries. Modern SQL supports window functions, CTEs (Common Table Expressions), and JSON operations.", "databases"),
+            new("sp-data-postgres", "PostgreSQL is an advanced open-source relational database with support for JSONB, full-text search, GIS (PostGIS), and extensible type systems. It offers MVCC for concurrent access, write-ahead logging for durability, and supports partitioning, materialized views, and custom indexes (GIN, GiST, BRIN).", "databases"),
+            new("sp-data-redis", "Redis is an in-memory data structure store used as a database, cache, and message broker. It supports strings, hashes, lists, sets, sorted sets, streams, and geospatial indexes. Redis provides sub-millisecond latency, pub/sub messaging, Lua scripting, and cluster mode for horizontal scaling.", "databases"),
+            new("sp-data-nosql", "NoSQL databases provide flexible schema designs for specific workloads. Document stores (MongoDB) handle nested JSON. Key-value stores (DynamoDB) optimize for simple lookups. Column-family stores (Cassandra) handle time-series at scale. Graph databases (Neo4j) model relationships natively.", "databases"),
+            new("sp-data-indexing", "Database indexing accelerates query performance by maintaining sorted data structures. B-tree indexes support range queries, hash indexes optimize equality lookups, and inverted indexes power full-text search. Composite indexes cover multi-column queries. Over-indexing wastes storage and slows writes.", "databases"),
+
+            // ── Machine Learning cluster ──
+            new("sp-ml-neural", "Neural networks are computational models inspired by biological neurons. They consist of layers of interconnected nodes that learn representations through backpropagation. Architectures include feedforward networks, convolutional networks (CNNs) for images, and recurrent networks (RNNs) for sequences.", "ml"),
+            new("sp-ml-transformer", "Transformers are neural network architectures based on self-attention mechanisms. They process input sequences in parallel rather than sequentially, enabling efficient training on large datasets. Transformers power large language models (GPT, BERT, LLaMA) and have been adapted for vision (ViT) and multimodal tasks.", "ml"),
+            new("sp-ml-gradient", "Gradient descent is the fundamental optimization algorithm for training neural networks. Variants include stochastic gradient descent (SGD), Adam (adaptive moment estimation), and AdaGrad. Learning rate scheduling, momentum, and weight decay are key hyperparameters. Gradient clipping prevents exploding gradients.", "ml"),
+            new("sp-ml-nlp", "Natural language processing (NLP) enables computers to understand and generate human language. Key tasks include tokenization, named entity recognition, sentiment analysis, machine translation, and question answering. Modern NLP relies on pretrained language models fine-tuned for specific tasks.", "ml"),
+            new("sp-ml-embedding", "Embeddings map discrete tokens (words, sentences, documents) to dense vector representations in continuous space. Word2Vec and GloVe learn word embeddings from co-occurrence. Sentence embeddings (SBERT, BGE) capture semantic meaning for similarity search and retrieval-augmented generation.", "ml"),
+
+            // ── Systems & Infrastructure cluster ──
+            new("sp-sys-containers", "Containers package applications with their dependencies into isolated, portable units. Docker provides the container runtime and image format. Container images are built from layered Dockerfiles. Registries (Docker Hub, ECR) store and distribute images.", "systems"),
+            new("sp-sys-kubernetes", "Kubernetes orchestrates containerized applications across clusters of machines. It manages deployment, scaling, and networking through declarative configuration. Core concepts include Pods, Services, Deployments, StatefulSets, and Ingress controllers. Helm charts package Kubernetes manifests.", "systems"),
+            new("sp-sys-linux", "Linux is an open-source operating system kernel used in servers, embedded systems, and cloud infrastructure. Key concepts include process management, file systems (ext4, XFS), permissions (rwx, ACLs), systemd service management, and networking (iptables, nftables). Shell scripting automates administration.", "systems"),
+            new("sp-sys-networking", "Computer networking connects devices through layered protocols. The TCP/IP model includes link, internet (IP), transport (TCP, UDP), and application layers. DNS resolves domain names, DHCP assigns IP addresses, and TLS/SSL encrypts communication. Load balancers distribute traffic across servers.", "systems"),
+            new("sp-sys-ci", "Continuous integration and continuous deployment (CI/CD) automate software build, test, and release pipelines. Tools include GitHub Actions, GitLab CI, and Jenkins. Pipelines run linting, unit tests, integration tests, and deploy to staging and production environments. Artifacts are versioned and traceable.", "systems"),
+
+            // ── Security cluster ──
+            new("sp-sec-crypto", "Cryptography protects data through mathematical algorithms. Symmetric encryption (AES) uses shared keys. Asymmetric encryption (RSA, ECDSA) uses key pairs. Hash functions (SHA-256) produce fixed-size digests. Digital signatures verify authenticity. TLS combines these for secure network communication.", "security"),
+            new("sp-sec-owasp", "The OWASP Top 10 lists critical web application security risks: injection (SQL, XSS), broken authentication, sensitive data exposure, XML external entities, broken access control, security misconfiguration, cross-site scripting, insecure deserialization, vulnerable components, and insufficient logging.", "security"),
+            new("sp-sec-zerorust", "Zero-trust security architecture assumes no implicit trust for any user or system, regardless of network location. Every access request is verified with identity, device health, and context. Micro-segmentation limits lateral movement. Continuous monitoring detects anomalies in real time.", "security"),
+            new("sp-sec-pentesting", "Penetration testing simulates adversarial attacks to identify security vulnerabilities. Methodologies include OSSTMM, PTES, and OWASP Testing Guide. Tools like Burp Suite, Nmap, and Metasploit help discover network, application, and configuration weaknesses. Findings are reported with severity ratings and remediation guidance.", "security"),
+            new("sp-sec-iam", "Identity and access management (IAM) controls who can access what resources. Role-based access control (RBAC) assigns permissions to roles. Attribute-based access control (ABAC) uses policies with contextual attributes. Single sign-on (SSO) with SAML or OIDC centralizes authentication. Least privilege principle limits access to minimum necessary permissions.", "security"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // ── Broad queries (should retrieve multiple seeds across a topic cluster) ──
+            new("sp-q01", "Programming languages and software development",
+                new() { ["sp-lang-python"] = 2, ["sp-lang-javascript"] = 2, ["sp-lang-rust"] = 2, ["sp-lang-csharp"] = 2, ["sp-lang-go"] = 2 }),
+            new("sp-q02", "Building and deploying web applications",
+                new() { ["sp-web-http"] = 1, ["sp-web-rest"] = 2, ["sp-web-react"] = 2, ["sp-web-css"] = 1, ["sp-web-auth"] = 1 }),
+            new("sp-q03", "Storing and querying data in databases",
+                new() { ["sp-data-sql"] = 2, ["sp-data-postgres"] = 2, ["sp-data-redis"] = 1, ["sp-data-nosql"] = 2, ["sp-data-indexing"] = 1 }),
+            new("sp-q04", "Artificial intelligence and machine learning",
+                new() { ["sp-ml-neural"] = 2, ["sp-ml-transformer"] = 2, ["sp-ml-gradient"] = 1, ["sp-ml-nlp"] = 2, ["sp-ml-embedding"] = 1 }),
+            new("sp-q05", "Server infrastructure and cloud operations",
+                new() { ["sp-sys-containers"] = 2, ["sp-sys-kubernetes"] = 2, ["sp-sys-linux"] = 2, ["sp-sys-networking"] = 1, ["sp-sys-ci"] = 1 }),
+            new("sp-q06", "Cybersecurity and protecting systems from attacks",
+                new() { ["sp-sec-crypto"] = 2, ["sp-sec-owasp"] = 2, ["sp-sec-zerorust"] = 2, ["sp-sec-pentesting"] = 2 }),
+
+            // ── Medium queries (should retrieve 2-3 seeds within a topic cluster) ──
+            new("sp-q07", "Backend web frameworks and API design patterns",
+                new() { ["sp-web-rest"] = 3, ["sp-web-http"] = 2, ["sp-web-auth"] = 1, ["sp-lang-python"] = 1, ["sp-lang-go"] = 1 }),
+            new("sp-q08", "Relational databases and SQL query optimization",
+                new() { ["sp-data-sql"] = 3, ["sp-data-postgres"] = 3, ["sp-data-indexing"] = 2 }),
+            new("sp-q09", "Training deep learning models with neural networks",
+                new() { ["sp-ml-neural"] = 3, ["sp-ml-gradient"] = 3, ["sp-ml-transformer"] = 2 }),
+            new("sp-q10", "Container orchestration and deployment automation",
+                new() { ["sp-sys-containers"] = 3, ["sp-sys-kubernetes"] = 3, ["sp-sys-ci"] = 2 }),
+            new("sp-q11", "Web application security vulnerabilities and prevention",
+                new() { ["sp-sec-owasp"] = 3, ["sp-sec-pentesting"] = 2, ["sp-web-auth"] = 1 }),
+            new("sp-q12", "Concurrent programming with goroutines and async/await",
+                new() { ["sp-lang-go"] = 3, ["sp-lang-javascript"] = 2, ["sp-lang-csharp"] = 2, ["sp-lang-rust"] = 1 }),
+
+            // ── Narrow queries (should strongly prefer 1-2 specific seeds) ──
+            new("sp-q13", "PostgreSQL JSONB operators and GIN index performance for document queries",
+                new() { ["sp-data-postgres"] = 3, ["sp-data-indexing"] = 2, ["sp-data-sql"] = 1 }),
+            new("sp-q14", "Self-attention mechanism and positional encoding in transformer architectures",
+                new() { ["sp-ml-transformer"] = 3, ["sp-ml-neural"] = 1 }),
+            new("sp-q15", "Configuring Kubernetes Ingress controllers and service mesh routing",
+                new() { ["sp-sys-kubernetes"] = 3, ["sp-sys-networking"] = 1 }),
+            new("sp-q16", "Rust ownership model, borrowing rules, and lifetime annotations for memory safety",
+                new() { ["sp-lang-rust"] = 3 }),
+            new("sp-q17", "BGE and SBERT sentence embedding models for semantic similarity search",
+                new() { ["sp-ml-embedding"] = 3, ["sp-ml-nlp"] = 2, ["sp-ml-transformer"] = 1 }),
+            new("sp-q18", "Elliptic curve digital signatures and TLS 1.3 handshake protocol",
+                new() { ["sp-sec-crypto"] = 3, ["sp-web-auth"] = 1 }),
+        };
+
+        return new BenchmarkDataset("specificity-v1", "Specificity Gradient Benchmark", seeds, queries);
     }
 }

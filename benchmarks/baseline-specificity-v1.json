@@ -1,0 +1,99 @@
+{
+  "datasetId": "specificity-v1",
+  "description": "Specificity Gradient Benchmark — 30 seeds across 6 topic clusters (languages, web, databases, ML, systems, security) with 5 seeds each. 18 queries at 3 specificity tiers (6 broad, 6 medium, 6 narrow) testing how retrieval precision and ranking change as queries move from general to highly specific.",
+  "capturedAt": "2026-03-25",
+  "version": "v0.5.4+specificity",
+  "embedding": "bge-micro-v2 (384-dim, ONNX)",
+  "seeds": 30,
+  "queries": 18,
+  "results": {
+    "vector": {
+      "recallAt5": 0.869,
+      "precisionAt5": 0.589,
+      "mrr": 0.972,
+      "ndcgAt5": 0.911,
+      "meanLatencyMs": 0.075,
+      "p95LatencyMs": 0.116
+    },
+    "hybrid": {
+      "recallAt5": 0.856,
+      "precisionAt5": 0.567,
+      "mrr": 0.972,
+      "ndcgAt5": 0.877,
+      "meanLatencyMs": 0.201,
+      "p95LatencyMs": 0.289
+    },
+    "vector_rerank": {
+      "recallAt5": 0.919,
+      "precisionAt5": 0.622,
+      "mrr": 0.972,
+      "ndcgAt5": 0.905,
+      "meanLatencyMs": 1.121,
+      "p95LatencyMs": 2.027
+    },
+    "hybrid_rerank": {
+      "recallAt5": 0.803,
+      "precisionAt5": 0.544,
+      "mrr": 0.944,
+      "ndcgAt5": 0.826,
+      "meanLatencyMs": 1.475,
+      "p95LatencyMs": 5.899
+    }
+  },
+  "bestMode": "vector_rerank",
+  "tierAnalysis": {
+    "description": "Per-tier average metrics showing how performance varies with query specificity",
+    "broad": {
+      "bestRecall": 0.792,
+      "bestMRR": 0.917,
+      "bestNdcg": 0.793,
+      "observations": [
+        "sp-q02 (web applications) is the weakest broad query — 0.40 recall across all modes, web seeds too diverse",
+        "sp-q01 (programming languages) achieves perfect recall in vector_rerank/hybrid_rerank — language seeds cluster tightly",
+        "sp-q05 (server infrastructure) struggles in hybrid modes — BM25 noise from generic 'server' and 'cloud' terms"
+      ]
+    },
+    "medium": {
+      "bestRecall": 0.933,
+      "bestMRR": 1.000,
+      "bestNdcg": 0.943,
+      "observations": [
+        "Medium queries consistently outperform broad queries — the sweet spot for this embedding model",
+        "sp-q12 (concurrent programming) correctly retrieves Go, JavaScript, C# with async/await",
+        "Medium queries achieve perfect MRR in vector and hybrid modes — first result always correct"
+      ]
+    },
+    "narrow": {
+      "bestRecall": 1.000,
+      "bestMRR": 1.000,
+      "bestNdcg": 0.987,
+      "observations": [
+        "Narrow queries achieve near-perfect recall and nDCG in vector and vector_rerank modes",
+        "sp-q16 (Rust ownership) correctly pinpoints sp-lang-rust as #1 with 1.0 MRR across all modes",
+        "Low precision (0.20-0.60) expected — narrow queries have fewer relevant seeds so K=5 window includes irrelevant results"
+      ]
+    }
+  },
+  "weakQueries": [
+    {
+      "queryId": "sp-q02",
+      "query": "Building and deploying web applications",
+      "bestRecall": 0.40,
+      "analysis": "Weakest query across all datasets. 'Web applications' is too generic — retrieves CI/CD, React, and non-web seeds. The web cluster seeds are individually specific (HTTP, REST, React, CSS, auth) but the broad query doesn't overlap enough with any of them."
+    },
+    {
+      "queryId": "sp-q05",
+      "query": "Server infrastructure and cloud operations",
+      "bestRecall": 0.80,
+      "analysis": "Misses sp-sys-containers in vector mode. 'Cloud operations' is vague — Go language leaks in because of Kubernetes/Docker associations."
+    }
+  ],
+  "keyFindings": [
+    "The specificity gradient reveals a clear 'Goldilocks zone': medium queries (0.933 recall) outperform both broad (0.792) and narrow (1.000 recall but low precision)",
+    "Vector_rerank is the best overall mode (0.919 recall, 0.905 nDCG) — reranker adds +5.0% recall over pure vector",
+    "Hybrid_rerank is the worst mode (0.803 recall, 0.826 nDCG) — BM25 noise hurts when queries use common terms across clusters",
+    "Narrow queries achieve near-perfect ranking (nDCG 0.987) — the embedding model excels at specific technical queries",
+    "Broad queries suffer from cross-cluster leakage — general terms like 'building', 'applications', 'systems' pull in irrelevant seeds",
+    "MRR is excellent across all tiers (0.944-1.000) — the system nearly always gets the top result right regardless of query specificity"
+  ]
+}

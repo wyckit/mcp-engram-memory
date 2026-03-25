@@ -1,6 +1,6 @@
 # Benchmark Ideas
 
-10 proposals for expanding the IR quality benchmark suite. Five have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1). Five remain as future candidates.
+10 proposals for expanding the IR quality benchmark suite. Six have been implemented (paraphrase-v1, multihop-v1, scale-v1, ambiguity-v1, distractor-v1, specificity-v1). Four remain as future candidates.
 
 ## Current Baselines
 
@@ -10,6 +10,9 @@
 | paraphrase-v1 | 25 | 15 | 0.944 | 0.360 | 1.000 | 0.977 |
 | multihop-v1 | 25 | 15 | 0.939 | 0.587 | 1.000 | 0.929 |
 | scale-v1 | 80 | 30 | 0.717 | 0.447 | 1.000 | 0.860 |
+| ambiguity-v1 | 24 | 15 | 0.922 | 0.467 | 1.000 | 0.941 |
+| distractor-v1 | 22 | 15 | 0.737 | 0.387 | 1.000 | 0.988 |
+| specificity-v1 | 30 | 18 | 0.919 | 0.622 | 0.972 | 0.905 |
 
 ## Ideas
 
@@ -55,15 +58,13 @@ Queries that span two or more seed topics, requiring the system to surface multi
 
 ---
 
-### 5. Specificity Gradient
+### 5. Specificity Gradient — IMPLEMENTED as `specificity-v1`
 
-Pairs of broad and narrow queries on the same topic. Tests how well the system handles queries at different levels of abstraction.
+Queries at 3 specificity tiers (broad, medium, narrow) on 6 topic clusters. Tests how precision and ranking change as queries move from general to highly specific.
 
-**Broad:** "programming" — should retrieve multiple language seeds.
-**Medium:** "web development" — should retrieve JavaScript, REST, HTTP.
-**Narrow:** "async/await in JavaScript event loop" — should strongly prefer bench-javascript.
+**Dataset:** 30 seeds across 6 clusters (languages, web, databases, ML, systems, security) with 5 seeds each. 18 queries: 6 broad (4-5 relevant seeds each), 6 medium (2-5 relevant seeds), 6 narrow (1-3 relevant seeds).
 
-**Measures:** Precision at different specificity levels, nDCG sensitivity to query scope.
+**Measures:** Per-tier recall, precision at different specificity levels, nDCG sensitivity to query scope.
 
 ---
 
@@ -136,7 +137,7 @@ Intentionally inject near-duplicate seeds (slightly reworded versions of the sam
 | High | 8. Scale Stress Test | **Implemented** — `scale-v1` |
 | Medium | 1. Cross-Domain Ambiguity | **Implemented** — `ambiguity-v1` |
 | Medium | 3. Negative/Distractor | **Implemented** — `distractor-v1` |
-| Medium | 5. Specificity Gradient | Not started |
+| Medium | 5. Specificity Gradient | **Implemented** — `specificity-v1` |
 | Medium | 9. Physics Re-ranking | Not started |
 | Low | 6. Lifecycle-Aware | Not started |
 | Low | 7. Cluster Summary | Not started |
