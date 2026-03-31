@@ -198,6 +198,7 @@ public class BenchmarkRunnerTests
     [InlineData("lifecycle-v1")]
     [InlineData("contamination-v1")]
     [InlineData("cluster-summary-v1")]
+    [InlineData("disambiguation-v1")]
     public void Dataset_SeedAndQueryIdsAreUnique(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId);
@@ -221,6 +222,7 @@ public class BenchmarkRunnerTests
     [InlineData("lifecycle-v1")]
     [InlineData("contamination-v1")]
     [InlineData("cluster-summary-v1")]
+    [InlineData("disambiguation-v1")]
     public void Dataset_AllRelevanceGradesReferenceValidSeeds(string datasetId)
     {
         var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
@@ -1028,6 +1030,10 @@ public class BenchmarkRunnerTests
     [InlineData("cluster-summary-v1", "hybrid")]
     [InlineData("cluster-summary-v1", "vector_rerank")]
     [InlineData("cluster-summary-v1", "hybrid_rerank")]
+    [InlineData("disambiguation-v1", "vector")]
+    [InlineData("disambiguation-v1", "hybrid")]
+    [InlineData("disambiguation-v1", "vector_rerank")]
+    [InlineData("disambiguation-v1", "hybrid_rerank")]
     public void RegressionBaseline(string datasetId, string modeStr)
     {
         var dataPath = Path.Combine(Path.GetTempPath(), $"regression_{Guid.NewGuid():N}");
@@ -1060,6 +1066,61 @@ public class BenchmarkRunnerTests
             $"{datasetId}/{modeStr}: MRR {result.MeanMRR:F3} below minimum threshold 0.20");
         Assert.True(result.MeanNdcgAtK >= 0.15f,
             $"{datasetId}/{modeStr}: nDCG@K {result.MeanNdcgAtK:F3} below minimum threshold 0.15");
+
+        index.Dispose();
+        persistence.Dispose();
+        if (Directory.Exists(dataPath))
+            Directory.Delete(dataPath, true);
+    }
+
+    // ── MSA-competitive benchmarks: scale-v2, msa-multihop, msa-coldstart ──
+
+    [Theory]
+    [InlineData("scale-v2", "vector")]
+    [InlineData("scale-v2", "hybrid")]
+    [InlineData("scale-v2", "hybrid_rerank")]
+    [InlineData("msa-multihop-v1", "vector")]
+    [InlineData("msa-multihop-v1", "hybrid")]
+    [InlineData("msa-multihop-v1", "hybrid_rerank")]
+    [InlineData("msa-coldstart-v1", "vector")]
+    [InlineData("msa-coldstart-v1", "hybrid")]
+    [InlineData("msa-coldstart-v1", "hybrid_rerank")]
+    [InlineData("physics-v1", "vector")]
+    [InlineData("physics-v1", "vector_rerank")]
+    [InlineData("physics-v1", "hybrid")]
+    [InlineData("physics-v1", "hybrid_rerank")]
+    [Trait("Category", "MSA")]
+    public void RunMsaBenchmark(string datasetId, string mode)
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"msa_bench_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        using var embedding = new OnnxEmbeddingService();
+        var index = new CognitiveIndex(persistence);
+        var runner = new BenchmarkRunner(index, embedding);
+
+        var searchMode = mode switch
+        {
+            "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
+            "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
+            _ => BenchmarkRunner.SearchMode.Vector
+        };
+
+        var dataset = BenchmarkRunner.CreateDataset(datasetId)!;
+        var result = runner.Run(dataset, searchMode);
+
+        _output.WriteLine($"=== MSA BENCHMARK: {datasetId} [{mode}] ===");
+        _output.WriteLine($"  Seeds: {result.TotalEntries}, Queries: {result.TotalQueries}");
+        _output.WriteLine($"  Recall@K:    {result.MeanRecallAtK:F4}");
+        _output.WriteLine($"  Precision@K: {result.MeanPrecisionAtK:F4}");
+        _output.WriteLine($"  MRR:         {result.MeanMRR:F4}");
+        _output.WriteLine($"  nDCG@K:      {result.MeanNdcgAtK:F4}");
+        _output.WriteLine($"  Latency:     {result.MeanLatencyMs:F2}ms (P95: {result.P95LatencyMs:F2}ms)");
+
+        foreach (var q in result.QueryScores)
+            _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds.Take(5))}]");
+
+        Assert.True(result.MeanRecallAtK >= 0f);
+        Assert.True(result.MeanLatencyMs < 500); // Must not be catastrophically slow
 
         index.Dispose();
         persistence.Dispose();

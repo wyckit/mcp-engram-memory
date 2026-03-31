@@ -29,6 +29,7 @@ public sealed class HybridSearchEngine
     private const float HighConfidenceThreshold = 0.85f;
     private const float LowConfidenceThreshold = 0.50f;
     private const int CascadeThreshold = 100;
+    private const float Bm25SemanticGate = 0.30f;
 
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         IReadOnlyList<CognitiveSearchResult> vectorResults,
@@ -72,20 +73,24 @@ public sealed class HybridSearchEngine
                 adaptiveRrfK = Math.Min(rrfK, 30); // amplify BM25
         }
 
-        // Cascade mode: for large namespaces, use BM25 as a precision booster
-        // instead of parallel fusion, to avoid BM25 noise diluting vector results.
+        // Cascade mode: for large namespaces, BM25 primarily boosts vector results,
+        // but also injects top BM25-only candidates that pass a semantic gate.
+        // This prevents BM25 noise while still allowing keyword rescue when HNSW misses.
         if (entryCount >= CascadeThreshold)
         {
-            // Get BM25 scores for vector results only (no new candidates)
             var vectorIds = vectorResults.Select(r => r.Id).ToHashSet();
-            var bm25Scores = bm25.Search(queryText, ns, vectorResults.Count * 2, vectorIds);
-            var bm25ScoreLookup = bm25Scores.ToDictionary(x => x.Id, x => x.Score);
+
+            // Search BM25 for both overlap and new candidates.
+            // Scale with namespace size so keyword rescue has enough candidates.
+            int bm25CandidateK = entryCount >= 5000 ? Math.Max(k * 8, 40) : Math.Max(k * 4, 20);
+            var bm25All = bm25.Search(queryText, ns, bm25CandidateK);
+            var bm25ScoreLookup = bm25All.ToDictionary(x => x.Id, x => x.Score);
 
             // Boost vector results that also score well in BM25
-            float maxBm25 = bm25Scores.Count > 0 ? bm25Scores.Max(x => x.Score) : 1f;
+            float maxBm25 = bm25All.Count > 0 ? bm25All.Max(x => x.Score) : 1f;
             if (maxBm25 <= 0f) maxBm25 = 1f;
 
-            var boosted = new List<CognitiveSearchResult>(vectorResults.Count);
+            var boosted = new List<CognitiveSearchResult>(vectorResults.Count + k);
             foreach (var vr in vectorResults)
             {
                 float boost = 1f;
@@ -97,6 +102,40 @@ public sealed class HybridSearchEngine
                     vr.LifecycleState, vr.ActivationEnergy,
                     vr.Category, vr.Metadata,
                     vr.IsSummaryNode, vr.SourceClusterId, vr.AccessCount));
+            }
+
+            // Inject BM25-only candidates that pass semantic gate (keyword rescue)
+            if (queryVector is not null)
+            {
+                float queryNorm = VectorMath.Norm(queryVector);
+                var cascadeStates = includeStates ?? new HashSet<string> { "stm", "ltm" };
+                int injected = 0;
+                // Scale BM25 injection limit with namespace size — larger namespaces
+                // have more entries that HNSW may miss in distant neighborhoods
+                int maxInject = entryCount >= 5000 ? k : 3;
+
+                foreach (var (id, _) in bm25All)
+                {
+                    if (injected >= maxInject) break;
+                    if (vectorIds.Contains(id)) continue;
+
+                    var entry = getEntry(id, ns);
+                    if (entry is null) continue;
+                    if (!cascadeStates.Contains(entry.LifecycleState)) continue;
+                    if (category is not null && entry.Category != category) continue;
+
+                    float cosine = VectorMath.Dot(queryVector, entry.Vector) /
+                        (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
+                    if (cosine >= Bm25SemanticGate)
+                    {
+                        boosted.Add(new CognitiveSearchResult(
+                            entry.Id, entry.Text, cosine,
+                            entry.LifecycleState, entry.ActivationEnergy,
+                            entry.Category, entry.Metadata,
+                            entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
+                        injected++;
+                    }
+                }
             }
 
             boosted.Sort((a, b) => b.Score.CompareTo(a.Score));
@@ -138,7 +177,6 @@ public sealed class HybridSearchEngine
         // Semantic gate: filter BM25-only results by cosine similarity to query vector.
         // Prevents low-relevance keyword matches from polluting RRF fusion.
         // Only apply when vector results show reasonable confidence (real embeddings).
-        const float Bm25SemanticGate = 0.30f;
         var bm25Gated = new List<(string Id, float Score)>(bm25Unfiltered.Count);
         bool applyGate = queryVector is not null &&
             vectorResults.Count > 0 && vectorResults[0].Score >= Bm25SemanticGate;

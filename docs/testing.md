@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-37 test files with 734 test cases (xUnit).
+46 test files with 842 test cases (xUnit).
 
 ## Running Tests
 
@@ -15,7 +15,7 @@ dotnet test
 
 | Test File | Tests | Focus |
 |-----------|-------|-------|
-| BenchmarkRunnerTests.cs | 99 | IR metrics, 13 benchmark datasets, 52-combination regression baseline, ONNX benchmarks, ablation study |
+| BenchmarkRunnerTests.cs | 106 | IR metrics, 17 benchmark datasets, 56-combination regression baseline, ONNX benchmarks, ablation study |
 | CognitiveIndexTests.cs | 43 | Vector search, lifecycle filtering, persistence, memory limits |
 | RetrievalImprovementTests.cs | 40 | Synonym expansion, document enrichment, Porter stemming, BM25 semantic gate, category boost, auto-PRF, adaptive RRF |
 | IntelligenceTests.cs | 39 | Duplicate detection, contradictions, reversible collapse, decay tuning, merge |
@@ -52,3 +52,12 @@ dotnet test
 | DecayBackgroundServiceTests.cs | 2 | Background service decay cycles |
 | AccretionBackgroundServiceTests.cs | 2 | Background service lifecycle |
 | EmbeddingWarmupServiceTests.cs | 2 | Embedding warmup startup behavior |
+| AdminToolsTests.cs | 9 | GetMemory, CognitiveStats, PurgeDebates tool endpoints |
+| BenchmarkToolsTests.cs | 8 | RunBenchmark, GetMetrics, ResetMetrics tool endpoints |
+| ClusterToolsTests.cs | 12 | CreateCluster, UpdateCluster, StoreClusterSummary, GetCluster, ListClusters tool endpoints |
+| GraphToolsTests.cs | 15 | LinkMemories, UnlinkMemories, GetNeighbors, TraverseGraph tool endpoints |
+| IntelligenceToolsTests.cs | 14 | DetectDuplicates, FindContradictions, UncollapseCluster, ListCollapseHistory, MergeMemories tool endpoints |
+| LifecycleToolsTests.cs | 13 | PromoteMemory, DeepRecall, MemoryFeedback, DecayCycle, ConfigureDecay tool endpoints |
+| MultiAgentToolsTests.cs | 12 | CrossSearch, ShareNamespace, UnshareNamespace, ListShared, WhoAmI tool endpoints |
+| SynthesisToolsTests.cs | 2 | SynthesizeMemories, GetContextBlock tool endpoints |
+| DiversityRerankerTests.cs | 11 | Cluster-aware MMR diversity reranking: selection, cluster/category penalties, edge cases |

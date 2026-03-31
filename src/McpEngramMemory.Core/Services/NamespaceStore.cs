@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
@@ -6,19 +7,20 @@ namespace McpEngramMemory.Core.Services;
 
 /// <summary>
 /// Manages namespace-partitioned storage of cognitive entries with lazy loading from disk.
-/// NOT thread-safe — callers must manage their own locking (CognitiveIndex holds the lock).
-///
-/// Extracted from CognitiveIndex to separate namespace management concerns from search logic.
+/// Infrastructure is thread-safe via ConcurrentDictionary. Per-namespace entry dictionaries
+/// are also ConcurrentDictionary, allowing CognitiveIndex to use ReadLock for read paths
+/// and WriteLock only for mutations.
 /// </summary>
 internal sealed class NamespaceStore
 {
     /// <summary>Minimum namespace size to activate HNSW indexing.</summary>
     private const int HnswThreshold = 200;
 
-    private readonly Dictionary<string, Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>> _namespaces = new();
-    private readonly HashSet<string> _loadedNamespaces = new();
-    private readonly Dictionary<string, string> _idToNamespace = new();
-    private readonly Dictionary<string, HnswIndex> _hnswIndices = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>> _namespaces = new();
+    private readonly ConcurrentDictionary<string, bool> _loadedNamespaces = new();
+    private readonly ConcurrentDictionary<string, string> _idToNamespace = new();
+    private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
+    private readonly ConcurrentDictionary<string, object> _loadLocks = new();
     private readonly IStorageProvider _persistence;
     private readonly BM25Index _bm25;
 
@@ -29,39 +31,33 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>Get the entry dictionary for a namespace (may be null if namespace doesn't exist).</summary>
-    public Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>? GetNamespace(string ns)
+    public ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>? GetNamespace(string ns)
     {
         return _namespaces.TryGetValue(ns, out var entries) ? entries : null;
     }
 
     /// <summary>Get or create the entry dictionary for a namespace.</summary>
-    public Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> GetOrCreateNamespace(string ns)
+    public ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> GetOrCreateNamespace(string ns)
     {
-        if (!_namespaces.TryGetValue(ns, out var entries))
-        {
-            entries = new();
-            _namespaces[ns] = entries;
-        }
-        return entries;
+        return _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
     }
 
     /// <summary>Remove a namespace entirely from in-memory state (entries, locator, BM25, HNSW, loaded tracking).</summary>
     public void RemoveNamespace(string ns)
     {
-        if (_namespaces.TryGetValue(ns, out var entries))
+        if (_namespaces.TryRemove(ns, out var entries))
         {
             foreach (var id in entries.Keys)
-                _idToNamespace.Remove(id);
-            _namespaces.Remove(ns);
+                _idToNamespace.TryRemove(id, out _);
         }
-        _loadedNamespaces.Remove(ns);
+        _loadedNamespaces.TryRemove(ns, out _);
         _bm25.ClearNamespace(ns);
-        _hnswIndices.Remove(ns);
+        _hnswIndices.TryRemove(ns, out _);
         _persistence.DeleteHnswSnapshot(ns);
     }
 
     /// <summary>All namespace dictionaries (for cross-namespace operations).</summary>
-    public IEnumerable<KeyValuePair<string, Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>>> AllNamespaces
+    public IEnumerable<KeyValuePair<string, ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>>> AllNamespaces
         => _namespaces;
 
     /// <summary>Total entries across all loaded namespaces.</summary>
@@ -75,26 +71,35 @@ internal sealed class NamespaceStore
         return persisted.Union(inMemory).Distinct().ToList();
     }
 
-    /// <summary>Ensure a namespace is loaded from disk. Safe to call multiple times (idempotent).</summary>
+    /// <summary>
+    /// Ensure a namespace is loaded from disk. Thread-safe via per-namespace load lock
+    /// with double-check pattern. Multiple namespaces can be loaded concurrently.
+    /// </summary>
     public void EnsureLoaded(string ns)
     {
-        if (_loadedNamespaces.Contains(ns))
+        if (_loadedNamespaces.ContainsKey(ns))
             return;
 
-        var data = _persistence.LoadNamespace(ns);
-        if (!_namespaces.ContainsKey(ns))
-            _namespaces[ns] = new();
+        // Per-namespace lock prevents concurrent double-loading of the same namespace
+        lock (_loadLocks.GetOrAdd(ns, _ => new object()))
+        {
+            if (_loadedNamespaces.ContainsKey(ns))
+                return; // Another thread loaded while we waited
 
-        LoadEntries(ns, data.Entries);
+            var data = _persistence.LoadNamespace(ns);
+            _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
 
-        if (!_bm25.HasNamespace(ns))
-            _bm25.RebuildNamespace(ns, data.Entries);
+            LoadEntries(ns, data.Entries);
 
-        // Try to restore HNSW from persisted snapshot (avoids O(N log N) rebuild)
-        if (data.Entries.Count >= HnswThreshold && !_hnswIndices.ContainsKey(ns))
-            TryRestoreHnsw(ns);
+            if (!_bm25.HasNamespace(ns))
+                _bm25.RebuildNamespace(ns, data.Entries);
 
-        _loadedNamespaces.Add(ns);
+            // Try to restore HNSW from persisted snapshot (avoids O(N log N) rebuild)
+            if (data.Entries.Count >= HnswThreshold && !_hnswIndices.ContainsKey(ns))
+                TryRestoreHnsw(ns);
+
+            _loadedNamespaces.TryAdd(ns, true);
+        }
     }
 
     /// <summary>Load all persisted namespaces from disk.</summary>
@@ -162,7 +167,7 @@ internal sealed class NamespaceStore
 
     /// <summary>Remove an entry from the locator.</summary>
     public void UntrackEntry(string entryId)
-        => _idToNamespace.Remove(entryId);
+        => _idToNamespace.TryRemove(entryId, out _);
 
     /// <summary>Check if BM25 index exists for a namespace.</summary>
     public bool HasBM25Namespace(string ns) => _bm25.HasNamespace(ns);
@@ -249,13 +254,14 @@ internal sealed class NamespaceStore
 
     private void LoadEntries(string ns, List<CognitiveEntry> entries)
     {
+        var nsDict = _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
         foreach (var entry in entries)
         {
             float norm = VectorMath.Norm(entry.Vector);
             var quantized = entry.LifecycleState is "ltm" or "archived"
                 ? VectorQuantizer.Quantize(entry.Vector)
                 : null;
-            _namespaces[ns][entry.Id] = (entry, norm, quantized);
+            nsDict[entry.Id] = (entry, norm, quantized);
             _idToNamespace[entry.Id] = ns;
         }
     }

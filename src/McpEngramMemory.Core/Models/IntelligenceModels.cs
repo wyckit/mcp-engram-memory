@@ -22,15 +22,32 @@ public sealed class DecayConfig
     [JsonPropertyName("archiveThreshold")]
     public float ArchiveThreshold { get; set; } = -5.0f;
 
+    /// <summary>Decay rate multiplier for STM entries. Higher = faster decay. Default 3.0 (half-life ~3h).</summary>
+    [JsonPropertyName("stmDecayMultiplier")]
+    public float StmDecayMultiplier { get; set; } = 3.0f;
+
+    /// <summary>Decay rate multiplier for LTM entries. Default 1.0 (baseline).</summary>
+    [JsonPropertyName("ltmDecayMultiplier")]
+    public float LtmDecayMultiplier { get; set; } = 1.0f;
+
+    /// <summary>Decay rate multiplier for archived entries. Lower = slower decay. Default 0.1.</summary>
+    [JsonPropertyName("archivedDecayMultiplier")]
+    public float ArchivedDecayMultiplier { get; set; } = 0.1f;
+
     [JsonConstructor]
     public DecayConfig(string ns, float decayRate = 0.1f, float reinforcementWeight = 1.0f,
-        float stmThreshold = 2.0f, float archiveThreshold = -5.0f)
+        float stmThreshold = 2.0f, float archiveThreshold = -5.0f,
+        float stmDecayMultiplier = 3.0f, float ltmDecayMultiplier = 1.0f,
+        float archivedDecayMultiplier = 0.1f)
     {
         Ns = ns;
         DecayRate = decayRate;
         ReinforcementWeight = reinforcementWeight;
         StmThreshold = stmThreshold;
         ArchiveThreshold = archiveThreshold;
+        StmDecayMultiplier = stmDecayMultiplier;
+        LtmDecayMultiplier = ltmDecayMultiplier;
+        ArchivedDecayMultiplier = archivedDecayMultiplier;
     }
 }
 

@@ -96,6 +96,21 @@ public sealed class DebateSessionManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Atomically check-and-create a session. Returns true if a new session was created,
+    /// false if the session already exists. Eliminates TOCTOU race between HasSession + RegisterNode.
+    /// </summary>
+    public bool TryCreateSession(string sessionId)
+    {
+        lock (_lock)
+        {
+            if (_sessions.ContainsKey(sessionId))
+                return false;
+            _sessions[sessionId] = new DebateSession();
+            return true;
+        }
+    }
+
     private void PurgeExpired()
     {
         lock (_lock)

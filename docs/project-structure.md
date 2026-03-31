@@ -29,6 +29,7 @@ src/
         PorterStemmer.cs        #   Lightweight Porter stemmer (steps 1-3)
         QueryExpander.cs        #   IDF-based query expansion + pseudo-relevance feedback
         TokenReranker.cs        #   Token-overlap reranker (implements IReranker)
+        DiversityReranker.cs    #   Cluster-aware MMR diversity reranking
         VectorQuantizer.cs      #   Int8 scalar quantization
         IReranker.cs            #   Pluggable reranker interface
       Graph/
@@ -55,7 +56,7 @@ src/
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (734 tests across 37 test files)
+  McpEngramMemory.Tests/        # xUnit tests (842 tests across 46 test files)
 benchmarks/
   baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json
@@ -71,7 +72,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.5
+dotnet add package McpEngramMemory.Core --version 0.6.0
 ```
 
 ### Library Usage

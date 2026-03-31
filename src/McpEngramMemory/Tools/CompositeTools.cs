@@ -264,6 +264,44 @@ public sealed class CompositeTools
             actions, pastReflections.Count > 0 ? pastReflections : null);
     }
 
+    [McpServerTool(Name = "get_context_block")]
+    [Description("Returns a cache-optimized memory context block for a namespace. Stable LTM memories sorted by ID (deterministic ordering for prompt caching). Place this block as a stable prefix in your context to benefit from prompt caching across turns.")]
+    public object GetContextBlock(
+        [Description("Namespace to build context block from.")] string ns,
+        [Description("Maximum number of LTM memories to include (default: 20).")] int maxEntries = 20,
+        [Description("Minimum access count to qualify as 'stable' (default: 2).")] int minAccessCount = 2,
+        [Description("Include namespace statistics header (default: true).")] bool includeHeader = true)
+    {
+        using var timer = _metrics.StartTimer("get_context_block");
+
+        // Get all LTM entries (these are the most stable memories worth caching)
+        var allEntries = _index.GetAllInNamespace(ns);
+        var stableEntries = allEntries
+            .Where(e => e.LifecycleState == "ltm" && e.AccessCount >= minAccessCount && !e.IsSummaryNode)
+            .OrderBy(e => e.Id) // Deterministic ordering by ID — critical for cache stability
+            .Take(maxEntries)
+            .ToList();
+
+        // Build the stable block — exclude volatile fields (scores, timestamps, access counts)
+        // that would change between calls and invalidate the cache
+        var stableBlock = stableEntries.Select(e => new StableMemoryEntry(
+            e.Id, e.Text, e.Category,
+            e.Metadata.Count > 0 ? e.Metadata : null)).ToList();
+
+        // Build header with namespace metadata (also stable)
+        var (stm, ltm, archived) = _index.GetStateCounts(ns);
+
+        return new ContextBlockResult(
+            ns,
+            $"{ns}:{ltm}:{stableEntries.Count}", // Changes only when LTM count changes
+            stableBlock,
+            includeHeader ? new NamespaceHeader(stm, ltm, archived, stableEntries.Count) : null,
+            "Place this block as a stable prefix in your system prompt. " +
+                "Append dynamic query results after this block. " +
+                "The version field changes when the stable block content changes — " +
+                "cache is valid while version is unchanged.");
+    }
+
     private IReadOnlyList<CognitiveSearchResult> ExpandWithGraph(
         IReadOnlyList<CognitiveSearchResult> results, HashSet<string> states)
     {
@@ -321,3 +359,22 @@ public sealed record ReflectResult(
     [property: JsonPropertyName("message")] string Message,
     [property: JsonPropertyName("actions")] IReadOnlyList<string> Actions,
     [property: JsonPropertyName("relatedReflections")] IReadOnlyList<CognitiveSearchResult>? RelatedReflections = null);
+
+public sealed record ContextBlockResult(
+    [property: JsonPropertyName("ns")] string Namespace,
+    [property: JsonPropertyName("version")] string Version,
+    [property: JsonPropertyName("stableMemories")] IReadOnlyList<StableMemoryEntry> StableMemories,
+    [property: JsonPropertyName("header")] NamespaceHeader? Header = null,
+    [property: JsonPropertyName("cacheGuidance")] string? CacheGuidance = null);
+
+public sealed record StableMemoryEntry(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("category")] string? Category,
+    [property: JsonPropertyName("metadata")] Dictionary<string, string>? Metadata = null);
+
+public sealed record NamespaceHeader(
+    [property: JsonPropertyName("stmCount")] int StmCount,
+    [property: JsonPropertyName("ltmCount")] int LtmCount,
+    [property: JsonPropertyName("archivedCount")] int ArchivedCount,
+    [property: JsonPropertyName("stableBlockSize")] int StableBlockSize);

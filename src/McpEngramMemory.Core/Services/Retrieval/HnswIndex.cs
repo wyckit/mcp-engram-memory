@@ -120,8 +120,8 @@ public sealed class HnswIndex
         }
     }
 
-    /// <summary>Default search beam width. Lower than efConstruction for faster queries with minimal recall loss.</summary>
-    private const int DefaultEfSearch = 64;
+    /// <summary>Default search beam width. Tuned for good recall at 10K+ entries while maintaining low latency.</summary>
+    private const int DefaultEfSearch = 128;
 
     /// <summary>
     /// Search for the k nearest neighbors of the query vector.

@@ -22,9 +22,12 @@ public sealed class CoreMemoryTools
     private readonly MetricsCollector _metrics;
     private readonly KnowledgeGraph _graph;
     private readonly QueryExpander _queryExpander;
+    private readonly SpreadingActivationService _spreading;
+    private readonly ClusterManager _clusters;
 
     public CoreMemoryTools(CognitiveIndex index, PhysicsEngine physics, IEmbeddingService embedding,
-        MetricsCollector metrics, KnowledgeGraph graph, QueryExpander queryExpander)
+        MetricsCollector metrics, KnowledgeGraph graph, QueryExpander queryExpander,
+        SpreadingActivationService spreading, ClusterManager clusters)
     {
         _index = index;
         _physics = physics;
@@ -32,6 +35,8 @@ public sealed class CoreMemoryTools
         _metrics = metrics;
         _graph = graph;
         _queryExpander = queryExpander;
+        _spreading = spreading;
+        _clusters = clusters;
     }
 
     [McpServerTool(Name = "store_memory")]
@@ -149,7 +154,10 @@ public sealed class CoreMemoryTools
         [Description("When true, use hybrid search combining BM25 keyword matching with vector similarity via Reciprocal Rank Fusion.")] bool hybrid = false,
         [Description("When true, apply token-level reranking to improve precision on the top results.")] bool rerank = false,
         [Description("When true, use pseudo-relevance feedback to expand the query with terms from top results, improving recall.")] bool expandQuery = false,
-        [Description("When true, include graph-connected neighbors of search results, boosting recall for related memories.")] bool expandGraph = false)
+        [Description("When true, include graph-connected neighbors of search results, boosting recall for related memories.")] bool expandGraph = false,
+        [Description("Cognitive temperature [0.0-1.0]. T=0: pure semantic (factual lookup). T=0.3: balanced (default when usePhysics=true). T=0.7: associative brainstorming. T=1.0: heavily physics-weighted (favors frequently accessed memories).")] float temperature = 0f,
+        [Description("When true, apply cluster-aware MMR diversity reranking to spread results across different sub-topics instead of clustering around one.")] bool diversity = false,
+        [Description("Diversity trade-off [0.0-1.0]. 1.0=pure relevance, 0.0=pure diversity (default: 0.5).")] float diversityLambda = 0.5f)
     {
         using var timer = _metrics.StartTimer("search");
 
@@ -173,7 +181,18 @@ public sealed class CoreMemoryTools
 
         var searchSw = Stopwatch.StartNew();
         IReadOnlyList<CognitiveSearchResult> results;
-        if (hybrid && text is not null)
+        if (diversity)
+        {
+            // Use SearchRequest path which supports diversity reranking
+            results = _index.Search(new SearchRequest
+            {
+                Query = resolved, Namespace = ns, QueryText = text, K = k,
+                MinScore = minScore, Category = category, IncludeStates = states,
+                Hybrid = hybrid, Rerank = rerank, SummaryFirst = summaryFirst,
+                Diversity = true, DiversityLambda = diversityLambda
+            });
+        }
+        else if (hybrid && text is not null)
         {
             results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank);
         }
@@ -217,11 +236,16 @@ public sealed class CoreMemoryTools
 
         searchSw.Stop();
 
-        // Side effect: record access for returned entries (namespace-scoped for efficiency)
+        // Side effect: record access and trigger spreading activation for returned entries
         foreach (var result in results)
+        {
             _index.RecordAccess(result.Id, ns);
+            // Asynchronous spreading activation: propagate energy to graph neighbors and cluster peers
+            if (expandGraph)
+                _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f);
+        }
 
-        // Graph expansion: pull in neighbors of top results
+        // Graph expansion: pull in neighbors of top results with edge-type-weighted scoring
         if (expandGraph && results.Count > 0)
         {
             var existingIds = results.Select(r => r.Id).ToHashSet();
@@ -230,6 +254,7 @@ public sealed class CoreMemoryTools
 
             foreach (var result in results)
             {
+                // Graph neighbor expansion with edge-type-weighted scoring
                 var neighbors = _graph.GetNeighbors(result.Id);
                 foreach (var neighbor in neighbors.Neighbors)
                 {
@@ -239,13 +264,47 @@ public sealed class CoreMemoryTools
 
                     existingIds.Add(neighbor.Entry.Id);
 
-                    // Graph-expanded results get a discounted score (0.8× lowest result score)
-                    // Use fields from CognitiveEntryInfo directly to avoid N+1 index lookups
+                    // Edge-type-weighted score: stronger edge types get higher scores
+                    float edgeWeight = PhysicsEngine.GetEdgeTypeWeight(neighbor.Edge.Relation);
+                    float expandedScore = lowestScore * edgeWeight;
+
                     graphExpanded.Add(new CognitiveSearchResult(
-                        neighbor.Entry.Id, neighbor.Entry.Text, lowestScore * 0.8f,
+                        neighbor.Entry.Id, neighbor.Entry.Text, expandedScore,
                         neighbor.Entry.LifecycleState, 0f,
                         neighbor.Entry.Category, null,
                         false, null, 0));
+                }
+
+                // Cluster expansion: include cluster peers of top results
+                var clusterIds = _clusters.GetClustersForEntry(result.Id);
+                foreach (var clusterId in clusterIds)
+                {
+                    var clusterInfo = _clusters.GetCluster(clusterId);
+                    if (clusterInfo is null) continue;
+
+                    // Include cluster summary node at high priority
+                    if (clusterInfo.SummaryEntry is not null && existingIds.Add(clusterInfo.SummaryEntry.Id))
+                    {
+                        graphExpanded.Add(new CognitiveSearchResult(
+                            clusterInfo.SummaryEntry.Id, clusterInfo.SummaryEntry.Text,
+                            lowestScore * 0.9f,
+                            clusterInfo.SummaryEntry.LifecycleState, 0f,
+                            clusterInfo.SummaryEntry.Category, null,
+                            true, clusterId, 0));
+                    }
+
+                    // Include top cluster members
+                    foreach (var member in clusterInfo.Members.Take(3))
+                    {
+                        if (!existingIds.Add(member.Id)) continue;
+                        if (!states.Contains(member.LifecycleState)) continue;
+
+                        graphExpanded.Add(new CognitiveSearchResult(
+                            member.Id, member.Text, lowestScore * 0.6f,
+                            member.LifecycleState, 0f,
+                            member.Category, null,
+                            false, null, 0));
+                    }
                 }
             }
 
@@ -257,7 +316,7 @@ public sealed class CoreMemoryTools
         SlingshotResult? slingshot = null;
         if (usePhysics && results.Count > 0)
         {
-            slingshot = _physics.Slingshot(results);
+            slingshot = _physics.Slingshot(results, temperature);
             // Re-map to CognitiveSearchResult in gravity order for explain path
             orderedResults = slingshot.AllResults.Select(r =>
                 new CognitiveSearchResult(r.Id, r.Text, r.CosineScore, r.LifecycleState,

@@ -11,14 +11,23 @@ public sealed class VectorSearchEngine
     /// <summary>Minimum namespace size to activate two-stage Int8 screening.</summary>
     private const int TwoStageThreshold = 30;
 
-    /// <summary>Candidate pool multiplier for Int8 screening pass.</summary>
-    private const int ScreeningMultiplier = 5;
+    /// <summary>Candidate pool multiplier for Int8 screening pass. Increased from 5 to 8 for better recall.</summary>
+    private const int ScreeningMultiplier = 8;
 
     /// <summary>Minimum namespace size to use HNSW candidates instead of linear scan.</summary>
     private const int HnswCandidateThreshold = 200;
 
-    /// <summary>Multiplier for HNSW candidate pool (to allow for post-filtering).</summary>
-    private const int HnswCandidateMultiplier = 4;
+    /// <summary>Multiplier for HNSW candidate pool (to allow for post-filtering). Increased from 4 to 8 for better recall at scale.</summary>
+    private const int HnswCandidateMultiplier = 8;
+
+    /// <summary>Namespace size above which adaptive HNSW candidate scaling activates.</summary>
+    private const int AdaptiveScaleThreshold = 2000;
+
+    /// <summary>Fraction of namespace to explore as minimum candidate floor for large namespaces.</summary>
+    private const float MinExplorationRatio = 0.05f;
+
+    /// <summary>Hard cap on HNSW candidates to bound latency at very large scales.</summary>
+    private const int MaxHnswCandidates = 1500;
 
     /// <summary>
     /// Search a namespace using cosine similarity with optional two-stage Int8 screening.
@@ -57,6 +66,14 @@ public sealed class VectorSearchEngine
         if (hnswIndex is not null && entries.Count >= HnswCandidateThreshold)
         {
             int candidateCount = k * HnswCandidateMultiplier;
+            // Scale minimum candidates with namespace size for better recall at scale.
+            // Without this, small fixed multipliers miss relevant results in large namespaces
+            // where matching entries are spread across distant HNSW neighborhoods.
+            if (entries.Count >= AdaptiveScaleThreshold)
+            {
+                int floorCandidates = (int)Math.Min(entries.Count * MinExplorationRatio, MaxHnswCandidates);
+                candidateCount = Math.Max(candidateCount, floorCandidates);
+            }
             var hnswCandidates = hnswIndex.Search(query, candidateCount);
             var candidateIds = hnswCandidates.Select(c => c.Id).ToHashSet();
 

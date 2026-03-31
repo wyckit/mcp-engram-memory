@@ -55,7 +55,7 @@ public sealed class DebateTools
         if (string.IsNullOrWhiteSpace(sessionId))
             return "Error: sessionId must not be empty.";
 
-        if (_sessions.HasSession(sessionId))
+        if (!_sessions.TryCreateSession(sessionId))
             return $"Error: Session '{sessionId}' already exists. Use a new sessionId or call resolve_debate first.";
 
         var states = ParseStates(includeStates);

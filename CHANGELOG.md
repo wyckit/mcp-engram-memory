@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-03-31
+
+### Added
+- **Cluster-Aware MMR Diversity Reranking**: New `DiversityReranker` applies Maximal Marginal Relevance with cluster and category penalties to spread search results across sub-topics. Activated via `diversity: true` on `search_memory`. Configurable lambda trade-off (0.0 = pure diversity, 1.0 = pure relevance, default 0.5).
+- **GitHub Actions CI/CD**: `ci.yml` pipeline on push/PR to main — builds, tests (excluding MSA), and packs NuGet on all 3 TFMs. `benchmark.yml` runs nightly MSA benchmarks at 6 AM UTC with manual dispatch.
+- **`disambiguation-v1` benchmark**: Dense-domain disambiguation dataset — 4 clusters × 5 seeds + 4 distractors, 10 queries (broad/cross-cluster/narrow) measuring result diversity across semantically dense namespaces.
+- **Spreading Activation Service**: Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming.
+- **SLM Synthesis Engine**: Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows.
+- **`get_context_block` tool**: Prompt-cache-aware context assembly for LLM consumption.
+- **`physics-v1` in MSA benchmark suite**: 4 modes (vector, vector_rerank, hybrid, hybrid_rerank) added to nightly MSA benchmarks.
+- 108 new tests (total: 842 across 3 frameworks, up from 734).
+
+### Changed
+- **ONNX Concurrent Inference**: Removed `SemaphoreSlim(1,1)` bottleneck. All scratch buffers (input IDs, attention mask, token type IDs, shape) moved to per-call `ArrayPool` allocations. `InferenceSession.Run()` now runs fully concurrent.
+- **Namespace-Partitioned Locking**: `NamespaceStore` converted from `Dictionary` to `ConcurrentDictionary` for all 4 internal collections. Per-namespace load locks with double-check pattern for safe lazy loading. `CognitiveIndex` read paths switched from `UpgradeableReadLock` (1 thread) to `ReadLock` (N concurrent threads) at 10 call sites.
+- **Expert System Consolidation**: Linked 6 orphaned high-use experts to domain tree parent nodes. Deleted 36 dead/duplicate expert entries. Broadened `information_retrieval` branch node persona description for improved hierarchical routing.
+- **MCP Tool Test Coverage**: 8 previously untested tool classes now have dedicated test files (AdminTools, BenchmarkTools, ClusterTools, GraphTools, IntelligenceTools, LifecycleTools, MultiAgentTools, SynthesisTools) with 85 new tests.
+
 ## [0.5.5] - 2026-03-25
 
 ### Added

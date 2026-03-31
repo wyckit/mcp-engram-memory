@@ -38,4 +38,10 @@ public sealed record SearchRequest
 
     /// <summary>Prioritize cluster summary entries in results.</summary>
     public bool SummaryFirst { get; init; }
+
+    /// <summary>Apply cluster-aware MMR diversity reranking to prevent results clustering around one sub-topic.</summary>
+    public bool Diversity { get; init; }
+
+    /// <summary>MMR lambda trade-off: 1.0 = pure relevance, 0.0 = pure diversity (default: 0.5).</summary>
+    public float DiversityLambda { get; init; } = 0.5f;
 }

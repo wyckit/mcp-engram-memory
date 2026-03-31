@@ -53,8 +53,9 @@ public class IntelligenceTests : IDisposable
 
         var dups = _index.FindDuplicates("test", 0.95f);
         Assert.Single(dups);
-        Assert.Equal("a", dups[0].IdA);
-        Assert.Equal("b", dups[0].IdB);
+        var ids = new HashSet<string> { dups[0].IdA, dups[0].IdB };
+        Assert.Contains("a", ids);
+        Assert.Contains("b", ids);
         Assert.Equal(1f, dups[0].Similarity, 3);
     }
 

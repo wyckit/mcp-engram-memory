@@ -1,6 +1,7 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
+using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Lifecycle;
@@ -135,7 +136,8 @@ public class RegressionTests : IDisposable
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "test"));
         _clusters.CreateCluster("c1", "test", new[] { "a", "b" });
 
-        var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander());
+        var spreading = new SpreadingActivationService(_index, _graph, _clusters);
+        var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters);
 
         // Run StoreSummary and DeleteMemory concurrently — should not deadlock
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -194,5 +196,37 @@ public class RegressionTests : IDisposable
         var namespaces = _persistence.GetPersistedNamespaces();
         Assert.DoesNotContain("_clusters", namespaces);
         Assert.Contains("test", namespaces);
+    }
+
+    // Issue: ClassifyExpert allCandidates[0] could throw if ScoreEntries filters all entries
+    [Fact]
+    public void ClassifyExpert_DimensionMismatch_DoesNotThrow()
+    {
+        var embedding = new StubEmbeddingService(); // 2-dim
+        var dispatcher = new ExpertDispatcher(_index, embedding);
+
+        // Create a root with 2-dim vector (via embedding)
+        dispatcher.CreateDomainNode("root1", "test root domain", "root");
+
+        // Classify with a different dimension vector — ScoreEntries will skip all entries
+        var mismatchedVector = new float[] { 0.5f, 0.5f, 0.5f }; // 3-dim vs 2-dim root
+        var placement = dispatcher.ClassifyExpert(mismatchedVector);
+
+        // Should return unclassified, not throw IndexOutOfRangeException
+        Assert.Equal("unclassified", placement.Status);
+    }
+
+    // Issue: TryCreateSession atomically prevents duplicate session creation (TOCTOU fix)
+    [Fact]
+    public void TryCreateSession_AtomicCreation_PreventsDuplicates()
+    {
+        using var sessions = new DebateSessionManager();
+
+        Assert.True(sessions.TryCreateSession("s1"));
+        Assert.False(sessions.TryCreateSession("s1")); // Already exists
+
+        // RegisterNode still works on the created session
+        int alias = sessions.RegisterNode("s1", "entry-a");
+        Assert.Equal(1, alias);
     }
 }

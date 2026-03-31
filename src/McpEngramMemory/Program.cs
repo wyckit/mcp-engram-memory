@@ -8,6 +8,7 @@ using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
+using McpEngramMemory.Core.Services.Synthesis;
 using McpEngramMemory.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -48,6 +49,16 @@ builder.Services.AddSingleton<QueryExpander>();
 builder.Services.AddSingleton<BenchmarkRunner>();
 builder.Services.AddSingleton<DebateSessionManager>();
 builder.Services.AddSingleton<ExpertDispatcher>();
+builder.Services.AddSingleton<SpreadingActivationService>();
+
+// SLM synthesis engine (Ollama-powered map-reduce)
+var ollamaUrl = Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434";
+var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL") ?? "qwen2.5:0.5b";
+var synthesisReduceModel = Environment.GetEnvironmentVariable("SYNTHESIS_REDUCE_MODEL") ?? "qwen2.5:0.5b";
+builder.Services.AddSingleton(sp => new SynthesisEngine(
+    sp.GetRequiredService<CognitiveIndex>(),
+    sp.GetRequiredService<ClusterManager>(),
+    synthesisMapModel, synthesisReduceModel, ollamaUrl));
 
 // Agent identity for multi-agent memory sharing (set AGENT_ID env var per agent)
 var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;
@@ -92,7 +103,8 @@ if (toolProfile is "full")
         .WithTools<BenchmarkTools>()
         .WithTools<DebateTools>()
         .WithTools<MaintenanceTools>()
-        .WithTools<ExpertTools>();
+        .WithTools<ExpertTools>()
+        .WithTools<SynthesisTools>();
 }
 
 await builder.Build().RunAsync();

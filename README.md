@@ -6,7 +6,7 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-734%20passed-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-842%20passed-brightgreen" alt="Tests"/>
   <img src="https://img.shields.io/badge/MCP%20tools-50-blue" alt="MCP Tools"/>
 </p>
 
@@ -38,7 +38,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 3 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.5
+dotnet add package McpEngramMemory.Core --version 0.6.0
 ```
 
 Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
@@ -74,13 +74,14 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Metric | Value |
 |--------|-------|
 | MCP tools | 50 (profiles: 15 / 34 / 50) |
-| Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, auto-PRF |
-| Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally) |
+| Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
+| Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 734 across 37 files |
+| Tests | 842 across 46 files |
+| CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
 
@@ -155,7 +156,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 The core engine is available as a NuGet package for embedding in your own .NET applications:
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.5.5
+dotnet add package McpEngramMemory.Core --version 0.6.0
 ```
 
 ```csharp
@@ -189,14 +190,14 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 | [AI Assistant Setup](docs/ai-assistant-setup.md) | Step-by-step setup prompts for each tool |
 | [Sample Prompts](docs/prompts.md) | Power prompts and usage patterns |
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
-| [Testing](docs/testing.md) | Test coverage breakdown (734 tests) |
+| [Testing](docs/testing.md) | Test coverage breakdown (842 tests) |
 
 ## Build & Test
 
 ```bash
 cd mcp-engram-memory
 dotnet build
-dotnet test    # 734 tests across 37 files
+dotnet test    # 842 tests across 46 files
 ```
 
 ## Tech Stack

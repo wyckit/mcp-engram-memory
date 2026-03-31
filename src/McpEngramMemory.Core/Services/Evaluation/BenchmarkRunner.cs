@@ -659,7 +659,7 @@ public sealed class BenchmarkRunner
     /// <summary>Get all available dataset IDs.</summary>
     public static IReadOnlyList<string> GetAvailableDatasets()
     {
-        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1", "physics-v1", "lifecycle-v1", "contamination-v1", "cluster-summary-v1" };
+        return new[] { "default-v1", "paraphrase-v1", "multihop-v1", "scale-v1", "scale-v2", "realworld-v1", "compound-v1", "ambiguity-v1", "distractor-v1", "specificity-v1", "physics-v1", "lifecycle-v1", "contamination-v1", "cluster-summary-v1", "msa-multihop-v1", "msa-coldstart-v1", "disambiguation-v1" };
     }
 
     /// <summary>Create a dataset by ID.</summary>
@@ -680,6 +680,10 @@ public sealed class BenchmarkRunner
             "lifecycle-v1" => CreateLifecycleDataset(),
             "contamination-v1" => CreateContaminationDataset(),
             "cluster-summary-v1" => CreateClusterSummaryDataset(),
+            "scale-v2" => CreateScaleV2Dataset(),
+            "msa-multihop-v1" => CreateMsaMultiHopDataset(),
+            "msa-coldstart-v1" => CreateMsaColdStartDataset(),
+            "disambiguation-v1" => CreateDisambiguationDataset(),
             _ => null
         };
     }
@@ -1457,5 +1461,650 @@ public sealed class BenchmarkRunner
         };
 
         return new BenchmarkDataset("cluster-summary-v1", "Cluster Summary Quality Benchmark", seeds, queries);
+    }
+
+    /// <summary>
+    /// Scale V2 benchmark: 10,000 entries across 10 domains via template-based generation.
+    /// Tests HNSW recall degradation, latency scaling, and memory usage at ~1M token scale.
+    /// Each domain has 20 subjects and 15 properties; combinatorial template expansion
+    /// produces 50 semantically distinct variations per subject.
+    /// </summary>
+    public static BenchmarkDataset CreateScaleV2Dataset()
+    {
+        const int VariationsPerSubject = 50;
+        var rng = new Random(42); // fixed seed for reproducibility
+        var seeds = new List<BenchmarkSeedEntry>(10500);
+
+        // 10 domains: (category, label, subjects[20], properties[15])
+        var domains = new (string cat, string label, string[] subjects, string[] props)[]
+        {
+            ("prog", "programming languages", new[] {
+                "Python", "Rust", "Go", "TypeScript", "C#", "Java", "Kotlin", "Swift",
+                "Haskell", "Elixir", "Scala", "Ruby", "PHP", "Lua", "Dart", "Julia",
+                "R", "Zig", "OCaml", "Erlang"
+            }, new[] {
+                "static typing", "dynamic dispatch", "garbage collection", "manual memory management",
+                "pattern matching", "generics", "async/await", "coroutines", "macros",
+                "type inference", "null safety", "immutability", "closures", "traits", "functional composition"
+            }),
+            ("database", "database systems", new[] {
+                "PostgreSQL", "MySQL", "SQLite", "MongoDB", "Redis", "Cassandra", "Neo4j",
+                "InfluxDB", "CockroachDB", "Elasticsearch", "DynamoDB", "Couchbase", "MariaDB",
+                "ScyllaDB", "ClickHouse", "Dgraph", "FaunaDB", "Supabase", "Vitess", "TimescaleDB"
+            }, new[] {
+                "ACID transactions", "eventual consistency", "horizontal sharding", "multi-region replication",
+                "B-tree indexing", "full-text search", "JSON document storage", "time-series optimization",
+                "graph traversal", "in-memory caching", "write-ahead logging", "multi-version concurrency",
+                "columnar storage", "document model", "key-value access"
+            }),
+            ("cloud", "cloud computing", new[] {
+                "AWS Lambda", "Azure Functions", "Google Cloud Run", "Kubernetes", "Docker Swarm",
+                "Terraform", "CloudFormation", "Pulumi", "Istio", "Prometheus", "Grafana",
+                "Datadog", "Vault", "Consul", "ArgoCD", "FluxCD", "Helm", "Kustomize",
+                "Crossplane", "PagerDuty"
+            }, new[] {
+                "auto-scaling", "serverless execution", "container orchestration", "infrastructure as code",
+                "service mesh", "observability", "secrets management", "continuous deployment",
+                "GitOps workflow", "load balancing", "circuit breaking", "canary deployment",
+                "blue-green rollout", "cost optimization", "multi-cloud strategy"
+            }),
+            ("ml", "machine learning", new[] {
+                "neural networks", "decision trees", "random forests", "gradient boosting",
+                "support vector machines", "k-nearest neighbors", "logistic regression", "transformers",
+                "convolutional networks", "recurrent networks", "GANs", "autoencoders",
+                "reinforcement learning", "Bayesian methods", "ensemble methods", "attention mechanisms",
+                "diffusion models", "graph neural networks", "federated learning", "meta-learning"
+            }, new[] {
+                "backpropagation", "gradient descent", "regularization", "cross-validation",
+                "feature engineering", "hyperparameter tuning", "transfer learning", "data augmentation",
+                "batch normalization", "dropout", "learning rate scheduling", "loss function design",
+                "model compression", "quantization", "pruning"
+            }),
+            ("web", "web development", new[] {
+                "React", "Angular", "Vue", "Svelte", "Next.js", "Nuxt", "Remix", "Astro",
+                "Express", "FastAPI", "Django", "Flask", "Spring Boot", "Rails", "Laravel",
+                "ASP.NET", "Deno", "Bun", "htmx", "Tailwind CSS"
+            }, new[] {
+                "server-side rendering", "client-side routing", "state management", "component composition",
+                "responsive design", "progressive enhancement", "API integration", "authentication middleware",
+                "caching strategy", "bundle optimization", "code splitting", "hydration",
+                "streaming SSR", "edge rendering", "static generation"
+            }),
+            ("security", "cybersecurity", new[] {
+                "TLS encryption", "OAuth protocol", "JWT tokens", "RBAC system", "zero-trust architecture",
+                "WAF firewall", "SIEM platform", "penetration testing", "vulnerability scanning",
+                "threat modeling", "incident response", "DLP system", "PKI infrastructure",
+                "MFA authentication", "CASB broker", "SOC operations", "EDR solution",
+                "SAST analysis", "DAST scanning", "supply chain verification"
+            }, new[] {
+                "encryption at rest", "encryption in transit", "access control", "identity verification",
+                "threat detection", "compliance auditing", "vulnerability remediation", "incident forensics",
+                "risk assessment", "security monitoring", "code review", "secrets rotation",
+                "network segmentation", "least privilege", "audit logging"
+            }),
+            ("network", "computer networking", new[] {
+                "TCP protocol", "UDP protocol", "HTTP/2", "HTTP/3 QUIC", "gRPC framework",
+                "WebSocket", "GraphQL", "REST API", "DNS resolution", "BGP routing",
+                "OSPF routing", "MPLS tunneling", "SDN controller", "load balancer",
+                "reverse proxy", "CDN edge", "VPN tunnel", "WireGuard", "mTLS mesh", "SMTP protocol"
+            }, new[] {
+                "packet routing", "flow control", "congestion avoidance", "multiplexing",
+                "header compression", "connection pooling", "rate limiting", "circuit breaking",
+                "health checking", "service discovery", "request tracing", "protocol negotiation",
+                "latency optimization", "bandwidth management", "fault tolerance"
+            }),
+            ("devops", "DevOps practices", new[] {
+                "GitHub Actions", "GitLab CI", "Jenkins", "CircleCI", "Ansible",
+                "Chef", "Puppet", "SaltStack", "Vagrant", "Packer",
+                "Docker Compose", "Podman", "Buildah", "Skaffold", "Tilt",
+                "Garden", "Okteto", "Waypoint", "Earthly", "Bazel"
+            }, new[] {
+                "pipeline automation", "artifact management", "environment provisioning", "configuration management",
+                "infrastructure testing", "deployment rollback", "feature flagging", "A/B testing",
+                "release management", "dependency scanning", "container scanning", "compliance as code",
+                "change management", "runbook automation", "toil reduction"
+            }),
+            ("dataeng", "data engineering", new[] {
+                "Apache Kafka", "Apache Spark", "Apache Flink", "Apache Airflow", "dbt",
+                "Snowflake", "Databricks", "BigQuery", "Redshift", "Fivetran",
+                "Airbyte", "Great Expectations", "Monte Carlo", "Apache Iceberg", "Delta Lake",
+                "Apache Hudi", "Trino", "Presto", "Apache Beam", "Dagster"
+            }, new[] {
+                "stream processing", "batch processing", "data partitioning", "schema evolution",
+                "data quality checks", "lineage tracking", "change data capture", "exactly-once delivery",
+                "late data handling", "backfill strategy", "data cataloging", "metadata management",
+                "cost governance", "query optimization", "data freshness"
+            }),
+            ("arch", "software architecture", new[] {
+                "microservices", "monolith", "event sourcing", "CQRS", "saga orchestration",
+                "hexagonal architecture", "clean architecture", "domain-driven design", "actor model",
+                "reactive streams", "circuit breaker pattern", "bulkhead pattern", "sidecar pattern",
+                "strangler fig", "backend-for-frontend", "API gateway", "service registry",
+                "event mesh", "data mesh", "cell architecture"
+            }, new[] {
+                "loose coupling", "high cohesion", "fault isolation", "horizontal scaling",
+                "vertical scaling", "eventual consistency", "strong consistency", "idempotency",
+                "observability", "resilience testing", "chaos engineering", "load testing",
+                "capacity planning", "tech debt management", "modular boundaries"
+            }),
+        };
+
+        // Sentence patterns: {S}=subject, {P1}=prop1, {P2}=prop2, {D}=domain label
+        string[] patterns =
+        {
+            "{S} leverages {P1} and {P2} for effective {D} solutions.",
+            "In {D}, {S} is known for its approach to {P1} combined with {P2}.",
+            "The {S} approach to {D} emphasizes {P1} while providing {P2} capabilities.",
+            "Engineers choose {S} for {D} projects requiring {P1} and {P2}.",
+            "When evaluating {D} options, {S} stands out through {P1} and {P2}.",
+            "{S} in the {D} ecosystem offers {P1} alongside {P2}.",
+            "For {D} workloads demanding {P1}, {S} also provides {P2}.",
+            "Production systems using {S} benefit from {P1} and {P2} in {D}.",
+        };
+
+        string[] prefixes =
+        {
+            "In modern software development, ", "For enterprise applications, ",
+            "When building scalable systems, ", "In cloud-native architectures, ",
+            "For high-performance workloads, ", "In distributed computing, ",
+            "When optimizing for reliability, ", "For data-intensive applications, ",
+            "In production environments, ", "For mission-critical systems, ",
+        };
+
+        string[] suffixes =
+        {
+            " This approach is widely adopted.", " Teams report improved productivity.",
+            " Benchmarks confirm strong performance.", " The ecosystem continues to grow.",
+            " Migration paths are well-documented.", " Security audits endorse this approach.",
+            " Cost efficiency is well-established.", " Scalability has been demonstrated.",
+            " Community support is extensive.", " Integration options are broad.",
+        };
+
+        int globalId = 0;
+        foreach (var (cat, label, subjects, props) in domains)
+        {
+            foreach (var subj in subjects)
+            {
+                for (int v = 0; v < VariationsPerSubject; v++)
+                {
+                    var p1 = props[(v * 7 + 3) % props.Length];
+                    var p2 = props[(v * 11 + 7) % props.Length];
+                    if (p1 == p2) p2 = props[(v * 11 + 8) % props.Length];
+
+                    var text = patterns[v % patterns.Length]
+                        .Replace("{S}", subj).Replace("{P1}", p1)
+                        .Replace("{P2}", p2).Replace("{D}", label);
+
+                    if (v >= patterns.Length)
+                        text = prefixes[rng.Next(prefixes.Length)] + char.ToLower(text[0]) + text[1..];
+                    if (v >= patterns.Length * 2)
+                        text += suffixes[rng.Next(suffixes.Length)];
+
+                    seeds.Add(new BenchmarkSeedEntry($"sv2-{globalId++:D5}", text, cat));
+                }
+            }
+        }
+
+        // Queries: 3 per domain (easy/medium/hard) = 30 total
+        var queries = new List<BenchmarkQuery>(30);
+        int domainOffset = 0;
+        foreach (var (cat, label, subjects, props) in domains)
+        {
+            int domainSize = subjects.Length * VariationsPerSubject;
+
+            // Easy: broad domain query — gold = first 3 subjects' base entries
+            var easyGrades = new Dictionary<string, int>();
+            for (int e = 0; e < 3; e++)
+            {
+                int baseId = domainOffset + e * VariationsPerSubject;
+                for (int v = 0; v < 3; v++)
+                    easyGrades[$"sv2-{baseId + v:D5}"] = e == 0 ? 3 : 2;
+            }
+            queries.Add(new BenchmarkQuery($"sv2-q-{cat}-easy",
+                $"Overview of {label} technologies and approaches",
+                easyGrades, K: 10));
+
+            // Medium: specific subject query (index 5)
+            var medGrades = new Dictionary<string, int>();
+            int medBase = domainOffset + 5 * VariationsPerSubject;
+            for (int v = 0; v < 5; v++)
+                medGrades[$"sv2-{medBase + v:D5}"] = 3;
+            int nearBase = domainOffset + 6 * VariationsPerSubject;
+            for (int v = 0; v < 2; v++)
+                medGrades[$"sv2-{nearBase + v:D5}"] = 1;
+            queries.Add(new BenchmarkQuery($"sv2-q-{cat}-med",
+                $"How does {subjects[5]} handle {props[0]} in {label}",
+                medGrades, K: 10));
+
+            // Hard: property-specific query across subjects
+            var hardGrades = new Dictionary<string, int>();
+            string targetProp = props[2];
+            for (int e = 0; e < subjects.Length && hardGrades.Count < 15; e++)
+            {
+                for (int v = 0; v < VariationsPerSubject && hardGrades.Count < 15; v++)
+                {
+                    var p1 = props[(v * 7 + 3) % props.Length];
+                    var p2 = props[(v * 11 + 7) % props.Length];
+                    if (p1 == p2) p2 = props[(v * 11 + 8) % props.Length];
+                    if (p1 == targetProp || p2 == targetProp)
+                        hardGrades[$"sv2-{domainOffset + e * VariationsPerSubject + v:D5}"] = 2;
+                }
+            }
+            queries.Add(new BenchmarkQuery($"sv2-q-{cat}-hard",
+                $"Systems and tools that leverage {targetProp} in {label}",
+                hardGrades, K: 10));
+
+            domainOffset += domainSize;
+        }
+
+        return new BenchmarkDataset("scale-v2",
+            $"Scale V2 Stress Test ({seeds.Count} entries, {domains.Length} domains, ~1M tokens)",
+            seeds, queries);
+    }
+
+    /// <summary>
+    /// MSA Multi-Hop Associative Reasoning benchmark: tests retrieval across linked fact chains.
+    /// Creates 15 chains of 4 entries each (60 entries). Queries require traversing 2-4 hops
+    /// to find all relevant entries. Compares to MSA's ability to attend across arbitrarily
+    /// distant context positions for multi-step reasoning.
+    /// </summary>
+    public static BenchmarkDataset CreateMsaMultiHopDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>(65);
+
+        // 15 chains of 4 linked facts. Each chain: A→B→C→D where consecutive
+        // entries share entity mentions, forming an associative reasoning path.
+        var chains = new (string topic, string[] entities, string[] facts)[]
+        {
+            ("auth", new[] { "OAuth", "JWT", "session management", "RBAC", "MFA" }, new[] {
+                "OAuth delegates authentication by issuing authorization codes that are exchanged for JWT access tokens",
+                "JWT tokens encode user claims that are validated by the session management system to maintain state",
+                "Session management tracks active user sessions and integrates with RBAC to enforce role-based permissions",
+                "RBAC role assignments determine which resources users can access and whether MFA is required for sensitive operations"
+            }),
+            ("data-pipeline", new[] { "Kafka", "Flink", "Iceberg", "Spark", "dbt" }, new[] {
+                "Kafka ingests streaming events that Flink consumes for real-time windowed aggregations",
+                "Flink processed results are written to Iceberg tables with ACID transactional guarantees",
+                "Iceberg tables serve as the source for Spark batch jobs that compute daily analytical rollups",
+                "Spark outputs feed into dbt models that transform raw aggregates into business-ready reporting tables"
+            }),
+            ("deployment", new[] { "Git commit", "CI pipeline", "Docker image", "Kubernetes pod", "load balancer" }, new[] {
+                "A Git commit triggers the CI pipeline which runs tests and linting on the changed code",
+                "The CI pipeline builds a Docker image tagged with the commit SHA and pushes it to the registry",
+                "Kubernetes pulls the Docker image and schedules it as a pod across available cluster nodes",
+                "The load balancer routes external traffic to healthy Kubernetes pods based on readiness probes"
+            }),
+            ("ml-training", new[] { "raw data", "feature store", "training pipeline", "model registry", "inference endpoint" }, new[] {
+                "Raw data from event logs is cleaned and transformed into features stored in the feature store",
+                "The feature store provides versioned feature sets to the training pipeline for model fitting",
+                "The training pipeline outputs trained model artifacts that are versioned in the model registry",
+                "Models promoted in the model registry are deployed to the inference endpoint for real-time predictions"
+            }),
+            ("observability", new[] { "application logs", "metrics aggregator", "alerting system", "incident manager", "postmortem" }, new[] {
+                "Application logs are parsed and forwarded to the metrics aggregator for time-series analysis",
+                "The metrics aggregator computes SLO burn rates that trigger the alerting system when thresholds breach",
+                "The alerting system pages on-call engineers and creates tickets in the incident manager",
+                "The incident manager tracks resolution and generates a postmortem document for team review"
+            }),
+            ("networking", new[] { "DNS query", "CDN edge", "reverse proxy", "application server", "database connection" }, new[] {
+                "A DNS query resolves the domain name and directs the client to the nearest CDN edge node",
+                "The CDN edge serves cached static assets or forwards dynamic requests to the reverse proxy",
+                "The reverse proxy terminates TLS and routes the request to the appropriate application server",
+                "The application server processes the request and establishes a database connection to fetch data"
+            }),
+            ("security-incident", new[] { "threat actor", "phishing email", "credential theft", "lateral movement", "data exfiltration" }, new[] {
+                "The threat actor crafts a phishing email with a malicious link targeting corporate employees",
+                "The phishing email leads to credential theft when an employee enters credentials on the fake login page",
+                "Stolen credentials enable lateral movement across the network to find high-value data stores",
+                "Lateral movement culminates in data exfiltration of sensitive records through an encrypted tunnel"
+            }),
+            ("frontend-render", new[] { "user interaction", "virtual DOM", "state update", "component re-render", "layout paint" }, new[] {
+                "A user interaction like a button click dispatches an action that triggers a virtual DOM diff",
+                "The virtual DOM computes the minimal state update needed and batches changes efficiently",
+                "The state update propagates through the component tree causing targeted component re-renders",
+                "Component re-renders produce new DOM nodes that the browser processes in the layout paint cycle"
+            }),
+            ("database-write", new[] { "write request", "WAL entry", "buffer pool", "checkpoint process", "disk page" }, new[] {
+                "A write request is first recorded as a WAL entry ensuring durability before acknowledgment",
+                "The WAL entry is applied to the buffer pool which holds modified pages in memory",
+                "The buffer pool accumulates dirty pages until the checkpoint process flushes them to disk",
+                "The checkpoint process writes dirty buffer pool pages to their permanent disk page locations"
+            }),
+            ("container-lifecycle", new[] { "Dockerfile", "build context", "image layer", "container runtime", "process namespace" }, new[] {
+                "A Dockerfile defines the build instructions that are executed within the build context directory",
+                "Each build instruction creates an image layer that is cached and stacked to form the final image",
+                "The container runtime unpacks image layers and creates an isolated execution environment",
+                "The container runtime sets up a process namespace providing PID, network, and mount isolation"
+            }),
+            ("api-design", new[] { "schema definition", "endpoint routing", "middleware chain", "serialization", "response caching" }, new[] {
+                "A schema definition specifies the request and response shapes that endpoint routing validates",
+                "Endpoint routing matches URL patterns to handlers that are wrapped by the middleware chain",
+                "The middleware chain processes authentication, logging, and rate limiting before serialization",
+                "Serialization converts handler output to JSON and populates response caching headers for CDN storage"
+            }),
+            ("testing-pyramid", new[] { "unit test", "integration test", "contract test", "end-to-end test", "performance test" }, new[] {
+                "A unit test validates individual function logic in isolation and feeds confidence to integration tests",
+                "Integration tests verify component interactions and their contracts feed into contract test definitions",
+                "Contract tests ensure API compatibility between services which enables reliable end-to-end test scenarios",
+                "End-to-end tests validate complete user workflows and identify bottlenecks measured by performance tests"
+            }),
+            ("memory-hierarchy", new[] { "CPU register", "L1 cache", "L2 cache", "main memory", "SSD storage" }, new[] {
+                "CPU registers hold the immediate operands and results, with L1 cache providing the next fastest access tier",
+                "L1 cache misses trigger L2 cache lookups which have higher capacity but increased latency",
+                "L2 cache misses fall through to main memory which provides gigabytes of DRAM capacity",
+                "Main memory pages that haven't been accessed recently are swapped to SSD storage by the OS"
+            }),
+            ("event-sourcing", new[] { "command handler", "event store", "projection builder", "read model", "snapshot" }, new[] {
+                "A command handler validates business rules and emits domain events persisted to the event store",
+                "The event store maintains an append-only log that the projection builder subscribes to for updates",
+                "The projection builder transforms events into denormalized views stored in the read model",
+                "The read model query performance is maintained by periodic snapshots that compact the event history"
+            }),
+            ("search-engine", new[] { "web crawler", "inverted index", "ranking algorithm", "query parser", "search results" }, new[] {
+                "A web crawler discovers pages by following links and feeds raw HTML to the inverted index builder",
+                "The inverted index maps tokens to document lists which the ranking algorithm scores for relevance",
+                "The ranking algorithm combines TF-IDF, PageRank, and freshness signals to order query parser output",
+                "The query parser interprets user intent and retrieves ranked documents displayed as search results"
+            }),
+        };
+
+        foreach (var (topic, entities, facts) in chains)
+        {
+            for (int hop = 0; hop < facts.Length; hop++)
+            {
+                seeds.Add(new BenchmarkSeedEntry(
+                    $"mh-{topic}-{hop}", facts[hop], $"chain-{topic}"));
+            }
+        }
+
+        // Queries: 2 per chain (2-hop and 4-hop) = 30 total
+        var queries = new List<BenchmarkQuery>(30);
+        foreach (var (topic, entities, facts) in chains)
+        {
+            // 2-hop: relationship between first and third entity
+            queries.Add(new BenchmarkQuery($"mh-q-{topic}-2hop",
+                $"{entities[0]} processing through {entities[1]} into {entities[2]} system",
+                new Dictionary<string, int>
+                {
+                    [$"mh-{topic}-0"] = 3,
+                    [$"mh-{topic}-1"] = 3,
+                    [$"mh-{topic}-2"] = 2,
+                }, K: 4));
+
+            // 4-hop: full chain from first to last entity
+            queries.Add(new BenchmarkQuery($"mh-q-{topic}-4hop",
+                $"End-to-end flow from {entities[0]} through to {entities[4]} in {topic} systems",
+                new Dictionary<string, int>
+                {
+                    [$"mh-{topic}-0"] = 3,
+                    [$"mh-{topic}-1"] = 2,
+                    [$"mh-{topic}-2"] = 2,
+                    [$"mh-{topic}-3"] = 3,
+                }, K: 4));
+        }
+
+        return new BenchmarkDataset("msa-multihop-v1",
+            $"MSA Multi-Hop Associative Reasoning ({seeds.Count} entries, {chains.Length} chains)",
+            seeds, queries);
+    }
+
+    /// <summary>
+    /// MSA Cold Start benchmark: tests retrieval quality for under-represented domains
+    /// in a corpus dominated by a few topics. Simulates switching to a new context
+    /// where the system has sparse coverage. Major domains have 30 entries each;
+    /// minor domains have only 6 entries each. Compares recall between the two tiers.
+    /// MSA handles domain switches seamlessly via uniform attention; this tests whether
+    /// engram's retrieval degrades for minority domains in a skewed corpus.
+    /// </summary>
+    public static BenchmarkDataset CreateMsaColdStartDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>(200);
+
+        // Major domains: 5 topics × 6 subjects × 5 variations = 150 entries (well-represented)
+        var majorDomains = new (string cat, string label, string[] subjects)[]
+        {
+            ("cloud-major", "cloud infrastructure", new[] {
+                "load balancer", "auto-scaler", "API gateway", "service mesh", "ingress controller", "CDN edge" }),
+            ("backend-major", "backend services", new[] {
+                "REST endpoint", "message queue", "cache layer", "connection pool", "rate limiter", "health check" }),
+            ("frontend-major", "frontend development", new[] {
+                "component tree", "state store", "virtual DOM", "CSS module", "route handler", "form validation" }),
+            ("data-major", "data processing", new[] {
+                "ETL pipeline", "stream processor", "batch job", "data lake", "warehouse table", "quality check" }),
+            ("testing-major", "software testing", new[] {
+                "unit test", "integration test", "e2e test", "load test", "contract test", "mutation test" }),
+        };
+
+        // Minor domains: 5 topics × 2 subjects × 3 variations = 30 entries (under-represented, cold)
+        var minorDomains = new (string cat, string label, string[] subjects)[]
+        {
+            ("botany-minor", "plant biology", new[] { "photosynthesis pathway", "xylem transport" }),
+            ("geology-minor", "geological processes", new[] { "tectonic subduction", "mineral crystallization" }),
+            ("music-minor", "music theory", new[] { "harmonic progression", "modal interchange" }),
+            ("culinary-minor", "culinary science", new[] { "Maillard reaction", "emulsion stability" }),
+            ("astronomy-minor", "stellar astronomy", new[] { "nucleosynthesis chain", "gravitational lensing" }),
+        };
+
+        string[] templates =
+        {
+            "{S} is a core concept in {D} that enables reliable and effective outcomes.",
+            "Understanding {S} in {D} is essential for building production-grade solutions.",
+            "The {S} pattern in {D} addresses common scalability and quality challenges.",
+            "Teams working in {D} rely on {S} as a foundational building block.",
+            "Modern {D} practices emphasize {S} for operational excellence and efficiency.",
+        };
+
+        int globalId = 0;
+
+        // Generate major domain entries (well-represented)
+        foreach (var (cat, label, subjects) in majorDomains)
+        {
+            foreach (var subj in subjects)
+            {
+                for (int v = 0; v < 5; v++)
+                {
+                    var text = templates[v]
+                        .Replace("{S}", subj).Replace("{D}", label);
+                    seeds.Add(new BenchmarkSeedEntry($"cs-{globalId++:D4}", text, cat,
+                        LifecycleState: "ltm", AccessCount: 15));
+                }
+            }
+        }
+
+        // Generate minor domain entries (under-represented, cold start)
+        foreach (var (cat, label, subjects) in minorDomains)
+        {
+            foreach (var subj in subjects)
+            {
+                for (int v = 0; v < 3; v++)
+                {
+                    var text = templates[v]
+                        .Replace("{S}", subj).Replace("{D}", label);
+                    seeds.Add(new BenchmarkSeedEntry($"cs-{globalId++:D4}", text, cat,
+                        LifecycleState: "stm", AccessCount: 1));
+                }
+            }
+        }
+
+        // Queries: 10 for major domains (2 per domain), 10 for minor domains (2 per domain)
+        var queries = new List<BenchmarkQuery>(20);
+
+        int offset = 0;
+        foreach (var (cat, label, subjects) in majorDomains)
+        {
+            // Query 1: broad domain
+            var grades1 = new Dictionary<string, int>();
+            for (int i = 0; i < 5; i++) // first subject's entries
+                grades1[$"cs-{offset + i:D4}"] = 3;
+            for (int i = 5; i < 10; i++) // second subject's entries
+                grades1[$"cs-{offset + i:D4}"] = 2;
+            queries.Add(new BenchmarkQuery($"cs-q-{cat}-1",
+                $"How does {label} work in modern systems",
+                grades1, K: 5));
+
+            // Query 2: specific subject (third subject)
+            var grades2 = new Dictionary<string, int>();
+            int subj2Start = offset + 10;
+            for (int i = 0; i < 5; i++)
+                grades2[$"cs-{subj2Start + i:D4}"] = 3;
+            queries.Add(new BenchmarkQuery($"cs-q-{cat}-2",
+                $"Understanding {subjects[2]} in {label}",
+                grades2, K: 5));
+
+            offset += subjects.Length * 5;
+        }
+
+        foreach (var (cat, label, subjects) in minorDomains)
+        {
+            // Query 1: first subject (cold)
+            var grades1 = new Dictionary<string, int>();
+            for (int i = 0; i < 3; i++)
+                grades1[$"cs-{offset + i:D4}"] = 3;
+            queries.Add(new BenchmarkQuery($"cs-q-{cat}-1",
+                $"How does {subjects[0]} work in {label}",
+                grades1, K: 5));
+
+            // Query 2: second subject (cold)
+            var grades2 = new Dictionary<string, int>();
+            for (int i = 3; i < 6; i++)
+                grades2[$"cs-{offset + i:D4}"] = 3;
+            queries.Add(new BenchmarkQuery($"cs-q-{cat}-2",
+                $"Understanding {subjects[1]} in {label}",
+                grades2, K: 5));
+
+            offset += subjects.Length * 3;
+        }
+
+        return new BenchmarkDataset("msa-coldstart-v1",
+            $"MSA Cold Start Retrieval ({seeds.Count} entries, {majorDomains.Length} major + {minorDomains.Length} minor domains)",
+            seeds, queries);
+    }
+
+    /// <summary>
+    /// Dense-Domain Disambiguation Benchmark: Tests whether search results cover multiple
+    /// sub-topics within a semantically dense domain. 4 clusters × 5 seeds = 20 intra-domain
+    /// entries, plus 4 out-of-domain distractors. Broad queries should retrieve across
+    /// sub-topics (clusters), not cluster around the closest single match.
+    /// </summary>
+    public static BenchmarkDataset CreateDisambiguationDataset()
+    {
+        // Cluster 1: Web Frontend (cluster-web)
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            new("web-html", "HTML5 semantic elements like header, nav, main, article, and section provide meaningful structure to web pages, improving accessibility for screen readers and SEO for search engines.", "web", SourceClusterId: "cluster-web"),
+            new("web-css", "CSS Grid and Flexbox are modern layout systems. Grid handles two-dimensional layouts with rows and columns, while Flexbox manages one-dimensional alignment along a single axis.", "web", SourceClusterId: "cluster-web"),
+            new("web-react", "React uses a virtual DOM to efficiently update the browser DOM. Components re-render when state changes, and React's reconciliation algorithm minimizes actual DOM mutations for performance.", "web", SourceClusterId: "cluster-web"),
+            new("web-auth", "OAuth 2.0 and OpenID Connect handle web application authentication. The authorization code flow with PKCE is recommended for single-page applications, replacing the implicit grant.", "web", SourceClusterId: "cluster-web"),
+            new("web-perf", "Core Web Vitals measure user experience: Largest Contentful Paint (loading), First Input Delay (interactivity), and Cumulative Layout Shift (visual stability). Lighthouse audits these metrics.", "web", SourceClusterId: "cluster-web"),
+
+            // Cluster 2: Database Systems (cluster-db)
+            new("db-relational", "Relational databases use SQL for structured queries across normalized tables. PostgreSQL supports JSONB columns, CTEs, window functions, and full-text search with tsvector/tsquery.", "database", SourceClusterId: "cluster-db"),
+            new("db-nosql", "Document databases like MongoDB store flexible JSON documents without rigid schemas. They excel at hierarchical data, rapid prototyping, and horizontal scaling via sharding.", "database", SourceClusterId: "cluster-db"),
+            new("db-indexing", "B-tree indexes accelerate range queries and equality lookups. Hash indexes are faster for exact matches. Composite indexes follow the leftmost prefix rule for multi-column queries.", "database", SourceClusterId: "cluster-db"),
+            new("db-replication", "Database replication strategies include synchronous (strong consistency, higher latency), asynchronous (eventual consistency, lower latency), and semi-synchronous (compromise) modes.", "database", SourceClusterId: "cluster-db"),
+            new("db-transactions", "ACID transactions guarantee atomicity, consistency, isolation, and durability. Isolation levels range from read uncommitted (fastest, phantom reads) to serializable (slowest, no anomalies).", "database", SourceClusterId: "cluster-db"),
+
+            // Cluster 3: DevOps & Infrastructure (cluster-ops)
+            new("ops-containers", "Docker containers package applications with dependencies into portable units. Kubernetes orchestrates containers across clusters, managing scaling, networking, and rolling deployments.", "devops", SourceClusterId: "cluster-ops"),
+            new("ops-cicd", "CI/CD pipelines automate build, test, and deploy workflows. GitHub Actions uses YAML workflow files with jobs, steps, and matrix strategies for multi-platform builds.", "devops", SourceClusterId: "cluster-ops"),
+            new("ops-monitoring", "Observability requires three pillars: metrics (Prometheus/Grafana), logs (ELK stack or Loki), and traces (OpenTelemetry/Jaeger). SLOs define acceptable error budgets.", "devops", SourceClusterId: "cluster-ops"),
+            new("ops-iac", "Infrastructure as Code tools like Terraform and Pulumi declare cloud resources in version-controlled files. Terraform uses HCL with providers for AWS, Azure, and GCP.", "devops", SourceClusterId: "cluster-ops"),
+            new("ops-security", "Zero-trust security assumes breach. Mutual TLS authenticates service-to-service calls. Service meshes like Istio and Linkerd enforce mTLS, circuit breaking, and traffic policies.", "devops", SourceClusterId: "cluster-ops"),
+
+            // Cluster 4: Machine Learning (cluster-ml)
+            new("ml-training", "Neural network training uses backpropagation with gradient descent optimizers (Adam, SGD with momentum). Learning rate schedulers like cosine annealing prevent overshooting during convergence.", "ml", SourceClusterId: "cluster-ml"),
+            new("ml-embeddings", "Word embeddings map tokens to dense vectors capturing semantic relationships. Transformer models produce contextual embeddings where the same word gets different vectors based on context.", "ml", SourceClusterId: "cluster-ml"),
+            new("ml-evaluation", "Model evaluation metrics include accuracy, precision, recall, F1-score for classification; MSE, MAE, R-squared for regression; BLEU, ROUGE for text generation.", "ml", SourceClusterId: "cluster-ml"),
+            new("ml-deployment", "Model serving frameworks like TensorFlow Serving, TorchServe, and ONNX Runtime optimize inference with batching, quantization (INT8/FP16), and hardware acceleration (CUDA, DirectML).", "ml", SourceClusterId: "cluster-ml"),
+            new("ml-data", "Data pipelines for ML include collection, cleaning, augmentation, and feature engineering. Data versioning tools like DVC track dataset versions alongside code changes.", "ml", SourceClusterId: "cluster-ml"),
+
+            // Distractors: out-of-domain entries that shouldn't match
+            new("distractor-cooking", "French cuisine relies on five mother sauces: béchamel, velouté, espagnole, hollandaise, and tomato. Each serves as a base for hundreds of derivative sauces.", "cooking"),
+            new("distractor-music", "Jazz improvisation follows chord progressions using modes. The Dorian mode over a minor chord creates a characteristic jazz sound, while Mixolydian works over dominant sevenths.", "music"),
+            new("distractor-astronomy", "Stellar nucleosynthesis fuses hydrogen into helium in main-sequence stars. Heavier elements form in supernovae, where extreme temperatures enable rapid neutron capture (r-process).", "science"),
+            new("distractor-botany", "Photosynthesis converts CO2 and water into glucose using sunlight. The Calvin cycle fixes carbon in the stroma, while light reactions in thylakoids produce ATP and NADPH.", "science"),
+        };
+
+        var queries = new List<BenchmarkQuery>
+        {
+            // Broad queries: should retrieve diverse results ACROSS clusters
+            new("dis-broad-software", "Building modern software systems and applications",
+                new Dictionary<string, int>
+                {
+                    // Grade 2 for one representative from each tech cluster
+                    ["web-react"] = 2, ["web-html"] = 2, ["web-css"] = 2, ["web-auth"] = 2, ["web-perf"] = 2,
+                    ["db-relational"] = 2, ["db-nosql"] = 2, ["db-indexing"] = 2, ["db-replication"] = 2, ["db-transactions"] = 2,
+                    ["ops-containers"] = 2, ["ops-cicd"] = 2, ["ops-monitoring"] = 2, ["ops-iac"] = 2, ["ops-security"] = 2,
+                    ["ml-training"] = 1, ["ml-embeddings"] = 1, ["ml-evaluation"] = 1, ["ml-deployment"] = 1, ["ml-data"] = 1,
+                }),
+
+            new("dis-broad-tech", "Technology infrastructure and engineering practices",
+                new Dictionary<string, int>
+                {
+                    ["ops-containers"] = 3, ["ops-cicd"] = 3, ["ops-monitoring"] = 3, ["ops-iac"] = 3, ["ops-security"] = 3,
+                    ["db-relational"] = 2, ["db-nosql"] = 2, ["db-indexing"] = 2, ["db-replication"] = 2, ["db-transactions"] = 2,
+                    ["web-perf"] = 1, ["ml-deployment"] = 1,
+                }),
+
+            new("dis-broad-data", "Working with data storage, processing, and analysis",
+                new Dictionary<string, int>
+                {
+                    ["db-relational"] = 3, ["db-nosql"] = 3, ["db-indexing"] = 3, ["db-replication"] = 3, ["db-transactions"] = 3,
+                    ["ml-data"] = 2, ["ml-training"] = 2, ["ml-evaluation"] = 2,
+                    ["ml-embeddings"] = 1, ["ml-deployment"] = 1,
+                }),
+
+            // Cross-cluster queries: should retrieve from exactly 2 clusters
+            new("dis-cross-web-ops", "Deploying and monitoring web applications in production",
+                new Dictionary<string, int>
+                {
+                    ["web-perf"] = 3, ["web-react"] = 2, ["web-auth"] = 2,
+                    ["ops-containers"] = 3, ["ops-cicd"] = 3, ["ops-monitoring"] = 3,
+                    ["ops-iac"] = 2, ["ops-security"] = 2,
+                }),
+
+            new("dis-cross-ml-db", "Storing and querying machine learning model predictions and training data",
+                new Dictionary<string, int>
+                {
+                    ["ml-data"] = 3, ["ml-deployment"] = 3, ["ml-training"] = 2, ["ml-evaluation"] = 2,
+                    ["db-relational"] = 3, ["db-nosql"] = 3, ["db-indexing"] = 2,
+                }),
+
+            new("dis-cross-db-ops", "Managing database infrastructure and reliability in production",
+                new Dictionary<string, int>
+                {
+                    ["db-replication"] = 3, ["db-relational"] = 2, ["db-transactions"] = 2,
+                    ["ops-monitoring"] = 3, ["ops-iac"] = 3, ["ops-containers"] = 2, ["ops-security"] = 2,
+                }),
+
+            // Narrow queries: controls — should retrieve from one cluster accurately
+            new("dis-narrow-css", "CSS layout techniques for responsive web design",
+                new Dictionary<string, int>
+                {
+                    ["web-css"] = 3, ["web-html"] = 2, ["web-perf"] = 1, ["web-react"] = 1,
+                }),
+
+            new("dis-narrow-indexes", "Database indexing strategies for query optimization",
+                new Dictionary<string, int>
+                {
+                    ["db-indexing"] = 3, ["db-relational"] = 2, ["db-transactions"] = 1,
+                }),
+
+            new("dis-narrow-k8s", "Container orchestration with Kubernetes",
+                new Dictionary<string, int>
+                {
+                    ["ops-containers"] = 3, ["ops-cicd"] = 2, ["ops-monitoring"] = 1, ["ops-iac"] = 1,
+                }),
+
+            new("dis-narrow-embeddings", "Neural network embeddings and vector representations",
+                new Dictionary<string, int>
+                {
+                    ["ml-embeddings"] = 3, ["ml-training"] = 2, ["ml-evaluation"] = 1,
+                }),
+        };
+
+        return new BenchmarkDataset("disambiguation-v1",
+            "Dense-Domain Disambiguation Benchmark (4 clusters × 5 seeds, broad/cross/narrow queries)",
+            seeds, queries);
     }
 }

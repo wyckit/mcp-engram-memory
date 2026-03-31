@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore McpEngramMemory.slnx
+
+      - name: Build
+        run: dotnet build McpEngramMemory.slnx --no-restore -c Release
+
+      - name: Test (excluding MSA benchmarks)
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFileName=results.trx" --filter "Category!=MSA"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+
+  pack:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore McpEngramMemory.slnx
+
+      - name: Pack Core library
+        run: dotnet pack src/McpEngramMemory.Core/McpEngramMemory.Core.csproj -c Release -o ./artifacts
+
+      - name: Pack global tool
+        run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o ./artifacts
+
+      - name: Upload NuGet packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./artifacts/*.nupkg

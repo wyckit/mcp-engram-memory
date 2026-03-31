@@ -90,6 +90,9 @@ public sealed class LifecycleEngine
             float effectiveReinforcement = reinforcementWeight;
             float effectiveStmThreshold = stmThreshold;
             float effectiveArchiveThreshold = archiveThreshold;
+            float stmMultiplier = 3.0f;
+            float ltmMultiplier = 1.0f;
+            float archivedMultiplier = 0.1f;
 
             if (useStoredConfig)
             {
@@ -100,6 +103,9 @@ public sealed class LifecycleEngine
                     effectiveReinforcement = config.ReinforcementWeight;
                     effectiveStmThreshold = config.StmThreshold;
                     effectiveArchiveThreshold = config.ArchiveThreshold;
+                    stmMultiplier = config.StmDecayMultiplier;
+                    ltmMultiplier = config.LtmDecayMultiplier;
+                    archivedMultiplier = config.ArchivedDecayMultiplier;
                 }
             }
 
@@ -111,7 +117,16 @@ public sealed class LifecycleEngine
 
                 processedCount++;
                 var hoursSinceAccess = (float)(DateTimeOffset.UtcNow - entry.LastAccessedAt).TotalHours;
-                float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - (hoursSinceAccess * effectiveDecayRate);
+
+                // Asymmetric decay: each lifecycle state has its own decay rate multiplier
+                float stateMultiplier = entry.LifecycleState switch
+                {
+                    "stm" => stmMultiplier,
+                    "ltm" => ltmMultiplier,
+                    "archived" => archivedMultiplier,
+                    _ => 1.0f
+                };
+                float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - (hoursSinceAccess * effectiveDecayRate * stateMultiplier);
 
                 // Determine new state
                 string? newState = null;

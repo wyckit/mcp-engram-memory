@@ -13,16 +13,13 @@ public sealed class OnnxEmbeddingService : IEmbeddingService, IDisposable
 
     private readonly InferenceSession _session;
     private readonly BertTokenizer _tokenizer;
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private readonly long[] _tokenTypeIds;
-    private readonly long[] _shape = [1L, 0];
-    private readonly OrtValue[] _inputValues = new OrtValue[3];
+    private readonly int _maximumTokens;
 
     public int Dimensions { get; }
 
     public OnnxEmbeddingService(string? modelDir = null, int maximumTokens = 512)
     {
-        _tokenTypeIds = new long[maximumTokens];
+        _maximumTokens = maximumTokens;
 
         modelDir ??= Path.Combine(AppContext.BaseDirectory, "LocalEmbeddingsModel", "default");
 
@@ -40,41 +37,40 @@ public sealed class OnnxEmbeddingService : IEmbeddingService, IDisposable
 
     public float[] Embed(string text)
     {
-        _lock.Wait();
+        // All buffers are stack-local — no shared mutable state, so concurrent
+        // calls are safe. InferenceSession.Run() is thread-safe per ONNX Runtime.
+        int maxTokens = _maximumTokens;
+        long[] scratch = ArrayPool<long>.Shared.Rent(maxTokens * 2);
+        long[] tokenTypeIds = ArrayPool<long>.Shared.Rent(maxTokens);
         try
         {
-            int maxTokens = _tokenTypeIds.Length;
-            long[] scratch = ArrayPool<long>.Shared.Rent(maxTokens * 2);
-            try
-            {
-                int tokenCount = _tokenizer.Encode(
-                    text,
-                    scratch.AsSpan(0, maxTokens),
-                    scratch.AsSpan(maxTokens, maxTokens));
-                _shape[1] = tokenCount;
+            Array.Clear(tokenTypeIds, 0, maxTokens);
 
-                var info = OrtMemoryInfo.DefaultInstance;
-                using var inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                    info, scratch.AsMemory(0, tokenCount), _shape);
-                using var attMaskOrt = OrtValue.CreateTensorValueFromMemory(
-                    info, scratch.AsMemory(maxTokens, tokenCount), _shape);
-                using var typeIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                    info, _tokenTypeIds.AsMemory(0, tokenCount), _shape);
+            int tokenCount = _tokenizer.Encode(
+                text,
+                scratch.AsSpan(0, maxTokens),
+                scratch.AsSpan(maxTokens, maxTokens));
+            long[] shape = [1L, tokenCount];
 
-                _inputValues[0] = inputIdsOrt;
-                _inputValues[1] = attMaskOrt;
-                _inputValues[2] = typeIdsOrt;
-                using var outputs = _session.Run(
-                    s_runOptions, s_inputNames, _inputValues, _session.OutputNames);
+            var info = OrtMemoryInfo.DefaultInstance;
+            using var inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                info, scratch.AsMemory(0, tokenCount), shape);
+            using var attMaskOrt = OrtValue.CreateTensorValueFromMemory(
+                info, scratch.AsMemory(maxTokens, tokenCount), shape);
+            using var typeIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                info, tokenTypeIds.AsMemory(0, tokenCount), shape);
 
-                return MeanPool(outputs[0].GetTensorDataAsSpan<float>());
-            }
-            finally
-            {
-                ArrayPool<long>.Shared.Return(scratch);
-            }
+            OrtValue[] inputValues = [inputIdsOrt, attMaskOrt, typeIdsOrt];
+            using var outputs = _session.Run(
+                s_runOptions, s_inputNames, inputValues, _session.OutputNames);
+
+            return MeanPool(outputs[0].GetTensorDataAsSpan<float>());
         }
-        finally { _lock.Release(); }
+        finally
+        {
+            ArrayPool<long>.Shared.Return(scratch);
+            ArrayPool<long>.Shared.Return(tokenTypeIds);
+        }
     }
 
     private float[] MeanPool(ReadOnlySpan<float> modelOutput)
@@ -110,7 +106,6 @@ public sealed class OnnxEmbeddingService : IEmbeddingService, IDisposable
 
     public void Dispose()
     {
-        _lock.Dispose();
         _session.Dispose();
     }
 }

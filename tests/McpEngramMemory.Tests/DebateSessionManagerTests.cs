@@ -137,4 +137,27 @@ public class DebateSessionManagerTests : IDisposable
 
         Assert.Null(_manager.ResolveAlias("session-1", 1));
     }
+
+    [Fact]
+    public void TryCreateSession_NewSession_ReturnsTrue()
+    {
+        Assert.True(_manager.TryCreateSession("session-new"));
+        Assert.True(_manager.HasSession("session-new"));
+    }
+
+    [Fact]
+    public void TryCreateSession_ExistingSession_ReturnsFalse()
+    {
+        _manager.TryCreateSession("session-dup");
+        Assert.False(_manager.TryCreateSession("session-dup"));
+    }
+
+    [Fact]
+    public void TryCreateSession_ThenRegisterNode_Works()
+    {
+        _manager.TryCreateSession("session-atomic");
+        int alias = _manager.RegisterNode("session-atomic", "entry-x");
+        Assert.Equal(1, alias);
+        Assert.Equal("entry-x", _manager.ResolveAlias("session-atomic", 1));
+    }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
@@ -9,6 +10,8 @@ namespace McpEngramMemory.Core.Services;
 /// Thread-safe namespace-partitioned vector index with lifecycle awareness.
 /// Thin facade that delegates search to VectorSearchEngine/HybridSearchEngine,
 /// duplicate detection to DuplicateDetector, and manages CRUD + locking.
+/// Read paths use ReadLock (concurrent), write paths use WriteLock (exclusive).
+/// NamespaceStore uses ConcurrentDictionary infrastructure for safe lazy loading under ReadLock.
 /// </summary>
 public sealed class CognitiveIndex : IDisposable
 {
@@ -39,26 +42,26 @@ public sealed class CognitiveIndex : IDisposable
     {
         get
         {
-            _lock.EnterUpgradeableReadLock();
+            _lock.EnterReadLock();
             try
             {
                 _store.LoadAll();
                 return _store.TotalCount;
             }
-            finally { _lock.ExitUpgradeableReadLock(); }
+            finally { _lock.ExitReadLock(); }
         }
     }
 
     /// <summary>Count entries in a specific namespace.</summary>
     public int CountInNamespace(string ns)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
             return _store.GetNamespace(ns)?.Count ?? 0;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Get all known namespace names.</summary>
@@ -162,7 +165,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Get an entry by ID, searching all namespaces.</summary>
     public CognitiveEntry? Get(string id)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             if (!_store.TryResolveOrLoad(id, out var ns))
@@ -173,13 +176,13 @@ public sealed class CognitiveIndex : IDisposable
                 return tuple.Entry;
             return null;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Get an entry by ID within a specific namespace.</summary>
     public CognitiveEntry? Get(string id, string ns)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -188,7 +191,7 @@ public sealed class CognitiveIndex : IDisposable
                 return tuple.Entry;
             return null;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Delete an entry by ID, searching all namespaces.</summary>
@@ -201,7 +204,7 @@ public sealed class CognitiveIndex : IDisposable
                 return false;
 
             var nsEntries = _store.GetNamespace(ns);
-            if (nsEntries is not null && nsEntries.Remove(id))
+            if (nsEntries is not null && nsEntries.TryRemove(id, out _))
             {
                 _store.UntrackEntry(id);
                 _store.RemoveBM25(id, ns);
@@ -226,7 +229,7 @@ public sealed class CognitiveIndex : IDisposable
 
         IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot;
         HnswIndex? hnswIndex;
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(request.Namespace);
@@ -236,19 +239,26 @@ public sealed class CognitiveIndex : IDisposable
             snapshot = nsEntries.Values.ToList();
             hnswIndex = _store.GetHnswIndex(request.Namespace);
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
+
+        // When diversity is active, fetch more candidates so MMR has a broader pool
+        int diversityMultiplier = request.Diversity ? 3 : 1;
 
         if (request.Hybrid && request.QueryText is not null)
         {
             // Expand query with domain synonyms for BM25 vocabulary bridging
             var expandedQueryText = _synonymExpander.Expand(request.QueryText);
 
-            int candidateK = Math.Max(request.K * 6, 30);
+            // Scale vector candidate pool with namespace size for better hybrid recall
+            int candidateK = snapshot.Count >= 5000
+                ? Math.Max(request.K * 12, 80)
+                : Math.Max(request.K * 6, 30);
             var vectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
                 request.Category, request.IncludeStates, false, hnswIndex);
+            int hybridK = request.K * diversityMultiplier;
             var hybridResults = _hybridSearch.HybridSearch(
-                vectorResults, expandedQueryText, request.Namespace, request.K,
+                vectorResults, expandedQueryText, request.Namespace, hybridK,
                 request.IncludeStates, request.Category,
                 request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
 
@@ -262,21 +272,22 @@ public sealed class CognitiveIndex : IDisposable
                 if (prfQuery != expandedQueryText)
                 {
                     var prfResults = _hybridSearch.HybridSearch(
-                        vectorResults, prfQuery, request.Namespace, request.K,
+                        vectorResults, prfQuery, request.Namespace, hybridK,
                         request.IncludeStates, request.Category,
                         request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
                     // Use PRF results if they improve top score
                     if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
-                        return ApplyCategoryBoost(prfResults, request.QueryText);
+                        return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, snapshot);
                 }
             }
 
-            return ApplyCategoryBoost(hybridResults, request.QueryText);
+            return ApplyDiversity(ApplyCategoryBoost(hybridResults, request.QueryText), request, snapshot);
         }
 
         // Vector-only search with auto-escalation to hybrid when confidence is low
+        int vectorK = request.K * diversityMultiplier;
         var vectorOnlyResults = _vectorSearch.Search(
-            request.Query, snapshot, request.K, request.MinScore,
+            request.Query, snapshot, vectorK, request.MinScore,
             request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
 
         // Auto-escalate: if top vector result is low confidence and we have query text,
@@ -286,18 +297,21 @@ public sealed class CognitiveIndex : IDisposable
             vectorOnlyResults[0].Score < 0.50f &&
             !request.SummaryFirst)
         {
-            int candidateK = Math.Max(request.K * 5, 25);
+            int candidateK = snapshot.Count >= 5000
+                ? Math.Max(request.K * 10, 60)
+                : Math.Max(request.K * 5, 25);
             var broadVectorResults = _vectorSearch.Search(
                 request.Query, snapshot, candidateK, request.MinScore,
                 request.Category, request.IncludeStates, false, hnswIndex);
             var expandedQueryText = _synonymExpander.Expand(request.QueryText);
-            return ApplyCategoryBoost(_hybridSearch.HybridSearch(
-                broadVectorResults, expandedQueryText, request.Namespace, request.K,
+            var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
+                broadVectorResults, expandedQueryText, request.Namespace, request.K * diversityMultiplier,
                 request.IncludeStates, request.Category,
                 false, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count), request.QueryText);
+            return ApplyDiversity(escalatedResults, request, snapshot);
         }
 
-        return vectorOnlyResults;
+        return ApplyDiversity(vectorOnlyResults, request, snapshot);
     }
 
     /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
@@ -402,7 +416,7 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicatesForEntry(
         string ns, string entryId, float threshold = 0.95f)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -413,7 +427,7 @@ public sealed class CognitiveIndex : IDisposable
             nsEntries.TryGetValue(entryId, out var target);
             return _duplicateDetector.FindDuplicatesForEntry(entryId, target, nsEntries, threshold);
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Find near-duplicate entries within a namespace by pairwise cosine similarity.</summary>
@@ -427,7 +441,7 @@ public sealed class CognitiveIndex : IDisposable
         includeStates ??= new HashSet<string> { "stm", "ltm" };
 
         List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates;
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -441,7 +455,7 @@ public sealed class CognitiveIndex : IDisposable
                     && t.Norm > 0f)
                 .ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         // Sort by norm ascending for early-exit optimization
         candidates.Sort((a, b) => a.Norm.CompareTo(b.Norm));
@@ -484,6 +498,37 @@ public sealed class CognitiveIndex : IDisposable
                 tuple.Entry.LastAccessedAt = DateTimeOffset.UtcNow;
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
             }
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    /// <summary>Boost activation energy for an entry (spreading activation). Returns true if entry was found and updated.</summary>
+    public bool BoostActivationEnergy(string id, string ns, float delta)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(ns);
+            if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
+            {
+                tuple.Entry.ActivationEnergy += delta;
+                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                return true;
+            }
+
+            // Try to resolve across namespaces if not found in specified ns
+            if (_store.TryResolveOrLoad(id, out var resolvedNs))
+            {
+                var resolvedEntries = _store.GetNamespace(resolvedNs);
+                if (resolvedEntries is not null && resolvedEntries.TryGetValue(id, out var resolvedTuple))
+                {
+                    resolvedTuple.Entry.ActivationEnergy += delta;
+                    _store.ScheduleEntryUpsert(resolvedNs, resolvedTuple.Entry);
+                    return true;
+                }
+            }
+            return false;
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -574,7 +619,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Get all entries in a namespace.</summary>
     public IReadOnlyList<CognitiveEntry> GetAllInNamespace(string ns)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -583,7 +628,7 @@ public sealed class CognitiveIndex : IDisposable
                 return Array.Empty<CognitiveEntry>();
             return nsEntries.Values.Select(t => t.Entry).ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Delete all entries in a namespace and remove it from in-memory state. Does NOT cascade to graph edges or clusters — callers must handle that.</summary>
@@ -618,7 +663,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Get all entries across all namespaces.</summary>
     public IReadOnlyList<CognitiveEntry> GetAll()
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             _store.LoadAll();
@@ -626,13 +671,13 @@ public sealed class CognitiveIndex : IDisposable
                 .SelectMany(kv => kv.Value.Values.Select(t => t.Entry))
                 .ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Get count of entries by lifecycle state.</summary>
     public (int stm, int ltm, int archived) GetStateCounts(string? ns = null)
     {
-        _lock.EnterUpgradeableReadLock();
+        _lock.EnterReadLock();
         try
         {
             if (ns is null || ns == "*")
@@ -658,7 +703,7 @@ public sealed class CognitiveIndex : IDisposable
             }
             return (stm, ltm, archived);
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>Re-embed all entries in a namespace.</summary>
@@ -749,8 +794,27 @@ public sealed class CognitiveIndex : IDisposable
         return boosted;
     }
 
+    /// <summary>Apply cluster-aware MMR diversity reranking when requested.</summary>
+    private static IReadOnlyList<CognitiveSearchResult> ApplyDiversity(
+        IReadOnlyList<CognitiveSearchResult> results,
+        SearchRequest request,
+        IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot)
+    {
+        if (!request.Diversity || results.Count <= 1)
+            return results.Count > request.K ? results.Take(request.K).ToList() : results;
+
+        // Build vector lookup from snapshot for MMR inter-result similarity
+        var vectorLookup = new Dictionary<string, float[]>(snapshot.Count);
+        foreach (var (entry, _, _) in snapshot)
+            vectorLookup[entry.Id] = entry.Vector;
+
+        return DiversityReranker.Rerank(
+            results, request.Query, id => vectorLookup.GetValueOrDefault(id),
+            request.K, request.DiversityLambda);
+    }
+
     private static void UpdateQuantization(
-        Dictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> entries,
+        ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> entries,
         string id,
         (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized) tuple,
         string previousState, string newState)

@@ -2,6 +2,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Graph;
+using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
@@ -212,7 +213,9 @@ public class PhysicsEngineTests
         var index = new CognitiveIndex(persistence);
         var physics = new PhysicsEngine();
         var graph = new KnowledgeGraph(persistence, index);
-        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander());
+        var clusters = new ClusterManager(index, persistence);
+        var spreading = new SpreadingActivationService(index, graph, clusters);
+        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander(), spreading, clusters);
 
         try
         {
@@ -248,7 +251,9 @@ public class PhysicsEngineTests
         var index = new CognitiveIndex(persistence);
         var physics = new PhysicsEngine();
         var graph = new KnowledgeGraph(persistence, index);
-        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander());
+        var clusters = new ClusterManager(index, persistence);
+        var spreading = new SpreadingActivationService(index, graph, clusters);
+        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander(), spreading, clusters);
 
         try
         {
@@ -273,7 +278,9 @@ public class PhysicsEngineTests
         var index = new CognitiveIndex(persistence);
         var physics = new PhysicsEngine();
         var graph = new KnowledgeGraph(persistence, index);
-        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander());
+        var clusters = new ClusterManager(index, persistence);
+        var spreading = new SpreadingActivationService(index, graph, clusters);
+        var tools = new CoreMemoryTools(index, physics, new StubEmbeddingService(), new MetricsCollector(), graph, new QueryExpander(), spreading, clusters);
 
         try
         {

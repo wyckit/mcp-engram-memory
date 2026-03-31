@@ -230,7 +230,11 @@ public sealed class ExpertDispatcher
     /// <returns>Hierarchical route result with tree path, matched experts, and context.</returns>
     public HierarchicalRouteResult RouteHierarchical(float[] queryVector, int topK = 3, float threshold = DefaultThreshold)
     {
-        var roots = GetNodesByLevel("root");
+        // Cache all expert entries once — avoids O(n²) repeated GetAllInNamespace scans
+        var cachedEntries = _index.GetAllInNamespace(SystemNamespace);
+        var roots = cachedEntries
+            .Where(e => e.Category == ExpertCategory && GetLevel(e) == "root")
+            .ToList();
 
         // FALLBACK: If no root domain nodes exist, fall back to flat routing
         if (roots.Count == 0)
@@ -293,7 +297,7 @@ public sealed class ExpertDispatcher
         var directLeaves = new List<CognitiveEntry>();
         foreach (var root in matchedRoots)
         {
-            var children = GetChildren(root.Entry.Id);
+            var children = GetChildren(root.Entry.Id, cachedEntries);
             foreach (var child in children)
             {
                 if (GetLevel(child) == "branch")
@@ -324,7 +328,7 @@ public sealed class ExpertDispatcher
         {
             foreach (var branch in matchedBranches)
             {
-                var children = GetChildren(branch.Entry.Id);
+                var children = GetChildren(branch.Entry.Id, cachedEntries);
                 allLeaves.AddRange(children);
             }
         }
@@ -333,7 +337,7 @@ public sealed class ExpertDispatcher
             // No branches and no direct leaves — try roots' children as fallback
             foreach (var root in matchedRoots)
             {
-                var children = GetChildren(root.Entry.Id);
+                var children = GetChildren(root.Entry.Id, cachedEntries);
                 allLeaves.AddRange(children);
             }
         }
@@ -466,6 +470,9 @@ public sealed class ExpertDispatcher
         if (queryNorm == 0f)
             return new PlacementInfo("unclassified", null, 0f, Array.Empty<PlacementCandidate>());
 
+        // Cache all expert entries once — avoids repeated GetAllInNamespace scans
+        var cachedEntries = _index.GetAllInNamespace(SystemNamespace);
+
         // Score all roots
         var scoredRoots = ScoreEntries(roots, personaVector, queryNorm);
         if (scoredRoots.Count == 0)
@@ -484,7 +491,7 @@ public sealed class ExpertDispatcher
 
         foreach (var root in matchedRoots)
         {
-            var children = GetChildren(root.Entry.Id);
+            var children = GetChildren(root.Entry.Id, cachedEntries);
             var branches = children.Where(c => GetLevel(c) == "branch").ToList();
             if (branches.Count > 0)
             {
@@ -494,6 +501,9 @@ public sealed class ExpertDispatcher
         }
 
         allCandidates.Sort((a, b) => b.Score.CompareTo(a.Score));
+
+        if (allCandidates.Count == 0)
+            return new PlacementInfo("unclassified", null, 0f, Array.Empty<PlacementCandidate>());
 
         // Pick best parent — prefer branch over root when scores are within 5%
         var best = allCandidates[0];
@@ -555,8 +565,14 @@ public sealed class ExpertDispatcher
     /// Get all children of a given parent node from the meta-index.
     /// </summary>
     public IReadOnlyList<CognitiveEntry> GetChildren(string parentNodeId)
+        => GetChildren(parentNodeId, _index.GetAllInNamespace(SystemNamespace));
+
+    /// <summary>
+    /// Get children from a pre-fetched entry list (avoids repeated GetAllInNamespace scans).
+    /// </summary>
+    private static IReadOnlyList<CognitiveEntry> GetChildren(
+        string parentNodeId, IReadOnlyList<CognitiveEntry> allEntries)
     {
-        var allEntries = _index.GetAllInNamespace(SystemNamespace);
         return allEntries
             .Where(e => e.Category == ExpertCategory &&
                         e.Metadata.GetValueOrDefault("parentNodeId") == parentNodeId)
