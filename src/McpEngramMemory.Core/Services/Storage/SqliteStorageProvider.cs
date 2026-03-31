@@ -175,7 +175,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var pragma = conn.CreateCommand();
-        pragma.CommandText = "PRAGMA synchronous=NORMAL;";
+        pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
         pragma.ExecuteNonQuery();
         return conn;
     }
@@ -706,6 +706,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
     {
         using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync();
+        using var pragma = conn.CreateCommand();
+        pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
+        await pragma.ExecuteNonQueryAsync();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM entries WHERE ns = @ns";
         cmd.Parameters.AddWithValue("@ns", ns);

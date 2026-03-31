@@ -38,7 +38,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 3 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.6.0
+dotnet add package McpEngramMemory.Core --version 0.6.1
 ```
 
 Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
@@ -161,7 +161,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 The core engine is available as a NuGet package for embedding in your own .NET applications:
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.6.0
+dotnet add package McpEngramMemory.Core --version 0.6.1
 ```
 
 ```csharp

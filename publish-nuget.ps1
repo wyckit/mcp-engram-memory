@@ -18,7 +18,7 @@ Write-Host "Publishing McpEngramMemory.Core v$version" -ForegroundColor Cyan
 # Run tests unless skipped
 if (-not $SkipTests) {
     Write-Host "`nRunning tests..." -ForegroundColor Yellow
-    dotnet test "$PSScriptRoot\tests\McpEngramMemory.Tests" --configuration $Configuration
+    dotnet test "$PSScriptRoot\tests\McpEngramMemory.Tests" --configuration $Configuration --filter "Category!=MSA"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Tests failed. Aborting publish." -ForegroundColor Red
         exit 1

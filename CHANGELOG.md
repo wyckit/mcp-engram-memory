@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.1] - 2026-03-31
+
+### Fixed
+- **SQLite Multi-Instance Lock Contention**: Added `PRAGMA busy_timeout=5000` to `SqliteStorageProvider.OpenConnection()` and `DeleteNamespaceAsync()`. When multiple MCP server instances share the same `memory.db`, the second instance's schema initialization DDL would fail with `SQLITE_BUSY` after a 30-second hang because the first instance held the WAL write lock. SQLite now retries for up to 5 seconds on lock contention instead of immediately failing. Also fixed `DeleteNamespaceAsync()` bypassing `OpenConnection()` and missing the `busy_timeout` and `synchronous=NORMAL` pragmas.
+
 ## [0.6.0] - 2026-03-31
 
 ### Added

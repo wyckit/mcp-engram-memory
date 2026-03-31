@@ -34,7 +34,7 @@
 | `ExpertDispatcher` | `Experts` | Semantic routing engine with flat and hierarchical (HMoE) modes — maps queries to specialized expert namespaces via cosine similarity through a 3-level domain tree (root → branch → leaf). Zero LLM API calls |
 | `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, crash recovery, storage version validation, and HNSW snapshot persistence |
-| `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, schema migration framework, incremental per-entry writes, and HNSW snapshot persistence |
+| `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, busy_timeout for multi-process safety, schema migration framework, incremental per-entry writes, and HNSW snapshot persistence |
 | `DiversityReranker` | `Retrieval` | Cluster-aware Maximal Marginal Relevance (MMR) reranking — spreads results across sub-topics using cluster and category penalties. Activated via `diversity: true` on search. Configurable lambda trade-off (0.0 = pure diversity, 1.0 = pure relevance, default 0.5) |
 | `SpreadingActivationService` | `Services` | Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming |
 | `SynthesisEngine` | `Synthesis` | Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows. Paired with `OllamaClient` for local SLM inference |
@@ -88,6 +88,7 @@ Two storage backends are available, selectable via environment variable:
 
 **SQLite backend** (`MEMORY_STORAGE=sqlite`):
 - Single `memory.db` file with WAL mode for concurrent read/write
+- `PRAGMA busy_timeout=5000` on every connection — retries on lock contention for up to 5 seconds, enabling multi-process access to the same database
 - Tables: `entries`, `edges`, `clusters`, `collapse_history`, `decay_configs`, `global_data` (HNSW snapshots stored as `hnsw_{ns}` keys), `schema_version`
 - Automatic schema migrations (v1→v2 adds `lifecycle_state` column with backfill)
 - Suitable for higher-throughput or multi-process scenarios

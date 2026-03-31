@@ -72,7 +72,7 @@ graph TD
 
     subgraph SP["Storage"]
         PM["PersistenceManager<br/><i>JSON + SHA-256 checksums</i>"]
-        SQ["SqliteStorageProvider<br/><i>WAL mode</i>"]
+        SQ["SqliteStorageProvider<br/><i>WAL mode, busy_timeout</i>"]
     end
 
     NS --> EMB["OnnxEmbeddingService<br/><i>bge-micro-v2, 384-dim, concurrent</i>"]

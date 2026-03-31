@@ -11,7 +11,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Core</PackageId>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <Authors>wyckit</Authors>
     <Description>Cognitive engram memory engine with semantic search, knowledge graphs, clustering, lifecycle management, and hierarchical expert routing (HMoE). Core library for MCP Engram Memory.</Description>
     <PackageTags>mcp;engram;vector;memory;embeddings;semantic-search;knowledge-graph;expert-routing;hmoe</PackageTags>

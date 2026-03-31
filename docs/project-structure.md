@@ -56,7 +56,7 @@ src/
       Storage/
         IStorageProvider.cs     #   Storage abstraction interface
         PersistenceManager.cs   #   JSON file backend with debounced writes
-        SqliteStorageProvider.cs #   SQLite backend with WAL mode
+        SqliteStorageProvider.cs #   SQLite backend with WAL mode + busy_timeout
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
@@ -80,7 +80,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.6.0
+dotnet add package McpEngramMemory.Core --version 0.6.1
 ```
 
 ### Library Usage
