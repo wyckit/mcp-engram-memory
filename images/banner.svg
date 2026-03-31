@@ -73,9 +73,9 @@
   <!-- Version + MCP badge -->
   <g transform="translate(195, 190)">
     <rect x="0" y="0" width="60" height="22" rx="4" fill="#334155"/>
-    <text x="30" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">v0.5.4</text>
+    <text x="30" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">v0.6.0</text>
     <rect x="70" y="0" width="85" height="22" rx="4" fill="#334155"/>
-    <text x="112" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">49 MCP tools</text>
+    <text x="112" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">52 MCP tools</text>
     <rect x="165" y="0" width="55" height="22" rx="4" fill="#334155"/>
     <text x="192" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">.NET 8</text>
   </g>

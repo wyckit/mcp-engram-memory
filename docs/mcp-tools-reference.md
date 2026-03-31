@@ -1,6 +1,6 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (50 tools)
+# MCP Tools Reference (52 tools)
 
 ### Core Memory (4 tools)
 
@@ -8,16 +8,17 @@
 |------|-------------|
 | `store_memory` | Store a vector embedding with text, category, and optional metadata. Defaults to STM lifecycle state. Warns if near-duplicates are detected. |
 | `store_batch` | Bulk-store multiple entries in a single write-lock. Faster than repeated `store_memory` calls for batch imports. Each entry gets contextual prefix embedding. Returns stored count and duplicate warnings. |
-| `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, BM25 semantic gate, and auto-PRF), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
+| `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, BM25 semantic gate, and auto-PRF), cluster-aware MMR diversity reranking (`diversity: true`), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
 | `delete_memory` | Remove a memory entry by ID. Cascades to remove associated graph edges and cluster memberships. |
 
-### Composite Tools (3 tools)
+### Composite Tools (4 tools)
 
 | Tool | Description |
 |------|-------------|
 | `remember` | Intelligent store: saves a memory with auto-generated embedding, duplicate detection, and auto-linking to related existing memories. Use instead of store_memory + detect_duplicates + link_memories. |
 | `recall` | Intelligent search: searches with auto-routing to the best namespace via expert dispatch, with fallback to direct search. Combines search_memory + dispatch_task in one call. |
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
+| `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 
 ### Knowledge Graph (4 tools)
 
@@ -94,15 +95,21 @@ Activation energy formula: `(accessCount x reinforcementWeight) - (hoursSinceLas
 
 Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_graph` (define relationships) → `resolve_debate` (store consensus). Sessions use integer aliases (1, 2, 3...) so the LLM never handles UUIDs. Sessions auto-expire after 1 hour.
 
+### Synthesis (1 tool)
+
+| Tool | Description |
+|------|-------------|
+| `synthesize_memories` | Map-reduce synthesis over a set of memories using a local SLM via Ollama. Produces dense reasoning summaries without expanding the LLM context window. Useful for large memory sets where individual recall would exceed context limits. |
+
 ### Benchmarking & Observability (3 tools)
 
 | Tool | Description |
 |------|-------------|
-| `run_benchmark` | Run an IR quality benchmark. 13 datasets including `default-v1`, `paraphrase-v1`, `multihop-v1`, `scale-v1`, `realworld-v1`, `compound-v1`, `ambiguity-v1`, `distractor-v1`, `specificity-v1`, `contamination-v1`, `cluster-summary-v1`. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
+| `run_benchmark` | Run an IR quality benchmark. 17 datasets including `default-v1`, `paraphrase-v1`, `multihop-v1`, `scale-v1`, `realworld-v1`, `compound-v1`, `ambiguity-v1`, `distractor-v1`, `specificity-v1`, `contamination-v1`, `cluster-summary-v1`, `disambiguation-v1`, `physics-v1`. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
-Thirteen benchmark datasets: six core datasets (default, paraphrase, multihop, scale, realworld, compound) plus seven stress-test datasets (ambiguity, distractor, specificity, scale extended, contamination, cluster-summary). All use a 0–3 relevance grade scale (3 = highly relevant). A 52-combination regression baseline (13 datasets x 4 modes) enforces minimum thresholds: Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15.
+Seventeen benchmark datasets: six core datasets (default, paraphrase, multihop, scale, realworld, compound), seven stress-test datasets (ambiguity, distractor, specificity, scale extended, contamination, cluster-summary), and four v0.6.0 datasets (disambiguation — dense-domain diversity across 4 clusters, physics — physics engine domain retrieval tested in 4 modes). All use a 0–3 relevance grade scale (3 = highly relevant). A 56-combination regression baseline (17 datasets × 4 modes) enforces minimum thresholds: Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15.
 
 ### Maintenance (2 tools)
 

@@ -26,7 +26,19 @@ state of our engram memory system.
 
 **Run benchmarks** — verify IR quality hasn't regressed:
 ```
-Run all 13 benchmark datasets and compare results against our stored baselines in benchmarks/.
+Run all 17 benchmark datasets and compare results against our stored baselines in benchmarks/.
+```
+
+**Synthesize context** — distill large memory sets into a dense summary:
+```
+Use synthesize_memories to create a dense summary of everything in the [namespace] namespace
+related to [topic]. Then use get_context_block to format it for injection.
+```
+
+**Diverse search** — spread results across sub-topics in dense namespaces:
+```
+Search memory for [broad topic] with diversity: true to get results spanning
+different clusters rather than concentrating on the most similar sub-topic.
 ```
 
 ## Power Prompts
@@ -61,3 +73,5 @@ This exercises the full tool suite: expert management, memory maintenance, paral
 | "Store what we just learned" | Knowledge capture | `store_memory`, `link_memories`, `promote_memory` |
 | "Run benchmarks and compare to baseline" | Quality validation | `run_benchmark`, `get_metrics` |
 | "Deep search including archived" | Full recall | `deep_recall` |
+| "Synthesize everything about X" | Dense summary | `synthesize_memories`, `get_context_block` |
+| "Diverse search for broad topic" | Sub-topic spread | `search_memory` with `diversity: true` |

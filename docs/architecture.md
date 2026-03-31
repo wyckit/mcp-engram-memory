@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["14 Tool Classes<br/>50 MCP Tools"]
+        Tools["15 Tool Classes<br/>52 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -27,6 +27,7 @@ graph TD
         PS["PorterStemmer<br/><i>Steps 1-3</i>"]
         QE["QueryExpander<br/><i>PRF</i>"]
         TR["TokenReranker"]
+        DR["DiversityReranker<br/><i>Cluster-aware MMR</i>"]
         VQ["VectorQuantizer<br/><i>SIMD Int8</i>"]
     end
 
@@ -48,6 +49,11 @@ graph TD
     subgraph EX["Expert Routing"]
         ED["ExpertDispatcher<br/><i>HMoE tree walk</i>"]
         DM["DebateSessionManager"]
+        SA["SpreadingActivation<br/><i>Collins &amp; Loftus</i>"]
+    end
+
+    subgraph SN["Synthesis"]
+        SE["SynthesisEngine<br/><i>Ollama map-reduce</i>"]
     end
 
     subgraph SH["Multi-Agent Sharing"]
@@ -60,7 +66,8 @@ graph TD
     end
 
     CI --> SH
-    CI --> NS["NamespaceStore<br/><i>Lazy loading, partitioned</i>"]
+    CI --> SN
+    CI --> NS["NamespaceStore<br/><i>ConcurrentDictionary, partitioned locks</i>"]
     NS --> SP["Storage Provider"]
 
     subgraph SP["Storage"]
@@ -68,7 +75,7 @@ graph TD
         SQ["SqliteStorageProvider<br/><i>WAL mode</i>"]
     end
 
-    NS --> EMB["OnnxEmbeddingService<br/><i>bge-micro-v2, 384-dim</i>"]
+    NS --> EMB["OnnxEmbeddingService<br/><i>bge-micro-v2, 384-dim, concurrent</i>"]
 
     subgraph BG["Background Services"]
         BG1["EmbeddingWarmup<br/><i>startup</i>"]

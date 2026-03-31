@@ -50,6 +50,8 @@ Think of it this way: **namespaces = folders, memories = documents, search = sma
 | `hybrid: true` | Almost always — fuses BM25 keyword matching with vector similarity |
 | `expandGraph: true` | When you need related context pulled in automatically |
 | `rerank: true` | Precision-critical searches — token-overlap reranking on top of hybrid |
+| `diversity: true` | Dense namespaces — cluster-aware MMR spreads results across sub-topics |
+| `diversityLambda: 0.5` | Trade-off: 1.0 = pure relevance, 0.0 = pure diversity (default 0.5) |
 | `summaryFirst: true` | Large namespaces — searches cluster summaries first, then drills in |
 
 ## Lifecycle
@@ -66,8 +68,8 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 
 | Profile | Tools | What's included |
 |---------|-------|----------------|
-| `minimal` | 15 | Core CRUD, admin, composite tools, multi-agent sharing |
-| `standard` | 34 | Adds graph, lifecycle, clustering, intelligence tools |
-| `full` | 50 | Everything: expert routing, debate, benchmarks (default) |
+| `minimal` | 16 | Core CRUD, admin, composite tools, multi-agent sharing |
+| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence tools |
+| `full` | 52 | Everything: expert routing, debate, synthesis, benchmarks (default) |
 
 Use `minimal` or `standard` to reduce context window pressure on smaller models.

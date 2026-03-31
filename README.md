@@ -7,7 +7,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
   <img src="https://img.shields.io/badge/tests-842%20passed-brightgreen" alt="Tests"/>
-  <img src="https://img.shields.io/badge/MCP%20tools-50-blue" alt="MCP Tools"/>
+  <img src="https://img.shields.io/badge/MCP%20tools-52-blue" alt="MCP Tools"/>
 </p>
 
 **Give your AI agent persistent memory that survives across sessions.** Store decisions, recall context, and build expertise — all locally, no cloud required.
@@ -65,15 +65,15 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 
 | Profile | Tools | What's included |
 |---------|-------|-----------------|
-| `minimal` | 15 | Core CRUD + composite + admin + multi-agent — recommended starting point |
-| `standard` | 34 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 50 | Everything including expert routing, debate, benchmarks (default) |
+| `minimal` | 16 | Core CRUD + composite + admin + multi-agent — recommended starting point |
+| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 52 | Everything including expert routing, debate, synthesis, benchmarks (default) |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 50 (profiles: 15 / 34 / 50) |
+| MCP tools | 52 (profiles: 16 / 35 / 52) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
@@ -93,6 +93,10 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 
 <p align="center">
   <img src="images/how-it-works.svg" alt="How It Works" width="900"/>
+</p>
+
+<p align="center">
+  <img src="images/retrieval-pipeline.svg" alt="Retrieval Pipeline" width="900"/>
 </p>
 
 ## AI Assistant Setup
@@ -120,12 +124,12 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (50)
+## MCP Tools (52)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
 | Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
-| Composite | `remember`, `recall`, `reflect` | High-level wrappers with auto-dedup, auto-linking, and expert routing |
+| Composite | `remember`, `recall`, `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, and context assembly |
 | Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS traversal |
 | Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
 | Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `decay_cycle`, `configure_decay` | State transitions (STM/LTM/archived), activation energy decay |
@@ -133,6 +137,7 @@ Opus thinks, Sonnet remembers, Haiku explores.
 | Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
 | Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
 | Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate`, `purge_debates` | Multi-perspective analysis with debate tracking |
+| Synthesis | `synthesize_memories` | Map-reduce synthesis via local SLM (Ollama) |
 | Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse`, `trigger_accretion_scan` | DBSCAN cluster detection and two-phase summarization |
 | Admin | `get_memory`, `cognitive_stats`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, and latency metrics |
 | Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
@@ -144,7 +149,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (14), `standard` (33), `full` (49) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (35), `full` (52) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
@@ -182,7 +187,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 50 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 52 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |

@@ -46,6 +46,10 @@ src/
       Experts/
         ExpertDispatcher.cs     #   Semantic routing to expert namespaces
         DebateSessionManager.cs #   Debate session state + alias mapping
+      Synthesis/
+        SynthesisEngine.cs      #   Map-reduce synthesis via Ollama SLM
+        OllamaClient.cs         #   Local Ollama HTTP client
+      SpreadingActivationService.cs #   Collins & Loftus graph-coupled activation
       Evaluation/
         BenchmarkRunner.cs      #   IR quality benchmarks
         MetricsCollector.cs     #   Operational metrics + percentiles
@@ -57,6 +61,10 @@ src/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
   McpEngramMemory.Tests/        # xUnit tests (842 tests across 46 test files)
+.github/
+  workflows/
+    ci.yml                      # Build + test on push/PR (excludes MSA)
+    benchmark.yml               # Nightly MSA benchmarks at 6 AM UTC
 benchmarks/
   baseline-v1.json              # Sprint 1 baseline (2026-03-07)
   baseline-paraphrase-v1.json

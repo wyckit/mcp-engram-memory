@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380">
+  <defs>
+    <linearGradient id="pbg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a"/>
+      <stop offset="100%" style="stop-color:#1e293b"/>
+    </linearGradient>
+    <filter id="ps">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+    <marker id="parrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="380" rx="12" fill="url(#pbg)"/>
+
+  <!-- Title -->
+  <text x="450" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="20" font-weight="700" fill="#f8fafc">8-Stage Retrieval Pipeline</text>
+  <text x="450" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">Hybrid search with synonym expansion, adaptive fusion, and diversity reranking</text>
+
+  <!-- Query input -->
+  <g transform="translate(30, 80)" filter="url(#ps)">
+    <rect width="90" height="44" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+    <text x="45" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#a5b4fc">Query</text>
+    <text x="45" y="36" text-anchor="middle" font-family="monospace" font-size="9" fill="#64748b">user text</text>
+  </g>
+
+  <!-- Arrow to Stage 1 -->
+  <line x1="125" y1="102" x2="145" y2="102" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 1: Synonym Expansion -->
+  <g transform="translate(155, 75)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#6366f1" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">1. Synonyms</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">98 domain maps</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">query expansion</text>
+  </g>
+
+  <!-- Fork into two paths -->
+  <line x1="280" y1="102" x2="310" y2="102" stroke="#475569" stroke-width="1.5"/>
+  <!-- Upper path (vector) -->
+  <line x1="310" y1="102" x2="310" y2="85" stroke="#475569" stroke-width="1.5"/>
+  <line x1="310" y1="85" x2="330" y2="85" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+  <!-- Lower path (BM25) -->
+  <line x1="310" y1="102" x2="310" y2="155" stroke="#475569" stroke-width="1.5"/>
+  <line x1="310" y1="155" x2="330" y2="155" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 2a: Vector Search -->
+  <g transform="translate(340, 65)" filter="url(#ps)">
+    <rect width="120" height="42" rx="8" fill="#1e293b" stroke="#8b5cf6" stroke-opacity="0.5" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#8b5cf6" y="0"/>
+    <text x="60" y="18" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">2a. Vector</text>
+    <text x="60" y="32" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">HNSW + Int8→FP32</text>
+  </g>
+
+  <!-- Stage 2b: BM25 Search -->
+  <g transform="translate(340, 135)" filter="url(#ps)">
+    <rect width="120" height="42" rx="8" fill="#1e293b" stroke="#a78bfa" stroke-opacity="0.5" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#a78bfa" y="0"/>
+    <text x="60" y="18" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">2b. BM25</text>
+    <text x="60" y="32" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">Porter stemming</text>
+  </g>
+
+  <!-- Merge paths into Stage 3 -->
+  <line x1="465" y1="86" x2="485" y2="86" stroke="#475569" stroke-width="1.5"/>
+  <line x1="485" y1="86" x2="485" y2="102" stroke="#475569" stroke-width="1.5"/>
+  <line x1="465" y1="156" x2="485" y2="156" stroke="#475569" stroke-width="1.5"/>
+  <line x1="485" y1="156" x2="485" y2="102" stroke="#475569" stroke-width="1.5"/>
+  <line x1="485" y1="102" x2="505" y2="102" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 3: Semantic Gate -->
+  <g transform="translate(515, 75)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#f59e0b" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">3. Sem. Gate</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">Filter BM25 noise</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">cosine threshold</text>
+  </g>
+
+  <!-- Arrow to Stage 4 -->
+  <line x1="640" y1="102" x2="660" y2="102" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 4: Adaptive RRF -->
+  <g transform="translate(670, 75)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#22c55e" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">4. RRF Fusion</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">Confidence-gated</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">cascade ≥50 entries</text>
+  </g>
+
+  <!-- Second row: Stages 5-8 -->
+
+  <!-- Arrow down from Stage 4 to Stage 5 -->
+  <line x1="730" y1="134" x2="730" y2="165" stroke="#475569" stroke-width="1.5"/>
+  <line x1="730" y1="165" x2="500" y2="165" stroke="#475569" stroke-width="1.5"/>
+  <line x1="500" y1="165" x2="500" y2="210" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 5: Auto-PRF -->
+  <g transform="translate(440, 220)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#3b82f6" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">5. Auto-PRF</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">Pseudo-relevance</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">if top &lt; 0.015 RRF</text>
+  </g>
+
+  <!-- Arrow left to Stage 6 -->
+  <line x1="435" y1="247" x2="415" y2="247" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 6: Category Boost -->
+  <g transform="translate(290, 220)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <rect width="120" height="3" rx="1.5" fill="#ec4899" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#e2e8f0">6. Cat. Boost</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">8% category match</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">token overlap</text>
+  </g>
+
+  <!-- Arrow left to Stage 7 -->
+  <line x1="285" y1="247" x2="265" y2="247" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Stage 7: MMR Diversity (highlighted) -->
+  <g transform="translate(140, 220)" filter="url(#ps)">
+    <rect width="120" height="54" rx="8" fill="#1e293b" stroke="#6366f1" stroke-width="1.5"/>
+    <rect width="120" height="3" rx="1.5" fill="#6366f1" y="0"/>
+    <text x="60" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#a5b4fc">7. MMR Diversity</text>
+    <text x="60" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">Cluster-aware</text>
+    <text x="60" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">λ relevance vs spread</text>
+  </g>
+
+  <!-- Arrow down to results -->
+  <line x1="200" y1="279" x2="200" y2="305" stroke="#475569" stroke-width="1.5" marker-end="url(#parrow)"/>
+
+  <!-- Results -->
+  <g transform="translate(140, 315)" filter="url(#ps)">
+    <rect width="120" height="40" rx="8" fill="#1e293b" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="60" y="25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#4ade80">Results</text>
+  </g>
+
+  <!-- Stage 8 annotation: Document Enrichment (at store time) -->
+  <g transform="translate(590, 220)" filter="url(#ps)">
+    <rect width="170" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" stroke-dasharray="4,3"/>
+    <rect width="170" height="3" rx="1.5" fill="#64748b" y="0"/>
+    <text x="85" y="22" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#94a3b8">8. Doc Enrichment</text>
+    <text x="85" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#64748b">47 reverse synonym maps</text>
+    <text x="85" y="47" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" fill="#475569">applied at store time</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(590, 310)">
+    <rect x="0" y="0" width="10" height="10" rx="2" fill="#6366f1"/>
+    <text x="16" y="9" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">v0.6.0 — new</text>
+    <rect x="95" y="0" width="10" height="10" rx="2" fill="#334155" stroke="#334155" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="111" y="9" font-family="system-ui, sans-serif" font-size="9" fill="#94a3b8">store-time only</text>
+  </g>
+</svg>

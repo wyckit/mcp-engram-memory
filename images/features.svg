@@ -23,7 +23,7 @@
       <circle cx="9" cy="9" r="7"/><line x1="14" y1="14" x2="20" y2="20" stroke-width="2.5"/>
     </g>
     <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Hybrid Search</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">BM25 keywords + vector similarity</text>
+    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">BM25 + vector, MMR diversity</text>
     <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Synonym expansion, stemming, PRF</text>
     <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">0.792 recall on real-world queries</text>
   </g>
@@ -96,7 +96,7 @@
       <rect x="3" y="0" width="16" height="20" rx="3"/><line x1="8" y1="5" x2="14" y2="5"/><line x1="8" y1="10" x2="14" y2="10"/><line x1="8" y1="15" x2="12" y2="15"/>
     </g>
     <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Local-First</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">ONNX embeddings on your machine</text>
+    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Concurrent ONNX embeddings</text>
     <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">JSON or SQLite storage</text>
     <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">No cloud, no API keys, MIT license</text>
   </g>

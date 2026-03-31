@@ -11,8 +11,10 @@ All notable changes to this project will be documented in this file.
 - **Spreading Activation Service**: Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming.
 - **SLM Synthesis Engine**: Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows.
 - **`get_context_block` tool**: Prompt-cache-aware context assembly for LLM consumption.
+- **`synthesize_memories` tool**: Map-reduce synthesis via Ollama for dense reasoning over large memory sets.
 - **`physics-v1` in MSA benchmark suite**: 4 modes (vector, vector_rerank, hybrid, hybrid_rerank) added to nightly MSA benchmarks.
 - 108 new tests (total: 842 across 3 frameworks, up from 734).
+- Total tools: 52 (up from 50).
 
 ### Changed
 - **ONNX Concurrent Inference**: Removed `SemaphoreSlim(1,1)` bottleneck. All scratch buffers (input IDs, attention mask, token type IDs, shape) moved to per-call `ArrayPool` allocations. `InferenceSession.Run()` now runs fully concurrent.

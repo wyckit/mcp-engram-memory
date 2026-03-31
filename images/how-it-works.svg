@@ -69,7 +69,7 @@
     </g>
     <text x="85" y="105" text-anchor="middle" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#e2e8f0">Search</text>
     <text x="85" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Hybrid BM25 + vector</text>
-    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Synonym expansion</text>
+    <text x="85" y="145" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">MMR diversity reranking</text>
     <text x="85" y="162" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#94a3b8">Cross-namespace RRF</text>
     <rect x="25" y="175" width="120" height="20" rx="4" fill="#8b5cf6" opacity="0.12"/>
     <text x="85" y="189" text-anchor="middle" font-family="monospace" font-size="10" fill="#a78bfa">search_memory</text>

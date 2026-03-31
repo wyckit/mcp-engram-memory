@@ -9,7 +9,7 @@
 | Service | Namespace | Description |
 |---------|-----------|-------------|
 | `CognitiveIndex` | `Services` | Thread-safe facade: CRUD, lifecycle state, access tracking, memory limits enforcement. Delegates search to engines below |
-| `NamespaceStore` | `Services` | Namespace-partitioned storage with lazy loading from disk and BM25 indexing |
+| `NamespaceStore` | `Services` | Namespace-partitioned storage with `ConcurrentDictionary`, per-namespace load locks (double-check pattern), lazy loading from disk, and BM25 indexing |
 | `VectorSearchEngine` | `Retrieval` | Stateless k-NN search with HNSW ANN candidate generation (≥200 entries) or two-stage Int8 screening (≥30 entries) → FP32 exact reranking |
 | `HnswIndex` | `Retrieval` | Hierarchical Navigable Small World graph for O(log N) approximate nearest neighbor search with soft deletion, compacting rebuild, and topology-only snapshot serialization for cold-start persistence |
 | `HybridSearchEngine` | `Retrieval` | Adaptive RRF fusion with confidence-gated k parameter. Two modes: parallel RRF for small namespaces (<50 entries), cascade mode for large namespaces (BM25 boosts vector results up to 15% instead of introducing new candidates). Auto-escalation to hybrid when vector-only confidence is low |
@@ -35,7 +35,10 @@
 | `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, crash recovery, storage version validation, and HNSW snapshot persistence |
 | `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, schema migration framework, incremental per-entry writes, and HNSW snapshot persistence |
-| `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer |
+| `DiversityReranker` | `Retrieval` | Cluster-aware Maximal Marginal Relevance (MMR) reranking — spreads results across sub-topics using cluster and category penalties. Activated via `diversity: true` on search. Configurable lambda trade-off (0.0 = pure diversity, 1.0 = pure relevance, default 0.5) |
+| `SpreadingActivationService` | `Services` | Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming |
+| `SynthesisEngine` | `Synthesis` | Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows. Paired with `OllamaClient` for local SLM inference |
+| `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer. Fully concurrent inference with per-call ArrayPool scratch buffers (no semaphore bottleneck) |
 | `HashEmbeddingService` | `Services` | Deterministic hash-based embeddings for testing/CI (no model dependency) |
 
 ### Background Services
@@ -53,7 +56,7 @@
 | `CognitiveEntry` | Core memory entry with vector, text, keywords (auto-enriched), metadata, lifecycle state, and activation energy |
 | `QuantizedVector` | Int8 quantized vector with `sbyte[]` data, min/scale for reconstruction, and precomputed self-dot product |
 | `FloatArrayBase64Converter` | JSON converter for `float[]` — writes Base64 strings, reads both Base64 and legacy JSON arrays for backwards compatibility |
-| `SearchRequest` | Search request model with options for hybrid, rerank, expand query, explain, physics, and summary-first modes |
+| `SearchRequest` | Search request model with options for hybrid, rerank, diversity (MMR), expand query, explain, physics, and summary-first modes |
 | `ExplainedSearchResult` | Extended search result with full retrieval diagnostics (cosine, physics, lifecycle breakdown) |
 | `HnswSnapshot` | Topology-only HNSW graph snapshot for cold-start persistence (node IDs, levels, connections — no vectors) |
 | `ToolError` | Standard `{ status, error }` structured error response for consistent MCP tool error reporting |
@@ -93,7 +96,7 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (15 tools), `standard` (34 tools), `full` (50 tools) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (35 tools), `full` (52 tools) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
