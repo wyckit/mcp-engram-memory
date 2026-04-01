@@ -432,3 +432,6 @@ FodyWeavers.xsd
 
 # ONNX model cache (downloaded at build time)
 .cache/
+
+# Local AI tooling SQLite database
+memory.db
