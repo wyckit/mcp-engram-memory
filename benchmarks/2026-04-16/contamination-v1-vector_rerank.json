@@ -1,0 +1,13 @@
+{
+  "datasetId": "contamination-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.972,
+  "meanMrr": 0.958,
+  "meanNdcgAtK": 0.911,
+  "totalEntries": 15,
+  "totalQueries": 10,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

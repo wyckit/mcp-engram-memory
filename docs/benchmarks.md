@@ -14,30 +14,34 @@ benchmarks/
   baseline-scale-v1.json
   2026-03-10-ablation/                # First ONNX ablation study (10 configs)
   2026-03-20/                         # Day 10 stability test (12 configs + ops)
-  2026-04-16/                         # Post-cleanup stability run (8 configs: default-v1 + scale-v1 × 4 modes)
+  2026-04-16/                         # Post-cleanup stability run (34 configs: 12 datasets × up to 4 modes)
   runner/                             # Benchmark execution infrastructure
   ideas/                              # Benchmark proposals and analysis
 ```
 
 ## Key Findings (2026-04-16 — post-cleanup run)
 
-Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run after dead code removal, bug fixes, and `DeleteMemory` signature correction. Zero regression from v0.6.1.
+Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run after dead code removal, bug fixes, and `DeleteMemory` signature correction. Zero regression from v0.6.1. 34 benchmark result files across 12 datasets.
 
 | Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
 |---------|-----------|----------|-----|--------|-------|
 | default-v1 (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
-| scale-v1 (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / **0.734** | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
-| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | 0.964 | From March 2026 baseline |
-| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | 0.952 | From March 2026 baseline |
-| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | Synonym expansion bridges vocab gaps |
-| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | Compound tokenization + stemming |
-| ambiguity-v1 (24 seeds) | vector_rerank | 0.922 | 1.000 | 0.941 | From March 25 baseline |
-| distractor-v1 (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | From March 25 baseline |
-| specificity-v1 (30 seeds) | vector_rerank | 0.919 | 0.972 | 0.905 | From March 25 baseline |
-| disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity across 4 clusters |
-| contamination-v1 | hybrid | — | — | — | Cross-domain contamination resistance |
+| scale-v1 (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / 0.734 | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
+| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | 0.964 | March 2026 baseline |
+| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | 0.952 | March 2026 baseline |
+| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | March 2026 baseline |
+| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | March 2026 baseline |
+| ambiguity-v1 (24 seeds) | vector_rerank | **0.922** | 1.000 | **0.941** | Stable vs March 25 baseline |
+| distractor-v1 (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | March 25 baseline |
+| specificity-v1 (30 seeds) | vector_rerank | **0.919** | 0.972 | **0.905** | Stable vs March 25 baseline |
+| contamination-v1 (15 seeds) | vector / vector_rerank | **0.972** | 0.958 | **0.917** | Strong cross-domain resistance; all modes ≥ 0.972 recall |
+| physics-v1 (20 seeds) | hybrid_rerank | **1.000** | 1.000 | **0.917** | Perfect recall all modes; hybrid_rerank best nDCG |
+| lifecycle-v1 (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
+| msa-multihop-v1 (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
+| msa-coldstart-v1 (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
+| scale-v2 (1000 seeds) | hybrid | **0.129** | 0.236 | **0.132** | Extreme-scale stress test (10× scale-v1); expected low recall at K=5 |
+| disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity; data in March 2026 baseline |
 | cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
-| physics-v1 | hybrid | — | — | — | Physics engine domain retrieval |
 
 ## Key Findings (v0.6.0)
 

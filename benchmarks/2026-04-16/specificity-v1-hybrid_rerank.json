@@ -1,0 +1,15 @@
+{
+  "datasetId": "specificity-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.803,
+  "meanMrr": 0.944,
+  "meanNdcgAtK": 0.826,
+  "meanLatencyMs": 1.495,
+  "p95LatencyMs": 3.360,
+  "totalEntries": 30,
+  "totalQueries": 18,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

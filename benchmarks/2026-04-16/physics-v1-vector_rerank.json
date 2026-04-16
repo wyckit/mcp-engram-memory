@@ -1,0 +1,15 @@
+{
+  "datasetId": "physics-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 1.000,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.884,
+  "meanLatencyMs": 0.02,
+  "p95LatencyMs": 0.03,
+  "totalEntries": 20,
+  "totalQueries": 10,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

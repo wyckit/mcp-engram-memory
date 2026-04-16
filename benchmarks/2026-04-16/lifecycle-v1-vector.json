@@ -1,0 +1,13 @@
+{
+  "datasetId": "lifecycle-v1",
+  "mode": "vector",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.594,
+  "meanMrr": 0.763,
+  "meanNdcgAtK": 0.631,
+  "totalEntries": 25,
+  "totalQueries": 15,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

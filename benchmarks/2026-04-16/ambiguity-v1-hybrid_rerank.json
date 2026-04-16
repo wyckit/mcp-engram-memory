@@ -1,0 +1,15 @@
+{
+  "datasetId": "ambiguity-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.878,
+  "meanMrr": 0.967,
+  "meanNdcgAtK": 0.870,
+  "meanLatencyMs": 0.249,
+  "p95LatencyMs": 0.284,
+  "totalEntries": 24,
+  "totalQueries": 15,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

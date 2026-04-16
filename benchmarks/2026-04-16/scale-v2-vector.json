@@ -1,0 +1,15 @@
+{
+  "datasetId": "scale-v2",
+  "mode": "vector",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.103,
+  "meanMrr": 0.169,
+  "meanNdcgAtK": 0.108,
+  "meanLatencyMs": 5.82,
+  "p95LatencyMs": 7.01,
+  "totalEntries": 1000,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

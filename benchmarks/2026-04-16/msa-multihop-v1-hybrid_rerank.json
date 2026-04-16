@@ -1,0 +1,15 @@
+{
+  "datasetId": "msa-multihop-v1",
+  "mode": "hybrid_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.775,
+  "meanMrr": 0.889,
+  "meanNdcgAtK": 0.819,
+  "meanLatencyMs": 0.74,
+  "p95LatencyMs": 0.45,
+  "totalEntries": 30,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}

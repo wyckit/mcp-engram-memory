@@ -1,0 +1,15 @@
+{
+  "datasetId": "msa-coldstart-v1",
+  "mode": "vector",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.815,
+  "meanMrr": 0.900,
+  "meanNdcgAtK": 0.855,
+  "meanLatencyMs": 0.15,
+  "p95LatencyMs": 0.16,
+  "totalEntries": 20,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup stability run."
+}
