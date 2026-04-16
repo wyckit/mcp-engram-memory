@@ -9,8 +9,8 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    background: #0f1117;
-    color: #e2e8f0;
+    background: #04050a;
+    color: #c4cad6;
     font-family: 'Segoe UI', system-ui, sans-serif;
     height: 100vh;
     overflow: hidden;
@@ -24,30 +24,42 @@
     align-items: center;
     gap: 16px;
     padding: 10px 16px;
-    background: #1a1d2e;
-    border-bottom: 1px solid #2d3148;
+    background: #080a10;
+    border-bottom: 1px solid #141620;
     flex-shrink: 0;
     flex-wrap: wrap;
   }
-  #header h1 { font-size: 15px; font-weight: 600; color: #a5b4fc; white-space: nowrap; }
-  #stats { font-size: 12px; color: #64748b; }
+  #header h1 { font-size: 15px; font-weight: 600; color: #7c8db0; white-space: nowrap; }
+  #stats { font-size: 12px; color: #3a4255; }
   #stats span { margin-right: 12px; }
-  #stats .val { color: #94a3b8; font-weight: 500; }
+  #stats .val { color: #5a6580; font-weight: 500; }
+
+  .zoom-btn {
+    padding: 3px 9px;
+    background: #080a10;
+    color: #4a5568;
+    border: 1px solid #141620;
+    border-radius: 5px;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .zoom-btn:hover { background: #0f1118; color: #94a3b8; }
 
   label.btn {
     padding: 5px 12px;
-    background: #3730a3;
-    color: #e0e7ff;
+    background: #1a1d30;
+    color: #8090b0;
     border-radius: 6px;
     font-size: 12px;
     cursor: pointer;
     white-space: nowrap;
-    border: 1px solid #4338ca;
+    border: 1px solid #252840;
   }
-  label.btn:hover { background: #4338ca; }
+  label.btn:hover { background: #252840; }
   #fileInput { display: none; }
 
-  .sep { width: 1px; height: 20px; background: #2d3148; flex-shrink: 0; }
+  .sep { width: 1px; height: 20px; background: #141620; flex-shrink: 0; }
 
   /* ── Filters ── */
   #filters {
@@ -72,6 +84,8 @@
   .pill-stm  { background: rgba(245,158,11,0.15); border-color: #f59e0b; color: #fbbf24; }
   .pill-ltm  { background: rgba(59,130,246,0.15); border-color: #3b82f6; color: #60a5fa; }
   .pill-arch { background: rgba(107,114,128,0.15); border-color: #6b7280; color: #9ca3af; }
+  .pill-conn { background: rgba(99,102,241,0.12); border-color: #4f46a0; color: #7c7fc0; }
+  .pill-conn:not(.inactive) { background: rgba(99,102,241,0.25); border-color: #6366f1; color: #a5b4fc; }
 
   /* ── Canvas ── */
   #canvas { flex: 1; position: relative; overflow: hidden; }
@@ -79,52 +93,74 @@
 
   /* ── Edges ── */
   .edge {
-    stroke-opacity: 0.55;
-    stroke-width: 1.2;
+    stroke-opacity: 0.18;
+    stroke-width: 0.6;
     fill: none;
-    marker-end: url(#arrow);
   }
-  .edge:hover { stroke-opacity: 1; stroke-width: 2; }
+  .edge.focused {
+    stroke-opacity: 0.85;
+    stroke-width: 1.4;
+    stroke-dasharray: 6 4;
+    animation: edgeFlow 1.2s linear infinite;
+  }
+  .edge.dim { stroke-opacity: 0.03; }
+  @keyframes edgeFlow {
+    from { stroke-dashoffset: 20; }
+    to   { stroke-dashoffset: 0;  }
+  }
 
   /* ── Nodes ── */
-  .node circle {
+  .node { cursor: grab; transition: opacity 0.2s; }
+  .node:active { cursor: grabbing; }
+  .node .halo {
+    pointer-events: none;
+    transition: r 0.2s, fill-opacity 0.2s;
+  }
+  .node .core {
+    stroke-width: 0;
+    transition: r 0.15s;
+  }
+  .node.summary .core {
     stroke-width: 1.5;
-    cursor: grab;
-    transition: r 0.1s;
+    stroke-dasharray: 3 2;
   }
-  .node circle:active { cursor: grabbing; }
-  .node.summary circle {
-    stroke-width: 2.5;
-    stroke-dasharray: 4 2;
-  }
+  .node.dim { opacity: 0.05; }
   .node-label {
-    font-size: 9px;
-    fill: #94a3b8;
+    font-size: 10px;
+    fill: #c8d0e0;
     pointer-events: none;
     text-anchor: middle;
     dominant-baseline: hanging;
+    opacity: 0;
+    transition: opacity 0.15s;
+    text-shadow: 0 0 6px #000;
+    paint-order: stroke;
+    stroke: #000;
+    stroke-width: 3px;
   }
+  .node.labeled .node-label { opacity: 1; }
 
   /* ── Cluster halos ── */
   .cluster-hull {
-    fill-opacity: 0.06;
-    stroke-opacity: 0.25;
-    stroke-width: 1.5;
-    stroke-dasharray: 5 3;
+    fill-opacity: 0.04;
+    stroke-opacity: 0.18;
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
     pointer-events: none;
   }
   .cluster-label {
     font-size: 10px;
     font-weight: 500;
-    fill-opacity: 0.5;
+    fill-opacity: 0.35;
     pointer-events: none;
+    letter-spacing: 0.04em;
   }
 
   /* ── Tooltip ── */
   #tooltip {
     position: absolute;
-    background: #1e2235;
-    border: 1px solid #374151;
+    background: #08090e;
+    border: 1px solid #1a1d28;
     border-radius: 8px;
     padding: 10px 14px;
     font-size: 12px;
@@ -133,10 +169,10 @@
     display: none;
     z-index: 100;
     line-height: 1.5;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.8);
   }
-  #tooltip .tt-id   { font-size: 10px; color: #64748b; margin-bottom: 4px; font-family: monospace; }
-  #tooltip .tt-text { color: #e2e8f0; margin-bottom: 6px; }
+  #tooltip .tt-id   { font-size: 10px; color: #3a4255; margin-bottom: 4px; font-family: monospace; }
+  #tooltip .tt-text { color: #8090a8; margin-bottom: 6px; }
   #tooltip .tt-meta { display: flex; flex-wrap: wrap; gap: 4px; }
   #tooltip .tag {
     padding: 1px 7px;
@@ -150,15 +186,15 @@
     position: absolute;
     bottom: 16px;
     right: 16px;
-    background: rgba(26,29,46,0.9);
-    border: 1px solid #2d3148;
+    background: rgba(6,7,12,0.92);
+    border: 1px solid #141620;
     border-radius: 8px;
     padding: 12px 14px;
     font-size: 11px;
     line-height: 1.8;
   }
-  #legend h3 { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-  .leg-row { display: flex; align-items: center; gap: 8px; color: #94a3b8; }
+  #legend h3 { font-size: 10px; color: #2e3545; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .leg-row { display: flex; align-items: center; gap: 8px; color: #4a5568; }
   .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .leg-line { width: 20px; height: 2px; flex-shrink: 0; border-radius: 1px; }
 
@@ -218,8 +254,15 @@
     <div class="pill pill-stm"  data-state="stm"      onclick="toggleState(this)">STM</div>
     <div class="pill pill-ltm"  data-state="ltm"      onclick="toggleState(this)">LTM</div>
     <div class="pill pill-arch" data-state="archived"  onclick="toggleState(this)">Archived</div>
+    <div class="sep" style="height:14px"></div>
+    <div class="pill pill-conn inactive" id="pill-conn" onclick="toggleConnected(this)">Connected only</div>
   </div>
   <div class="sep"></div>
+  <div style="display:flex;gap:4px;align-items:center">
+    <button class="zoom-btn" onclick="zoomBy(2)"   title="Zoom in">+</button>
+    <button class="zoom-btn" onclick="zoomBy(0.5)" title="Zoom out">−</button>
+    <button class="zoom-btn" onclick="zoomFit()"   title="Fit all nodes">⊡</button>
+  </div>
   <label class="btn" for="fileInput">Load JSON</label>
   <input type="file" id="fileInput" accept=".json">
 </div>
@@ -237,48 +280,51 @@
     </p>
   </div>
   <svg id="svg"></svg>
+  <canvas id="fractal-canvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity 0.6s ease"></canvas>
   <div id="tooltip"></div>
   <div id="drop">Drop JSON here</div>
 </div>
 
 <div id="legend">
   <h3>Lifecycle</h3>
-  <div class="leg-row"><div class="leg-dot" style="background:#f59e0b"></div> STM (active)</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#3b82f6"></div> LTM (stable)</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#4b5563"></div> Archived</div>
-  <div class="leg-row"><div class="leg-dot" style="background:#e2e8f0;border:2px dashed #94a3b8"></div> Summary node</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#ff8c00;box-shadow:0 0 6px #ff8c00"></div> STM (active)</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#00aaff;box-shadow:0 0 6px #00aaff"></div> LTM (stable)</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#1e2535"></div> Archived</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#00aaff;border:1.5px dashed #6080a0"></div> Summary node</div>
   <h3 style="margin-top:10px">Relations</h3>
-  <div class="leg-row"><div class="leg-line" style="background:#ef4444"></div> contradicts</div>
-  <div class="leg-row"><div class="leg-line" style="background:#14b8a6"></div> elaborates</div>
-  <div class="leg-row"><div class="leg-line" style="background:#a855f7"></div> cross_reference</div>
-  <div class="leg-row"><div class="leg-line" style="background:#f59e0b"></div> depends_on</div>
-  <div class="leg-row"><div class="leg-line" style="background:#e2e8f0"></div> parent_child</div>
-  <div class="leg-row"><div class="leg-line" style="background:#64748b"></div> similar_to</div>
+  <div class="leg-row"><div class="leg-line" style="background:#ff3b3b"></div> contradicts</div>
+  <div class="leg-row"><div class="leg-line" style="background:#00e5c0"></div> elaborates</div>
+  <div class="leg-row"><div class="leg-line" style="background:#bf5fff"></div> cross_reference</div>
+  <div class="leg-row"><div class="leg-line" style="background:#ffaa00"></div> depends_on</div>
+  <div class="leg-row"><div class="leg-line" style="background:#6080a0"></div> parent_child</div>
+  <div class="leg-row"><div class="leg-line" style="background:#2a3545"></div> similar_to</div>
 </div>
 
 <script>
 // ── Color maps ────────────────────────────────────────────────────────────────
 const STATE_COLOR = {
-  stm:      { fill: '#f59e0b', stroke: '#d97706' },
-  ltm:      { fill: '#3b82f6', stroke: '#2563eb' },
-  archived: { fill: '#374151', stroke: '#4b5563' },
+  stm:      { fill: '#ff8c00', halo: '#ff8c00' },   // neon amber
+  ltm:      { fill: '#00aaff', halo: '#00aaff' },   // neon blue
+  archived: { fill: '#1e2535', halo: '#1e2535' },   // near-invisible
 };
 const RELATION_COLOR = {
-  contradicts:     '#ef4444',
-  elaborates:      '#14b8a6',
-  cross_reference: '#a855f7',
-  depends_on:      '#f59e0b',
-  parent_child:    '#e2e8f0',
-  similar_to:      '#64748b',
+  contradicts:     '#ff3b3b',
+  elaborates:      '#00e5c0',
+  cross_reference: '#bf5fff',
+  depends_on:      '#ffaa00',
+  parent_child:    '#6080a0',
+  similar_to:      '#2a3545',
 };
 const CLUSTER_COLORS = [
-  '#6366f1','#ec4899','#10b981','#f97316','#06b6d4','#8b5cf6','#84cc16','#f43f5e'
+  '#5566ff','#ff4488','#00cc88','#ff7700','#00ccee','#aa44ff','#88cc00','#ff2255'
 ];
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let snapshot = null;
 let simulation = null;
 let visibleStates = new Set(['stm', 'ltm', 'archived']);
+let connectedOnly = false;
+let globalAngle = 0; // current rotation in radians
 
 // ── File loading ──────────────────────────────────────────────────────────────
 document.getElementById('fileInput').addEventListener('change', e => {
@@ -325,6 +371,12 @@ function toggleState(el) {
   if (snapshot) render(snapshot);
 }
 
+function toggleConnected(el) {
+  connectedOnly = !connectedOnly;
+  el.classList.toggle('inactive', !connectedOnly);
+  if (snapshot) render(snapshot);
+}
+
 // ── Main render ───────────────────────────────────────────────────────────────
 function render(data) {
   document.getElementById('empty').style.display = 'none';
@@ -336,10 +388,22 @@ function render(data) {
   document.getElementById('s-time').textContent     =
     new Date(data.capturedAt).toLocaleString();
 
-  // Filter nodes
-  const nodes = data.nodes.filter(n => visibleStates.has(n.lifecycleState));
-  const nodeSet = new Set(nodes.map(n => n.id));
-  const edges = data.edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
+  // Filter nodes by lifecycle state
+  let nodes = data.nodes.filter(n => visibleStates.has(n.lifecycleState));
+  let nodeSet = new Set(nodes.map(n => n.id));
+
+  // Build edge list for the current lifecycle-visible set
+  let edges = data.edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
+
+  // Connected-only filter: drop nodes with no edges among the visible set
+  if (connectedOnly) {
+    const connectedIds = new Set();
+    edges.forEach(e => { connectedIds.add(e.source); connectedIds.add(e.target); });
+    nodes = nodes.filter(n => connectedIds.has(n.id));
+    nodeSet = new Set(nodes.map(n => n.id));
+    edges = edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
+  }
+
   const clusters = data.clusters.filter(c => c.memberIds.some(id => nodeSet.has(id)));
 
   // Clone nodes/edges so D3 can mutate them with x/y
@@ -383,12 +447,30 @@ function render(data) {
     .attr('orient', 'auto')
     .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#64748b').attr('fill-opacity', 0.6);
 
-  const root = svg.append('g').attr('class', 'root');
+  // rotGroup wraps everything — rotation is applied here, zoom/pan inside
+  const rotGroup = svg.append('g').attr('id', 'rot-group');
+  const root = rotGroup.append('g').attr('class', 'root');
 
-  // Zoom
-  svg.call(d3.zoom()
-    .scaleExtent([0.1, 6])
-    .on('zoom', e => root.attr('transform', e.transform)));
+  // Store canvas dims globally so rotation helpers can access them
+  window._canvasW = W;
+  window._canvasH = H;
+
+  // Zoom — min 0.01 lets you zoom out to ~1% for a full bird's-eye view
+  const zoom = d3.zoom()
+    .scaleExtent([0.01, 6])
+    .on('zoom', e => {
+      root.attr('transform', e.transform);
+      onZoomChange(e.transform);
+    });
+  svg.call(zoom);
+
+  // Expose zoom to zoom buttons
+  window._zoom    = zoom;
+  window._svg     = svg;
+  window._rotGroup = rotGroup;
+
+  // Apply current rotation (preserves angle across filter re-renders)
+  applyRotation();
 
   // ── Cluster hull layer ────────────────────────────────────────────────────
   const hullLayer  = root.append('g').attr('class', 'hulls');
@@ -412,6 +494,13 @@ function render(data) {
   const maxEnergy = d3.max(simNodes, n => n.activationEnergy) || 1;
   const rScale = d3.scaleSqrt().domain([0, maxEnergy]).range([5, 18]);
 
+  // Build adjacency for hover depth effect
+  const adjMap = new Map(simNodes.map(n => [n.id, new Set()]));
+  simEdges.forEach(e => {
+    adjMap.get(e.source.id)?.add(e.target.id);
+    adjMap.get(e.target.id)?.add(e.source.id);
+  });
+
   const nodeSel = nodeLayer.selectAll('g.node')
     .data(simNodes)
     .enter().append('g')
@@ -420,25 +509,51 @@ function render(data) {
         .on('start', dragStart)
         .on('drag',  dragged)
         .on('end',   dragEnd))
-      .on('mouseenter', (event, d) => showNodeTip(event, d))
-      .on('mouseleave', hideTip);
+      .on('mouseenter', (event, d) => {
+        // Obsidian depth: dim everything except this node + direct neighbors
+        const neighbors = adjMap.get(d.id) ?? new Set();
+        nodeSel.classed('dim', n => n.id !== d.id && !neighbors.has(n.id));
+        nodeSel.filter(n => n.id === d.id).classed('labeled', true);
+        edgeSel
+          .classed('focused', e => e.source.id === d.id || e.target.id === d.id)
+          .classed('dim',     e => e.source.id !== d.id && e.target.id !== d.id);
+        showNodeTip(event, d);
+      })
+      .on('mouseleave', () => {
+        nodeSel.classed('dim', false).classed('labeled', false);
+        edgeSel.classed('focused', false).classed('dim', false);
+        hideTip();
+      });
 
+  // Outer halo — soft glow corona
   nodeSel.append('circle')
-    .attr('r', d => rScale(d.activationEnergy))
-    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
-    .attr('stroke', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).stroke)
-    .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.4 : 0.85);
+    .attr('class', 'halo')
+    .attr('r', d => rScale(d.activationEnergy) * 3.5)
+    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).halo)
+    .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.025 : 0.07)
+    .attr('stroke', 'none');
 
+  // Inner core — bright dot
+  nodeSel.append('circle')
+    .attr('class', 'core')
+    .attr('r', d => rScale(d.activationEnergy) * 0.55)
+    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
+    .attr('stroke', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
+    .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.25 : 0.95);
+
+  // Label — hidden until hover
   nodeSel.append('text')
     .attr('class', 'node-label')
-    .attr('dy', d => rScale(d.activationEnergy) + 3)
+    .attr('dy', d => rScale(d.activationEnergy) * 0.55 + 5)
     .text(d => {
       const label = d.text || d.id;
-      return label.length > 22 ? label.slice(0, 20) + '…' : label;
+      return label.length > 28 ? label.slice(0, 26) + '…' : label;
     });
 
   // ── Force simulation ──────────────────────────────────────────────────────
   if (simulation) simulation.stop();
+
+  window._fractalNodes = simNodes; // capture for fractal renderer
 
   simulation = d3.forceSimulation(simNodes)
     .force('link', d3.forceLink(simEdges)
@@ -448,7 +563,11 @@ function render(data) {
     .force('charge', d3.forceManyBody().strength(-220))
     .force('center', d3.forceCenter(W / 2, H / 2))
     .force('collide', d3.forceCollide(d => rScale(d.activationEnergy) + 4))
-    .on('tick', ticked);
+    .on('tick', ticked)
+    .on('end', () => {
+      // Simulation settled — render fractal if we're zoomed out enough
+      if (window._svg) onZoomChange(d3.zoomTransform(window._svg.node()));
+    });
 
   function ticked() {
     edgeSel
@@ -562,6 +681,170 @@ function hideTip() { tip.style.display = 'none'; }
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Rotation ──────────────────────────────────────────────────────────────────
+function applyRotation() {
+  if (!window._rotGroup) return;
+  const W = window._canvasW || 800;
+  const H = window._canvasH || 600;
+  const deg = globalAngle * 180 / Math.PI;
+  window._rotGroup.attr('transform', `rotate(${deg}, ${W/2}, ${H/2})`);
+
+  // Rotate the fractal canvas in sync (drawn in pre-rotation screen space)
+  const fc = document.getElementById('fractal-canvas');
+  if (fc) {
+    fc.style.transformOrigin = '50% 50%';
+    fc.style.transform = `rotate(${deg}deg)`;
+  }
+}
+
+// Right-click drag to rotate
+let _rotDrag = null;
+
+document.getElementById('canvas').addEventListener('mousedown', e => {
+  if (e.button !== 2) return;
+  e.preventDefault();
+  const rect = document.getElementById('canvas').getBoundingClientRect();
+  const cx = (window._canvasW || rect.width)  / 2;
+  const cy = (window._canvasH || rect.height) / 2;
+  _rotDrag = {
+    startAngle: Math.atan2(e.clientY - rect.top - cy, e.clientX - rect.left - cx),
+    initGlobal: globalAngle,
+  };
+  document.body.style.cursor = 'grabbing';
+});
+
+document.getElementById('canvas').addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('mousemove', e => {
+  if (!_rotDrag) return;
+  const rect = document.getElementById('canvas').getBoundingClientRect();
+  const cx = (window._canvasW || rect.width)  / 2;
+  const cy = (window._canvasH || rect.height) / 2;
+  const a = Math.atan2(e.clientY - rect.top - cy, e.clientX - rect.left - cx);
+  globalAngle = _rotDrag.initGlobal + (a - _rotDrag.startAngle);
+  applyRotation();
+  // Refresh fractal if visible
+  if (window._svg) onZoomChange(d3.zoomTransform(window._svg.node()));
+});
+
+window.addEventListener('mouseup', e => {
+  if (e.button === 2 && _rotDrag) {
+    _rotDrag = null;
+    document.body.style.cursor = '';
+  }
+});
+
+// ── Fractal overlay ───────────────────────────────────────────────────────────
+let _fractalTimer = null;
+
+function onZoomChange(t) {
+  const k = t.k;
+  // Fade in below k=0.20, fully visible 0.03–0.06, fade back out below 0.02
+  const fadeIn  = Math.max(0, Math.min(1, (0.20 - k) / 0.14));
+  const fadeOut = Math.max(0, Math.min(1, (k - 0.015) / 0.015)); // kills flare at extreme zoom-out
+  const opacity = fadeIn * fadeOut;
+  const el = document.getElementById('fractal-canvas');
+  if (el) el.style.opacity = opacity;
+
+  if (opacity > 0.01) {
+    if (_fractalTimer) clearTimeout(_fractalTimer);
+    _fractalTimer = setTimeout(() => drawFractal(t), 80);
+  }
+}
+
+function drawFractal(transform) {
+  const canvas = document.getElementById('fractal-canvas');
+  if (!canvas || !window._fractalNodes) return;
+  const nodes = window._fractalNodes.filter(n => n.x != null);
+  if (!nodes.length) return;
+
+  const W = canvas.width  = canvas.offsetWidth;
+  const H = canvas.height = canvas.offsetHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Project node positions into screen space
+  const pts = nodes.map(n => [transform.applyX(n.x), transform.applyY(n.y), n.lifecycleState]);
+
+  // Clamp to the bounding box of the projected nodes (+ padding)
+  // — this prevents fills covering the whole canvas when zoomed way out
+  const pad = 40;
+  const minX = Math.max(0,  d3.min(pts, p => p[0]) - pad);
+  const minY = Math.max(0,  d3.min(pts, p => p[1]) - pad);
+  const maxX = Math.min(W,  d3.max(pts, p => p[0]) + pad);
+  const maxY = Math.min(H,  d3.max(pts, p => p[1]) + pad);
+  const bw = maxX - minX, bh = maxY - minY;
+  if (bw <= 0 || bh <= 0) return;
+
+  const bounded = pts.filter(p => p[0] >= minX && p[0] <= maxX && p[1] >= minY && p[1] <= maxY);
+
+  // ── Pass 1: soft glow (coarse, blurred) ─────────────────────────────────
+  ctx.save();
+  ctx.filter = 'blur(5px)';
+  ctx.globalCompositeOperation = 'screen';
+  subdivide(ctx, minX, minY, bw, bh, 4, bounded);
+  ctx.restore();
+
+  // ── Pass 2: crisp fractal detail ─────────────────────────────────────────
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  subdivide(ctx, minX, minY, bw, bh, 8, bounded);
+  ctx.restore();
+}
+
+function subdivide(ctx, x, y, w, h, depth, pts) {
+  if (!pts.length || w < 0.5 || h < 0.5) return;
+
+  const isLeaf = depth === 0 || w <= 3 || h <= 3;
+
+  if (isLeaf) {
+    // Only draw at leaf nodes — never fill a parent cell.
+    const ltm = pts.filter(p => p[2] === 'ltm').length;
+    const stm = pts.filter(p => p[2] === 'stm').length;
+    let r, g, b;
+    if (ltm >= stm) { r = 0;   g = 100; b = 200; }  // neon blue (LTM)
+    else            { r = 200; g = 80;  b = 0;   }  // neon amber (STM)
+    // Alpha proportional to point count, capped low so dense spots glow not blast
+    const alpha = Math.min(0.5, pts.length * 0.035 + 0.02);
+    ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+    ctx.fillRect(x, y, w, h);
+    return;
+  }
+
+  // Subdivide: 4 quadrants — no fill at this level
+  const mx = x + w / 2, my = y + h / 2;
+  for (const [qx, qy, qw, qh] of [
+    [x,  y,  w/2, h/2],
+    [mx, y,  w/2, h/2],
+    [x,  my, w/2, h/2],
+    [mx, my, w/2, h/2],
+  ]) {
+    const sub = pts.filter(p => p[0] >= qx && p[0] < qx+qw && p[1] >= qy && p[1] < qy+qh);
+    if (sub.length) subdivide(ctx, qx, qy, qw, qh, depth - 1, sub);
+  }
+}
+
+// ── Zoom helpers ──────────────────────────────────────────────────────────────
+function zoomBy(factor) {
+  if (!window._svg || !window._zoom) return;
+  window._svg.transition().duration(250).call(window._zoom.scaleBy, factor);
+}
+
+function zoomFit() {
+  if (!window._svg || !window._zoom || !snapshot) return;
+  const canvas = document.getElementById('canvas');
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  const g = window._svg.select('g.root');
+  const bbox = g.node().getBBox();
+  if (!bbox.width || !bbox.height) return;
+  const scale = Math.min(W / (bbox.width + 60), H / (bbox.height + 60), 6);
+  const tx = W / 2 - scale * (bbox.x + bbox.width / 2);
+  const ty = H / 2 - scale * (bbox.y + bbox.height / 2);
+  window._svg.transition().duration(500)
+    .call(window._zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 }
 
 // ── Resize ────────────────────────────────────────────────────────────────────
