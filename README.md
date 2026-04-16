@@ -20,25 +20,26 @@ A cognitive memory engine exposed as an [MCP](https://modelcontextprotocol.io/) 
 
 ## Quickstart
 
-**Option 1 — Clone and build**
+**Option 1 — One-click setup script** (clones, restores, and wires up Claude Code automatically)
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.ps1 | iex
+```
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.sh | bash
+```
+
+Both scripts clone the repo, download the ONNX model, and patch `~/.claude.json` with the MCP server entry. Optional flags: `--profile minimal|standard|full`, `--storage json|sqlite`, `--agent-id <id>`. Already cloned? Run `pwsh setup.ps1` or `bash setup.sh` from the repo root.
+
+**Option 2 — Clone and configure manually**
 
 ```bash
 git clone https://github.com/wyckit/mcp-engram-memory.git
 cd mcp-engram-memory
-dotnet build
-```
-
-**Option 2 — Docker**
-
-```bash
-docker build -t mcp-engram-memory .
-docker run -i -v memory-data:/app/data mcp-engram-memory
-```
-
-**Option 3 — NuGet library** (embed the engine in your own app)
-
-```bash
-dotnet add package McpEngramMemory.Core --version 0.7.0
+dotnet restore
 ```
 
 Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
@@ -55,7 +56,20 @@ Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
 }
 ```
 
-> First build downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent builds are instant.
+**Option 3 — Docker**
+
+```bash
+docker build -t mcp-engram-memory .
+docker run -i -v memory-data:/app/data mcp-engram-memory
+```
+
+**Option 4 — NuGet library** (embed the engine in your own app)
+
+```bash
+dotnet add package McpEngramMemory.Core --version 0.7.0
+```
+
+> First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.
 
 See [`examples/`](examples/) for ready-to-use config files and AI assistant harness templates.
 
