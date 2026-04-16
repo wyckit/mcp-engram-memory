@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-04-16
+
+### Added
+- **Memory Graph Visualizer**: `get_graph_snapshot` MCP tool returns a `GraphSnapshot` with nodes, typed edges, cluster memberships, and corpus stats. Companion D3.js viewer (`visualization/memory-graph.html`) renders a force-directed graph with Obsidian/Nexus dark aesthetic: gold entry points, cyan LTM, teal STM, gray archived.
+- **Visualizer Features**: Zoom 0.01–6×, right-click drag to rotate, filter pills (STM / LTM / Archived / Connected-only), fractal density overlay below zoom k=0.20 (leaf-only rendering anchored to node bounding box), search bar with live node highlighting (matches pulse gold, non-matches dim to 4%), ›/‹ buttons + Enter/Shift+Enter to cycle through results with a 1/N counter, Esc or × to clear.
+- `get_graph_snapshot` registered in `full` profile only (`VisualizationTools.cs`). 10 new unit tests.
+- Benchmark suite expanded to 34 result files across 12 datasets in `benchmarks/2026-04-16/`.
+
+### Changed
+- **Architecture Cleanup**: Removed 12 dead-code and bug items — duplicate `CosineSimilarity` / `DotProduct` overloads on `VectorMath`, stale `ScaleTunedTests.cs` test infrastructure, obsolete lifecycle fields (`_lastDecay`, `_lastSave` serialization remnants), and corrected `DeleteMemory` method signature mismatch.
+- Total tests: **850** (up from 842). All 850 pass across net8.0.
+
 ## [0.6.1] - 2026-03-31
 
 ### Fixed

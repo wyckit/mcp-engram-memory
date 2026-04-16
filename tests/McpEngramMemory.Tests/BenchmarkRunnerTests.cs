@@ -1119,7 +1119,21 @@ public class BenchmarkRunnerTests
         foreach (var q in result.QueryScores)
             _output.WriteLine($"    {q.QueryId}: R={q.RecallAtK:F2} P={q.PrecisionAtK:F2} MRR={q.MRR:F2} nDCG={q.NdcgAtK:F2} [{q.LatencyMs:F1}ms] → [{string.Join(", ", q.ActualResultIds.Take(5))}]");
 
-        Assert.True(result.MeanRecallAtK >= 0f);
+        // scale-v2 has redesigned queries with semantically aligned gold sets — enforce real thresholds.
+        // Easy queries (K=50) test subject-level ANN clustering; medium tests subject+property recall;
+        // hard tests property-only recall (structural ceiling ~0.40 due to K=20 vs 15 gold entries).
+        // Other MSA datasets (multihop, coldstart, physics) keep the no-floor assertion.
+        if (datasetId == "scale-v2")
+        {
+            Assert.True(result.MeanRecallAtK >= 0.35f,
+                $"scale-v2/{mode}: Recall@K {result.MeanRecallAtK:F3} below minimum 0.35");
+            Assert.True(result.MeanMRR >= 0.35f,
+                $"scale-v2/{mode}: MRR {result.MeanMRR:F3} below minimum 0.35");
+        }
+        else
+        {
+            Assert.True(result.MeanRecallAtK >= 0f);
+        }
         Assert.True(result.MeanLatencyMs < 500); // Must not be catastrophically slow
 
         index.Dispose();

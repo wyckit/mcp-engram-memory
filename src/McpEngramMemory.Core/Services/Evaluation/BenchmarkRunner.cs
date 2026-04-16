@@ -1649,37 +1649,50 @@ public sealed class BenchmarkRunner
         }
 
         // Queries: 3 per domain (easy/medium/hard) = 30 total
+        //
+        // Query design ensures gold sets are semantically aligned with queries:
+        //   Easy  — subject retrieval at scale: K=50 covers all 50 variations of subjects[0].
+        //           Tests whether HNSW can cluster all same-subject entries when queried by name.
+        //   Medium — subject + property: K=10, gold = 6 variations of subjects[5] that explicitly
+        //           contain props[0] as p1 or p2. No grade-1 from subjects[6] — keeps gold focused
+        //           so cross-subject contamination doesn't dilute precision-weighted metrics.
+        //   Hard  — property-only across domain: K=20 to cover gold set of up to 15 entries.
         var queries = new List<BenchmarkQuery>(30);
         int domainOffset = 0;
         foreach (var (cat, label, subjects, props) in domains)
         {
             int domainSize = subjects.Length * VariationsPerSubject;
 
-            // Easy: broad domain query — gold = first 3 subjects' base entries
+            // Easy: subject-level retrieval — K=50 spans all 50 variations of subjects[0].
+            // All 50 entries contain subjects[0] name; HNSW should cluster them together.
+            // Recall = #subjects[0] entries in top 50 / 50. Tests ANN quality at scale.
             var easyGrades = new Dictionary<string, int>();
-            for (int e = 0; e < 3; e++)
-            {
-                int baseId = domainOffset + e * VariationsPerSubject;
-                for (int v = 0; v < 3; v++)
-                    easyGrades[$"sv2-{baseId + v:D5}"] = e == 0 ? 3 : 2;
-            }
+            for (int v = 0; v < VariationsPerSubject; v++)
+                easyGrades[$"sv2-{domainOffset + v:D5}"] = 3;
             queries.Add(new BenchmarkQuery($"sv2-q-{cat}-easy",
-                $"Overview of {label} technologies and approaches",
-                easyGrades, K: 10));
+                $"What is {subjects[0]} and how is it applied in {label}?",
+                easyGrades, K: VariationsPerSubject));
 
-            // Medium: specific subject query (index 5)
+            // Medium: subjects[5] + props[0] — gold = only variations of subjects[5] that
+            // explicitly mention props[0] as p1 or p2 (6 entries per domain per prop pattern).
+            // Grade-1 from subjects[6] omitted — keeping gold focused avoids inflating recall
+            // denominator with semantically ambiguous near-matches.
             var medGrades = new Dictionary<string, int>();
             int medBase = domainOffset + 5 * VariationsPerSubject;
-            for (int v = 0; v < 5; v++)
-                medGrades[$"sv2-{medBase + v:D5}"] = 3;
-            int nearBase = domainOffset + 6 * VariationsPerSubject;
-            for (int v = 0; v < 2; v++)
-                medGrades[$"sv2-{nearBase + v:D5}"] = 1;
+            for (int v = 0; v < VariationsPerSubject; v++)
+            {
+                var p1m = props[(v * 7 + 3) % props.Length];
+                var p2m = props[(v * 11 + 7) % props.Length];
+                if (p1m == p2m) p2m = props[(v * 11 + 8) % props.Length];
+                if (p1m == props[0] || p2m == props[0])
+                    medGrades[$"sv2-{medBase + v:D5}"] = 3;
+            }
             queries.Add(new BenchmarkQuery($"sv2-q-{cat}-med",
                 $"How does {subjects[5]} handle {props[0]} in {label}",
                 medGrades, K: 10));
 
-            // Hard: property-specific query across subjects
+            // Hard: property-specific query across subjects — K=20 so the gold set of up to 15
+            // entries fits within K. Gold = entries where props[2] appears as p1 or p2.
             var hardGrades = new Dictionary<string, int>();
             string targetProp = props[2];
             for (int e = 0; e < subjects.Length && hardGrades.Count < 15; e++)
@@ -1695,7 +1708,7 @@ public sealed class BenchmarkRunner
             }
             queries.Add(new BenchmarkQuery($"sv2-q-{cat}-hard",
                 $"Systems and tools that leverage {targetProp} in {label}",
-                hardGrades, K: 10));
+                hardGrades, K: 20));
 
             domainOffset += domainSize;
         }

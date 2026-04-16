@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-46 test files with 842 test cases (xUnit).
+47 test files with 850 test cases (xUnit).
 
 ## Running Tests
 
@@ -61,3 +61,4 @@ dotnet test
 | MultiAgentToolsTests.cs | 12 | CrossSearch, ShareNamespace, UnshareNamespace, ListShared, WhoAmI tool endpoints |
 | SynthesisToolsTests.cs | 2 | SynthesizeMemories, GetContextBlock tool endpoints |
 | DiversityRerankerTests.cs | 11 | Cluster-aware MMR diversity reranking: selection, cluster/category penalties, edge cases |
+| VisualizationToolsTests.cs | 10 | GetGraphSnapshot tool: node/edge serialization, filter options, stats accuracy |

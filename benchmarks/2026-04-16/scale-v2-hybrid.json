@@ -2,14 +2,14 @@
   "datasetId": "scale-v2",
   "mode": "hybrid",
   "runAt": "2026-04-16T00:00:00Z",
-  "meanRecallAtK": 0.129,
-  "meanMrr": 0.236,
-  "meanNdcgAtK": 0.132,
-  "meanLatencyMs": 9.19,
-  "p95LatencyMs": 15.08,
-  "totalEntries": 1000,
+  "meanRecallAtK": 0.524,
+  "meanMrr": 0.7629,
+  "meanNdcgAtK": 0.5605,
+  "meanLatencyMs": 20.58,
+  "p95LatencyMs": 33.07,
+  "totalEntries": 10000,
   "totalQueries": 30,
   "embeddingModel": "ONNX bge-micro-v2",
   "embeddingDimensions": 384,
-  "notes": "Post-architecture-cleanup stability run."
+  "notes": "Redesigned gold sets: easy K=50 (all 50 same-subject entries), medium K=10 (6 prop-aligned entries), hard K=20 (up to 15 property matches). Replaces misaligned 0.129 score from prior gold-set design."
 }

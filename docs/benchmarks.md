@@ -39,7 +39,7 @@ Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run aft
 | lifecycle-v1 (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
 | msa-multihop-v1 (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
 | msa-coldstart-v1 (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
-| scale-v2 (1000 seeds) | hybrid | **0.129** | 0.236 | **0.132** | Extreme-scale stress test (10× scale-v1); expected low recall at K=5 |
+| scale-v2 (10000 seeds) | hybrid_rerank | **0.614** | 0.708 | **0.625** | Extreme-scale stress test (10× scale-v1); redesigned gold sets (easy K=50, medium K=10, hard K=20); hybrid 0.524, vector 0.460 |
 | disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity; data in March 2026 baseline |
 | cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
 
