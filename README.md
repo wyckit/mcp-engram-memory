@@ -59,6 +59,35 @@ Add to your MCP client config (Claude Code, Copilot, Gemini, Codex):
 
 See [`examples/`](examples/) for ready-to-use config files and AI assistant harness templates.
 
+## Memory Graph Visualizer
+
+The built-in D3.js graph viewer lets you explore your memory graph interactively.
+
+**Generate a snapshot** (call this MCP tool from any AI assistant):
+```
+get_graph_snapshot   →   save the JSON   →   open visualization/memory-graph.html
+```
+
+<p align="center">
+  <img src="images/graph-overview.png" alt="Memory graph overview — 1,207 nodes, 375 edges, 178 clusters" width="860"/>
+</p>
+
+<p align="center">
+  <img src="images/graph-detail.png" alt="Memory graph connected-only detail view" width="860"/>
+</p>
+
+**Features:**
+- **Force-directed layout** — related memories cluster together, typed edges (elaborates, contradicts, depends_on, …) shown in distinct neon colors
+- **Lifecycle colors** — STM nodes amber, LTM nodes blue; cluster summaries marked with a dashed ring
+- **Convex-hull cluster overlays** — cluster membership visible at a glance
+- **Search & highlight** — type in the search bar to instantly dim non-matching nodes and pulse-highlight matches in gold; `‹ ›` buttons or `Enter / Shift+Enter` to cycle through results
+- **Zoom / pan / rotate** — `+` / `−` / `⊡` buttons; scroll to zoom; right-click drag to rotate the whole graph
+- **Fractal density overlay** — zooms out reveal a quadtree density map color-coded by lifecycle state
+- **Connected-only filter** — hide isolated nodes to focus on the linked knowledge graph
+- **Drag-and-drop JSON loading** — drop a snapshot file directly onto the viewer
+
+The snapshot file is not committed (it's personal memory data). Generate a fresh one any time with `get_graph_snapshot`.
+
 ## Tool Profiles
 
 Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:

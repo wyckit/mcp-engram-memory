@@ -198,6 +198,58 @@
   .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .leg-line { width: 20px; height: 2px; flex-shrink: 0; border-radius: 1px; }
 
+  /* ── Search bar ── */
+  #search-wrap {
+    display: flex;
+    align-items: center;
+    background: #0c0e16;
+    border: 1px solid #1e2235;
+    border-radius: 6px;
+    min-width: 190px;
+    transition: border-color 0.15s;
+  }
+  #search-wrap:focus-within { border-color: #2d3a5a; }
+  #search-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #c4cad6;
+    font-size: 12px;
+    padding: 5px 10px;
+    flex: 1;
+    min-width: 0;
+    width: 150px;
+  }
+  #search-input::placeholder { color: #252e40; }
+  #search-count {
+    font-size: 11px;
+    color: #4a5568;
+    padding: 0 6px;
+    white-space: nowrap;
+    min-width: 42px;
+    text-align: right;
+  }
+  .snav {
+    background: none;
+    border: none;
+    border-left: 1px solid #1e2235;
+    color: #3a4255;
+    cursor: pointer;
+    padding: 5px 6px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .snav:hover { color: #7c8db0; background: #0f1118; }
+
+  /* Search highlight states */
+  .node .search-ring { opacity: 0; transition: opacity 0.2s; }
+  .node.search-match .search-ring { opacity: 1; animation: searchPulse 1.8s ease-in-out infinite; }
+  .node.search-dim { opacity: 0.04 !important; }
+  @keyframes searchPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.22; }
+  }
+
   /* ── Drop zone ── */
   #drop { display:none; }
   body.dragging #drop {
@@ -263,6 +315,14 @@
     <button class="zoom-btn" onclick="zoomBy(0.5)" title="Zoom out">−</button>
     <button class="zoom-btn" onclick="zoomFit()"   title="Fit all nodes">⊡</button>
   </div>
+  <div class="sep"></div>
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="Search nodes…" autocomplete="off" spellcheck="false">
+    <span id="search-count"></span>
+    <button class="snav" id="search-prev" title="Previous match (Shift+Enter)">‹</button>
+    <button class="snav" id="search-next" title="Next match (Enter)">›</button>
+    <button class="snav" id="search-clear" title="Clear (Esc)" style="color:#5a3535">×</button>
+  </div>
   <label class="btn" for="fileInput">Load JSON</label>
   <input type="file" id="fileInput" accept=".json">
 </div>
@@ -325,6 +385,12 @@ let simulation = null;
 let visibleStates = new Set(['stm', 'ltm', 'archived']);
 let connectedOnly = false;
 let globalAngle = 0; // current rotation in radians
+
+// Search state
+let searchQuery   = '';
+let searchMatches = [];
+let searchIndex   = 0;
+let _searchTimer  = null;
 
 // ── File loading ──────────────────────────────────────────────────────────────
 document.getElementById('fileInput').addEventListener('change', e => {
@@ -525,6 +591,19 @@ function render(data) {
         hideTip();
       });
 
+  // Expose for search
+  window._nodeSel  = nodeSel;
+  window._simNodes = simNodes;
+
+  // Search ring — outside halo, pulsing when matched
+  nodeSel.append('circle')
+    .attr('class', 'search-ring')
+    .attr('r', d => rScale(d.activationEnergy) * 5.5)
+    .attr('fill', 'none')
+    .attr('stroke', '#ffd040')
+    .attr('stroke-width', 1.5)
+    .attr('stroke-dasharray', '5 4');
+
   // Outer halo — soft glow corona
   nodeSel.append('circle')
     .attr('class', 'halo')
@@ -630,6 +709,9 @@ function render(data) {
     if (!event.active) simulation.alphaTarget(0);
     d.fx = null; d.fy = null;
   }
+
+  // Reapply active search across re-renders (filter changes, load, etc.)
+  if (searchQuery) applySearch(searchQuery);
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -846,6 +928,88 @@ function zoomFit() {
   window._svg.transition().duration(500)
     .call(window._zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 }
+
+// ── Search ────────────────────────────────────────────────────────────────────
+function applySearch(query) {
+  searchQuery = query.toLowerCase().trim();
+
+  if (!window._nodeSel) return;
+
+  if (!searchQuery) {
+    window._nodeSel.classed('search-match', false).classed('search-dim', false);
+    searchMatches = [];
+    updateSearchCount();
+    return;
+  }
+
+  const matchSet = new Set();
+  (window._simNodes || []).forEach(n => {
+    const hay = [n.id, n.text, n.keywords, n.category, n.ns]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (hay.includes(searchQuery)) matchSet.add(n.id);
+  });
+
+  searchMatches = [...matchSet];
+  searchIndex   = 0;
+
+  window._nodeSel
+    .classed('search-match', n => matchSet.has(n.id))
+    .classed('search-dim',   n => !matchSet.has(n.id));
+
+  updateSearchCount();
+  if (searchMatches.length) focusMatch(0);
+}
+
+function focusMatch(i) {
+  if (!searchMatches.length || !window._svg || !window._zoom) return;
+  searchIndex = ((i % searchMatches.length) + searchMatches.length) % searchMatches.length;
+  const id   = searchMatches[searchIndex];
+  const node = (window._simNodes || []).find(n => n.id === id);
+  if (!node || node.x == null) return;
+
+  const canvas = document.getElementById('canvas');
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  // Zoom to at least 1.5× so the matched node is clearly visible
+  const k = Math.max(1.5, d3.zoomTransform(window._svg.node()).k);
+  const tx = W / 2 - k * node.x;
+  const ty = H / 2 - k * node.y;
+  window._svg.transition().duration(350)
+    .call(window._zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+
+  updateSearchCount();
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  applySearch('');
+}
+
+function updateSearchCount() {
+  const el = document.getElementById('search-count');
+  if (!el) return;
+  if (!searchQuery || !searchMatches.length) {
+    el.textContent = searchQuery ? '0' : '';
+    el.style.color = '#ff5555';
+    return;
+  }
+  el.textContent = (searchIndex + 1) + ' / ' + searchMatches.length;
+  el.style.color = '#5a8a5a';
+}
+
+// Search input events
+document.getElementById('search-input').addEventListener('input', e => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => applySearch(e.target.value), 120);
+});
+
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { clearSearch(); e.target.blur(); }
+  if (e.key === 'Enter')  { e.preventDefault(); e.shiftKey ? focusMatch(searchIndex - 1) : focusMatch(searchIndex + 1); }
+});
+
+document.getElementById('search-prev').addEventListener('click',  () => focusMatch(searchIndex - 1));
+document.getElementById('search-next').addEventListener('click',  () => focusMatch(searchIndex + 1));
+document.getElementById('search-clear').addEventListener('click', clearSearch);
 
 // ── Resize ────────────────────────────────────────────────────────────────────
 window.addEventListener('resize', () => { if (snapshot) render(snapshot); });

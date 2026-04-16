@@ -438,3 +438,8 @@ memory.db
 
 # Claude Code agent worktrees (internal scratch space)
 .claude/worktrees/
+
+# Generated visualization snapshots
+visualization/snapshot.json
+visualization/snapshot.json.raw
+visualization/*.json
