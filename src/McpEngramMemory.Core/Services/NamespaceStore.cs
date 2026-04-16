@@ -148,17 +148,13 @@ internal sealed class NamespaceStore
 
     // ── Id Locator (reverse index: entryId → namespace) ──
 
-    /// <summary>Resolve which namespace an entry belongs to. O(1) lookup.</summary>
-    public bool TryResolveNamespace(string entryId, out string ns)
-        => _idToNamespace.TryGetValue(entryId, out ns!);
-
     /// <summary>Resolve namespace via locator, falling back to LoadAll if not found.</summary>
     public bool TryResolveOrLoad(string entryId, out string ns)
     {
-        if (TryResolveNamespace(entryId, out ns))
+        if (_idToNamespace.TryGetValue(entryId, out ns!))
             return true;
         LoadAll();
-        return TryResolveNamespace(entryId, out ns);
+        return _idToNamespace.TryGetValue(entryId, out ns!);
     }
 
     /// <summary>Track an entry's namespace in the locator.</summary>
@@ -168,13 +164,6 @@ internal sealed class NamespaceStore
     /// <summary>Remove an entry from the locator.</summary>
     public void UntrackEntry(string entryId)
         => _idToNamespace.TryRemove(entryId, out _);
-
-    /// <summary>Check if BM25 index exists for a namespace.</summary>
-    public bool HasBM25Namespace(string ns) => _bm25.HasNamespace(ns);
-
-    /// <summary>Rebuild BM25 index for a namespace.</summary>
-    public void RebuildBM25Namespace(string ns, List<CognitiveEntry> entries)
-        => _bm25.RebuildNamespace(ns, entries);
 
     // ── HNSW Index Management ──
 
@@ -219,6 +208,16 @@ internal sealed class NamespaceStore
             if (idx.NeedsRebuild)
                 _hnswIndices[ns] = idx.Rebuild();
         }
+    }
+
+    /// <summary>
+    /// Invalidate the in-memory HNSW index for a namespace and delete its persisted snapshot.
+    /// Call this after bulk re-embedding so the stale index is rebuilt lazily on the next search.
+    /// </summary>
+    public void InvalidateHnswIndex(string ns)
+    {
+        _hnswIndices.TryRemove(ns, out _);
+        _persistence.DeleteHnswSnapshot(ns);
     }
 
     /// <summary>Try to restore HNSW index from a persisted snapshot. Falls back to lazy rebuild if snapshot is stale.</summary>

@@ -1,0 +1,15 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "vector",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.728,
+  "meanPrecisionAtK": 0.453,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.868,
+  "meanLatencyMs": 0.170,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run. +0.011 recall vs March 2026 original baseline (0.717)."
+}

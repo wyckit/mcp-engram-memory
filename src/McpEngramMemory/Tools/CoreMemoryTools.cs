@@ -372,15 +372,13 @@ public sealed class CoreMemoryTools
     [McpServerTool(Name = "delete_memory")]
     [Description("Delete a memory entry by ID. Cascades to remove graph edges and cluster memberships.")]
     public string DeleteMemory(
-        [Description("The identifier of the entry to delete.")] string id,
-        KnowledgeGraph graph,
-        ClusterManager clusters)
+        [Description("The identifier of the entry to delete.")] string id)
     {
         // Cascade: remove graph edges (safe even if entry doesn't exist)
-        int edgesRemoved = graph.RemoveAllEdgesForEntry(id);
+        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
 
         // Cascade: remove from clusters
-        clusters.RemoveEntryFromAllClusters(id);
+        _clusters.RemoveEntryFromAllClusters(id);
 
         // Remove the entry itself — check return value to avoid TOCTOU
         if (!_index.Delete(id))

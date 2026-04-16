@@ -14,9 +14,30 @@ benchmarks/
   baseline-scale-v1.json
   2026-03-10-ablation/                # First ONNX ablation study (10 configs)
   2026-03-20/                         # Day 10 stability test (12 configs + ops)
+  2026-04-16/                         # Post-cleanup stability run (8 configs: default-v1 + scale-v1 × 4 modes)
   runner/                             # Benchmark execution infrastructure
   ideas/                              # Benchmark proposals and analysis
 ```
+
+## Key Findings (2026-04-16 — post-cleanup run)
+
+Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run after dead code removal, bug fixes, and `DeleteMemory` signature correction. Zero regression from v0.6.1.
+
+| Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
+|---------|-----------|----------|-----|--------|-------|
+| default-v1 (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
+| scale-v1 (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / **0.734** | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
+| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | 0.964 | From March 2026 baseline |
+| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | 0.952 | From March 2026 baseline |
+| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | Synonym expansion bridges vocab gaps |
+| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | Compound tokenization + stemming |
+| ambiguity-v1 (24 seeds) | vector_rerank | 0.922 | 1.000 | 0.941 | From March 25 baseline |
+| distractor-v1 (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | From March 25 baseline |
+| specificity-v1 (30 seeds) | vector_rerank | 0.919 | 0.972 | 0.905 | From March 25 baseline |
+| disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity across 4 clusters |
+| contamination-v1 | hybrid | — | — | — | Cross-domain contamination resistance |
+| cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
+| physics-v1 | hybrid | — | — | — | Physics engine domain retrieval |
 
 ## Key Findings (v0.6.0)
 
@@ -29,13 +50,31 @@ benchmarks/
 | realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | Synonym expansion bridges vocab gaps |
 | compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | Compound tokenization + stemming |
 | disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity across 4 clusters |
-| ambiguity-v1 | hybrid | — | — | — | Ambiguous query disambiguation |
-| distractor-v1 | hybrid | — | — | — | Noise resistance with grade-0 distractors |
-| specificity-v1 | hybrid | — | — | — | Precise vs. broad retrieval |
+| ambiguity-v1 | vector_rerank | 0.922 | 1.000 | 0.941 | Reranker provides +9.2% recall vs vector |
+| distractor-v1 | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | High nDCG — correct answer always ranks #1 |
+| specificity-v1 | vector_rerank | 0.919 | 0.972 | 0.905 | +5.0% recall vs pure vector |
 | scale-v1 (extended) | hybrid | — | — | — | Large namespace stress test |
 | contamination-v1 | hybrid | — | — | — | Cross-domain contamination resistance |
 | cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
 | physics-v1 | hybrid | — | — | — | Physics engine domain retrieval |
+
+## 2026-04-16 Architecture Cleanup (post-v0.6.1)
+
+Code quality pass: dead code removal, bug fixes, no algorithm changes.
+
+**Changes verified non-regressive:**
+- `DeleteMemory` tool signature fix (removed `KnowledgeGraph`/`ClusterManager` from MCP args — was causing deserialization failure on the live server)
+- `AccretionScanner` collapse/auto-summary ID collision fixed (timestamp → `Guid.NewGuid()`)
+- `BenchmarkRunner` cleanup: per-entry delete loop → `DeleteAllInNamespace` (O(1) vs O(N))
+- `RebuildEmbeddings` now calls `InvalidateHnswIndex` so stale HNSW is dropped after re-embedding
+- `SqliteStorageProvider.DeleteNamespaceAsync` wrapped in a transaction (atomicity fix)
+- `ExpertDispatcher.BuildTreeNode` now populates `ChildNodeIds` correctly from `nodeMap`
+- `MultiAgentTools.list_shared` now returns shared namespaces only (was incorrectly returning `WhoAmIResult`)
+- Removed dead methods: `VectorQuantizer.Dequantize`, `SynonymExpander.HasExpansions`/`GetSynonymMap`, `DocumentEnricher.GetReverseMap`, `NamespaceStore.HasBM25Namespace`/`RebuildBM25Namespace`, `ClusterManager.GetAllClusters`, `ExpertDispatcher.GetChildren(string)`
+- `SynthesisEngine.MapWorkerAsync` exceptions now logged instead of silently swallowed
+- `MaintenanceTools.compression_stats` savings ratio corrected (was including STM bytes in denominator)
+
+**Result:** 850/850 tests pass across net8.0. default-v1 vector_rerank stable at 0.900/1.000/0.956 (within noise of prior runs).
 
 ## v0.6.0 Improvements
 

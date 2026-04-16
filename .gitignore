@@ -435,3 +435,6 @@ FodyWeavers.xsd
 
 # Local AI tooling SQLite database
 memory.db
+
+# Claude Code agent worktrees (internal scratch space)
+.claude/worktrees/

@@ -166,17 +166,23 @@ public class MultiAgentToolsTests : IDisposable
     // ── ListShared ──
 
     [Fact]
-    public void ListShared_ReturnsAccessMap()
+    public void ListShared_ReturnsOnlySharedByOthers()
     {
-        _registry.EnsureOwnership("owned-ns", "agent-lister");
+        // agent-owner owns a namespace and shares it with agent-lister
+        _registry.EnsureOwnership("shared-ns", "agent-owner");
+        _registry.Share("shared-ns", "agent-owner", "agent-lister", "read");
+
+        // agent-lister owns its own namespace (should NOT appear)
+        _registry.EnsureOwnership("own-ns", "agent-lister");
+
         var agent = new AgentIdentity("agent-lister");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
 
-        var result = tools.ListShared() as WhoAmIResult;
+        var result = tools.ListShared() as IReadOnlyList<NamespacePermission>;
 
         Assert.NotNull(result);
-        Assert.Equal("agent-lister", result!.AgentId);
-        Assert.Contains("owned-ns", result.OwnedNamespaces);
+        Assert.Contains(result, p => p.Namespace == "shared-ns");
+        Assert.DoesNotContain(result, p => p.Namespace == "own-ns");
     }
 
     // ── WhoAmI ──

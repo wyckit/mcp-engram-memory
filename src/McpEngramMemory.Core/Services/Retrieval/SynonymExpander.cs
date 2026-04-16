@@ -136,20 +136,6 @@ public sealed class SynonymExpander
         return query + " " + string.Join(" ", expansions);
     }
 
-    /// <summary>
-    /// Check if a query would be expanded (has matching synonym terms).
-    /// Useful for deciding whether to use the expanded vs original query.
-    /// </summary>
-    public bool HasExpansions(string query)
-    {
-        if (string.IsNullOrWhiteSpace(query))
-            return false;
-        return Tokenize(query).Any(t => SynonymMap.ContainsKey(t));
-    }
-
-    /// <summary>Get the synonym map for testing/inspection.</summary>
-    public static IReadOnlyDictionary<string, string[]> GetSynonymMap() => SynonymMap;
-
     private static List<string> Tokenize(string text)
     {
         var tokens = new List<string>();

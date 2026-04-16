@@ -345,17 +345,23 @@ public class MultiAgentTests : IDisposable
     }
 
     [Fact]
-    public void ListShared_ReturnsAccessibleNamespaces()
+    public void ListShared_ReturnsOnlySharedByOthers()
     {
-        _registry.EnsureOwnership("ns1", "agent-a");
+        // agent-b owns ns-shared and shares it with agent-a
+        _registry.EnsureOwnership("ns-shared", "agent-b");
+        _registry.Share("ns-shared", "agent-b", "agent-a", "read");
+
+        // agent-a also owns its own namespace (should NOT appear in list_shared)
+        _registry.EnsureOwnership("ns-own", "agent-a");
+
         var agent = new AgentIdentity("agent-a");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
 
-        var result = tools.ListShared() as WhoAmIResult;
+        var result = tools.ListShared() as IReadOnlyList<NamespacePermission>;
 
         Assert.NotNull(result);
-        Assert.Equal("agent-a", result!.AgentId);
-        Assert.Contains("ns1", result.OwnedNamespaces);
+        Assert.Contains(result, p => p.Namespace == "ns-shared");
+        Assert.DoesNotContain(result, p => p.Namespace == "ns-own");
     }
 
     [Fact]

@@ -1,0 +1,15 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.734,
+  "meanPrecisionAtK": 0.453,
+  "meanMrr": 0.983,
+  "meanNdcgAtK": 0.884,
+  "meanLatencyMs": 0.573,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run. Best nDCG mode for scale-v1."
+}

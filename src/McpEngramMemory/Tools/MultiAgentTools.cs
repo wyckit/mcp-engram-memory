@@ -108,15 +108,16 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "list_shared")]
-    [Description("List all namespaces shared with the current agent, showing owner and access level for each.")]
+    [Description("List all namespaces that OTHER agents have shared with the current agent, showing owner and access level for each.")]
     public object ListShared()
     {
         using var timer = _metrics.StartTimer("list_shared");
-        return _registry.GetAccessibleNamespaces(_agent.AgentId);
+        var result = _registry.GetAccessibleNamespaces(_agent.AgentId);
+        return result.SharedNamespaces;
     }
 
     [McpServerTool(Name = "whoami")]
-    [Description("Return current agent identity and accessible namespaces. Use to verify multi-agent configuration.")]
+    [Description("Return current agent identity and accessible namespaces (owned + shared with this agent). Use to verify multi-agent configuration.")]
     public object WhoAmI()
     {
         using var timer = _metrics.StartTimer("whoami");

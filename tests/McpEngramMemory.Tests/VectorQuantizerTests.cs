@@ -29,41 +29,6 @@ public class VectorQuantizerTests
     }
 
     [Fact]
-    public void Dequantize_RoundTripsWithLowError()
-    {
-        var fp32 = CreateRandomVector(384);
-        var qv = VectorQuantizer.Quantize(fp32);
-        var reconstructed = VectorQuantizer.Dequantize(qv);
-
-        Assert.Equal(fp32.Length, reconstructed.Length);
-
-        // Quantization error should be small relative to the value range
-        float range = fp32.Max() - fp32.Min();
-        float maxError = range / 255f; // Theoretical max per-element error
-
-        for (int i = 0; i < fp32.Length; i++)
-        {
-            Assert.InRange(Math.Abs(fp32[i] - reconstructed[i]), 0, maxError * 1.5f);
-        }
-    }
-
-    [Fact]
-    public void Dequantize_PreservesCosineSimilarity()
-    {
-        var a = CreateRandomVector(384);
-        var b = CreateRandomVector(384);
-
-        float originalCosine = ExactCosine(a, b);
-
-        var aRecon = VectorQuantizer.Dequantize(VectorQuantizer.Quantize(a));
-        var bRecon = VectorQuantizer.Dequantize(VectorQuantizer.Quantize(b));
-        float reconstructedCosine = ExactCosine(aRecon, bRecon);
-
-        // Cosine similarity should be preserved within ~2%
-        Assert.InRange(Math.Abs(originalCosine - reconstructedCosine), 0, 0.02f);
-    }
-
-    [Fact]
     public void Int8DotProduct_ScalarMatchesSIMD()
     {
         var a = VectorQuantizer.Quantize(CreateRandomVector(384));

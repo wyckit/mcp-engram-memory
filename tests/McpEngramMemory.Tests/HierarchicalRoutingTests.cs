@@ -281,27 +281,6 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Equal("leaf1", leaves[0].Id);
     }
 
-    [Fact]
-    public void GetChildren_ReturnsChildNodes()
-    {
-        _dispatcher.CreateDomainNode("parent", "Parent domain", "root");
-        _dispatcher.CreateDomainNode("child1", "Child 1", "branch", "parent");
-        _dispatcher.CreateDomainNode("child2", "Child 2", "branch", "parent");
-
-        var children = _dispatcher.GetChildren("parent");
-        Assert.Equal(2, children.Count);
-        Assert.Contains(children, c => c.Id == "child1");
-        Assert.Contains(children, c => c.Id == "child2");
-    }
-
-    [Fact]
-    public void GetChildren_NoChildren_ReturnsEmpty()
-    {
-        _dispatcher.CreateDomainNode("lonely", "Lonely root", "root");
-        var children = _dispatcher.GetChildren("lonely");
-        Assert.Empty(children);
-    }
-
     // ── Backward Compatibility ──
 
     [Fact]

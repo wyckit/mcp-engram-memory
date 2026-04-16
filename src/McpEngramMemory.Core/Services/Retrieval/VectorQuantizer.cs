@@ -38,17 +38,6 @@ public static class VectorQuantizer
     }
 
     /// <summary>
-    /// Reconstruct a FP32 vector from its quantized representation (lossy).
-    /// </summary>
-    public static float[] Dequantize(QuantizedVector qv)
-    {
-        var result = new float[qv.Data.Length];
-        for (int i = 0; i < qv.Data.Length; i++)
-            result[i] = (qv.Data[i] + 128f) / qv.Scale + qv.Min;
-        return result;
-    }
-
-    /// <summary>
     /// SIMD-accelerated Int8 dot product.
     /// Uses System.Numerics.Vector for portable hardware acceleration:
     /// widens sbyte→short for multiply, then short→int for accumulation.

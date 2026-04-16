@@ -123,9 +123,6 @@ public sealed class DocumentEnricher
         return combined;
     }
 
-    /// <summary>Get the reverse synonym map for testing/inspection.</summary>
-    public static IReadOnlyDictionary<string, string[]> GetReverseMap() => ReverseMap;
-
     private static List<string> Tokenize(string text)
     {
         var tokens = new List<string>();

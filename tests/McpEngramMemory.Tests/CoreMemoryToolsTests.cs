@@ -205,7 +205,7 @@ public class CoreMemoryToolsTests : IDisposable
     public void DeleteMemory_Existing_ReturnsDeleted()
     {
         _tools.StoreMemory(id: "a", ns: "work", vector: new[] { 1f, 0f });
-        var result = _tools.DeleteMemory("a", _graph, _clusters);
+        var result = _tools.DeleteMemory("a");
         Assert.Contains("Deleted", result);
         Assert.Equal(0, _index.Count);
     }
@@ -213,7 +213,7 @@ public class CoreMemoryToolsTests : IDisposable
     [Fact]
     public void DeleteMemory_NonExistent_ReturnsNotFound()
     {
-        var result = _tools.DeleteMemory("missing", _graph, _clusters);
+        var result = _tools.DeleteMemory("missing");
         Assert.Contains("not found", result);
     }
 
@@ -224,7 +224,7 @@ public class CoreMemoryToolsTests : IDisposable
         _tools.StoreMemory(id: "b", ns: "work", vector: new[] { 0f, 1f });
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
 
-        _tools.DeleteMemory("a", _graph, _clusters);
+        _tools.DeleteMemory("a");
         Assert.Equal(0, _graph.EdgeCount);
     }
 
@@ -235,7 +235,7 @@ public class CoreMemoryToolsTests : IDisposable
         _tools.StoreMemory(id: "b", ns: "work", vector: new[] { 0f, 1f });
         _clusters.CreateCluster("c1", "work", new[] { "a", "b" });
 
-        _tools.DeleteMemory("a", _graph, _clusters);
+        _tools.DeleteMemory("a");
         var cluster = _clusters.GetCluster("c1");
         Assert.Equal(1, cluster!.MemberCount);
     }

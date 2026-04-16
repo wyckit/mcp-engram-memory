@@ -1,0 +1,15 @@
+{
+  "datasetId": "default-v1",
+  "mode": "hybrid",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.858,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.931,
+  "meanLatencyMs": 0.724,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run."
+}

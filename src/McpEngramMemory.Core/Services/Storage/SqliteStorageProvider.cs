@@ -709,11 +709,28 @@ public sealed class SqliteStorageProvider : IStorageProvider
         using var pragma = conn.CreateCommand();
         pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
         await pragma.ExecuteNonQueryAsync();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM entries WHERE ns = @ns";
-        cmd.Parameters.AddWithValue("@ns", ns);
-        await cmd.ExecuteNonQueryAsync();
-        DeleteHnswSnapshot(ns);
+        using var tx = await conn.BeginTransactionAsync();
+        try
+        {
+            using var cmdEntries = conn.CreateCommand();
+            cmdEntries.Transaction = (SqliteTransaction)tx;
+            cmdEntries.CommandText = "DELETE FROM entries WHERE ns = @ns";
+            cmdEntries.Parameters.AddWithValue("@ns", ns);
+            await cmdEntries.ExecuteNonQueryAsync();
+
+            using var cmdHnsw = conn.CreateCommand();
+            cmdHnsw.Transaction = (SqliteTransaction)tx;
+            cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
+            cmdHnsw.Parameters.AddWithValue("@key", $"hnsw_{ns}");
+            await cmdHnsw.ExecuteNonQueryAsync();
+
+            await tx.CommitAsync();
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            throw;
+        }
     }
 
     // ── Flush + Dispose ──

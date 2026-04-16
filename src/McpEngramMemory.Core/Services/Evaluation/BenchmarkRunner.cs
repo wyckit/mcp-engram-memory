@@ -124,9 +124,10 @@ public sealed class BenchmarkRunner
         }
         finally
         {
-            // 4. Cleanup: delete by namespace-scoped lookup to avoid touching real data
-            foreach (var entry in _index.GetAllInNamespace(ns))
-                _index.Delete(entry.Id);
+            // 4. Cleanup: delete the entire isolated benchmark namespace in one step.
+            // Using DeleteAllInNamespace (not per-entry Delete) avoids accidentally
+            // removing real user data if a seed ID collides with a production entry.
+            _index.DeleteAllInNamespace(ns);
         }
     }
 
@@ -226,8 +227,10 @@ public sealed class BenchmarkRunner
         }
         finally
         {
-            foreach (var entry in _index.GetAllInNamespace(ns))
-                _index.Delete(entry.Id);
+            // Cleanup: delete the entire isolated benchmark namespace in one step.
+            // Using DeleteAllInNamespace (not per-entry Delete) avoids accidentally
+            // removing real user data if a seed ID collides with a production entry.
+            _index.DeleteAllInNamespace(ns);
         }
     }
 

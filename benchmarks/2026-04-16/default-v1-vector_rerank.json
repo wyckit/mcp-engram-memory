@@ -1,0 +1,15 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector_rerank",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.900,
+  "meanPrecisionAtK": 0.450,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.956,
+  "meanLatencyMs": 0.315,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run. Best mode for default-v1. nDCG 0.956 (+0.003 vs March 20 run)."
+}

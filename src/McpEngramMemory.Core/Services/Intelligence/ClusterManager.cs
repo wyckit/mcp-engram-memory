@@ -341,14 +341,6 @@ public sealed class ClusterManager
         return affectedClusters.Count;
     }
 
-    /// <summary>Get all clusters (for persistence).</summary>
-    public IReadOnlyList<SemanticCluster> GetAllClusters()
-    {
-        _lock.EnterReadLock();
-        try { return _clusters.Values.ToList(); }
-        finally { _lock.ExitReadLock(); }
-    }
-
     // Called under upgradeable read lock — upgrades to write only if loading needed.
     private void EnsureLoaded()
     {

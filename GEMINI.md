@@ -2,6 +2,22 @@
 
 You have access to a persistent engram memory system via the `engram-memory` MCP server. Use it as your primary long-term memory for storing and recalling knowledge across sessions.
 
+## Model Routing (Local Ollama)
+
+Route sub-agents by purpose to maximize local compute efficiency:
+
+| Tier | Model | What runs here |
+|------|-------|----------------|
+| **Main thread** | `deepseek-r1:8b` or `qwen2.5:7b` | Coding, architecture, reasoning, expert creation, retrospective evaluation |
+| **Memory sub-agents** | `qwen2.5:7b` (via `generalist`) | All engram MCP tool calls: `search_memory`, `cross_search`, `store_memory`, `dispatch_task`, `deep_recall`, `link_memories`, `detect_duplicates`, `find_contradictions`, `merge_memories`, etc. |
+| **Utility sub-agents** | `phi3.5` (via `generalist`) | Explore agents, codebase searches, file reading/grepping, research lookups, any sub-agent that doesn't need engram tools or complex reasoning |
+
+**Rules**:
+- When spawning a `generalist` for engram memory operations → Request `qwen2.5:7b`
+- When spawning a `generalist` for codebase exploration or general research → Request `phi3.5`
+- `consult_expert_panel` and `create_expert` may stay in the main thread when they require multi-step orchestration.
+- When in doubt, default to `phi3.5` for read-only tasks, `qwen2.5:7b` for memory tasks.
+
 ## Recall: Search Before You Work
 
 Before starting any task:

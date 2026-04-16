@@ -69,7 +69,7 @@ public sealed class AccretionScanner
                     continue;
 
                 var centroid = ComputeCentroid(cluster);
-                var collapseId = $"collapse:{ns}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}:{_pendingCollapses.Count}";
+                var collapseId = $"collapse:{ns}:{Guid.NewGuid():N}";
                 var collapse = new PendingCollapse(collapseId, ns, memberIds, centroid);
                 _pendingCollapses[collapseId] = collapse;
 
@@ -90,7 +90,7 @@ public sealed class AccretionScanner
             foreach (var cluster in detectedClusters)
             {
                 var memberIds = cluster.Select(e => e.Id).ToList();
-                var clusterId = $"auto:{ns}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}:{autoSummaries.Count}";
+                var clusterId = $"auto:{ns}:{Guid.NewGuid():N}";
 
                 // Check if cluster already exists for these members
                 if (HasExistingCluster(clusters, ns, memberIds))

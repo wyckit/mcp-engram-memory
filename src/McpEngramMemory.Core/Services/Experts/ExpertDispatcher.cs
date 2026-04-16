@@ -562,12 +562,6 @@ public sealed class ExpertDispatcher
     }
 
     /// <summary>
-    /// Get all children of a given parent node from the meta-index.
-    /// </summary>
-    public IReadOnlyList<CognitiveEntry> GetChildren(string parentNodeId)
-        => GetChildren(parentNodeId, _index.GetAllInNamespace(SystemNamespace));
-
-    /// <summary>
     /// Get children from a pre-fetched entry list (avoids repeated GetAllInNamespace scans).
     /// </summary>
     private static IReadOnlyList<CognitiveEntry> GetChildren(
@@ -670,10 +664,33 @@ public sealed class ExpertDispatcher
     }
 
     /// <summary>
-    /// Build a DomainNode with its full child tree for GetDomainTree().
+    /// Build a DomainNode for GetDomainTree(), filtering ChildNodeIds to only those
+    /// that exist in nodeMap so stale or orphaned ID references are excluded.
     /// </summary>
     private static DomainNode BuildTreeNode(CognitiveEntry entry, Dictionary<string, CognitiveEntry> nodeMap)
-        => EntryToDomainNode(entry, 0f, truncateDescription: true);
+    {
+        string childNodeIdsStr = entry.Metadata.GetValueOrDefault("childNodeIds") ?? "";
+        var childNodeIds = string.IsNullOrEmpty(childNodeIdsStr)
+            ? Array.Empty<string>()
+            : childNodeIdsStr
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Where(id => nodeMap.ContainsKey(id))
+                .ToArray();
+
+        string description = entry.Text ?? "";
+        if (description.Length > 120)
+            description = string.Concat(description.AsSpan(0, 117), "...");
+
+        return new DomainNode(
+            entry.Id,
+            description,
+            entry.Metadata.GetValueOrDefault("targetNamespace") ?? $"expert_{entry.Id}",
+            GetLevel(entry),
+            entry.Metadata.GetValueOrDefault("parentNodeId"),
+            childNodeIds,
+            0f,
+            entry.AccessCount);
+    }
 
     /// <summary>
     /// Calculate depth of a node in the tree.

@@ -1,0 +1,15 @@
+{
+  "datasetId": "scale-v1",
+  "mode": "hybrid",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.745,
+  "meanPrecisionAtK": 0.460,
+  "meanMrr": 0.975,
+  "meanNdcgAtK": 0.856,
+  "meanLatencyMs": 0.268,
+  "totalEntries": 80,
+  "totalQueries": 30,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run. Best recall mode for scale-v1. +0.028 over original vector baseline (0.717)."
+}

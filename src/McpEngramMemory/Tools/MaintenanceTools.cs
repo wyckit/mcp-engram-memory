@@ -71,23 +71,27 @@ public sealed class MaintenanceTools
             int quantizedCount = ltm + archived; // LTM and archived entries are quantized
             int dims = entries.Count > 0 ? entries[0].Vector.Length : _embedding.Dimensions;
 
-            long fp32Bytes = entries.Count * dims * sizeof(float);      // FP32 memory
-            long int8Bytes = quantizedCount * dims * sizeof(sbyte);     // Int8 quantized
-            long stmBytes = stm * dims * sizeof(float);                  // STM stays FP32
-            long totalMemory = stmBytes + int8Bytes + (quantizedCount * 8); // +8 for min/scale
+            long fp32Bytes = entries.Count * dims * sizeof(float);      // FP32 memory if uncompressed
+            long int8Bytes = quantizedCount * dims * sizeof(sbyte);     // Int8 quantized (LTM + archived)
+            long stmBytes = stm * dims * sizeof(float);                  // STM stays FP32 (not quantized)
+            long totalMemory = stmBytes + int8Bytes + (quantizedCount * 8); // +8 for min/scale per quantized entry
 
             nsStats.Add(new NamespaceCompressionStats(
                 namespaceName, entries.Count, stm, quantizedCount,
-                dims, fp32Bytes, int8Bytes + stmBytes, totalMemory));
+                dims, fp32Bytes, int8Bytes, totalMemory));
 
             totalEntries += entries.Count;
             totalQuantized += quantizedCount;
             totalFp32Bytes += fp32Bytes;
-            totalInt8Bytes += int8Bytes + stmBytes;
+            totalInt8Bytes += int8Bytes;
         }
 
-        float compressionRatio = totalFp32Bytes > 0
-            ? (float)totalInt8Bytes / totalFp32Bytes
+        // Savings ratio: how much smaller the quantized (LTM + archived) entries are vs. full FP32.
+        // STM entries are not quantized and are excluded from this ratio — they remain FP32.
+        // Compare int8Bytes (actual quantized storage) against what those same entries would cost at FP32.
+        long quantizedAtFp32 = totalQuantized * _embedding.Dimensions * sizeof(float);
+        float compressionRatio = quantizedAtFp32 > 0
+            ? (float)totalInt8Bytes / quantizedAtFp32
             : 1f;
 
         return new CompressionStatsResult(

@@ -176,7 +176,11 @@ public sealed class SynthesisEngine
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Graceful degradation: skip failed chunks
+                // Graceful degradation: skip failed chunks, but surface the error so callers
+                // can distinguish "Ollama crashed" from "inputs were empty".
+                Console.Error.WriteLine(
+                    $"[SynthesisEngine] MapWorker failed for chunk of {chunk.Entries.Count} items: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
             }
         }
     }

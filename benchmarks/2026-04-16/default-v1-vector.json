@@ -1,0 +1,15 @@
+{
+  "datasetId": "default-v1",
+  "mode": "vector",
+  "runAt": "2026-04-16T00:00:00Z",
+  "meanRecallAtK": 0.867,
+  "meanPrecisionAtK": 0.430,
+  "meanMrr": 1.000,
+  "meanNdcgAtK": 0.938,
+  "meanLatencyMs": 0.242,
+  "totalEntries": 25,
+  "totalQueries": 20,
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Post-architecture-cleanup run. Dead code removal, ID collision fixes, DeleteMemory signature fix. Zero regression from v0.6.1 baseline."
+}

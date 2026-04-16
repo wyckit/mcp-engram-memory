@@ -646,14 +646,14 @@ public sealed class CognitiveIndex : IDisposable
             }
 
             int count = nsEntries.Count;
-            // Delete each entry from BM25 and HNSW indices
+            // Schedule per-entry persistence deletes for incremental backends (e.g. SQLite).
+            // BM25 and HNSW cleanup is handled in bulk by RemoveNamespace below — no per-entry
+            // removal needed here.
             foreach (var id in nsEntries.Keys.ToList())
-            {
-                _store.RemoveBM25(id, ns);
-                _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id);
-            }
 
+            // Removes namespace from _namespaces, _idToNamespace, _loadedNamespaces, BM25,
+            // _hnswIndices, and deletes the persisted HNSW snapshot in one O(1) bulk step.
             _store.RemoveNamespace(ns);
             return count;
         }
@@ -745,7 +745,12 @@ public sealed class CognitiveIndex : IDisposable
             }
 
             if (updated > 0)
+            {
                 _store.ScheduleSave(ns);
+                // Invalidate the stale HNSW index so it is rebuilt lazily on the next search.
+                // The old topology references pre-re-embedding vectors and would return wrong candidates.
+                _store.InvalidateHnswIndex(ns);
+            }
 
             return (updated, skipped);
         }

@@ -144,7 +144,7 @@ public class RegressionTests : IDisposable
         var tasks = new[]
         {
             Task.Run(() => _clusters.StoreSummary("c1", "summary text", new[] { 0.5f, 0.5f }), cts.Token),
-            Task.Run(() => tools.DeleteMemory("b", _graph, _clusters), cts.Token)
+            Task.Run(() => tools.DeleteMemory("b"), cts.Token)
         };
 
         // If this times out, we have a deadlock

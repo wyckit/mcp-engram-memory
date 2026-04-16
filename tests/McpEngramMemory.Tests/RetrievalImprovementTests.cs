@@ -64,14 +64,6 @@ public class RetrievalImprovementTests : IDisposable
     }
 
     [Fact]
-    public void SynonymExpander_HasExpansions_ReturnsTrueForKnownTerms()
-    {
-        var expander = new SynonymExpander();
-        Assert.True(expander.HasExpansions("maintenance test"));
-        Assert.False(expander.HasExpansions("quantum physics"));
-    }
-
-    [Fact]
     public void SynonymExpander_LimitsExpansionsPerTerm()
     {
         var expander = new SynonymExpander();
