@@ -186,3 +186,63 @@ public sealed record FeedbackResult(
     [property: JsonPropertyName("previousState")] string PreviousState,
     [property: JsonPropertyName("newState")] string NewState,
     [property: JsonPropertyName("stateChanged")] bool StateChanged);
+
+// ── Graph Snapshot (visualization) ──────────────────────────────────────────
+
+/// <summary>
+/// A single node in the memory graph snapshot.
+/// </summary>
+public sealed record GraphSnapshotNode(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("ns")] string Ns,
+    [property: JsonPropertyName("lifecycleState")] string LifecycleState,
+    [property: JsonPropertyName("activationEnergy")] float ActivationEnergy,
+    [property: JsonPropertyName("category")] string? Category,
+    [property: JsonPropertyName("accessCount")] int AccessCount,
+    [property: JsonPropertyName("isSummaryNode")] bool IsSummaryNode,
+    [property: JsonPropertyName("sourceClusterId")] string? SourceClusterId,
+    [property: JsonPropertyName("keywords")] string? Keywords);
+
+/// <summary>
+/// A single typed edge in the memory graph snapshot.
+/// </summary>
+public sealed record GraphSnapshotEdge(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("target")] string Target,
+    [property: JsonPropertyName("relation")] string Relation,
+    [property: JsonPropertyName("weight")] float Weight);
+
+/// <summary>
+/// A cluster grouping in the memory graph snapshot.
+/// </summary>
+public sealed record GraphSnapshotCluster(
+    [property: JsonPropertyName("clusterId")] string ClusterId,
+    [property: JsonPropertyName("label")] string? Label,
+    [property: JsonPropertyName("ns")] string Ns,
+    [property: JsonPropertyName("memberIds")] IReadOnlyList<string> MemberIds,
+    [property: JsonPropertyName("hasSummary")] bool HasSummary);
+
+/// <summary>
+/// Aggregate statistics for a graph snapshot.
+/// </summary>
+public sealed record GraphSnapshotStats(
+    [property: JsonPropertyName("nodeCount")] int NodeCount,
+    [property: JsonPropertyName("edgeCount")] int EdgeCount,
+    [property: JsonPropertyName("clusterCount")] int ClusterCount,
+    [property: JsonPropertyName("stm")] int Stm,
+    [property: JsonPropertyName("ltm")] int Ltm,
+    [property: JsonPropertyName("archived")] int Archived,
+    [property: JsonPropertyName("namespaces")] IReadOnlyList<string> Namespaces);
+
+/// <summary>
+/// Full memory graph snapshot for visualization.
+/// Pipe this JSON into visualization/memory-graph.html.
+/// </summary>
+public sealed record GraphSnapshot(
+    [property: JsonPropertyName("namespace")] string Namespace,
+    [property: JsonPropertyName("capturedAt")] DateTimeOffset CapturedAt,
+    [property: JsonPropertyName("nodes")] IReadOnlyList<GraphSnapshotNode> Nodes,
+    [property: JsonPropertyName("edges")] IReadOnlyList<GraphSnapshotEdge> Edges,
+    [property: JsonPropertyName("clusters")] IReadOnlyList<GraphSnapshotCluster> Clusters,
+    [property: JsonPropertyName("stats")] GraphSnapshotStats Stats);

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram Memory Graph</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f1117;
+    color: #e2e8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  #header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: #1a1d2e;
+    border-bottom: 1px solid #2d3148;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  #header h1 { font-size: 15px; font-weight: 600; color: #a5b4fc; white-space: nowrap; }
+  #stats { font-size: 12px; color: #64748b; }
+  #stats span { margin-right: 12px; }
+  #stats .val { color: #94a3b8; font-weight: 500; }
+
+  label.btn {
+    padding: 5px 12px;
+    background: #3730a3;
+    color: #e0e7ff;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    border: 1px solid #4338ca;
+  }
+  label.btn:hover { background: #4338ca; }
+  #fileInput { display: none; }
+
+  .sep { width: 1px; height: 20px; background: #2d3148; flex-shrink: 0; }
+
+  /* ── Filters ── */
+  #filters {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+  #filters span { color: #64748b; }
+  .pill {
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    user-select: none;
+    transition: opacity 0.15s;
+  }
+  .pill.inactive { opacity: 0.3; }
+  .pill-stm  { background: rgba(245,158,11,0.15); border-color: #f59e0b; color: #fbbf24; }
+  .pill-ltm  { background: rgba(59,130,246,0.15); border-color: #3b82f6; color: #60a5fa; }
+  .pill-arch { background: rgba(107,114,128,0.15); border-color: #6b7280; color: #9ca3af; }
+
+  /* ── Canvas ── */
+  #canvas { flex: 1; position: relative; overflow: hidden; }
+  svg { width: 100%; height: 100%; }
+
+  /* ── Edges ── */
+  .edge {
+    stroke-opacity: 0.55;
+    stroke-width: 1.2;
+    fill: none;
+    marker-end: url(#arrow);
+  }
+  .edge:hover { stroke-opacity: 1; stroke-width: 2; }
+
+  /* ── Nodes ── */
+  .node circle {
+    stroke-width: 1.5;
+    cursor: grab;
+    transition: r 0.1s;
+  }
+  .node circle:active { cursor: grabbing; }
+  .node.summary circle {
+    stroke-width: 2.5;
+    stroke-dasharray: 4 2;
+  }
+  .node-label {
+    font-size: 9px;
+    fill: #94a3b8;
+    pointer-events: none;
+    text-anchor: middle;
+    dominant-baseline: hanging;
+  }
+
+  /* ── Cluster halos ── */
+  .cluster-hull {
+    fill-opacity: 0.06;
+    stroke-opacity: 0.25;
+    stroke-width: 1.5;
+    stroke-dasharray: 5 3;
+    pointer-events: none;
+  }
+  .cluster-label {
+    font-size: 10px;
+    font-weight: 500;
+    fill-opacity: 0.5;
+    pointer-events: none;
+  }
+
+  /* ── Tooltip ── */
+  #tooltip {
+    position: absolute;
+    background: #1e2235;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    max-width: 320px;
+    pointer-events: none;
+    display: none;
+    z-index: 100;
+    line-height: 1.5;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  #tooltip .tt-id   { font-size: 10px; color: #64748b; margin-bottom: 4px; font-family: monospace; }
+  #tooltip .tt-text { color: #e2e8f0; margin-bottom: 6px; }
+  #tooltip .tt-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+  #tooltip .tag {
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  /* ── Legend ── */
+  #legend {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    background: rgba(26,29,46,0.9);
+    border: 1px solid #2d3148;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 11px;
+    line-height: 1.8;
+  }
+  #legend h3 { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .leg-row { display: flex; align-items: center; gap: 8px; color: #94a3b8; }
+  .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .leg-line { width: 20px; height: 2px; flex-shrink: 0; border-radius: 1px; }
+
+  /* ── Drop zone ── */
+  #drop { display:none; }
+  body.dragging #drop {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    background: rgba(67,56,202,0.25);
+    border: 3px dashed #4338ca;
+    border-radius: 12px;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: #a5b4fc;
+    z-index: 200;
+    pointer-events: none;
+  }
+
+  /* ── Empty state ── */
+  #empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: #374151;
+  }
+  #empty .big { font-size: 48px; }
+  #empty p { font-size: 14px; color: #4b5563; max-width: 380px; text-align: center; line-height: 1.6; }
+  #empty code {
+    background: #1a1d2e;
+    border: 1px solid #2d3148;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: #818cf8;
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>⬡ Engram Memory Graph</h1>
+  <div id="stats">
+    <span>Nodes <span class="val" id="s-nodes">—</span></span>
+    <span>Edges <span class="val" id="s-edges">—</span></span>
+    <span>Clusters <span class="val" id="s-clusters">—</span></span>
+    <span>Captured <span class="val" id="s-time">—</span></span>
+  </div>
+  <div class="sep"></div>
+  <div id="filters">
+    <span>Show:</span>
+    <div class="pill pill-stm"  data-state="stm"      onclick="toggleState(this)">STM</div>
+    <div class="pill pill-ltm"  data-state="ltm"      onclick="toggleState(this)">LTM</div>
+    <div class="pill pill-arch" data-state="archived"  onclick="toggleState(this)">Archived</div>
+  </div>
+  <div class="sep"></div>
+  <label class="btn" for="fileInput">Load JSON</label>
+  <input type="file" id="fileInput" accept=".json">
+</div>
+
+<div id="canvas">
+  <div id="empty">
+    <div class="big">◈</div>
+    <p>
+      Call <code>get_graph_snapshot</code> in Claude, save the JSON to a file,
+      then click <strong>Load JSON</strong> — or drag the file here.
+    </p>
+    <p style="font-size:12px; color:#374151;">
+      Nodes = memories &nbsp;·&nbsp; Color = lifecycle state &nbsp;·&nbsp;
+      Edges = typed relations &nbsp;·&nbsp; Halos = clusters
+    </p>
+  </div>
+  <svg id="svg"></svg>
+  <div id="tooltip"></div>
+  <div id="drop">Drop JSON here</div>
+</div>
+
+<div id="legend">
+  <h3>Lifecycle</h3>
+  <div class="leg-row"><div class="leg-dot" style="background:#f59e0b"></div> STM (active)</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#3b82f6"></div> LTM (stable)</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#4b5563"></div> Archived</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#e2e8f0;border:2px dashed #94a3b8"></div> Summary node</div>
+  <h3 style="margin-top:10px">Relations</h3>
+  <div class="leg-row"><div class="leg-line" style="background:#ef4444"></div> contradicts</div>
+  <div class="leg-row"><div class="leg-line" style="background:#14b8a6"></div> elaborates</div>
+  <div class="leg-row"><div class="leg-line" style="background:#a855f7"></div> cross_reference</div>
+  <div class="leg-row"><div class="leg-line" style="background:#f59e0b"></div> depends_on</div>
+  <div class="leg-row"><div class="leg-line" style="background:#e2e8f0"></div> parent_child</div>
+  <div class="leg-row"><div class="leg-line" style="background:#64748b"></div> similar_to</div>
+</div>
+
+<script>
+// ── Color maps ────────────────────────────────────────────────────────────────
+const STATE_COLOR = {
+  stm:      { fill: '#f59e0b', stroke: '#d97706' },
+  ltm:      { fill: '#3b82f6', stroke: '#2563eb' },
+  archived: { fill: '#374151', stroke: '#4b5563' },
+};
+const RELATION_COLOR = {
+  contradicts:     '#ef4444',
+  elaborates:      '#14b8a6',
+  cross_reference: '#a855f7',
+  depends_on:      '#f59e0b',
+  parent_child:    '#e2e8f0',
+  similar_to:      '#64748b',
+};
+const CLUSTER_COLORS = [
+  '#6366f1','#ec4899','#10b981','#f97316','#06b6d4','#8b5cf6','#84cc16','#f43f5e'
+];
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let snapshot = null;
+let simulation = null;
+let visibleStates = new Set(['stm', 'ltm', 'archived']);
+
+// ── File loading ──────────────────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) loadFile(file);
+});
+
+// Drag-and-drop
+document.addEventListener('dragenter', () => document.body.classList.add('dragging'));
+document.addEventListener('dragleave', e => {
+  if (!e.relatedTarget) document.body.classList.remove('dragging');
+});
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  document.body.classList.remove('dragging');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = evt => {
+    try {
+      snapshot = JSON.parse(evt.target.result);
+      render(snapshot);
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Filter pills ──────────────────────────────────────────────────────────────
+function toggleState(el) {
+  const s = el.dataset.state;
+  if (visibleStates.has(s)) {
+    visibleStates.delete(s);
+    el.classList.add('inactive');
+  } else {
+    visibleStates.add(s);
+    el.classList.remove('inactive');
+  }
+  if (snapshot) render(snapshot);
+}
+
+// ── Main render ───────────────────────────────────────────────────────────────
+function render(data) {
+  document.getElementById('empty').style.display = 'none';
+
+  // Update stats bar
+  document.getElementById('s-nodes').textContent    = data.stats.nodeCount;
+  document.getElementById('s-edges').textContent    = data.stats.edgeCount;
+  document.getElementById('s-clusters').textContent = data.stats.clusterCount;
+  document.getElementById('s-time').textContent     =
+    new Date(data.capturedAt).toLocaleString();
+
+  // Filter nodes
+  const nodes = data.nodes.filter(n => visibleStates.has(n.lifecycleState));
+  const nodeSet = new Set(nodes.map(n => n.id));
+  const edges = data.edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
+  const clusters = data.clusters.filter(c => c.memberIds.some(id => nodeSet.has(id)));
+
+  // Clone nodes/edges so D3 can mutate them with x/y
+  const simNodes = nodes.map(n => ({ ...n }));
+  const nodeById = new Map(simNodes.map(n => [n.id, n]));
+  const simEdges = edges.map(e => ({
+    ...e,
+    source: nodeById.get(e.source) ?? e.source,
+    target: nodeById.get(e.target) ?? e.target,
+  })).filter(e => typeof e.source === 'object' && typeof e.target === 'object');
+
+  // SVG setup
+  const svg = d3.select('#svg');
+  svg.selectAll('*').remove();
+
+  const W = document.getElementById('canvas').clientWidth;
+  const H = document.getElementById('canvas').clientHeight;
+
+  // Arrow marker per relation type
+  const defs = svg.append('defs');
+  Object.entries(RELATION_COLOR).forEach(([rel, color]) => {
+    defs.append('marker')
+      .attr('id', `arrow-${rel}`)
+      .attr('viewBox', '0 -4 8 8')
+      .attr('refX', 14)
+      .attr('refY', 0)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path')
+        .attr('d', 'M0,-4L8,0L0,4')
+        .attr('fill', color)
+        .attr('fill-opacity', 0.7);
+  });
+  // fallback arrow
+  defs.append('marker')
+    .attr('id', 'arrow-default')
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 14).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#64748b').attr('fill-opacity', 0.6);
+
+  const root = svg.append('g').attr('class', 'root');
+
+  // Zoom
+  svg.call(d3.zoom()
+    .scaleExtent([0.1, 6])
+    .on('zoom', e => root.attr('transform', e.transform)));
+
+  // ── Cluster hull layer ────────────────────────────────────────────────────
+  const hullLayer  = root.append('g').attr('class', 'hulls');
+  const labelLayer = root.append('g').attr('class', 'cluster-labels');
+
+  // ── Edge layer ────────────────────────────────────────────────────────────
+  const edgeLayer = root.append('g').attr('class', 'edges');
+  const edgeSel = edgeLayer.selectAll('line.edge')
+    .data(simEdges)
+    .enter().append('line')
+      .attr('class', 'edge')
+      .attr('stroke', d => RELATION_COLOR[d.relation] ?? '#64748b')
+      .attr('marker-end', d => `url(#arrow-${d.relation in RELATION_COLOR ? d.relation : 'default'})`)
+      .on('mouseenter', (event, d) => showEdgeTip(event, d))
+      .on('mouseleave', hideTip);
+
+  // ── Node layer ────────────────────────────────────────────────────────────
+  const nodeLayer = root.append('g').attr('class', 'nodes');
+
+  // Node radius: base 6, scaled by activation energy + access
+  const maxEnergy = d3.max(simNodes, n => n.activationEnergy) || 1;
+  const rScale = d3.scaleSqrt().domain([0, maxEnergy]).range([5, 18]);
+
+  const nodeSel = nodeLayer.selectAll('g.node')
+    .data(simNodes)
+    .enter().append('g')
+      .attr('class', d => 'node' + (d.isSummaryNode ? ' summary' : ''))
+      .call(d3.drag()
+        .on('start', dragStart)
+        .on('drag',  dragged)
+        .on('end',   dragEnd))
+      .on('mouseenter', (event, d) => showNodeTip(event, d))
+      .on('mouseleave', hideTip);
+
+  nodeSel.append('circle')
+    .attr('r', d => rScale(d.activationEnergy))
+    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
+    .attr('stroke', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).stroke)
+    .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.4 : 0.85);
+
+  nodeSel.append('text')
+    .attr('class', 'node-label')
+    .attr('dy', d => rScale(d.activationEnergy) + 3)
+    .text(d => {
+      const label = d.text || d.id;
+      return label.length > 22 ? label.slice(0, 20) + '…' : label;
+    });
+
+  // ── Force simulation ──────────────────────────────────────────────────────
+  if (simulation) simulation.stop();
+
+  simulation = d3.forceSimulation(simNodes)
+    .force('link', d3.forceLink(simEdges)
+      .id(d => d.id)
+      .distance(80)
+      .strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-220))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(d => rScale(d.activationEnergy) + 4))
+    .on('tick', ticked);
+
+  function ticked() {
+    edgeSel
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x)
+      .attr('y2', d => d.target.y);
+
+    nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+
+    // Redraw cluster hulls
+    hullLayer.selectAll('*').remove();
+    labelLayer.selectAll('*').remove();
+
+    clusters.forEach((c, i) => {
+      const color = CLUSTER_COLORS[i % CLUSTER_COLORS.length];
+      const pts = c.memberIds
+        .map(id => nodeById.get(id))
+        .filter(n => n && n.x !== undefined)
+        .map(n => [n.x, n.y]);
+
+      if (pts.length < 2) return;
+
+      // Expand points so hull has visible padding
+      const padded = [];
+      const pad = 22;
+      pts.forEach(([x, y]) => {
+        for (let a = 0; a < Math.PI * 2; a += Math.PI / 4)
+          padded.push([x + Math.cos(a) * pad, y + Math.sin(a) * pad]);
+      });
+
+      const hull = d3.polygonHull(padded);
+      if (!hull) return;
+
+      hullLayer.append('path')
+        .attr('class', 'cluster-hull')
+        .attr('d', 'M' + hull.join('L') + 'Z')
+        .attr('fill', color)
+        .attr('stroke', color);
+
+      // Label at centroid
+      const cx = d3.mean(pts, p => p[0]);
+      const cy = d3.mean(pts, p => p[1]) - pad - 8;
+      labelLayer.append('text')
+        .attr('class', 'cluster-label')
+        .attr('x', cx).attr('y', cy)
+        .attr('fill', color)
+        .attr('text-anchor', 'middle')
+        .text(c.label || c.clusterId);
+    });
+  }
+
+  // ── Drag handlers ─────────────────────────────────────────────────────────
+  function dragStart(event, d) {
+    if (!event.active) simulation.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+  function dragEnd(event, d) {
+    if (!event.active) simulation.alphaTarget(0);
+    d.fx = null; d.fy = null;
+  }
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+const tip = document.getElementById('tooltip');
+
+function showNodeTip(event, d) {
+  const sc = STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived;
+  const tags = [
+    `<span class="tag" style="background:${sc.fill}22;border:1px solid ${sc.fill};color:${sc.fill}">${d.lifecycleState.toUpperCase()}</span>`,
+    d.category ? `<span class="tag" style="background:#1e3a5f;border:1px solid #3b82f6;color:#93c5fd">${d.category}</span>` : '',
+    d.isSummaryNode ? `<span class="tag" style="background:#1a1d2e;border:1px solid #6366f1;color:#a5b4fc">cluster summary</span>` : '',
+    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">⚡ ${d.activationEnergy.toFixed(1)}</span>`,
+    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">👁 ${d.accessCount}×</span>`,
+  ].filter(Boolean).join('');
+
+  tip.innerHTML = `
+    <div class="tt-id">${d.id} &nbsp;·&nbsp; ${d.ns}</div>
+    <div class="tt-text">${d.text ? escHtml(d.text.slice(0, 200)) + (d.text.length > 200 ? '…' : '') : '<em style="color:#4b5563">no text</em>'}</div>
+    <div class="tt-meta">${tags}</div>
+  `;
+  positionTip(event);
+}
+
+function showEdgeTip(event, d) {
+  const color = RELATION_COLOR[d.relation] ?? '#64748b';
+  tip.innerHTML = `
+    <div class="tt-id">${d.source.id} → ${d.target.id}</div>
+    <div class="tt-meta">
+      <span class="tag" style="background:${color}22;border:1px solid ${color};color:${color}">${d.relation}</span>
+      <span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">weight ${d.weight.toFixed(2)}</span>
+    </div>
+  `;
+  positionTip(event);
+}
+
+function positionTip(event) {
+  tip.style.display = 'block';
+  const margin = 12;
+  let x = event.clientX + margin;
+  let y = event.clientY + margin;
+  // Keep inside viewport
+  if (x + 340 > window.innerWidth)  x = event.clientX - 340 - margin;
+  if (y + 160 > window.innerHeight) y = event.clientY - 160 - margin;
+  tip.style.left = x + 'px';
+  tip.style.top  = (y - document.getElementById('header').offsetHeight) + 'px';
+}
+
+function hideTip() { tip.style.display = 'none'; }
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => { if (snapshot) render(snapshot); });
+</script>
+</body>
+</html>

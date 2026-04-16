@@ -104,7 +104,8 @@ if (toolProfile is "full")
         .WithTools<DebateTools>()
         .WithTools<MaintenanceTools>()
         .WithTools<ExpertTools>()
-        .WithTools<SynthesisTools>();
+        .WithTools<SynthesisTools>()
+        .WithTools<VisualizationTools>();
 }
 
 await builder.Build().RunAsync();
