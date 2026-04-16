@@ -6,6 +6,7 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
+  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.7.0-blue" alt="GitHub Packages"/></a>
   <img src="https://img.shields.io/badge/tests-850%20passed-brightgreen" alt="Tests"/>
   <img src="https://img.shields.io/badge/MCP%20tools-52-blue" alt="MCP Tools"/>
 </p>
@@ -199,12 +200,17 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Max entries per namespace |
 | `MEMORY_MAX_TOTAL_COUNT` | unlimited | Max total entries across all namespaces |
 
-## NuGet Library
+## NuGet / GitHub Packages
 
 The core engine is available as a NuGet package for embedding in your own .NET applications:
 
 ```bash
+# nuget.org
 dotnet add package McpEngramMemory.Core --version 0.7.0
+
+# GitHub Packages
+dotnet add package McpEngramMemory.Core --version 0.7.0 \
+  --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
 ```csharp
