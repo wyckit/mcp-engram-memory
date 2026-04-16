@@ -44,7 +44,8 @@ Pick the right tool for the situation:
 | Need perspectives from multiple domains | `consult_expert_panel` | Parallel multi-namespace search with debate tracking |
 | Looking for archived/forgotten knowledge | `deep_recall` | Searches ALL lifecycle states including archived; auto-resurrects high-scoring entries |
 | Checking for duplicates before storing | `detect_duplicates` | Pairwise cosine similarity scan |
-| Suspect conflicting information | `find_contradictions` | Surfaces entries linked with `contradicts` edges |
+| Suspect conflicting information | `find_contradictions` | Surfaces entries with `contradicts` edges + high-similarity pairs |
+| Explore the memory graph visually | `get_graph_snapshot` | Exports JSON for the D3.js visualizer (`full` profile only) |
 
 **Default to `cross_search`** for initial recall (covers multiple namespaces in one call). Use `search_memory` for focused follow-ups. Use `dispatch_task` when you don't know which namespace holds the answer.
 
@@ -140,6 +141,25 @@ During long sessions that may hit context limits, store incremental progress mem
 - Before a complex task, store a `reference` memory with the plan and current state
 - After major milestones, store a `decision` or `pattern` memory capturing what was done
 - Use descriptive IDs like `wip-YYYY-MM-DD-task-name` for in-progress snapshots
+
+## Tool Profiles
+
+Set `MEMORY_TOOL_PROFILE` in your MCP config env to control which tools are exposed:
+
+| Profile | Tools | Includes |
+|---------|-------|---------|
+| `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin, multi-agent |
+| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 52 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
+
+`get_graph_snapshot` (graph visualizer) requires `full`. Most daily use works fine on `minimal`.
+
+## Memory Graph Visualizer
+
+To explore your memory visually (requires `full` profile):
+1. Call `get_graph_snapshot` from any conversation
+2. Save the returned JSON to `visualization/snapshot.json` in the repo
+3. Open `visualization/memory-graph.html` in a browser
 
 ## Namespace Guide
 

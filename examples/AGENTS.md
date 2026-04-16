@@ -20,7 +20,8 @@ Before starting any task:
 | Need multiple perspectives | `consult_expert_panel` |
 | Looking for archived knowledge | `deep_recall` (searches all lifecycle states) |
 | Checking for duplicates | `detect_duplicates` |
-| Suspect conflicting information | `find_contradictions` |
+| Suspect conflicting information | `find_contradictions` (edges + high-similarity pairs) |
+| Explore the memory graph visually | `get_graph_snapshot` (exports JSON for D3.js viewer; `full` profile) |
 
 ### Search Parameters
 
@@ -76,3 +77,22 @@ At the end of significant sessions:
 2. Store with id `retro-YYYY-MM-DD-topic`, category `lesson`
 3. Link to related memories
 4. Search past retrospectives before starting similar work
+
+## Tool Profiles
+
+Set `MEMORY_TOOL_PROFILE` in your MCP config to control exposed tools:
+
+| Profile | Tools | Includes |
+|---------|-------|---------|
+| `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin, multi-agent |
+| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
+| `full` | 52 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
+
+`get_graph_snapshot` requires `full`. Most daily use works on `minimal`.
+
+## Memory Graph Visualizer
+
+To explore your memory visually (requires `full` profile):
+1. Call `get_graph_snapshot` from any conversation
+2. Save the returned JSON to `visualization/snapshot.json` in the repo
+3. Open `visualization/memory-graph.html` in a browser

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Engram Memory -- one-click setup for Claude Code (macOS / Linux)
+# Engram Memory -- one-click setup (macOS / Linux)
 #
-# Fresh install -- run from anywhere:
+# Fresh install:
 #   curl -fsSL https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.sh | bash
 #
 # Already cloned:
 #   bash setup.sh
-#   bash setup.sh --profile standard --storage sqlite
+#   bash setup.sh --for gemini,codex --profile standard
+#   bash setup.sh --for all
 
 set -euo pipefail
 
@@ -15,6 +16,7 @@ INSTALL_DIR=""
 PROFILE="minimal"
 STORAGE="json"
 AGENT_ID=""
+FOR_TOOLS="claude"
 SKIP_CONFIG=0
 
 # ── Arg parsing ───────────────────────────────────────────────────────────────
@@ -24,19 +26,27 @@ while [[ $# -gt 0 ]]; do
         --profile)      PROFILE="$2";      shift 2 ;;
         --storage)      STORAGE="$2";      shift 2 ;;
         --agent-id)     AGENT_ID="$2";     shift 2 ;;
+        --for)          FOR_TOOLS="$2";    shift 2 ;;
         --skip-config)  SKIP_CONFIG=1;     shift   ;;
-        *) echo "Unknown option: $1" >&2; exit 1 ;;
+        *) printf "Unknown option: %s\n" "$1" >&2; exit 1 ;;
     esac
 done
+
+# Expand "all" to the full list
+[[ "$FOR_TOOLS" == "all" ]] && FOR_TOOLS="claude,gemini,codex"
+# Normalise separators (spaces or commas)
+FOR_TOOLS="${FOR_TOOLS//,/ }"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 step() { printf "\n  \033[36m%s\033[0m\n" "$*"; }
 ok()   { printf "  \033[32m[ok]\033[0m %s\n" "$*"; }
+skip() { printf "  \033[90m[--]\033[0m %s\n" "$*"; }
 warn() { printf "  \033[33m[!] \033[0m %s\n" "$*"; }
 die()  { printf "\n  \033[31m[ERROR]\033[0m %s\n\n" "$*" >&2; exit 1; }
 
 printf "\n  \033[1mEngram Memory -- setup\033[0m\n"
 printf "  -----------------------------------------\n"
+printf "  Configuring: %s\n" "$FOR_TOOLS"
 
 # ── 1. .NET SDK ───────────────────────────────────────────────────────────────
 step "Checking .NET SDK..."
@@ -49,7 +59,6 @@ ok ".NET SDK $DOTNET_VER"
 # ── 2. Locate or clone ────────────────────────────────────────────────────────
 step "Locating repo..."
 
-# BASH_SOURCE[0] works when script is run directly; $0 works when piped to bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 REPO_ROOT=""
 
@@ -58,7 +67,6 @@ if [[ -f "$SCRIPT_DIR/McpEngramMemory.slnx" ]]; then
     ok "Using existing repo at $REPO_ROOT"
 else
     [[ -z "$INSTALL_DIR" ]] && INSTALL_DIR="$HOME/mcp-engram-memory"
-
     if [[ -f "$INSTALL_DIR/McpEngramMemory.slnx" ]]; then
         REPO_ROOT="$INSTALL_DIR"
         ok "Using existing clone at $REPO_ROOT"
@@ -71,32 +79,30 @@ else
     fi
 fi
 
-# ── 3. Restore (downloads ONNX model) ────────────────────────────────────────
+# ── 3. Restore ────────────────────────────────────────────────────────────────
 step "Restoring packages...  first run downloads ~5.7 MB ONNX model"
 (cd "$REPO_ROOT" && dotnet restore McpEngramMemory.slnx --nologo -v quiet) \
     || die "Restore failed. Run 'dotnet restore' in $REPO_ROOT for details."
 ok "Packages restored"
 
-# ── 4. Project path (used in MCP config) ─────────────────────────────────────
+# ── 4. Project path ───────────────────────────────────────────────────────────
 PROJECT_PATH="$REPO_ROOT/src/McpEngramMemory"
 ok "Project at $PROJECT_PATH"
 
-# ── 5. Patch ~/.claude.json ───────────────────────────────────────────────────
-CLAUDE_JSON="$HOME/.claude.json"
-TOOL_COUNT=52
-[[ "$PROFILE" == "minimal"  ]] && TOOL_COUNT=16
-[[ "$PROFILE" == "standard" ]] && TOOL_COUNT=35
+if [[ "$SKIP_CONFIG" -eq 1 ]]; then
+    warn "--skip-config: not modifying any config files."
+    printf "  Add this to your tool's MCP server config:\n"
+    printf "    command: dotnet\n"
+    printf "    args:    run --project %s\n" "$PROJECT_PATH"
+    printf "    env:     MEMORY_TOOL_PROFILE=%s\n\n" "$PROFILE"
+    exit 0
+fi
 
-if [[ "$SKIP_CONFIG" -eq 0 ]]; then
-    step "Patching $CLAUDE_JSON ..."
-
-    # Build the JSON for the env block
-    ENV_BLOCK="\"MEMORY_TOOL_PROFILE\": \"$PROFILE\", \"MEMORY_STORAGE\": \"$STORAGE\""
+# ── Helpers: build shared JSON entry ─────────────────────────────────────────
+build_entry() {
+    local ENV_BLOCK="\"MEMORY_TOOL_PROFILE\": \"$PROFILE\", \"MEMORY_STORAGE\": \"$STORAGE\""
     [[ -n "$AGENT_ID" ]] && ENV_BLOCK="$ENV_BLOCK, \"AGENT_ID\": \"$AGENT_ID\""
-
-    # MCP server entry uses `dotnet run --project` -- no pre-built DLL required,
-    # no lock conflicts when the server is already running.
-    ENTRY=$(cat <<EOF
+    cat <<EOF
 {
   "type": "stdio",
   "command": "dotnet",
@@ -104,57 +110,107 @@ if [[ "$SKIP_CONFIG" -eq 0 ]]; then
   "env": { $ENV_BLOCK }
 }
 EOF
-)
+}
 
-    if [[ -f "$CLAUDE_JSON" ]]; then
-        python3 - "$CLAUDE_JSON" "$ENTRY" <<'PYEOF'
+# Patch a JSON file that uses { "mcpServers": { ... } } format (Claude / Gemini)
+patch_json() {
+    local config_path="$1"
+    local label="$2"
+    local entry
+    entry="$(build_entry)"
+
+    if [[ -f "$config_path" ]]; then
+        python3 - "$config_path" "$entry" <<'PYEOF'
 import sys, json
-
-path  = sys.argv[1]
-entry = json.loads(sys.argv[2])
-
+path, entry = sys.argv[1], json.loads(sys.argv[2])
 with open(path) as f:
     cfg = json.load(f)
-
 cfg.setdefault("mcpServers", {})["engram-memory"] = entry
-
 with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
+    json.dump(cfg, f, indent=2); f.write("\n")
 PYEOF
-        ok "Updated $CLAUDE_JSON"
+        ok "$label: updated $config_path"
     else
-        python3 - "$CLAUDE_JSON" "$ENTRY" <<'PYEOF'
+        local dir
+        dir="$(dirname "$config_path")"
+        [[ -d "$dir" ]] || mkdir -p "$dir"
+        python3 - "$config_path" "$entry" <<'PYEOF'
 import sys, json
-
-path  = sys.argv[1]
-entry = json.loads(sys.argv[2])
-
+path, entry = sys.argv[1], json.loads(sys.argv[2])
 cfg = {"mcpServers": {"engram-memory": entry}}
-
 with open(path, "w") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
+    json.dump(cfg, f, indent=2); f.write("\n")
 PYEOF
-        ok "Created $CLAUDE_JSON"
+        ok "$label: created $config_path"
     fi
-else
-    warn "--skip-config: skipping $CLAUDE_JSON. Add this to your mcpServers block:"
-    printf "\n"
-    printf '  "engram-memory": {\n'
-    printf '    "type": "stdio",\n'
-    printf '    "command": "dotnet",\n'
-    printf '    "args": ["run", "--project", "%s"],\n' "$PROJECT_PATH"
-    printf '    "env": { "MEMORY_TOOL_PROFILE": "%s" }\n' "$PROFILE"
-    printf '  }\n\n'
-fi
+}
+
+# Patch ~/.codex/config.toml (TOML format)
+patch_toml() {
+    local config_path="$1"
+    local dir
+    dir="$(dirname "$config_path")"
+
+    local env_lines="MEMORY_TOOL_PROFILE = \"$PROFILE\"\nMEMORY_STORAGE = \"$STORAGE\""
+    [[ -n "$AGENT_ID" ]] && env_lines="$env_lines\nAGENT_ID = \"$AGENT_ID\""
+
+    local new_section
+    new_section=$(printf '\n[mcp_servers.engram-memory]\ncommand = "dotnet"\nargs = ["run", "--project", "%s"]\n\n[mcp_servers.engram-memory.env]\n%b\n' \
+        "$PROJECT_PATH" "$env_lines")
+
+    if [[ -f "$config_path" ]]; then
+        # Remove existing engram-memory sections line-by-line (safe with TOML arrays)
+        python3 - "$config_path" <<'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    lines = f.readlines()
+in_section = False
+result = []
+for line in lines:
+    t = line.strip()
+    if t.startswith('[mcp_servers.engram-memory'):
+        in_section = True
+    elif t.startswith('[') and not t.startswith('[mcp_servers.engram-memory'):
+        in_section = False
+    if not in_section:
+        result.append(line)
+with open(path, "w") as f:
+    content = "".join(result).rstrip()
+    f.write(content)
+PYEOF
+        printf '%s' "$new_section" >> "$config_path"
+        ok "Codex: updated $config_path"
+    else
+        [[ -d "$dir" ]] || mkdir -p "$dir"
+        printf '%s' "${new_section#$'\n'}" > "$config_path"
+        ok "Codex: created $config_path"
+    fi
+}
+
+# ── 5. Configure each target tool ─────────────────────────────────────────────
+step "Patching config files..."
+
+for tool in $FOR_TOOLS; do
+    case "$tool" in
+        claude) patch_json "$HOME/.claude.json"              "Claude Code" ;;
+        gemini) patch_json "$HOME/.gemini/settings.json"     "Gemini CLI"  ;;
+        codex)  patch_toml "$HOME/.codex/config.toml"                      ;;
+        *)      warn "Unknown tool '$tool' -- skipping. Valid: claude, gemini, codex, all" ;;
+    esac
+done
 
 # ── 6. Done ───────────────────────────────────────────────────────────────────
+TOOL_COUNT=52
+[[ "$PROFILE" == "minimal"  ]] && TOOL_COUNT=16
+[[ "$PROFILE" == "standard" ]] && TOOL_COUNT=35
+
 printf "\n  -----------------------------------------\n"
 printf "  \033[32mSetup complete!\033[0m\n\n"
 printf "  Next steps:\n"
-printf "   1. Restart Claude Code (or reload MCP servers)\n"
+printf "   1. Restart configured tools to reload MCP servers\n"
 printf "   2. The 'engram-memory' server will appear in your tools\n"
-printf "   3. Copy examples/CLAUDE.md to ~/.claude/CLAUDE.md for full integration\n\n"
-printf "  Profile: %s  |  Storage: %s  |  Tools: %d\n" "$PROFILE" "$STORAGE" "$TOOL_COUNT"
-printf "  Change profile: set MEMORY_TOOL_PROFILE in %s\n\n" "$CLAUDE_JSON"
+printf "   3. Copy examples/CLAUDE.md  -> ~/.claude/CLAUDE.md  (Claude Code)\n"
+printf "      Copy GEMINI.md           -> workspace GEMINI.md  (Gemini CLI)\n"
+printf "      Copy examples/AGENTS.md  -> project AGENTS.md    (Codex)\n\n"
+printf "  Profile: %s  |  Storage: %s  |  Tools: %d\n\n" "$PROFILE" "$STORAGE" "$TOOL_COUNT"
