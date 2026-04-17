@@ -47,6 +47,9 @@ builder.Services.AddSingleton<AccretionScanner>();
 builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<QueryExpander>();
 builder.Services.AddSingleton<BenchmarkRunner>();
+builder.Services.AddSingleton<AgentOutcomeBenchmarkRunner>();
+builder.Services.AddSingleton<LiveAgentOutcomeBenchmarkRunner>();
+builder.Services.AddSingleton<IAgentOutcomeModelClientFactory, AgentOutcomeModelClientFactory>();
 builder.Services.AddSingleton<DebateSessionManager>();
 builder.Services.AddSingleton<ExpertDispatcher>();
 builder.Services.AddSingleton<SpreadingActivationService>();
@@ -73,7 +76,7 @@ builder.Services.AddHostedService<AccretionBackgroundService>();
 // Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
 //   "minimal"  → 16 tools: core CRUD + admin + composite + multi-agent
 //   "standard" → 35 tools: minimal + graph, lifecycle, clusters, intelligence
-//   "full"     → 52 tools: everything (default for backward compatibility)
+//   "full"     → 55 tools: everything (default for backward compatibility)
 var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "full";
 
 var mcpBuilder = builder.Services
@@ -109,3 +112,4 @@ if (toolProfile is "full")
 }
 
 await builder.Build().RunAsync();
+

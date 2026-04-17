@@ -70,6 +70,7 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 |---------|-------|----------------|
 | `minimal` | 16 | Core CRUD, admin, composite tools, multi-agent sharing |
 | `standard` | 35 | Adds graph, lifecycle, clustering, intelligence tools |
-| `full` | 52 | Everything: expert routing, debate, synthesis, benchmarks (default) |
+| `full` | 55 | Everything: expert routing, debate, synthesis, benchmarks (default) |
 
 Use `minimal` or `standard` to reduce context window pressure on smaller models.
+

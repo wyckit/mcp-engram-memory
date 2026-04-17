@@ -52,6 +52,9 @@ src/
       SpreadingActivationService.cs #   Collins & Loftus graph-coupled activation
       Evaluation/
         BenchmarkRunner.cs      #   IR quality benchmarks
+        AgentOutcomeBenchmarkRunner.cs # Task-style memory condition benchmarks
+        LiveAgentOutcomeBenchmarkRunner.cs # Live model memory-condition benchmarks
+        AgentOutcomeModelClient.cs #   Provider abstraction + Ollama adapter
         MetricsCollector.cs     #   Operational metrics + percentiles
       Storage/
         IStorageProvider.cs     #   Storage abstraction interface
@@ -60,7 +63,7 @@ src/
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (842 tests across 46 test files)
+  McpEngramMemory.Tests/        # xUnit tests (49 files; 865 current non-MSA net8 passes)
 .github/
   workflows/
     ci.yml                      # Build + test on push/PR (excludes MSA)
@@ -80,7 +83,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.6.1
+dotnet add package McpEngramMemory.Core --version 0.7.0
 ```
 
 ### Library Usage

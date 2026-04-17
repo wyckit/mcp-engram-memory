@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["15 Tool Classes<br/>52 MCP Tools"]
+        Tools["15 Tool Classes<br/>55 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -62,6 +62,7 @@ graph TD
 
     subgraph EV["Evaluation"]
         BR["BenchmarkRunner<br/><i>MRR, nDCG, Recall@K</i>"]
+        LR["LiveAgentOutcomeBenchmarkRunner<br/><i>Real model A/B harness</i>"]
         MC["MetricsCollector<br/><i>P50/P95/P99</i>"]
     end
 
@@ -83,3 +84,4 @@ graph TD
         BG3["AccretionService<br/><i>every 30 min</i>"]
     end
 ```
+

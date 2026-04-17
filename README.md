@@ -7,8 +7,8 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
   <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.7.0-blue" alt="GitHub Packages"/></a>
-  <img src="https://img.shields.io/badge/tests-850%20passed-brightgreen" alt="Tests"/>
-  <img src="https://img.shields.io/badge/MCP%20tools-52-blue" alt="MCP Tools"/>
+  <img src="https://img.shields.io/badge/tests-865%20non--MSA-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/MCP%20tools-55-blue" alt="MCP Tools"/>
 </p>
 
 **Give your AI agent persistent memory that survives across sessions.** Store decisions, recall context, and build expertise — all locally, no cloud required.
@@ -111,20 +111,20 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 |---------|-------|-----------------|
 | `minimal` | 16 | Core CRUD + composite + admin + multi-agent — recommended starting point |
 | `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 52 | Everything including expert routing, debate, synthesis, benchmarks (default) |
+| `full` | 55 | Everything including expert routing, debate, synthesis, benchmarks (default) |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 52 (profiles: 16 / 35 / 52) |
+| MCP tools | 55 (profiles: 16 / 35 / 55) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 850 across 47 files |
+| Tests | 865 non-MSA net8 tests across 49 files |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
@@ -168,7 +168,7 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (52)
+## MCP Tools (55)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
@@ -185,7 +185,7 @@ Opus thinks, Sonnet remembers, Haiku explores.
 | Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse`, `trigger_accretion_scan` | DBSCAN cluster detection and two-phase summarization |
 | Admin | `get_memory`, `cognitive_stats`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, and latency metrics |
 | Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
-| Benchmarks | `run_benchmark` | IR quality validation (Recall@K, MRR, nDCG@K) |
+| Benchmarks | `run_benchmark`, `run_agent_outcome_benchmark`, `run_live_agent_outcome_benchmark`, `compare_live_agent_outcome_artifacts` | IR quality validation, proxy memory-condition comparison, live-model memory A/B benchmarking, and artifact-to-artifact diff reporting |
 
 Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
@@ -193,7 +193,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (35), `full` (52) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (35), `full` (55) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
@@ -236,7 +236,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 52 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 55 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |
@@ -244,14 +244,14 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 | [AI Assistant Setup](docs/ai-assistant-setup.md) | Step-by-step setup prompts for each tool |
 | [Sample Prompts](docs/prompts.md) | Power prompts and usage patterns |
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
-| [Testing](docs/testing.md) | Test coverage breakdown (850 tests) |
+| [Testing](docs/testing.md) | Test coverage breakdown and current CI coverage |
 
 ## Build & Test
 
 ```bash
 cd mcp-engram-memory
 dotnet build
-dotnet test    # 850 tests across 47 files
+dotnet test    # full suite, including slower MSA benchmark cases
 ```
 
 ## Tech Stack

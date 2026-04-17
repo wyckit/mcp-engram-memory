@@ -29,6 +29,8 @@
 | `LifecycleEngine` | `Lifecycle` | Activation energy computation, agent feedback reinforcement, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
 | `PhysicsEngine` | `Services` | Gravitational force re-ranking with "Asteroid" (semantic) + "Sun" (importance) output |
 | `BenchmarkRunner` | `Evaluation` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
+| `AgentOutcomeBenchmarkRunner` | `Evaluation` | Proxy task-style benchmark comparing no-memory, transcript replay, vector memory, and full Engram memory policies |
+| `LiveAgentOutcomeBenchmarkRunner` | `Evaluation` | Real-model task benchmark that injects condition-specific memory context and grades structured answers deterministically |
 | `MetricsCollector` | `Evaluation` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | `Experts` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
 | `ExpertDispatcher` | `Experts` | Semantic routing engine with flat and hierarchical (HMoE) modes — maps queries to specialized expert namespaces via cosine similarity through a 3-level domain tree (root → branch → leaf). Zero LLM API calls |
@@ -97,7 +99,7 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (35 tools), `full` (52 tools) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (35 tools), `full` (55 tools) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
