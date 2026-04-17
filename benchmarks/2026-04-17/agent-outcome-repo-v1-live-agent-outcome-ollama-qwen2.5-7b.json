@@ -1,0 +1,389 @@
+{
+  "datasetId": "agent-outcome-repo-v1",
+  "runAt": "2026-04-17T16:23:03.1374032+00:00",
+  "provider": "ollama",
+  "model": "qwen2.5:7b",
+  "endpoint": "http://localhost:11434",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "repo-resume-deadlock",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1394.7881,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      },
+      {
+        "taskId": "repo-confirmed-build-cause",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1394.6606,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      },
+      {
+        "taskId": "repo-pre-rerun-check",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1387.8137,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      },
+      {
+        "taskId": "repo-commit-policy",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1653.8154,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1457.7694499999998,
+    "formatValidityRate": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3187.4495,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-root",
+              "rr-deadlock-fix",
+              "rr-commit-policy",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [
+              "rr-deadlock-root",
+              "rr-deadlock-fix"
+            ],
+            "answer": "Resolve dependent entries after releasing the graph lock, by snapshotting the adjacency under the graph lock first.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Resolve dependent entries after releasing the graph lock, by snapshotting the adjacency under the graph lock first.\u0022,\u0022evidence_ids\u0022:[\u0022rr-deadlock-root\u0022,\u0022rr-deadlock-fix\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2803.673,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-old-hypothesis",
+              "rr-confirmed-cause",
+              "rr-deadlock-root",
+              "rr-deadlock-fix"
+            ],
+            "citedMemoryIds": [
+              "rr-confirmed-cause"
+            ],
+            "answer": "The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.\u0022,\u0022evidence_ids\u0022:[\u0022rr-confirmed-cause\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 2585.7459,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-build-lock",
+              "rr-core-build"
+            ],
+            "citedMemoryIds": [
+              "rr-build-lock"
+            ],
+            "answer": "Before rerunning the build, kill lingering MCP server dotnet processes that are locking the output DLL.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Before rerunning the build, kill lingering MCP server dotnet processes that are locking the output DLL.\u0022,\u0022evidence_ids\u0022:[\u0022rr-build-lock\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1844.4341,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "answer": "Do not auto-commit the changes now.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Do not auto-commit the changes now.\u0022,\u0022evidence_ids\u0022:[\u0022rr-commit-policy\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.9,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2605.325625,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.9,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1147.5561750000002,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.4,
+            "passed": false,
+            "latencyMs": 2832.3944,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-fix",
+              "rr-confirmed-cause"
+            ],
+            "citedMemoryIds": [
+              "rr-deadlock-fix"
+            ],
+            "answer": "Resume the deadlock fix by snapshotting adjacency under the graph lock, then resolve dependent entries after releasing that lock.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Resume the deadlock fix by snapshotting adjacency under the graph lock, then resolve dependent entries after releasing that lock.\u0022,\u0022evidence_ids\u0022:[\u0022rr-deadlock-fix\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2751.9074,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-confirmed-cause",
+              "rr-old-hypothesis"
+            ],
+            "citedMemoryIds": [
+              "rr-confirmed-cause"
+            ],
+            "answer": "The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.\u0022,\u0022evidence_ids\u0022:[\u0022rr-confirmed-cause\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 2600.4058,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-core-build",
+              "rr-build-lock"
+            ],
+            "citedMemoryIds": [
+              "rr-build-lock"
+            ],
+            "answer": "Before rerunning a rebuild, kill lingering MCP server dotnet processes that are locking the output DLL.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Before rerunning a rebuild, kill lingering MCP server dotnet processes that are locking the output DLL.\u0022,\u0022evidence_ids\u0022:[\u0022rr-build-lock\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1785.0909,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "citedMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "answer": "Do not commit the changes automatically.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Do not commit the changes automatically.\u0022,\u0022evidence_ids\u0022:[\u0022rr-commit-policy\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.8,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.875,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2492.4496249999997,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.8,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.875,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1034.680175,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3288.877,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-fix",
+              "rr-deadlock-root",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [
+              "rr-deadlock-fix",
+              "rr-deadlock-root"
+            ],
+            "answer": "Resume the deadlock fix by snapshotting the adjacency under the graph lock, then resolve dependent entries after releasing that lock.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Resume the deadlock fix by snapshotting the adjacency under the graph lock, then resolve dependent entries after releasing that lock.\u0022,\u0022evidence_ids\u0022:[\u0022rr-deadlock-fix\u0022,\u0022rr-deadlock-root\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2783.5106,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-confirmed-cause",
+              "rr-build-lock",
+              "rr-old-hypothesis"
+            ],
+            "citedMemoryIds": [
+              "rr-confirmed-cause"
+            ],
+            "answer": "The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The confirmed cause of the rebuild failure is DLL locking by lingering dotnet processes, not checksum corruption.\u0022,\u0022evidence_ids\u0022:[\u0022rr-confirmed-cause\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 2275.0771,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-build-lock",
+              "rr-core-build",
+              "rr-confirmed-cause"
+            ],
+            "citedMemoryIds": [
+              "rr-build-lock"
+            ],
+            "answer": "Kill lingering MCP server dotnet processes that are locking the output DLL.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Kill lingering MCP server dotnet processes that are locking the output DLL.\u0022,\u0022evidence_ids\u0022:[\u0022rr-build-lock\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1784.9182,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "citedMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "answer": "Do not commit the changes automatically.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Do not commit the changes automatically.\u0022,\u0022evidence_ids\u0022:[\u0022rr-commit-policy\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.9,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2533.095725,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.9,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1075.3262750000004,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

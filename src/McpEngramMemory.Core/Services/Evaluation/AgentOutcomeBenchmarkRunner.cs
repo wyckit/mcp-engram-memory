@@ -71,7 +71,7 @@ public sealed class AgentOutcomeBenchmarkRunner
     }
 
     /// <summary>Get all available agent-outcome dataset IDs.</summary>
-    public static IReadOnlyList<string> GetAvailableDatasets() => ["agent-outcome-v1", "agent-outcome-repo-v1", "agent-outcome-hard-v1"];
+    public static IReadOnlyList<string> GetAvailableDatasets() => ["agent-outcome-v1", "agent-outcome-repo-v1", "agent-outcome-hard-v1", "agent-outcome-reasoning-v1"];
 
     /// <summary>Create an agent-outcome dataset by ID.</summary>
     public static AgentOutcomeDataset? CreateDataset(string datasetId)
@@ -80,6 +80,7 @@ public sealed class AgentOutcomeBenchmarkRunner
             "agent-outcome-v1" => CreateAgentOutcomeDataset(),
             "agent-outcome-repo-v1" => CreateRepoRecoveryDataset(),
             "agent-outcome-hard-v1" => CreateHardOutcomeDataset(),
+            "agent-outcome-reasoning-v1" => CreateReasoningOutcomeDataset(),
             _ => null
         };
 
@@ -290,6 +291,78 @@ public sealed class AgentOutcomeBenchmarkRunner
         return new AgentOutcomeDataset(
             "agent-outcome-hard-v1",
             "Agent Outcome Hard Benchmark",
+            seeds,
+            edges,
+            tasks,
+            TranscriptChunkSize: 1);
+    }
+
+    public static AgentOutcomeDataset CreateReasoningOutcomeDataset()
+    {
+        var seeds = new List<BenchmarkSeedEntry>
+        {
+            // Conflict pair: Port configuration
+            new("reason-port-legacy", "Legacy architecture uses port 8080 for internal signaling.", "architecture"),
+            new("reason-port-secure", "Security policy update: all signaling must migrate to port 443 with TLS 1.3.", "decision"),
+            
+            // Logic chain: Quantization depth
+            new("reason-quant-core", "Search performance is bound by dot-product throughput on FP32 vectors.", "architecture"),
+            new("reason-quant-pref", "The user prefers low-latency over perfect recall for draft-mode operations.", "preference"),
+            new("reason-quant-impl", "Draft-mode operations should use 8-bit integer quantization to maximize throughput.", "pattern"),
+            
+            // Temporal context: Naming
+            new("reason-name-old", "The system codename is 'Project Icarus'.", "reference"),
+            new("reason-name-new", "Project Icarus has been renamed to 'Nexus-SHI' to avoid copyright issues.", "decision"),
+            
+            // Indirect logic: Shutdown
+            new("reason-shutdown-db", "Storage transactions must be flushed before the PersistenceManager stops.", "pattern"),
+            new("reason-shutdown-mcp", "The MCP server shuts down when it receives a SIGTERM signal.", "architecture")
+        };
+
+        var edges = new List<OutcomeGraphEdgeSeed>
+        {
+            new("reason-port-secure", "reason-port-legacy", "contradicts", 1.0f),
+            new("reason-name-new", "reason-name-old", "contradicts", 1.0f),
+            new("reason-quant-core", "reason-quant-pref", "similar_to", 0.5f),
+            new("reason-quant-pref", "reason-quant-impl", "elaborates", 0.8f),
+            new("reason-shutdown-mcp", "reason-shutdown-db", "depends_on", 0.9f)
+        };
+
+        var tasks = new List<AgentOutcomeTask>
+        {
+            new(
+                "reason-resolve-port",
+                "What port should I use for internal signaling, and are there any conflicting rules I should know about?",
+                ["reason-port-secure", "reason-port-legacy"],
+                K: 1,
+                MinScore: 0.25f,
+                Notes: "Tests contradiction awareness. Intelligence is citing the migration to 443 while acknowledging the legacy 8080 rule is now obsolete."),
+            new(
+                "reason-low-latency-search",
+                "How should we implement search for draft mode to satisfy performance requirements?",
+                ["reason-quant-core", "reason-quant-pref", "reason-quant-impl"],
+                K: 1,
+                MinScore: 0.25f,
+                Notes: "Requires 3-hop logic: Core bottleneck (FP32) + User preference (Low latency) -> Implementation choice (Int8)."),
+            new(
+                "reason-rename-resolution",
+                "What is the current name of the project, and why was it changed?",
+                ["reason-name-new", "reason-name-old"],
+                K: 1,
+                MinScore: 0.25f,
+                Notes: "Tests temporal reasoning. Must identify Nexus-SHI as current and Icarus as obsolete due to copyright."),
+            new(
+                "reason-safe-exit",
+                "What needs to happen when the server receives a SIGTERM to ensure data integrity?",
+                ["reason-shutdown-mcp", "reason-shutdown-db"],
+                K: 1,
+                MinScore: 0.25f,
+                Notes: "Tests dependency reasoning: SIGTERM (MCP) triggers shutdown, which must flush transactions (DB) per the dependency link.")
+        };
+
+        return new AgentOutcomeDataset(
+            "agent-outcome-reasoning-v1",
+            "Agent Outcome Reasoning & Intelligence Benchmark",
             seeds,
             edges,
             tasks,

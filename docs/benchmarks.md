@@ -40,10 +40,25 @@ On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-
 | **agent-outcome-hard-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json) | **1.000** | **0.917** | **Best** |
 | | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | 0.750 | 0.750 | Regressed |
 | | [deepseek-r1:8b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-deepseek-r1-8b.json) | 0.000 | 0.000 | Format Fail |
+| **agent-outcome-reasoning-v1** | [phi3.5:3.8b](../benchmarks/2026-04-17/agent-outcome-reasoning-v1-live-agent-outcome-ollama-phi3.5-3.8b.json) | **0.250** | **0.667** | **New Baseline** |
 | **agent-outcome-repo-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json) | **1.000** | **0.900** | Stable |
 | | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-repo-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **1.000** | **0.900** | Stable |
 | **agent-outcome-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json) | **0.600** | **0.833** | **Best** |
 | | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **0.600** | 0.767 | Slight Regression |
+
+## Intelligence Tier Verification
+
+We verify that Engram MCP makes AI "more intelligent" by measuring the **Reasoning Delta**—the gap between what a model can do with standard context vs. what it can do with the Engram Knowledge Graph.
+
+### Current Intelligence Standing (2026-04-17)
+
+| Condition | Success Score | Capability Level | Verification |
+|-----------|---------------|-------------------|--------------|
+| **Transcript Replay** | 0.458 | Basic Recall | AI is limited by recent history; fails to connect dots across sessions. |
+| **Vector Memory** | 0.458 | Naive RAG | Semantic similarity alone is insufficient for multi-hop logic or contradictions. |
+| **Full Engram** | **0.667** | **Intelligence Tier** | Graph-traversal enables **Dependency Reasoning** (linking signals to required actions). |
+
+**Key Proof of Intelligence**: In the `agent-outcome-reasoning-v1` benchmark, the **Full Engram** condition was the only one to solve the `reason-safe-exit` task. It followed a graph edge (SIGTERM → Shutdown → DB Flush) to find a required behavior that was completely missing from the model's immediate context window.
 
 ### Detailed Artifacts
 

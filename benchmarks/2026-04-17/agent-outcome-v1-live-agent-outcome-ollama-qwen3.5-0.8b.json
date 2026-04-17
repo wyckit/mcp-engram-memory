@@ -1,0 +1,426 @@
+{
+  "datasetId": "agent-outcome-v1",
+  "runAt": "2026-04-17T15:23:39.8467872+00:00",
+  "provider": "ollama",
+  "model": "qwen3.5:0.8b",
+  "endpoint": "http://localhost:11434",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "task-build-lock",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 20804.0173,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "task-archived-decision",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 16054.8826,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "task-style-preferences",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 15902.495,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "task-maintenance-terminology",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 15373.7175,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "task-commit-policy",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 15480.271,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 16723.076680000006,
+    "formatValidityRate": 0
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15634.6544,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore",
+              "ao-lockorder"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15274.4443,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15729.1607,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-noemoji",
+              "ao-graphresolve",
+              "ao-darkmode",
+              "ao-accretion",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 14976.5508,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15256.3457,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15374.231179999999,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -1348.8455000000067,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15467.5156,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15111.3948,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15449.0432,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-noemoji",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 16080.1923,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15421.53,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15505.93518,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -1217.1415000000052,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15483.2613,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15309.8858,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 16144.93,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-darkmode",
+              "ao-noemoji"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15226.2976,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15074.0448,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15447.6839,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -1275.3927800000056,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

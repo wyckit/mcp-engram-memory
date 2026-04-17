@@ -1,0 +1,349 @@
+{
+  "datasetId": "agent-outcome-hard-v1",
+  "runAt": "2026-04-17T18:32:22.6544658+00:00",
+  "provider": "ollama",
+  "model": "deepseek-r1:8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "hard-cleanup-job",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 44427.7175,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "hard-expired-return",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 65631.2177,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "hard-graph-inversion",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 65753.0311,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "hard-security-chain",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 65752.2597,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 60391.05649999999,
+    "formatValidityRate": 0.25
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 65972.3799,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 66053.6281,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 66148.4732,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-lock-order"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-security-chain",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 32988.0794,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-security-audit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 57790.64014999999,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -2600.4163499999995,
+      "formatValidityDelta": -0.25
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 32937.8597,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 33060.7334,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 33027.7593,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-graph-snapshot"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-security-chain",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 33264.2692,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-security-audit"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 33072.6554,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -27318.40109999999,
+      "formatValidityDelta": -0.25
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 34272.3739,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-accretion-cleanup"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 33499.2825,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy",
+              "hard-archive-return"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 33354.0439,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-lock-order",
+              "hard-graph-snapshot"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "hard-security-chain",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 32786.7345,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-security-audit",
+              "hard-security-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 33478.1087,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -26912.947799999994,
+      "formatValidityDelta": -0.25
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

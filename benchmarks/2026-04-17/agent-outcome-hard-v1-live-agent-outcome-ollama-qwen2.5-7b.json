@@ -1,0 +1,301 @@
+{
+  "datasetId": "agent-outcome-hard-v1",
+  "runAt": "2026-04-17T16:23:33.5091375+00:00",
+  "provider": "ollama",
+  "model": "qwen2.5:7b",
+  "endpoint": "http://localhost:11434",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "hard-cleanup-job",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1405.7593,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      },
+      {
+        "taskId": "hard-expired-return",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1407.7732,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      },
+      {
+        "taskId": "hard-graph-inversion",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1400.7192,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1404.7505666666668,
+    "formatValidityRate": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2328.9313,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "answer": "Decay archives stale entries instead of deleting them, preserving them for later recall.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Decay archives stale entries instead of deleting them, preserving them for later recall.\u0022,\u0022evidence_ids\u0022:[\u0022hard-archive-policy\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2328.0468,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "answer": "Decay archives stale entries instead of deleting them, preserving them for later recall.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Decay archives stale entries instead of deleting them, preserving them for later recall.\u0022,\u0022evidence_ids\u0022:[\u0022hard-archive-policy\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2793.4228,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-lock-order"
+            ],
+            "citedMemoryIds": [
+              "hard-lock-order"
+            ],
+            "answer": "Use the snapshot shared state under the owning lock, then resolve dependent data outside that lock pattern to avoid lock inversion.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use the snapshot shared state under the owning lock, then resolve dependent data outside that lock pattern to avoid lock inversion.\u0022,\u0022evidence_ids\u0022:[\u0022hard-lock-order\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.33333334,
+        "passRate": 0,
+        "meanRequiredCoverage": 0.33333334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2483.466966666667,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.33333334,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0.33333334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1078.7164,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2380.0396,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "answer": "Decay archives stale entries instead of deleting them, preserving them for later recall.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Decay archives stale entries instead of deleting them, preserving them for later recall.\u0022,\u0022evidence_ids\u0022:[\u0022hard-archive-policy\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2350.1294,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "citedMemoryIds": [
+              "hard-archive-policy"
+            ],
+            "answer": "Decay archives stale entries instead of deleting them, preserving them for later recall.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Decay archives stale entries instead of deleting them, preserving them for later recall.\u0022,\u0022evidence_ids\u0022:[\u0022hard-archive-policy\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 4934.4179,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-graph-snapshot"
+            ],
+            "citedMemoryIds": [
+              "hard-graph-snapshot"
+            ],
+            "answer": "The pattern that avoids lock inversion in this context is to resolve entries outside the graph lock to prevent deadlocks, as mentioned in the graph-specific procedure. This aligns with the general lock-order rule, ensuring that the order of acquiring locks does not lead to circular wait conditions.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The pattern that avoids lock inversion in this context is to resolve entries outside the graph lock to prevent deadlocks, as mentioned in the graph-specific procedure. This aligns with the general lock-order rule, ensuring that the order of acquiring locks does not lead to circular wait conditions.\u0022,\u0022evidence_ids\u0022:[\u0022hard-graph-snapshot\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.33333334,
+        "passRate": 0,
+        "meanRequiredCoverage": 0.33333334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3221.5289666666667,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.33333334,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0.33333334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1816.7784,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "hard-cleanup-job",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2704.3773,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-accretion-cleanup"
+            ],
+            "citedMemoryIds": [
+              "hard-accretion-cleanup"
+            ],
+            "answer": "AccretionScanner consolidates aging STM entries via decay and collapse into denser summaries.",
+            "rawResponse": "{\u0022answer\u0022:\u0022AccretionScanner consolidates aging STM entries via decay and collapse into denser summaries.\u0022,\u0022evidence_ids\u0022:[\u0022hard-accretion-cleanup\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-expired-return",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3380.2238,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-archive-policy",
+              "hard-archive-return"
+            ],
+            "citedMemoryIds": [
+              "hard-archive-policy",
+              "hard-archive-return"
+            ],
+            "answer": "Old notes expire by being decayed and archived instead of deleted, preserving them for later recall through deep recall when similarity exceeds the resurrection threshold.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Old notes expire by being decayed and archived instead of deleted, preserving them for later recall through deep recall when similarity exceeds the resurrection threshold.\u0022,\u0022evidence_ids\u0022:[\u0022hard-archive-policy\u0022,\u0022hard-archive-return\u0022],\u0022insufficient_context\u0022:false}"
+          },
+          {
+            "taskId": "hard-graph-inversion",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2847.0221,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "hard-lock-order",
+              "hard-graph-snapshot"
+            ],
+            "citedMemoryIds": [
+              "hard-graph-snapshot"
+            ],
+            "answer": "Use the graph traversal snapshots adjacency under the graph lock and resolves entries outside the graph lock to prevent deadlocks.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use the graph traversal snapshots adjacency under the graph lock and resolves entries outside the graph lock to prevent deadlocks.\u0022,\u0022evidence_ids\u0022:[\u0022hard-graph-snapshot\u0022],\u0022insufficient_context\u0022:false}"
+          }
+        ],
+        "meanSuccessScore": 0.8333333,
+        "passRate": 0.6666667,
+        "meanRequiredCoverage": 0.8333333,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2977.207733333333,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.8333333,
+      "passRateDelta": 0.6666667,
+      "requiredCoverageDelta": 0.8333333,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1572.4571666666664,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

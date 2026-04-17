@@ -38,6 +38,13 @@ public class AgentOutcomeBenchmarkRunnerTests : IDisposable
                 var t when t.Contains("auto-commit") => [0f, 0f, 0.9f, 0.1f, 0f],
                 var t when t.Contains("graph mutex bites us") || t.Contains("lock inversion") => [0f, 0.75f, 0f, 0f, 0.2f],
                 var t when t.Contains("lock ordering") || t.Contains("deadlock") => [0f, 0.8f, 0.2f, 0f, 0f],
+                
+                // Reasoning Dataset
+                var t when t.Contains("internal signaling") || t.Contains("port") => [0.1f, 0f, 0f, 0f, 0.9f],
+                var t when t.Contains("search performance") || t.Contains("low-latency") || t.Contains("quantization") => [0.9f, 0f, 0f, 0.1f, 0f],
+                var t when t.Contains("project name") || t.Contains("codename") || t.Contains(" Nexus-SHI") => [0f, 0.1f, 0.9f, 0f, 0f],
+                var t when t.Contains("sigterm") || t.Contains("shutdown") || t.Contains("flush") => [0f, 0.9f, 0f, 0.1f, 0f],
+                
                 _ => [-1f, -1f, -1f, -1f, -1f]
             };
 
@@ -160,6 +167,23 @@ public class AgentOutcomeBenchmarkRunnerTests : IDisposable
         var fullGraph = full.TaskScores.Single(t => t.TaskId == "hard-graph-inversion");
         Assert.False(transcriptGraph.Passed);
         Assert.True(fullGraph.Passed);
+    }
+
+    [Fact]
+    public void Run_ReasoningDataset_FullEngram_DetectsContradictions()
+    {
+        var dataset = AgentOutcomeBenchmarkRunner.CreateReasoningOutcomeDataset();
+        var result = _runner.Run(dataset);
+
+        var full = result.Comparisons.Single(c => c.Condition == AgentOutcomeBenchmarkRunner.FullEngramCondition).Result;
+        
+        // reason-resolve-port requires both old and new rules
+        var portTask = full.TaskScores.Single(t => t.TaskId == "reason-resolve-port");
+        Assert.True(portTask.RetrievedMemoryIds.Count >= 2, "Should find both contradictory port rules");
+        
+        // reason-low-latency-search requires 3-hop chain
+        var searchTask = full.TaskScores.Single(t => t.TaskId == "reason-low-latency-search");
+        Assert.True(searchTask.RetrievedMemoryIds.Count >= 2, "Should find multi-hop quantization evidence");
     }
 
     public void Dispose()

@@ -1,0 +1,363 @@
+{
+  "datasetId": "agent-outcome-repo-v1",
+  "runAt": "2026-04-17T15:27:45.6764858+00:00",
+  "provider": "ollama",
+  "model": "qwen3.5:0.8b",
+  "endpoint": "http://localhost:11434",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "repo-resume-deadlock",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 15281.0472,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "repo-confirmed-build-cause",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 16108.2937,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "repo-pre-rerun-check",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 15510.5668,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      },
+      {
+        "taskId": "repo-commit-policy",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 16122.3455,
+        "responseFormatValid": false,
+        "insufficientContext": false,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": null,
+        "rawResponse": ""
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 15755.563300000002,
+    "formatValidityRate": 0
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15441.7011,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-root",
+              "rr-deadlock-fix",
+              "rr-commit-policy",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15057.3333,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-old-hypothesis",
+              "rr-confirmed-cause",
+              "rr-deadlock-root",
+              "rr-deadlock-fix"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15551.4313,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-build-lock",
+              "rr-core-build"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 14972.2447,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15255.677599999999,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -499.88570000000254,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 14969.4535,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-fix",
+              "rr-confirmed-cause"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15212.2798,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-confirmed-cause",
+              "rr-old-hypothesis"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15112.8106,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-core-build",
+              "rr-build-lock"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15708.0359,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15250.644950000002,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -504.9183499999999,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "repo-resume-deadlock",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 14778.791,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-deadlock-fix",
+              "rr-deadlock-root",
+              "rr-response-style"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-confirmed-build-cause",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15199.0903,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-confirmed-cause",
+              "rr-build-lock",
+              "rr-old-hypothesis"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-pre-rerun-check",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 14792.9703,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-build-lock",
+              "rr-core-build",
+              "rr-confirmed-cause"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          },
+          {
+            "taskId": "repo-commit-policy",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 15860.596,
+            "responseFormatValid": false,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "rr-commit-policy"
+            ],
+            "citedMemoryIds": [],
+            "answer": null,
+            "rawResponse": ""
+          }
+        ],
+        "meanSuccessScore": 0,
+        "passRate": 0,
+        "meanRequiredCoverage": 0,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 15157.8619,
+        "formatValidityRate": 0
+      },
+      "successDelta": 0,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0,
+      "conflictDelta": 0,
+      "latencyDeltaMs": -597.7014000000017,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}
