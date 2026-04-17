@@ -31,6 +31,19 @@ Use `check_for_regression` to perform automated regression testing in CI. It com
 
 On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-hard-v1` (expanded with 3-hop graph chains and synonym gaps), reaching a high pass rate under `full_engram` while simpler memory policies (transcript replay, vector) failed to bridge the multi-memory links.
 
+## Latest Results (2026-04-17)
+
+- **Hard Dataset (v1)**
+    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json)
+    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
+    - [deepseek-r1:8b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-deepseek-r1-8b.json)
+- **Repo Recovery (v1)**
+    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json)
+    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-repo-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
+- **General Assistant (v1)**
+    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json)
+    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
+
 ## Directory Structure
 
 ```
@@ -54,21 +67,21 @@ Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run aft
 
 | Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
 |---------|-----------|----------|-----|--------|-------|
-| default-v1 (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
-| scale-v1 (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / 0.734 | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
-| paraphrase-v1 (25 seeds) | vector | 0.944 | 1.000 | 0.964 | March 2026 baseline |
-| multihop-v1 (25 seeds) | vector | 0.939 | 1.000 | 0.952 | March 2026 baseline |
-| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | March 2026 baseline |
-| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | March 2026 baseline |
-| ambiguity-v1 (24 seeds) | vector_rerank | **0.922** | 1.000 | **0.941** | Stable vs March 25 baseline |
-| distractor-v1 (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | March 25 baseline |
-| specificity-v1 (30 seeds) | vector_rerank | **0.919** | 0.972 | **0.905** | Stable vs March 25 baseline |
-| contamination-v1 (15 seeds) | vector / vector_rerank | **0.972** | 0.958 | **0.917** | Strong cross-domain resistance; all modes ≥ 0.972 recall |
-| physics-v1 (20 seeds) | hybrid_rerank | **1.000** | 1.000 | **0.917** | Perfect recall all modes; hybrid_rerank best nDCG |
-| lifecycle-v1 (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
-| msa-multihop-v1 (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
-| msa-coldstart-v1 (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
-| scale-v2 (10000 seeds) | hybrid_rerank | **0.614** | 0.708 | **0.625** | Extreme-scale stress test (10× scale-v1); redesigned gold sets (easy K=50, medium K=10, hard K=20); hybrid 0.524, vector 0.460 |
+| [default-v1](../benchmarks/2026-04-16/default-v1-vector_rerank.json) (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
+| [scale-v1](../benchmarks/2026-04-16/scale-v1-hybrid.json) (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / 0.734 | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
+| [paraphrase-v1](../benchmarks/baseline-paraphrase-v1.json) (25 seeds) | vector | 0.944 | 1.000 | 0.964 | March 2026 baseline |
+| [multihop-v1](../benchmarks/baseline-multihop-v1.json) (25 seeds) | vector | 0.939 | 1.000 | 0.952 | March 2026 baseline |
+| [realworld-v1](../benchmarks/2026-03-20/realworld-v1-hybrid.json) (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | March 2026 baseline |
+| [compound-v1](../benchmarks/2026-03-20/scale-v1-hybrid.json) (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | March 2026 baseline |
+| [ambiguity-v1](../benchmarks/2026-04-16/ambiguity-v1-vector_rerank.json) (24 seeds) | vector_rerank | **0.922** | 1.000 | **0.941** | Stable vs March 25 baseline |
+| [distractor-v1](../benchmarks/baseline-distractor-v1.json) (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | March 25 baseline |
+| [specificity-v1](../benchmarks/2026-04-16/specificity-v1-vector_rerank.json) (30 seeds) | vector_rerank | **0.919** | 0.972 | **0.905** | Stable vs March 25 baseline |
+| [contamination-v1](../benchmarks/2026-04-16/contamination-v1-vector_rerank.json) (15 seeds) | vector / vector_rerank | **0.972** | 0.958 | **0.917** | Strong cross-domain resistance; all modes ≥ 0.972 recall |
+| [physics-v1](../benchmarks/2026-04-16/physics-v1-hybrid_rerank.json) (20 seeds) | hybrid_rerank | **1.000** | 1.000 | **0.917** | Perfect recall all modes; hybrid_rerank best nDCG |
+| [lifecycle-v1](../benchmarks/2026-04-16/lifecycle-v1-vector_rerank.json) (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
+| [msa-multihop-v1](../benchmarks/2026-04-16/msa-multihop-v1-hybrid.json) (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
+| [msa-coldstart-v1](../benchmarks/2026-04-16/msa-coldstart-v1-vector.json) (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
+| [scale-v2](../benchmarks/2026-04-16/scale-v2-hybrid_rerank.json) (10000 seeds) | hybrid_rerank | **0.614** | 0.708 | **0.625** | Extreme-scale stress test (10× scale-v1); redesigned gold sets (easy K=50, medium K=10, hard K=20); hybrid 0.524, vector 0.460 |
 | disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity; data in March 2026 baseline |
 | cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
 
