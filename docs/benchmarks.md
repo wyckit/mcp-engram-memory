@@ -33,6 +33,20 @@ On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-
 
 ## Latest Results (2026-04-17)
 
+### Overview Benchmarks
+
+| Dataset | Model | Pass Rate | Success Score | Result |
+|---------|-------|-----------|---------------|--------|
+| **agent-outcome-hard-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json) | **1.000** | **0.917** | **Best** |
+| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | 0.750 | 0.750 | Regressed |
+| | [deepseek-r1:8b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-deepseek-r1-8b.json) | 0.000 | 0.000 | Format Fail |
+| **agent-outcome-repo-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json) | **1.000** | **0.900** | Stable |
+| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-repo-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **1.000** | **0.900** | Stable |
+| **agent-outcome-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json) | **0.600** | **0.833** | **Best** |
+| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **0.600** | 0.767 | Slight Regression |
+
+### Detailed Artifacts
+
 - **Hard Dataset (v1)**
     - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json)
     - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
