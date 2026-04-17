@@ -4,11 +4,40 @@
 
 Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
 
+## Agent Outcome Benchmark
+
+In addition to IR benchmarks, the MCP server now exposes `run_agent_outcome_benchmark`, a task-style proxy benchmark that compares four memory conditions:
+
+- `no_memory`
+- `transcript_replay`
+- `vector_memory`
+- `full_engram`
+
+It scores task success, required-evidence coverage, conflict rate, and latency on practical assistant behaviors such as archived recall, graph-assisted recovery, preference retention, interrupted repo-work recovery, and hybrid rescue of colloquial queries. Available datasets are `agent-outcome-v1`, `agent-outcome-repo-v1`, and `agent-outcome-hard-v1`. Results are written to `benchmarks/YYYY-MM-DD/{datasetId}-agent-outcome.json` by default. Treat this as a bridge between pure retrieval quality and full external-agent evaluation, not a substitute for end-to-end model/task A/B tests.
+
+## Live Agent Outcome Benchmark
+The MCP server also exposes `run_live_agent_outcome_benchmark`, which runs the same four memory conditions against a real generation model and grades the model's structured JSON output deterministically:
+
+- `no_memory`
+- `transcript_replay`
+- `vector_memory`
+- `full_engram`
+
+The first supported live provider is `ollama`. The harness injects condition-specific memory context, requires the model to return JSON with cited memory IDs, and scores required coverage, conflict rate, response-format validity, and latency. Results are written to `benchmarks/YYYY-MM-DD/{datasetId}-live-agent-outcome-{provider}-{model}.json` by default.
+
+Use `compare_live_agent_outcome_artifacts` to diff two live benchmark artifacts from the same dataset. The report summarizes condition-level metric deltas and highlights the specific tasks that improved or regressed between runs.
+
+Use `check_for_regression` to perform automated regression testing in CI. It compares a candidate artifact against a pinned baseline and returns a failure status if `full_engram` metrics drop below configurable thresholds.
+
+On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-hard-v1` (expanded with 3-hop graph chains and synonym gaps), reaching a high pass rate under `full_engram` while simpler memory policies (transcript replay, vector) failed to bridge the multi-memory links.
+
 ## Directory Structure
 
 ```
 benchmarks/
+  baselines/                          # Pinned artifacts for CI regression testing
   baseline-v1.json                    # Original Sprint 1 baseline (2026-03-07)
+...
   baseline-paraphrase-v1.json
   baseline-multihop-v1.json
   baseline-scale-v1.json

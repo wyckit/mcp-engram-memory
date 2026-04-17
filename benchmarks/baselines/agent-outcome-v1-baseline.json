@@ -1,0 +1,457 @@
+{
+  "datasetId": "agent-outcome-v1",
+  "runAt": "2026-04-17T16:01:33.9610195+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": "http://localhost:11434",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "task-build-lock",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1778.4149,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n"
+      },
+      {
+        "taskId": "task-archived-decision",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1601.5504,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n"
+      },
+      {
+        "taskId": "task-style-preferences",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1589.722,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n"
+      },
+      {
+        "taskId": "task-maintenance-terminology",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1602.9356,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n"
+      },
+      {
+        "taskId": "task-commit-policy",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1528.6106,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}"
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1620.2467,
+    "formatValidityRate": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2308.9423,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore",
+              "ao-lockorder"
+            ],
+            "citedMemoryIds": [
+              "ao-buildcore"
+            ],
+            "answer": "Build the Core project alone with BuildProjectReferences=false",
+            "rawResponse": "{\u0022answer\u0022:\u0022Build the Core project alone with BuildProjectReferences=false\u0022,\u0022evidence_ids\u0022:[\u0022ao-buildcore\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2733.7783,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [
+              "ao-sqlitewal"
+            ],
+            "answer": "SQLite WAL mode is enabled for crash safety and concurrent reads",
+            "rawResponse": "{\u0022answer\u0022:\u0022SQLite WAL mode is enabled for crash safety and concurrent reads\u0022,\u0022evidence_ids\u0022:[\u0022ao-sqlitewal\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 6241.2591,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-noemoji",
+              "ao-graphresolve",
+              "ao-darkmode",
+              "ao-accretion",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [],
+            "answer": "Provide concise, direct responses and avoid emojis. Resolve graph traversal issues and ensure code changes are not auto-committed without user prompt. Adhere to dark mode preferences and consolidate STM entries efficiently.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Provide concise, direct responses and avoid emojis. Resolve graph traversal issues and ensure code changes are not auto-committed without user prompt. Adhere to dark mode preferences and consolidate STM entries efficiently.\u0022,\u0022evidence_ids\u0022:[\u0022ao-concise\u0022,\u0022ao-noemoji\u0022,\u0022ao-graphresolve\u0022,\u0022ao-darkmode\u0022,\u0022ao-accretion\u0022,\u0022ao-nocommit\u0022},\u0022insu"
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2598.641,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [
+              "ao-dlllock"
+            ],
+            "answer": "Kill the MCP server process before rebuilding for DLL lock issue resolution",
+            "rawResponse": "{\u0022answer\u0022:\u0022Kill the MCP server process before rebuilding for DLL lock issue resolution\u0022,\u0022evidence_ids\u0022:[\u0022ao-dlllock\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2675.0131,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [
+              "ao-nocommit"
+            ],
+            "answer": "Never auto-commit code changes unless explicitly asked to do so",
+            "rawResponse": "{\u0022answer\u0022:\u0022Never auto-commit code changes unless explicitly asked to do so\u0022,\u0022evidence_ids\u0022:[\u0022ao-nocommit\u0022],\u0022insufficient_context\u0022:false}\n\n"
+          }
+        ],
+        "meanSuccessScore": 0.5,
+        "passRate": 0.4,
+        "meanRequiredCoverage": 0.5,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3311.5267599999997,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.5,
+      "passRateDelta": 0.4,
+      "requiredCoverageDelta": 0.5,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1691.2800599999998,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2576.3937,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore"
+            ],
+            "citedMemoryIds": [
+              "ao-buildcore"
+            ],
+            "answer": "Build the Core project alone with BuildProjectReferences=false",
+            "rawResponse": "{\u0022answer\u0022:\u0022Build the Core project alone with BuildProjectReferences=false\u0022,\u0022evidence_ids\u0022:[\u0022ao-buildcore\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2610.5362,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion"
+            ],
+            "citedMemoryIds": [
+              "ao-accretion"
+            ],
+            "answer": "AccretionScanner provides crash safety and concurrent reads",
+            "rawResponse": "{\u0022answer\u0022:\u0022AccretionScanner provides crash safety and concurrent reads\u0022,\u0022evidence_ids\u0022:[\u0022ao-accretion\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0.6666667,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.6666667,
+            "passed": false,
+            "latencyMs": 3572.7235,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-noemoji",
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [
+              "ao-concise",
+              "ao-noemoji",
+              "ao-nocommit"
+            ],
+            "answer": "Provide concise, direct responses without emojis or code commits.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Provide concise, direct responses without emojis or code commits.\u0022, \u0022evidence_ids\u0022:[\u0022ao-concise\u0022,\u0022ao-noemoji\u0022,\u0022ao-nocommit\u0022], \u0022insufficient_context\u0022:false}\n\n"
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2601.6059,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [
+              "ao-nocommit"
+            ],
+            "answer": "Code changes are not automatically committed, requiring explicit user action.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Code changes are not automatically committed, requiring explicit user action.\u0022,\u0022evidence_ids\u0022:[\u0022ao-nocommit\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2262.4319,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [
+              "ao-nocommit"
+            ],
+            "answer": "Do not auto-commit these changes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Do not auto-commit these changes\u0022,\u0022evidence_ids\u0022:[\u0022ao-nocommit\u0022],\u0022insufficient_context\u0022:false}\n"
+          }
+        ],
+        "meanSuccessScore": 0.43333334,
+        "passRate": 0.2,
+        "meanRequiredCoverage": 0.43333334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2724.7382399999997,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.43333334,
+      "passRateDelta": 0.2,
+      "requiredCoverageDelta": 0.43333334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1104.4915399999998,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "task-build-lock",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 2450.8344,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-buildcore",
+              "ao-dlllock"
+            ],
+            "citedMemoryIds": [
+              "ao-buildcore"
+            ],
+            "answer": "Build the Core project alone with BuildProjectReferences=false",
+            "rawResponse": "{\u0022answer\u0022:\u0022Build the Core project alone with BuildProjectReferences=false\u0022,\u0022evidence_ids\u0022:[\u0022ao-buildcore\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-archived-decision",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2333.2139,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-sqlitewal"
+            ],
+            "citedMemoryIds": [
+              "ao-sqlitewal"
+            ],
+            "answer": "SQLite WAL mode provides crash safety and concurrent reads",
+            "rawResponse": "{\u0022answer\u0022:\u0022SQLite WAL mode provides crash safety and concurrent reads\u0022,\u0022evidence_ids\u0022:[\u0022ao-sqlitewal\u0022],\u0022insufficient_context\u0022:false}\n"
+          },
+          {
+            "taskId": "task-style-preferences",
+            "requiredCoverage": 0.6666667,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.6666667,
+            "passed": false,
+            "latencyMs": 3101.5702,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-concise",
+              "ao-darkmode",
+              "ao-noemoji"
+            ],
+            "citedMemoryIds": [
+              "ao-concise",
+              "ao-noemoji"
+            ],
+            "answer": "Provide concise and direct responses without emojis.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Provide concise and direct responses without emojis.\u0022, \u0022evidence_ids\u0022:[\u0022ao-concise\u0022,\u0022ao-noemoji\u0022], \u0022insufficient_context\u0022:false}\n\n"
+          },
+          {
+            "taskId": "task-maintenance-terminology",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3782.2323,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-accretion"
+            ],
+            "citedMemoryIds": [
+              "ao-accretion"
+            ],
+            "answer": "The system handles automatic memory maintenance by consolidating aging STM entries through decay and collapse into denser summaries using the AccretionScanner",
+            "rawResponse": "{\u0022answer\u0022:\u0022The system handles automatic memory maintenance by consolidating aging STM entries through decay and collapse into denser summaries using the AccretionScanner\u0022,\u0022evidence_ids\u0022:[\u0022ao-accretion\u0022],\u0022insufficient_context\u0022:false}\n\n"
+          },
+          {
+            "taskId": "task-commit-policy",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2338.5536,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ao-nocommit"
+            ],
+            "citedMemoryIds": [
+              "ao-nocommit"
+            ],
+            "answer": "Do not auto-commit these changes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Do not auto-commit these changes\u0022,\u0022evidence_ids\u0022:[\u0022ao-nocommit\u0022],\u0022insufficient_context\u0022:false}\n"
+          }
+        ],
+        "meanSuccessScore": 0.8333333,
+        "passRate": 0.6,
+        "meanRequiredCoverage": 0.8333333,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2801.28088,
+        "formatValidityRate": 1
+      },
+      "successDelta": 0.8333333,
+      "passRateDelta": 0.6,
+      "requiredCoverageDelta": 0.8333333,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1181.0341799999999,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

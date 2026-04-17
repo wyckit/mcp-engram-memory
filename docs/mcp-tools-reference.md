@@ -1,6 +1,6 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (52 tools)
+# MCP Tools Reference (55 tools)
 
 ### Core Memory (4 tools)
 
@@ -101,11 +101,14 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 |------|-------------|
 | `synthesize_memories` | Map-reduce synthesis over a set of memories using a local SLM via Ollama. Produces dense reasoning summaries without expanding the LLM context window. Useful for large memory sets where individual recall would exceed context limits. |
 
-### Benchmarking & Observability (3 tools)
+### Benchmarking & Observability (6 tools)
 
 | Tool | Description |
 |------|-------------|
 | `run_benchmark` | Run an IR quality benchmark. 17 datasets including `default-v1`, `paraphrase-v1`, `multihop-v1`, `scale-v1`, `realworld-v1`, `compound-v1`, `ambiguity-v1`, `distractor-v1`, `specificity-v1`, `contamination-v1`, `cluster-summary-v1`, `disambiguation-v1`, `physics-v1`. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. |
+| `run_agent_outcome_benchmark` | Run a task-style proxy benchmark across four memory conditions: `no_memory`, `transcript_replay`, `vector_memory`, and `full_engram`. Available datasets: `agent-outcome-v1`, `agent-outcome-repo-v1`, `agent-outcome-hard-v1`. Reports task success, required-evidence coverage, conflict rate, and latency, and writes a JSON artifact under `benchmarks/YYYY-MM-DD` by default. |
+| `run_live_agent_outcome_benchmark` | Run a real generation model across the same four memory conditions with structured JSON answers and cited memory IDs. Current live provider support starts with `ollama`. Writes a JSON artifact under `benchmarks/YYYY-MM-DD/{datasetId}-live-agent-outcome-{provider}-{model}.json`. |
+| `compare_live_agent_outcome_artifacts` | Compare two live benchmark JSON artifacts from `run_live_agent_outcome_benchmark`. Reports condition-level deltas plus per-task improvements and regressions for the same dataset so repeated model runs are easy to diff. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 

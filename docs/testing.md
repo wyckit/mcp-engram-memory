@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-47 test files with 850 test cases (xUnit).
+49 test files. Current net8 CI-equivalent run (`Category!=MSA`) passes 865 tests.
 
 ## Running Tests
 
@@ -53,7 +53,9 @@ dotnet test
 | AccretionBackgroundServiceTests.cs | 2 | Background service lifecycle |
 | EmbeddingWarmupServiceTests.cs | 2 | Embedding warmup startup behavior |
 | AdminToolsTests.cs | 9 | GetMemory, CognitiveStats, PurgeDebates tool endpoints |
-| BenchmarkToolsTests.cs | 8 | RunBenchmark, GetMetrics, ResetMetrics tool endpoints |
+| AgentOutcomeBenchmarkRunnerTests.cs | 6 | Task-style memory condition benchmark including the harder synonym-gap/graph-expansion dataset |
+| LiveAgentOutcomeBenchmarkRunnerTests.cs | 5 | Live-model memory condition benchmark with structured JSON grading, split-fragment recovery, and hard-dataset coverage |
+| BenchmarkToolsTests.cs | 14 | RunBenchmark, RunAgentOutcomeBenchmark, RunLiveAgentOutcomeBenchmark, compare_live_agent_outcome_artifacts, GetMetrics, ResetMetrics tool endpoints |
 | ClusterToolsTests.cs | 12 | CreateCluster, UpdateCluster, StoreClusterSummary, GetCluster, ListClusters tool endpoints |
 | GraphToolsTests.cs | 15 | LinkMemories, UnlinkMemories, GetNeighbors, TraverseGraph tool endpoints |
 | IntelligenceToolsTests.cs | 14 | DetectDuplicates, FindContradictions, UncollapseCluster, ListCollapseHistory, MergeMemories tool endpoints |
