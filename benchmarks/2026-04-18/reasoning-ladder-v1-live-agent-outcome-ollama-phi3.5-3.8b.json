@@ -1,0 +1,947 @@
+{
+  "datasetId": "reasoning-ladder-v1",
+  "runAt": "2026-04-18T16:04:52.3490638+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "ladder-1hop",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 8715.3154,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "ladder-2hop",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 2248.7612,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context to explain sub-50ms HNSW latency",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context to explain sub-50ms HNSW latency\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "ladder-3hop",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 2054.9043,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "ladder-4hop",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1648.2917,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 3666.81815,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 0,
+    "meanDependencyCompletionScore": 0,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanContradictionHandlingScore": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3139.7108,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.4,
+            "passed": false,
+            "latencyMs": 3687.8666,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-hnsw-latency"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency"
+            ],
+            "answer": "Higher dot-product throughput keeps HNSW search under 50ms at K=10",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput keeps HNSW search under 50ms at K=10\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 0.33333334,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.24444446,
+            "passed": false,
+            "latencyMs": 4065.0752,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization is likely relevant to achieving the Sub-50ms HNSW latency SLO for the real-time draft-mode endpoint",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization is likely relevant to achieving the Sub-50ms HNSW latency SLO for the real-time draft-mode endpoint\u0022,\u0022evidence_ids\u0022:[\u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.33333334,
+            "dependencyCompletionScore": 0.33333334,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.33333334,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 0.4,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.30400002,
+            "passed": false,
+            "latencyMs": 4629.8446,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-draft-ui"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022,\u0022ladder-draft-ui\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.4,
+            "dependencyCompletionScore": 0.4,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.4,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.48711112,
+        "passRate": 0.25,
+        "meanRequiredCoverage": 0.55833334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3880.6243000000004,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.55833334,
+        "meanDependencyCompletionScore": 0.55833334,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.55833334,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.48711112,
+      "passRateDelta": 0.25,
+      "requiredCoverageDelta": 0.55833334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 213.80615000000034,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3157.3171,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.4,
+            "passed": false,
+            "latencyMs": 3586.7835,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-hnsw-latency"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency"
+            ],
+            "answer": "Higher dot-product throughput keeps HNSW search under 50ms at K=10",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput keeps HNSW search under 50ms at K=10\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 0.6666667,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5777778,
+            "passed": false,
+            "latencyMs": 4278.1636,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-draft-slo"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization matters for draft-mode SLO to improve dot-product throughput and meet the sub-50ms latency requirement",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization matters for draft-mode SLO to improve dot-product throughput and meet the sub-50ms latency requirement\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022,\u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.6666667,
+            "dependencyCompletionScore": 0.6666667,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.6666667,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 0.4,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.30400002,
+            "passed": false,
+            "latencyMs": 4613.3363,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-draft-ui"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022,\u0022ladder-draft-ui\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.4,
+            "dependencyCompletionScore": 0.4,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.4,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.57044446,
+        "passRate": 0.25,
+        "meanRequiredCoverage": 0.64166665,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3908.900125,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.64166665,
+        "meanDependencyCompletionScore": 0.64166665,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.64166665,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.57044446,
+      "passRateDelta": 0.25,
+      "requiredCoverageDelta": 0.64166665,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 242.08197500000006,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3699.6385,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 4051.4108,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-draft-ui",
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "answer": "Higher dot-product throughput through int8 quantization and a hop depth of 2",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput through int8 quantization and a hop depth of 2\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022,\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6635.9299,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022, \u0022ladder-hnsw-latency\u0022, \u0022ladder-fp32-bottleneck\u0022, \u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 0.8,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.73600006,
+            "passed": false,
+            "latencyMs": 8179.3863,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictating the HNSW search latency, which must stay under 50ms to meet the SLO for the autocomplete UI.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictating the HNSW search latency, which must stay under 50ms to meet the SLO for the autocomplete UI.\u0022,\u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022,\u0022ladder-hnsw-latency\u0022,\u0022ladder-draft-ui\u0022,\u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.8,
+            "dependencyCompletionScore": 0.8,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.8,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.934,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.95,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 5641.591375,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.95,
+        "meanDependencyCompletionScore": 0.95,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.95,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.934,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.95,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1974.773225,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3096.2708,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.4,
+            "passed": false,
+            "latencyMs": 3550.7173,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-hnsw-latency"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency"
+            ],
+            "answer": "Higher dot-product throughput keeps HNSW search under 50ms at K=10",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput keeps HNSW search under 50ms at K=10\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 0.6666667,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5777778,
+            "passed": false,
+            "latencyMs": 4308.1262,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-draft-slo"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization matters for draft-mode SLO to improve dot-product throughput and meet the sub-50ms latency requirement",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization matters for draft-mode SLO to improve dot-product throughput and meet the sub-50ms latency requirement\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022,\u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.6666667,
+            "dependencyCompletionScore": 0.6666667,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.6666667,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 0.4,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.30400002,
+            "passed": false,
+            "latencyMs": 4620.2713,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-draft-ui"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the performance of the real-time draft-mode endpoint,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022,\u0022ladder-draft-ui\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.4,
+            "dependencyCompletionScore": 0.4,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.4,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.57044446,
+        "passRate": 0.25,
+        "meanRequiredCoverage": 0.64166665,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3893.8464,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.64166665,
+        "meanDependencyCompletionScore": 0.64166665,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.64166665,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.57044446,
+      "passRateDelta": 0.25,
+      "requiredCoverageDelta": 0.64166665,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 227.02824999999984,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3324.2339,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3982.3784,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-draft-ui",
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "answer": "Higher dot-product throughput through int8 quantization and a hop depth of 2",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput through int8 quantization and a hop depth of 2\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022,\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6514.0529,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022, \u0022ladder-hnsw-latency\u0022, \u0022ladder-fp32-bottleneck\u0022, \u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 11012.5861,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictated by the SLO of sub-50ms HNSW latency, which is powered by ladder-draft-slo and ladder-draft-ui, and relies on the improved dot-product throughput from ladder-int8-quant and ladder-fp32-bottleneck resolution.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictated by the SLO of sub-50ms HNSW latency, which is powered by ladder-draft-slo and ladder-draft-ui, and relies on the improved dot-product throughput from ladder-int8-quant and ladder-fp32-bottleneck resolution.\u0022, \u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022, \u0022ladder-int8-quant\u0022, \u0022ladder-hnsw-latency\u0022, \u0022ladder-draft-ui\u0022, \u0022ladder-draft-slo\u0022], \u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 6208.312825,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2541.494675,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskResults": [
+          {
+            "taskId": "ladder-1hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3490.3405,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant"
+            ],
+            "answer": "Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization raises dot-product throughput roughly 3x over FP32 on modern CPUs\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-2hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3832.7994,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-draft-slo",
+              "ladder-draft-ui",
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "citedMemoryIds": [
+              "ladder-hnsw-latency",
+              "ladder-int8-quant"
+            ],
+            "answer": "Higher dot-product throughput through int8 quantization and a hop depth of 2",
+            "rawResponse": "{\u0022answer\u0022:\u0022Higher dot-product throughput through int8 quantization and a hop depth of 2\u0022,\u0022evidence_ids\u0022:[\u0022ladder-hnsw-latency\u0022,\u0022ladder-int8-quant\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-3hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6350.2989,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo",
+              "ladder-draft-ui"
+            ],
+            "citedMemoryIds": [
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-fp32-bottleneck",
+              "ladder-draft-slo"
+            ],
+            "answer": "Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8 quantization matters for the draft-mode SLO to improve dot-product throughput and help achieve sub-50ms HNSW latency,\u0022,\u0022evidence_ids\u0022:[\u0022ladder-int8-quant\u0022, \u0022ladder-hnsw-latency\u0022, \u0022ladder-fp32-bottleneck\u0022, \u0022ladder-draft-slo\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "ladder-4hop",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 11248.1227,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "citedMemoryIds": [
+              "ladder-fp32-bottleneck",
+              "ladder-int8-quant",
+              "ladder-hnsw-latency",
+              "ladder-draft-ui",
+              "ladder-draft-slo"
+            ],
+            "answer": "The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictated by the SLO of sub-50ms HNSW latency, which is powered by ladder-draft-slo and ladder-draft-ui, and relies on the improved dot-product throughput from ladder-int8-quant and ladder-fp32-bottleneck resolution.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The FP32 throughput bottleneck affects the autocomplete UI by impacting the real-time draft-mode endpoint\u0027dictated by the SLO of sub-50ms HNSW latency, which is powered by ladder-draft-slo and ladder-draft-ui, and relies on the improved dot-product throughput from ladder-int8-quant and ladder-fp32-bottleneck resolution.\u0022, \u0022evidence_ids\u0022:[\u0022ladder-fp32-bottleneck\u0022, \u0022ladder-int8-quant\u0022, \u0022ladder-hnsw-latency\u0022, \u0022ladder-draft-ui\u0022, \u0022ladder-draft-slo\u0022], \u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 6230.390375,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2563.572225,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

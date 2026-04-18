@@ -50,6 +50,14 @@ On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-
 
 We verify that Engram MCP makes AI "more intelligent" by measuring the **Reasoning Delta**—the gap between what a model can do with standard context vs. what it can do with the Engram Knowledge Graph.
 
+See [benchmarks-intelligence.md](./benchmarks-intelligence.md) for the T2 intelligence-claim
+framework: four new datasets (`reasoning-ladder-v1`, `contradiction-arena-v1`,
+`adversarial-retrieval-v1`, `counterfactual-v1`), six new metrics (ReasoningPathValidity,
+DependencyCompletionScore, StaleMemoryPenalty, MinimalEvidenceScore, NoiseResistanceScore,
+ContradictionHandlingScore), and three ablation conditions (`full_engram_no_graph`,
+`full_engram_no_lifecycle`, `full_engram_no_hybrid`) that attribute wins to specific
+cognitive mechanisms.
+
 ### Current Intelligence Standing (2026-04-17)
 
 | Condition | Success Score | Capability Level | Verification |

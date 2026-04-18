@@ -1,0 +1,895 @@
+{
+  "datasetId": "adversarial-retrieval-v1",
+  "runAt": "2026-04-18T16:07:48.592013+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "adv-stem",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1931.4414,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "adv-archive",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1533.3019,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "adv-spread",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1486.2662,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "adv-rerank",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1500.5339,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1612.8858500000001,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanContradictionHandlingScore": 0.75
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1973.0036,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-stem-near"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.70000005,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2966.6652,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 3531.7017,
+            "responseFormatValid": true,
+            "insufficientContext": true,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the memories",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the memories\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:true}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3092.1573,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2890.88195,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.375,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1277.9960999999998,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3027.436,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming with an expanded synonym list of 98 mappings",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming with an expanded synonym list of 98 mappings\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3224.6646,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 6462.0006,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The provided context mentions \u0022adv-spread-near\u0022 which implies a decay pattern similar to \u0022adv-spread-real\u0022 but does not explicitly state the stopping threshold. The answer infers this threshold based on the provided context.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2987.0459,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3925.2867750000005,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.45,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2312.4009250000004,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3096.1884,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming with an expanded synonym list of 98 mappings",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming with an expanded synonym list of 98 mappings\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3274.7911,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 3630.4225,
+            "responseFormatValid": true,
+            "insufficientContext": true,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the context memories",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the context memories\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:true}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3090.14,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3272.8855,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.45,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1659.9996499999997,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2970.6255,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming with an expanded synonym list of 98 mappings",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming with an expanded synonym list of 98 mappings\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3278.1821,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 7194.289,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The provided context mentions \u0022adv-spread-near\u0022 which implies a decay pattern similar to the one described in the task, but it lacks explicit mention of the stopping threshold. The answer is inferred based on the decay pattern and the provided threshold, assuming it aligns with the task\u0027s expectation.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3039.0115,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 4120.527025,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.45,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2507.641175,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2914.8748,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming with an expanded synonym list of 98 mappings",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming with an expanded synonym list of 98 mappings\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3165.8418,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 3548.1769,
+            "responseFormatValid": true,
+            "insufficientContext": true,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the context memories",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extraneous information not provided in the context memories\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:true}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3077.0646,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3176.489525,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.45,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1563.6036749999998,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskResults": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2790.869,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-stem-real"
+            ],
+            "answer": "Porter stemming with an expanded synonym list of 98 mappings",
+            "rawResponse": "{\u0022answer\u0022:\u0022Porter stemming with an expanded synonym list of 98 mappings\u0022,\u0022evidence_ids\u0022:[\u0022adv-stem-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2999.7405,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "citedMemoryIds": [
+              "adv-archive-real"
+            ],
+            "answer": "Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7",
+            "rawResponse": "{\u0022answer\u0022:\u0022Archived memories can be retrieved via deep_recall when resurrection similarity exceeds 0.7\u0022,\u0022evidence_ids\u0022:[\u0022adv-archive-real\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 7470.7044,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "citedMemoryIds": [
+              "adv-spread-near"
+            ],
+            "answer": "Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1",
+            "rawResponse": "{\u0022answer\u0022:\u0022Spreading activation decays by half per hop and stops when cumulative weight falls below 0 extrinsic threshold of 0.1\u0022,\u0022evidence_ids\u0022:[\u0022adv-spread-near\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The provided context references \u0022adv-spread-near,\u0022 which suggests a decay pattern similar to the one described in the task, but it lacks explicit mention of the stopping threshold. The answer infers the threshold based on the provided context, assuming it aligns with the term \u0022terminates when cumulative weight falls below 0.1.\u0022",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2982.1459,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "citedMemoryIds": [
+              "adv-rerank-real"
+            ],
+            "answer": "Token-overlap reranking is applied only to the top-K candidates",
+            "rawResponse": "{\u0022answer\u0022:\u0022Token-overlap reranking is applied only to the top-K candidates\u0022,\u0022evidence_ids\u0022:[\u0022adv-rerank-real\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.4,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.75,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 0.75,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 4060.86495,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.45,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.75,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 0.75,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2447.9791,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

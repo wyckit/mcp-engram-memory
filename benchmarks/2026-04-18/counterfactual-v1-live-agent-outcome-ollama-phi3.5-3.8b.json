@@ -1,0 +1,767 @@
+{
+  "datasetId": "counterfactual-v1",
+  "runAt": "2026-04-18T16:06:16.2053572+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "cf-disable-wal",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1862.3207,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "cf-accretion-dependency",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1547.0248,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "cf-remove-snapshot",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 0,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 2639.1301,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context to determine the specific metric that would regress without HNSW snapshots and the historical precedent",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context to determine the specific metric that would regress without HNSW snapshots and the historical precedent\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n\n",
+        "reasoningPathValidity": 0,
+        "dependencyCompletionScore": 0,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 1
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 2016.1585333333333,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 0,
+    "meanDependencyCompletionScore": 0,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanContradictionHandlingScore": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3576.9662,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-wal",
+              "cf-atomic-delete",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-atomic-delete",
+              "cf-corruption"
+            ],
+            "answer": "Concurrent namespace deletion would fail without WAL atomicity, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would fail without WAL atomicity, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-atomic-delete\u0022,\u0022cf-corruption\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 0,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0,
+            "passed": false,
+            "latencyMs": 2677.5766,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-warmup",
+              "cf-distract-sharding"
+            ],
+            "citedMemoryIds": [
+              "cf-accretion"
+            ],
+            "answer": "Namespace deletion for stale STM summaries",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion for stale STM summaries\u0022,\u0022evidence_ids\u0022:[\u0022cf-accretion\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 0.33333334,
+            "dependencyCompletionScore": 0.33333334,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.64000005,
+            "passed": true,
+            "latencyMs": 3054.4937,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-cold-start"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.48000002,
+        "passRate": 0.6666667,
+        "meanRequiredCoverage": 0.6666667,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3103.012166666666,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.6111111,
+        "meanDependencyCompletionScore": 0.6111111,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.8333333,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.48000002,
+      "passRateDelta": 0.6666667,
+      "requiredCoverageDelta": 0.6666667,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1086.8536333333327,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.32000002,
+            "passed": false,
+            "latencyMs": 3559.9764,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "answer": "Concurrent namespace deletion would break without WAL mode, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would break without WAL mode, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-wal\u0022,\u0022cf-corruption\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.34666666,
+            "passed": false,
+            "latencyMs": 3326.6973,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-distract-sharding",
+              "cf-atomic-delete"
+            ],
+            "citedMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete"
+            ],
+            "answer": "Namespace deletion requires WAL atomicity for the Accretion cleanup,",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion requires WAL atomicity for the Accretion cleanup,\u0022 \u0022evidence_ids\u0022:[\u0022cf-accretion\u0022, \u0022cf-atomic-delete\u0022], \u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.6666667,
+            "dependencyCompletionScore": 0.6666667,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.64000005,
+            "passed": true,
+            "latencyMs": 9538.785,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-corruption",
+              "cf-cold-start"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022],\u0022insufficient_context\u0022:false}\n\n\n\nThe provided context indicates that HNSW snapshots were introduced to address cold-start latency issues, as stated in the \u0022cf-cold-start\u0022 memory. The historical precedent is the dominance of cold-start latency by HNSW rebuild before snapshots were introduced, suggesting that without snapshots, this latency metric would likely regress. The mention of \u0022WAL atomicity\u0022 in the \u0022cf-corruption\u0022 memory suggests a related but separate issue that does not directly substitute for the snapshot functionality.",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.43555558,
+        "passRate": 0.33333334,
+        "meanRequiredCoverage": 0.6666667,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 5475.1529,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.5555556,
+        "meanDependencyCompletionScore": 0.5555556,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.43555558,
+      "passRateDelta": 0.33333334,
+      "requiredCoverageDelta": 0.6666667,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 3458.994366666667,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3793.9984,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-cold-start",
+              "cf-warmup",
+              "cf-wal",
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "citedMemoryIds": [
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "answer": "Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-corruption\u0022,\u0022cf-atomic-delete\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3577.9258,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete",
+              "cf-distract-sharding",
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete",
+              "cf-wal"
+            ],
+            "answer": "Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup\u0022,\u0022evidence_ids\u0022:[\u0022cf-accretion\u0022,\u0022cf-atomic-delete\u0022,\u0022cf-wal\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3622.1103,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-corruption",
+              "cf-wal",
+              "cf-atomic-delete",
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022,\u0022cf-hnsw-snapshot\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.8,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3664.6781666666666,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.8,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1648.5196333333333,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.32000002,
+            "passed": false,
+            "latencyMs": 3394.2091,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "answer": "Concurrent namespace deletion would break without WAL mode, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would break without WAL mode, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-wal\u0022,\u0022cf-corruption\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.34666666,
+            "passed": false,
+            "latencyMs": 3251.1423,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-distract-sharding",
+              "cf-atomic-delete"
+            ],
+            "citedMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete"
+            ],
+            "answer": "Namespace deletion requires WAL atomicity for the Accretion cleanup,",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion requires WAL atomicity for the Accretion cleanup,\u0022 \u0022evidence_ids\u0022:[\u0022cf-accretion\u0022, \u0022cf-atomic-delete\u0022], \u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.6666667,
+            "dependencyCompletionScore": 0.6666667,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.64000005,
+            "passed": true,
+            "latencyMs": 11729.0463,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-corruption",
+              "cf-cold-start"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022],\u0022insufficient_context\u0022:false}\n\n\n\nThe provided context indicates that HNSW snapshots were introduced to mitigate the cold-start latency caused by rebuilding the graph index, as mentioned in the \u0022cf-cold-start\u0022 memory. The historical precedent is the dominance of cold-start latency by HNSW rebuild before the introduction of snapshots, suggesting that without them, this issue would likely regress. The mention of \u0022WAL atomicity\u0022 in the \u0022cf-corruption\u0022 memory suggests that concurrent operations could lead to corruption, which is related to the importance of maintaining a consistent state in the index, but the direct impact on cold-start performance without snapshots is the focus of the question.",
+            "reasoningPathValidity": 0.5,
+            "dependencyCompletionScore": 0.5,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.43555558,
+        "passRate": 0.33333334,
+        "meanRequiredCoverage": 0.6666667,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 6124.799233333334,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.5555556,
+        "meanDependencyCompletionScore": 0.5555556,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.43555558,
+      "passRateDelta": 0.33333334,
+      "requiredCoverageDelta": 0.6666667,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 4108.640700000001,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3805.2223,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-cold-start",
+              "cf-warmup",
+              "cf-wal",
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "citedMemoryIds": [
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "answer": "Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-corruption\u0022,\u0022cf-atomic-delete\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3802.8391,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete",
+              "cf-distract-sharding",
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete",
+              "cf-wal"
+            ],
+            "answer": "Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup\u0022,\u0022evidence_ids\u0022:[\u0022cf-accretion\u0022,\u0022cf-atomic-delete\u0022,\u0022cf-wal\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3817.9492,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-corruption",
+              "cf-wal",
+              "cf-atomic-delete",
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022,\u0022cf-hnsw-snapshot\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.8,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3808.6702000000005,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.8,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1792.5116666666672,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskResults": [
+          {
+            "taskId": "cf-disable-wal",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 4025.5231,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-hnsw-snapshot",
+              "cf-cold-start",
+              "cf-warmup",
+              "cf-wal",
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "citedMemoryIds": [
+              "cf-corruption",
+              "cf-atomic-delete"
+            ],
+            "answer": "Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index",
+            "rawResponse": "{\u0022answer\u0022:\u0022Concurrent namespace deletion would break without WAL atomicity, leading to corrupted HNSW graph index\u0022,\u0022evidence_ids\u0022:[\u0022cf-corruption\u0022,\u0022cf-atomic-delete\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-accretion-dependency",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.6933333,
+            "passed": true,
+            "latencyMs": 3229.3071,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-accretion",
+              "cf-atomic-delete",
+              "cf-distract-sharding",
+              "cf-wal",
+              "cf-corruption"
+            ],
+            "citedMemoryIds": [
+              "cf-atomic-delete",
+              "cf-wal"
+            ],
+            "answer": "Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup",
+            "rawResponse": "{\u0022answer\u0022:\u0022Namespace deletion requires WAL atomicity for cleanup during Accretion cleanup\u0022,\u0022evidence_ids\u0022:[\u0022cf-atomic-delete\u0022,\u0022cf-wal\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 0.6666667,
+            "dependencyCompletionScore": 0.6666667,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "cf-remove-snapshot",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 0,
+            "conflictRate": 0,
+            "successScore": 0.8,
+            "passed": true,
+            "latencyMs": 3841.9807,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "cf-corruption",
+              "cf-wal",
+              "cf-atomic-delete",
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "citedMemoryIds": [
+              "cf-cold-start",
+              "cf-hnsw-snapshot"
+            ],
+            "answer": "Cold-start latency would regress without HNSW snapshots",
+            "rawResponse": "{\u0022answer\u0022:\u0022Cold-start latency would regress without HNSW snapshots\u0022,\u0022evidence_ids\u0022:[\u0022cf-cold-start\u0022,\u0022cf-hnsw-snapshot\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.7644445,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3698.9369666666666,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 0.8888889,
+        "meanDependencyCompletionScore": 0.8888889,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.7644445,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1682.7784333333334,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

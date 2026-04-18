@@ -19,9 +19,27 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
     public const string TranscriptReplayCondition = AgentOutcomeBenchmarkRunner.TranscriptReplayCondition;
     public const string VectorMemoryCondition = AgentOutcomeBenchmarkRunner.VectorMemoryCondition;
     public const string FullEngramCondition = AgentOutcomeBenchmarkRunner.FullEngramCondition;
+    public const string FullEngramNoGraphCondition = AgentOutcomeBenchmarkRunner.FullEngramNoGraphCondition;
+    public const string FullEngramNoLifecycleCondition = AgentOutcomeBenchmarkRunner.FullEngramNoLifecycleCondition;
+    public const string FullEngramNoHybridCondition = AgentOutcomeBenchmarkRunner.FullEngramNoHybridCondition;
 
-    private static readonly string[] ComparisonConditions =
+    private static readonly string[] DefaultComparisonConditions =
         [TranscriptReplayCondition, VectorMemoryCondition, FullEngramCondition];
+
+    private static readonly string[] AblationConditions =
+    [
+        FullEngramNoGraphCondition,
+        FullEngramNoLifecycleCondition,
+        FullEngramNoHybridCondition
+    ];
+
+    private readonly record struct FullEngramPolicy(bool UseGraph, bool UseLifecycle, bool UseHybrid)
+    {
+        public static FullEngramPolicy Full => new(true, true, true);
+        public static FullEngramPolicy NoGraph => new(false, true, true);
+        public static FullEngramPolicy NoLifecycle => new(true, false, true);
+        public static FullEngramPolicy NoHybrid => new(true, true, false);
+    }
 
     private static readonly JsonSerializerOptions ResponseJsonOptions = new()
     {
@@ -52,9 +70,13 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         CancellationToken ct = default)
     {
         var baseline = await RunConditionAsync(dataset, options, client, NoMemoryCondition, ct);
-        var comparisons = new List<LiveAgentOutcomeConditionComparison>(ComparisonConditions.Length);
+        var conditions = options.RunAblations
+            ? DefaultComparisonConditions.Concat(AblationConditions).ToArray()
+            : DefaultComparisonConditions;
 
-        foreach (var condition in ComparisonConditions)
+        var comparisons = new List<LiveAgentOutcomeConditionComparison>(conditions.Length);
+
+        foreach (var condition in conditions)
         {
             ct.ThrowIfCancellationRequested();
 
@@ -93,8 +115,11 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         {
             NoMemoryCondition => RunNoMemoryAsync(dataset, options, client, ct),
             TranscriptReplayCondition => RunTranscriptReplayAsync(dataset, options, client, ct),
-            VectorMemoryCondition => RunIndexedConditionAsync(dataset, options, client, VectorMemoryCondition, useFullEngramPolicy: false, ct),
-            FullEngramCondition => RunIndexedConditionAsync(dataset, options, client, FullEngramCondition, useFullEngramPolicy: true, ct),
+            VectorMemoryCondition => RunIndexedConditionAsync(dataset, options, client, VectorMemoryCondition, policy: null, ct),
+            FullEngramCondition => RunIndexedConditionAsync(dataset, options, client, FullEngramCondition, FullEngramPolicy.Full, ct),
+            FullEngramNoGraphCondition => RunIndexedConditionAsync(dataset, options, client, FullEngramNoGraphCondition, FullEngramPolicy.NoGraph, ct),
+            FullEngramNoLifecycleCondition => RunIndexedConditionAsync(dataset, options, client, FullEngramNoLifecycleCondition, FullEngramPolicy.NoLifecycle, ct),
+            FullEngramNoHybridCondition => RunIndexedConditionAsync(dataset, options, client, FullEngramNoHybridCondition, FullEngramPolicy.NoHybrid, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(condition), $"Unknown memory condition '{condition}'.")
         };
     }
@@ -110,7 +135,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         foreach (var task in dataset.Tasks)
         {
             ct.ThrowIfCancellationRequested();
-            results.Add(await EvaluateTaskAsync(task, PromptContext.Empty, options, client, ct));
+            results.Add(await EvaluateTaskAsync(task, PromptContext.Empty, options, client, dataset.Edges, ct));
         }
 
         return Aggregate(NoMemoryCondition, results);
@@ -132,7 +157,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
 
             var contextIds = SearchTranscript(task, chunks);
             var context = BuildPromptContext(contextIds, seedById);
-            results.Add(await EvaluateTaskAsync(task, context, options, client, ct));
+            results.Add(await EvaluateTaskAsync(task, context, options, client, dataset.Edges, ct));
         }
 
         return Aggregate(TranscriptReplayCondition, results);
@@ -143,7 +168,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         LiveAgentOutcomeGenerationOptions options,
         IAgentOutcomeModelClient client,
         string condition,
-        bool useFullEngramPolicy,
+        FullEngramPolicy? policy,
         CancellationToken ct)
     {
         var seeded = SeedConditionNamespace(dataset, condition, options.ContextualPrefix);
@@ -158,11 +183,11 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
                 ct.ThrowIfCancellationRequested();
 
                 var queryVector = _embedding.Embed(task.QueryText);
-                var context = useFullEngramPolicy
-                    ? BuildFullEngramContext(seeded, seedById, task, queryVector)
+                var context = policy is FullEngramPolicy p
+                    ? BuildFullEngramContext(seeded, seedById, task, queryVector, p, dataset)
                     : BuildVectorContext(seeded, seedById, task, queryVector);
 
-                results.Add(await EvaluateTaskAsync(task, context, options, client, ct));
+                results.Add(await EvaluateTaskAsync(task, context, options, client, dataset.Edges, ct));
             }
 
             return Aggregate(condition, results);
@@ -188,8 +213,12 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         SeededNamespace seeded,
         IReadOnlyDictionary<string, BenchmarkSeedEntry> seedById,
         AgentOutcomeTask task,
-        float[] queryVector)
+        float[] queryVector,
+        FullEngramPolicy policy,
+        AgentOutcomeDataset dataset)
     {
+        bool useHybrid = policy.UseHybrid && BenchmarkPolicyPatches.ShouldUseHybrid(dataset);
+
         IReadOnlyList<CognitiveSearchResult> results = _index.Search(new SearchRequest
         {
             Query = queryVector,
@@ -197,11 +226,11 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             Namespace = seeded.Namespace,
             K = task.K,
             MinScore = task.MinScore,
-            Hybrid = true,
+            Hybrid = useHybrid,
             Rerank = true
         });
 
-        if (results.Count == 0 || results[0].Score < 0.50f)
+        if (policy.UseLifecycle && (results.Count == 0 || results[0].Score < 0.50f))
         {
             results = _lifecycle.DeepRecall(
                 queryVector,
@@ -210,11 +239,17 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
                 minScore: task.MinScore,
                 resurrectionThreshold: 0.7f,
                 queryText: task.QueryText,
-                hybrid: true,
+                hybrid: useHybrid,
                 rerank: true);
         }
 
-        var contextIds = ExpandWithGraph(results, seeded.LocalToCanonical);
+        var contextIds = policy.UseGraph
+            ? ExpandWithGraph(results, seeded.LocalToCanonical)
+            : ToCanonicalIds(results.Select(r => r.Id), seeded.LocalToCanonical);
+
+        if (policy.UseLifecycle)
+            contextIds = BenchmarkPolicyPatches.ResolveLifecycleContradictions(contextIds, dataset);
+
         return BuildPromptContext(contextIds, seedById);
     }
 
@@ -223,6 +258,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         PromptContext context,
         LiveAgentOutcomeGenerationOptions options,
         IAgentOutcomeModelClient client,
+        IReadOnlyList<OutcomeGraphEdgeSeed> edges,
         CancellationToken ct)
     {
         var prompt = BuildPrompt(task, context);
@@ -245,7 +281,8 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             rawResponse,
             parsed.IsValid,
             parsed.InsufficientContext,
-            sw.Elapsed.TotalMilliseconds);
+            sw.Elapsed.TotalMilliseconds,
+            edges);
     }
 
     private SeededNamespace SeedConditionNamespace(
@@ -746,7 +783,8 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         string? rawResponse,
         bool responseFormatValid,
         bool insufficientContext,
-        double latencyMs)
+        double latencyMs,
+        IReadOnlyList<OutcomeGraphEdgeSeed> edges)
     {
         var required = task.RequiredMemoryIds;
         var helpful = task.HelpfulMemoryIds ?? Array.Empty<string>();
@@ -762,14 +800,20 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
 
         float helpfulWeight = helpful.Count > 0 ? 0.20f : 0f;
         float requiredWeight = 1.0f - helpfulWeight;
-        float successScore = Math.Clamp(
+        float baseSuccess = Math.Clamp(
             (requiredCoverage * requiredWeight) +
             (helpfulCoverage * helpfulWeight) -
             (conflictRate * 0.50f),
             0f,
             1f);
 
-        bool passed = responseFormatValid && requiredCoverage >= 0.999f && conflictRate == 0f;
+        var intelligence = IntelligenceScoring.Compute(task, contextMemoryIds, citedMemoryIds, edges);
+        float successScore = IntelligenceScoring.AdjustSuccessScore(baseSuccess, intelligence, task);
+
+        bool passed = responseFormatValid
+            && requiredCoverage >= 0.999f
+            && conflictRate == 0f
+            && intelligence.StaleMemoryPenalty == 0f;
 
         return new LiveAgentOutcomeTaskResult(
             task.TaskId,
@@ -784,7 +828,14 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             contextMemoryIds,
             citedMemoryIds.ToList(),
             answer,
-            rawResponse);
+            rawResponse,
+            intelligence.ReasoningPathValidity,
+            intelligence.DependencyCompletionScore,
+            intelligence.StaleMemoryPenalty,
+            intelligence.MinimalEvidenceScore,
+            intelligence.NoiseResistanceScore,
+            intelligence.NoiseResistanceScoreRanked,
+            intelligence.ContradictionHandlingScore);
     }
 
     private static LiveAgentOutcomeConditionResult Aggregate(
@@ -804,7 +855,14 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             taskResults.Average(result => result.RequiredCoverage),
             taskResults.Average(result => result.ConflictRate),
             taskResults.Average(result => result.LatencyMs),
-            (float)taskResults.Count(result => result.ResponseFormatValid) / taskResults.Count);
+            (float)taskResults.Count(result => result.ResponseFormatValid) / taskResults.Count,
+            taskResults.Average(result => result.ReasoningPathValidity),
+            taskResults.Average(result => result.DependencyCompletionScore),
+            taskResults.Average(result => result.StaleMemoryPenalty),
+            taskResults.Average(result => result.MinimalEvidenceScore),
+            taskResults.Average(result => result.NoiseResistanceScore),
+            taskResults.Average(result => result.NoiseResistanceScoreRanked),
+            taskResults.Average(result => result.ContradictionHandlingScore));
     }
 
     private IReadOnlyList<string> ExpandWithGraph(

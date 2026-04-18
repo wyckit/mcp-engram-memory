@@ -1,0 +1,893 @@
+{
+  "datasetId": "contradiction-arena-v1",
+  "runAt": "2026-04-18T16:09:12.8385305+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "contra-port",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 2691.5784,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context to determine which port should be used for internal signaling and any conflicting rules.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context to determine which port should be used for internal signaling and any conflicting rules.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-quant",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1872.7156,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-name",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1513.7367,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-auth",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1512.6827,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "contradictionHandlingScore": 0
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1897.67835,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanContradictionHandlingScore": 0
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 5033.1413,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-old",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The legacy specification is not authoritative due to the new security policy directive, and the context only cites evidence from \u0022contra-port-new\u0022. The score reflects the new policy\u0027s authority.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1917.1482,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-port-old"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1905.9048,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-old",
+              "contra-name-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.75,
+            "passed": false,
+            "latencyMs": 3108.4799,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-auth-old"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new",
+              "contra-auth-old"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes under the new policy or 24 hours under the old policy",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes under the new policy or 24 hours under the old policy\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022,\u0022contra-auth-old\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 1,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 0.5
+          }
+        ],
+        "meanSuccessScore": 0.9375,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2991.1685500000003,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0.25,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 0.875
+      },
+      "successDelta": 0.9375,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1093.4902000000004,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 7906.8,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Use port 443 with TLS 1.3 for internal signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use port 443 with TLS 1.3 for internal signaling\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nThe context provided only mentions the contra-port-new memory, which suggests the use of port 443 with TLS 1.3 for internal signaling according to the 2026 security policy. There is no explicit mention of a conflicting rule within the provided context, hence only the evidence from contra-port-new is cited. The answer reflects the authoritative guideline based on the available information.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2033.9476,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1927.0365,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2082.1503,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3487.4836,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1589.8052500000001,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6796.3123,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Use port 443 with TLS 1.3 for internal signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use port 443 with TLS 1.3 for internal signaling\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nThe context provided only mentions \u0022contra-port-new\u0022 as the authoritative rule for internal signaling, with no conflicting information about older rules. Therefore, the answer cites only the new evidence with a full context. The confidence level is set to 1.0, as there is no mention of conflicting rules.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1995.1206,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1941.4951,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2086.4521,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3204.845025,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1307.1666750000002,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 7126.7108,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Use port 443 with TLS 1.3 for internal signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use port 443 with TLS 1.3 for internal signaling\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nThe context provided only mentions the new rule for internal signaling without conflicting information, so only the evidence from \u0022contra-port-new\u0022 is cited. The lack of conflicting information means there\u0027s no need to cite \u0022contra-quant-new\u0022 in this instance. The answer reflects the authoritative guidance based on the provided evidence.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2016.9533,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1924.1795,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2093.23,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3290.2684,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1392.59005,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 5811.8825,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Use port 443 with TLS 1.3 for internal signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use port 443 with TLS 1.3 for internal signaling\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nThe context provided only mentions the contra-port-new memory, which indicates the updated rule for internal signaling. There is no conflicting evidence cited regarding the use of a different port, so the answer is based solely on the provided evidence.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1964.0254,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1918.295,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2089.9568,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2946.039925,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1048.3615750000001,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6749.0053,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Use port 443 with TLS 1.3 for internal signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Use port 443 with TLS 1.3 for internal signaling\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}\n\nThe context provided only mentions the \u0022contra-port-new\u0022 memory, which indicates the updated rule for internal signaling. There is no conflicting evidence cited regarding the use of a different port, hence the focus is solely on the new directive. The answer reflects the information directly from the provided memory context.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2066.745,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1924.7075,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2084.279,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens remain valid for 15 minutes",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens remain valid for 15 minutes\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3206.1842,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1308.5058500000002,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

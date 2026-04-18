@@ -11,7 +11,8 @@ public sealed record LiveAgentOutcomeGenerationOptions(
     [property: JsonPropertyName("endpoint")] string? Endpoint = null,
     [property: JsonPropertyName("contextualPrefix")] bool ContextualPrefix = false,
     [property: JsonPropertyName("maxTokens")] int MaxTokens = 320,
-    [property: JsonPropertyName("temperature")] float Temperature = 0.1f);
+    [property: JsonPropertyName("temperature")] float Temperature = 0.1f,
+    [property: JsonPropertyName("runAblations")] bool RunAblations = false);
 
 /// <summary>
 /// Structured response schema expected from the benchmarked model.
@@ -37,7 +38,14 @@ public sealed record LiveAgentOutcomeTaskResult(
     [property: JsonPropertyName("contextMemoryIds")] IReadOnlyList<string> ContextMemoryIds,
     [property: JsonPropertyName("citedMemoryIds")] IReadOnlyList<string> CitedMemoryIds,
     [property: JsonPropertyName("answer")] string? Answer,
-    [property: JsonPropertyName("rawResponse")] string? RawResponse);
+    [property: JsonPropertyName("rawResponse")] string? RawResponse,
+    [property: JsonPropertyName("reasoningPathValidity")] float ReasoningPathValidity = 1f,
+    [property: JsonPropertyName("dependencyCompletionScore")] float DependencyCompletionScore = 1f,
+    [property: JsonPropertyName("staleMemoryPenalty")] float StaleMemoryPenalty = 0f,
+    [property: JsonPropertyName("minimalEvidenceScore")] float MinimalEvidenceScore = 1f,
+    [property: JsonPropertyName("noiseResistanceScore")] float NoiseResistanceScore = 1f,
+    [property: JsonPropertyName("noiseResistanceScoreRanked")] float NoiseResistanceScoreRanked = 1f,
+    [property: JsonPropertyName("contradictionHandlingScore")] float ContradictionHandlingScore = 1f);
 
 /// <summary>
 /// Aggregate result for one memory condition in a live model benchmark run.
@@ -50,7 +58,14 @@ public sealed record LiveAgentOutcomeConditionResult(
     [property: JsonPropertyName("meanRequiredCoverage")] float MeanRequiredCoverage,
     [property: JsonPropertyName("meanConflictRate")] float MeanConflictRate,
     [property: JsonPropertyName("meanLatencyMs")] double MeanLatencyMs,
-    [property: JsonPropertyName("formatValidityRate")] float FormatValidityRate);
+    [property: JsonPropertyName("formatValidityRate")] float FormatValidityRate,
+    [property: JsonPropertyName("meanReasoningPathValidity")] float MeanReasoningPathValidity = 1f,
+    [property: JsonPropertyName("meanDependencyCompletionScore")] float MeanDependencyCompletionScore = 1f,
+    [property: JsonPropertyName("meanStaleMemoryPenalty")] float MeanStaleMemoryPenalty = 0f,
+    [property: JsonPropertyName("meanMinimalEvidenceScore")] float MeanMinimalEvidenceScore = 1f,
+    [property: JsonPropertyName("meanNoiseResistanceScore")] float MeanNoiseResistanceScore = 1f,
+    [property: JsonPropertyName("meanNoiseResistanceScoreRanked")] float MeanNoiseResistanceScoreRanked = 1f,
+    [property: JsonPropertyName("meanContradictionHandlingScore")] float MeanContradictionHandlingScore = 1f);
 
 /// <summary>
 /// Comparison of a live memory condition against the no-memory baseline.

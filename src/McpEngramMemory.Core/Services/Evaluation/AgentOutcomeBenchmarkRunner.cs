@@ -20,8 +20,29 @@ public sealed class AgentOutcomeBenchmarkRunner
     public const string VectorMemoryCondition = "vector_memory";
     public const string FullEngramCondition = "full_engram";
 
+    // T2 ablation conditions. Each disables one Engram module so benchmark deltas map to a
+    // specific cognitive mechanism (graph traversal, lifecycle/deep-recall, hybrid BM25 lexical).
+    public const string FullEngramNoGraphCondition = "full_engram_no_graph";
+    public const string FullEngramNoLifecycleCondition = "full_engram_no_lifecycle";
+    public const string FullEngramNoHybridCondition = "full_engram_no_hybrid";
+
     private static readonly string[] ComparisonConditions =
         [TranscriptReplayCondition, VectorMemoryCondition, FullEngramCondition];
+
+    private static readonly string[] AblationConditions =
+    [
+        FullEngramNoGraphCondition,
+        FullEngramNoLifecycleCondition,
+        FullEngramNoHybridCondition
+    ];
+
+    private readonly record struct FullEngramPolicy(bool UseGraph, bool UseLifecycle, bool UseHybrid)
+    {
+        public static FullEngramPolicy Full => new(true, true, true);
+        public static FullEngramPolicy NoGraph => new(false, true, true);
+        public static FullEngramPolicy NoLifecycle => new(true, false, true);
+        public static FullEngramPolicy NoHybrid => new(true, true, false);
+    }
 
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
@@ -40,13 +61,23 @@ public sealed class AgentOutcomeBenchmarkRunner
         _lifecycle = lifecycle;
     }
 
-    /// <summary>Run an agent-outcome benchmark dataset across all supported memory conditions.</summary>
-    public AgentOutcomeBenchmarkResult Run(AgentOutcomeDataset dataset, bool useContextualPrefix = false)
+    /// <summary>Run an agent-outcome benchmark dataset across all supported memory conditions.
+    /// Set <paramref name="runAblations"/> to true to additionally run the three T2 ablation
+    /// conditions (<c>full_engram_no_graph</c>, <c>full_engram_no_lifecycle</c>,
+    /// <c>full_engram_no_hybrid</c>) for per-module intelligence attribution.</summary>
+    public AgentOutcomeBenchmarkResult Run(
+        AgentOutcomeDataset dataset,
+        bool useContextualPrefix = false,
+        bool runAblations = false)
     {
         var baseline = RunCondition(dataset, NoMemoryCondition, useContextualPrefix);
-        var comparisons = new List<AgentOutcomeConditionComparison>(ComparisonConditions.Length);
+        var conditions = runAblations
+            ? ComparisonConditions.Concat(AblationConditions).ToArray()
+            : ComparisonConditions;
 
-        foreach (var condition in ComparisonConditions)
+        var comparisons = new List<AgentOutcomeConditionComparison>(conditions.Length);
+
+        foreach (var condition in conditions)
         {
             var result = RunCondition(dataset, condition, useContextualPrefix);
             comparisons.Add(new AgentOutcomeConditionComparison(
@@ -71,7 +102,17 @@ public sealed class AgentOutcomeBenchmarkRunner
     }
 
     /// <summary>Get all available agent-outcome dataset IDs.</summary>
-    public static IReadOnlyList<string> GetAvailableDatasets() => ["agent-outcome-v1", "agent-outcome-repo-v1", "agent-outcome-hard-v1", "agent-outcome-reasoning-v1"];
+    public static IReadOnlyList<string> GetAvailableDatasets() =>
+    [
+        "agent-outcome-v1",
+        "agent-outcome-repo-v1",
+        "agent-outcome-hard-v1",
+        "agent-outcome-reasoning-v1",
+        "reasoning-ladder-v1",
+        "contradiction-arena-v1",
+        "adversarial-retrieval-v1",
+        "counterfactual-v1"
+    ];
 
     /// <summary>Create an agent-outcome dataset by ID.</summary>
     public static AgentOutcomeDataset? CreateDataset(string datasetId)
@@ -81,6 +122,10 @@ public sealed class AgentOutcomeBenchmarkRunner
             "agent-outcome-repo-v1" => CreateRepoRecoveryDataset(),
             "agent-outcome-hard-v1" => CreateHardOutcomeDataset(),
             "agent-outcome-reasoning-v1" => CreateReasoningOutcomeDataset(),
+            "reasoning-ladder-v1" => IntelligenceDatasets.CreateReasoningLadderDataset(),
+            "contradiction-arena-v1" => IntelligenceDatasets.CreateContradictionArenaDataset(),
+            "adversarial-retrieval-v1" => IntelligenceDatasets.CreateAdversarialRetrievalDataset(),
+            "counterfactual-v1" => IntelligenceDatasets.CreateCounterfactualDataset(),
             _ => null
         };
 
@@ -376,10 +421,13 @@ public sealed class AgentOutcomeBenchmarkRunner
     {
         return condition switch
         {
-            NoMemoryCondition => Aggregate(condition, dataset.Tasks.Select(t => ScoreTask(t, Array.Empty<string>(), 0)).ToList()),
+            NoMemoryCondition => Aggregate(condition, dataset.Tasks.Select(t => ScoreTask(t, Array.Empty<string>(), 0, dataset.Edges)).ToList()),
             TranscriptReplayCondition => RunTranscriptReplay(dataset),
-            VectorMemoryCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, useFullEngramPolicy: false),
-            FullEngramCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, useFullEngramPolicy: true),
+            VectorMemoryCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, policy: null),
+            FullEngramCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, FullEngramPolicy.Full),
+            FullEngramNoGraphCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, FullEngramPolicy.NoGraph),
+            FullEngramNoLifecycleCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, FullEngramPolicy.NoLifecycle),
+            FullEngramNoHybridCondition => RunIndexedCondition(dataset, condition, useContextualPrefix, FullEngramPolicy.NoHybrid),
             _ => throw new ArgumentOutOfRangeException(nameof(condition), $"Unknown memory condition '{condition}'.")
         };
     }
@@ -394,7 +442,7 @@ public sealed class AgentOutcomeBenchmarkRunner
             var sw = Stopwatch.StartNew();
             var retrievedIds = SearchTranscript(task, chunks);
             sw.Stop();
-            scores.Add(ScoreTask(task, retrievedIds, sw.Elapsed.TotalMilliseconds));
+            scores.Add(ScoreTask(task, retrievedIds, sw.Elapsed.TotalMilliseconds, dataset.Edges));
         }
 
         return Aggregate(TranscriptReplayCondition, scores);
@@ -404,7 +452,7 @@ public sealed class AgentOutcomeBenchmarkRunner
         AgentOutcomeDataset dataset,
         string condition,
         bool useContextualPrefix,
-        bool useFullEngramPolicy)
+        FullEngramPolicy? policy)
     {
         var seeded = SeedConditionNamespace(dataset, condition, useContextualPrefix);
         try
@@ -414,12 +462,12 @@ public sealed class AgentOutcomeBenchmarkRunner
             {
                 var sw = Stopwatch.StartNew();
                 var queryVector = _embedding.Embed(task.QueryText);
-                IReadOnlyList<string> canonicalIds = useFullEngramPolicy
-                    ? ExecuteFullEngramTask(seeded, task, queryVector)
+                IReadOnlyList<string> canonicalIds = policy is FullEngramPolicy p
+                    ? ExecuteFullEngramTask(seeded, task, queryVector, p, dataset)
                     : ExecuteVectorTask(seeded, task, queryVector);
                 sw.Stop();
 
-                scores.Add(ScoreTask(task, canonicalIds, sw.Elapsed.TotalMilliseconds));
+                scores.Add(ScoreTask(task, canonicalIds, sw.Elapsed.TotalMilliseconds, dataset.Edges));
             }
 
             return Aggregate(condition, scores);
@@ -442,8 +490,15 @@ public sealed class AgentOutcomeBenchmarkRunner
     private IReadOnlyList<string> ExecuteFullEngramTask(
         SeededNamespace seeded,
         AgentOutcomeTask task,
-        float[] queryVector)
+        float[] queryVector,
+        FullEngramPolicy policy,
+        AgentOutcomeDataset dataset)
     {
+        // Expert panel t2-benchmark-design-2026-04-17 Q2: BM25 IDF collapses on tiny synthetic
+        // corpora (<~30 entries), polluting RRF rank fusion. Gate hybrid at 50 entries so the
+        // ablation is not confused with calibration noise.
+        bool useHybrid = policy.UseHybrid && BenchmarkPolicyPatches.ShouldUseHybrid(dataset);
+
         IReadOnlyList<CognitiveSearchResult> results = _index.Search(new SearchRequest
         {
             Query = queryVector,
@@ -451,11 +506,11 @@ public sealed class AgentOutcomeBenchmarkRunner
             Namespace = seeded.Namespace,
             K = task.K,
             MinScore = task.MinScore,
-            Hybrid = true,
+            Hybrid = useHybrid,
             Rerank = true
         });
 
-        if (results.Count == 0 || results[0].Score < 0.50f)
+        if (policy.UseLifecycle && (results.Count == 0 || results[0].Score < 0.50f))
         {
             results = _lifecycle.DeepRecall(
                 queryVector,
@@ -464,11 +519,21 @@ public sealed class AgentOutcomeBenchmarkRunner
                 minScore: task.MinScore,
                 resurrectionThreshold: 0.7f,
                 queryText: task.QueryText,
-                hybrid: true,
+                hybrid: useHybrid,
                 rerank: true);
         }
 
-        return ExpandWithGraph(results, seeded.LocalToCanonical);
+        var canonicalIds = policy.UseGraph
+            ? ExpandWithGraph(results, seeded.LocalToCanonical)
+            : ToCanonicalIds(results.Select(r => r.Id), seeded.LocalToCanonical);
+
+        // Expert panel Q1: lifecycle-aware policies must treat archived entries as superseded
+        // when they are joined by a `contradicts` edge to a live LTM entry. Drop the archived
+        // side so deep_recall resurrection does not cause CHS regression on contradiction pairs.
+        if (policy.UseLifecycle)
+            canonicalIds = BenchmarkPolicyPatches.ResolveLifecycleContradictions(canonicalIds, dataset);
+
+        return canonicalIds;
     }
 
     private SeededNamespace SeedConditionNamespace(
@@ -533,7 +598,8 @@ public sealed class AgentOutcomeBenchmarkRunner
     private static AgentOutcomeTaskScore ScoreTask(
         AgentOutcomeTask task,
         IReadOnlyCollection<string> retrievedIds,
-        double latencyMs)
+        double latencyMs,
+        IReadOnlyList<OutcomeGraphEdgeSeed> edges)
     {
         var required = task.RequiredMemoryIds;
         var helpful = task.HelpfulMemoryIds ?? Array.Empty<string>();
@@ -549,14 +615,18 @@ public sealed class AgentOutcomeBenchmarkRunner
 
         float helpfulWeight = helpful.Count > 0 ? 0.20f : 0f;
         float requiredWeight = 1.0f - helpfulWeight;
-        float successScore = Math.Clamp(
+        float baseSuccess = Math.Clamp(
             (requiredCoverage * requiredWeight) +
             (helpfulCoverage * helpfulWeight) -
             (conflictRate * 0.50f),
             0f,
             1f);
 
-        bool passed = requiredCoverage >= 0.999f && conflictRate == 0f;
+        // In the offline runner there is no separate model-citation step, so context == cited.
+        var intelligence = IntelligenceScoring.Compute(task, retrievedIds, retrievedIds, edges);
+        float successScore = IntelligenceScoring.AdjustSuccessScore(baseSuccess, intelligence, task);
+
+        bool passed = requiredCoverage >= 0.999f && conflictRate == 0f && intelligence.StaleMemoryPenalty == 0f;
 
         return new AgentOutcomeTaskScore(
             task.TaskId,
@@ -566,7 +636,14 @@ public sealed class AgentOutcomeBenchmarkRunner
             successScore,
             passed,
             latencyMs,
-            retrievedIds.ToList());
+            retrievedIds.ToList(),
+            intelligence.ReasoningPathValidity,
+            intelligence.DependencyCompletionScore,
+            intelligence.StaleMemoryPenalty,
+            intelligence.MinimalEvidenceScore,
+            intelligence.NoiseResistanceScore,
+            intelligence.NoiseResistanceScoreRanked,
+            intelligence.ContradictionHandlingScore);
     }
 
     private static AgentOutcomeConditionResult Aggregate(
@@ -585,7 +662,14 @@ public sealed class AgentOutcomeBenchmarkRunner
             (float)scores.Count(s => s.Passed) / scores.Count,
             scores.Average(s => s.RequiredCoverage),
             scores.Average(s => s.ConflictRate),
-            scores.Average(s => s.LatencyMs));
+            scores.Average(s => s.LatencyMs),
+            scores.Average(s => s.ReasoningPathValidity),
+            scores.Average(s => s.DependencyCompletionScore),
+            scores.Average(s => s.StaleMemoryPenalty),
+            scores.Average(s => s.MinimalEvidenceScore),
+            scores.Average(s => s.NoiseResistanceScore),
+            scores.Average(s => s.NoiseResistanceScoreRanked),
+            scores.Average(s => s.ContradictionHandlingScore));
     }
 
     private IReadOnlyList<string> ExpandWithGraph(

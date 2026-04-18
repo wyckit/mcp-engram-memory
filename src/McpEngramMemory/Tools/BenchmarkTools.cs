@@ -66,7 +66,7 @@ public sealed class BenchmarkTools
     [McpServerTool(Name = "run_agent_outcome_benchmark")]
     [Description("Run a task-style benchmark across four memory conditions: no memory, transcript replay, vector memory, and full Engram memory. Scores task success, evidence coverage, conflict rate, and latency, and persists a JSON artifact by default.")]
     public AgentOutcomeBenchmarkRunOutput RunAgentOutcomeBenchmark(
-        [Description("Dataset ID: 'agent-outcome-v1' (archived recall, graph assist, preferences, hybrid rescue, policy recall), 'agent-outcome-repo-v1' (interrupted repo recovery, confirmed-cause recall, fallback workarounds), or 'agent-outcome-hard-v1' (synonym gaps, deep recall, graph-linked evidence).")] string datasetId = "agent-outcome-v1",
+        [Description("Dataset ID. Core: 'agent-outcome-v1', 'agent-outcome-repo-v1', 'agent-outcome-hard-v1', 'agent-outcome-reasoning-v1'. T2 intelligence: 'reasoning-ladder-v1' (hop-depth 1-4), 'contradiction-arena-v1' (old/new fact pairs), 'adversarial-retrieval-v1' (distractor/synonym/stale traps), 'counterfactual-v1' (what-breaks-if dependency reasoning).")] string datasetId = "agent-outcome-v1",
         [Description("When true, prepend category context before embedding seed memories. Default: false.")] bool contextualPrefix = false,
         [Description("When true, write the benchmark result to a JSON artifact under benchmarks/YYYY-MM-DD. Default: true.")] bool persistArtifact = true,
         [Description("Optional artifact root directory. Defaults to BENCHMARK_ARTIFACTS_PATH env var or ./benchmarks.")] string? artifactDirectory = null)
@@ -101,15 +101,16 @@ public sealed class BenchmarkTools
     }
 
     [McpServerTool(Name = "run_live_agent_outcome_benchmark")]
-    [Description("Run a real generation model across no-memory, transcript replay, vector memory, and full Engram conditions. Requires a live provider. The first supported provider is Ollama. Scores task success from model-cited memory IDs and persists a JSON artifact by default.")]
+    [Description("Run a real generation model across no-memory, transcript replay, vector memory, and full Engram conditions. Optionally includes T2 ablation conditions (no_graph, no_lifecycle, no_hybrid) for per-module attribution. Requires a live provider. The first supported provider is Ollama. Scores task success plus T2 intelligence metrics (ReasoningPathValidity, ContradictionHandling, NoiseResistance, StaleMemoryPenalty, DependencyCompletion, MinimalEvidence) from model-cited memory IDs and persists a JSON artifact by default.")]
     public async Task<LiveAgentOutcomeBenchmarkRunOutput> RunLiveAgentOutcomeBenchmark(
         [Description("Generation model name exposed by the live provider. Required. Example for Ollama: 'qwen2.5:3b'.")] string model,
-        [Description("Dataset ID: 'agent-outcome-v1', 'agent-outcome-repo-v1', or 'agent-outcome-hard-v1'.")] string datasetId = "agent-outcome-v1",
+        [Description("Dataset ID. Core: 'agent-outcome-v1', 'agent-outcome-repo-v1', 'agent-outcome-hard-v1', 'agent-outcome-reasoning-v1'. T2 intelligence: 'reasoning-ladder-v1', 'contradiction-arena-v1', 'adversarial-retrieval-v1', 'counterfactual-v1'.")] string datasetId = "agent-outcome-v1",
         [Description("Live provider. Supported: 'ollama'.")] string provider = "ollama",
         [Description("Optional provider endpoint. Defaults to OLLAMA_URL or http://localhost:11434 for Ollama.")] string? endpoint = null,
         [Description("When true, prepend category context before embedding seed memories. Default: false.")] bool contextualPrefix = false,
         [Description("Maximum completion tokens per task. Default: 320.")] int maxTokens = 320,
         [Description("Sampling temperature for the live model. Default: 0.1.")] float temperature = 0.1f,
+        [Description("When true, also run three T2 ablation conditions against the live model (full_engram_no_graph, full_engram_no_lifecycle, full_engram_no_hybrid). Triples the generation cost. Default: false.")] bool runAblations = false,
         [Description("When true, write the benchmark result to a JSON artifact under benchmarks/YYYY-MM-DD. Default: true.")] bool persistArtifact = true,
         [Description("Optional artifact root directory. Defaults to BENCHMARK_ARTIFACTS_PATH env var or ./benchmarks.")] string? artifactDirectory = null,
         CancellationToken cancellationToken = default)
@@ -152,7 +153,8 @@ public sealed class BenchmarkTools
                 endpoint,
                 contextualPrefix,
                 maxTokens,
-                temperature);
+                temperature,
+                runAblations);
 
             var result = await _liveOutcomeRunner.RunAsync(dataset, options, client, cancellationToken);
             if (!persistArtifact)

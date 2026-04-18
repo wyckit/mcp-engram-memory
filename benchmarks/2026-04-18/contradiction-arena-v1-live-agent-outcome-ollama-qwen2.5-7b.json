@@ -1,0 +1,928 @@
+{
+  "datasetId": "contradiction-arena-v1",
+  "runAt": "2026-04-18T17:13:36.4321739+00:00",
+  "provider": "ollama",
+  "model": "qwen2.5:7b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "contra-port",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1382.082,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-quant",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1354.9287,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-name",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1354.2207,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-auth",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 1370.0782,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Insufficient context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Insufficient context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 1365.3274,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanNoiseResistanceScoreRanked": 1,
+    "meanContradictionHandlingScore": 0
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2925.7456,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-old",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1584.3835,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-port-old"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.75,
+            "passed": false,
+            "latencyMs": 1862.1688,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-old",
+              "contra-name-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-old",
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-old\u0022,\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 1,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 0.5
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2274.7534,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-auth-old"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.9375,
+        "passRate": 0.75,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2161.762825,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0.25,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 0.875
+      },
+      "successDelta": 0.9375,
+      "passRateDelta": 0.75,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 796.4354249999999,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2948.563,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1593.1598,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1625.466,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2274.7373,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2110.481525,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 745.1541250000002,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2922.2106,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1595.2402,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1621.5799,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2279.6646,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2104.673825,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 739.346425,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2930.8636,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1579.3404,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1620.8937,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2278.0822,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2102.294975,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 736.9675749999999,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2927.222,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1579.0903,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1624.6669,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2274.7912,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2101.4426000000003,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 736.1152000000004,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskResults": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2960.8719,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-port-new"
+            ],
+            "answer": "Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Internal signaling must use port 443 with TLS 1.3 as of the 2026 security policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-port-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1585.499,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "citedMemoryIds": [
+              "contra-quant-new"
+            ],
+            "answer": "Int8",
+            "rawResponse": "{\u0022answer\u0022:\u0022Int8\u0022,\u0022evidence_ids\u0022:[\u0022contra-quant-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1618.992,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "citedMemoryIds": [
+              "contra-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022contra-name-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2276.2517,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "citedMemoryIds": [
+              "contra-auth-new"
+            ],
+            "answer": "Auth tokens rotate every 15 minutes under the new zero-trust policy.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Auth tokens rotate every 15 minutes under the new zero-trust policy.\u0022,\u0022evidence_ids\u0022:[\u0022contra-auth-new\u0022],\u0022insufficient_context\u0022:false}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2110.40365,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 745.0762500000003,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}
