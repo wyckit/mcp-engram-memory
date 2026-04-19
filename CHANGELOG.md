@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Cross-CLI MRCR benchmark drivers**: `CodexCliModelClient` (spawns `codex exec -o <tempfile>`) and `GeminiCliModelClient` (spawns `gemini -p ""` with stdin prompt) join the existing `ClaudeCliModelClient`. Each charges against the vendor subscription, not API keys. New `CliExecutableResolver` probes PATH for `.exe`/`.cmd`/`.bat` variants so npm-installed CLI shims on Windows resolve correctly. UTF-8 stdin/stdout encoding is now forced across all three clients (fixes codex's "input is not valid UTF-8 at offset N" failure on prompts containing emoji).
+- **Cross-CLI 8-needle comparison (2026-04-19, n=25 stratified)**:
+    - gemini-cli/gemini-2.5-pro: **0.994 sim / 100% pass**
+    - codex-cli/gpt-5.4-mini:    **0.993 sim / 100% pass**
+    - claude-cli/opus:            0.987 sim /  96% pass
+    - codex-cli/gpt-5.4:          0.973 sim /  96% pass
+    - gemini-cli/gemini-2.5-flash:0.965 sim /  88% pass
+    - claude-cli/sonnet:          0.912 sim /  72% pass
+  All at 99.7% prompt-token reduction. Flagships don't always win: gpt-5.4-mini beats gpt-5.4 on ordinal engram; Gemini 2.5 Pro ties for best overall.
+- Tightened ordinal prompt to explicitly ask for verbatim snippet reproduction (needed for Gemini 2.5 Pro to stop truncating long needles; Claude and Codex were already interpreting the earlier phrasing correctly).
 - **Ordinal-aware engram retrieval mode for MRCR**: `MrcrGenerationOptions.EngramMode = "ordinal"` enables pair-wise ingest that tags each assistant turn with its user-ask category signature and within-category 1-based ordinal (stored on `CognitiveEntry.Metadata["ordinal"]`). A new `MrcrProbeParser` extracts `(RandomString, Ordinal, Category)` from the "Prepend X to the Nth (1 indexed) Y" probe template, and retrieval resolves to an exact category+ordinal lookup via `CognitiveIndex.GetAllInNamespace`. Probes that don't match the template fall back to hybrid search.
   - 25-probe stratified run (2026-04-19, contexts 18K–571K approx tokens):
     - **Opus ordinal engram = 0.987 sim / 96% pass / 14,556 prompt tokens (n=25)**; on the matched set where full_context also ran (n=14), Opus ordinal engram (0.979) beats Opus full_context (0.936).

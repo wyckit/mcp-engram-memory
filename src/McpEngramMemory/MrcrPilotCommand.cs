@@ -46,13 +46,26 @@ internal static class MrcrPilotCommand
         var scorer = new MrcrScorer(embedding);
         var runner = new MrcrBenchmarkRunner(index, embedding, scorer);
 
-        using var client = new ClaudeCliModelClient(executable: opts.ClaudeExecutable);
+        var factory = new AgentOutcomeModelClientFactory();
+        IAgentOutcomeModelClient client;
+        try
+        {
+            client = factory.Create(opts.Provider, opts.ClaudeExecutable);
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            Console.Error.WriteLine($"[mrcr-pilot] {ex.Message}");
+            return 3;
+        }
 
         if (!await client.IsAvailableAsync(opts.Model))
         {
-            Console.Error.WriteLine("[mrcr-pilot] claude CLI not available — is it on PATH?");
+            Console.Error.WriteLine($"[mrcr-pilot] provider '{opts.Provider}' CLI not available — is it on PATH?");
+            client.Dispose();
             return 3;
         }
+
+        using var _disposableClient = client;
 
         var runOptions = new MrcrGenerationOptions(
             Provider: opts.Provider,

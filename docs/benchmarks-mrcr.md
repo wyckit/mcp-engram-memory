@@ -47,6 +47,52 @@ The engram arm has two retrieval policies, selectable via `engramMode`:
   ordinal lookup against the scratch namespace. Probes that don't match the template fall
   back to hybrid automatically, so the mode is safe to use on mixed datasets.
 
+## Cross-CLI comparison (8-needle, n=25 stratified, 2026-04-19)
+
+Same MRCR v2 8-needle harness, run across three subscription-driven CLIs with their best-in-class
+available models. `claude-cli` uses `claude -p`; `codex-cli` uses `codex exec -o`; `gemini-cli` uses
+`gemini -p ""` (prompt via stdin). All runs share the same 25 stratified probes
+(contexts 18K–571K approx tokens), same ordinal engram policy, same local ONNX scoring.
+
+| CLI / Model | Matched fc-sim | Matched en-sim | Oversized en-sim | Overall en-sim | Overall en-pass |
+|---|---:|---:|---:|---:|---:|
+| claude-cli / sonnet             | **0.993** | 0.898 | 0.931 | 0.912 |  72% |
+| claude-cli / opus               | 0.936 | 0.979 | 0.997 | 0.987 |  96% |
+| codex-cli / gpt-5.4             | **1.000** | 0.958 | 0.992 | 0.973 |  96% |
+| codex-cli / gpt-5.4-mini        | 0.928 | **0.993** | 0.992 | **0.993** | **100%** |
+| gemini-cli / gemini-2.5-pro     | 0.930 | **0.995** | 0.992 | **0.994** | **100%** |
+| gemini-cli / gemini-2.5-flash   | 0.961 | 0.972 | 0.956 | 0.965 |  88% |
+
+All runs: **99.7% prompt-token reduction** (320× fewer tokens), 15K engram tokens vs 4.66M
+full-context tokens.
+
+### Cross-CLI findings
+
+1. **Ordinal engram generalizes across CLIs**. 5 of 6 models clear 0.96+ on overall engram sim.
+   The one exception is Claude Sonnet (0.912) — but it is also the best full-context model when
+   the prompt fits (0.993 matched).
+2. **Flagship is not always best on ordinal engram.** gpt-5.4-**mini** (0.993) outperforms
+   gpt-5.4 (0.973); the smaller model is less prone to paraphrasing the single-chunk output.
+3. **Gemini 2.5 Pro and gpt-5.4-mini tie for best overall** (0.994 / 0.993, both 100% pass).
+4. **Codex gpt-5.4 has the highest matched full_context similarity** (1.000) — flawless long-context
+   recall when the prompt fits.
+5. **Above 200K tokens, 5 of 6 engram arms hit 0.99+ sim**. Long-context models cannot run at all
+   there; retrieval is the whole ballgame.
+
+**CLI-level notes**
+
+- `codex-cli` (ChatGPT subscription) does not support `gpt-5.4-codex` or `o3` — those require API
+  access. The two accessible models (`gpt-5.4`, `gpt-5.4-mini`) are both strong on MRCR.
+- `gemini-cli` subscription exposes `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`.
+  Gemini-3.x models are currently 404 on this subscription tier.
+- `claude-cli` supports `sonnet`, `opus`, `haiku`.
+- Claude Sonnet/Opus were run on an earlier iteration of the ordinal prompt ("minimum text"
+  phrasing); Codex + Gemini used a tightened "reproduce snippet verbatim" variant. The change
+  is minor for Claude (already interpreted it correctly) but was necessary for Gemini 2.5 Pro
+  to stop truncating long needles.
+
+Artifacts: `benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-{claude-cli,codex-cli,gemini-cli}-*-ordinal.json`.
+
 ## Scaling across needle counts (25 stratified probes per variant, 2026-04-19)
 
 Run on `openai/mrcr` 2-needle, 4-needle, and 8-needle parquets — 25 stratified probes

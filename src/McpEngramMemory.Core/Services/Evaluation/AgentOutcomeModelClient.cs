@@ -52,8 +52,9 @@ public sealed class OllamaAgentOutcomeModelClient : IAgentOutcomeModelClient
 }
 
 /// <summary>
-/// Default provider factory. Supports Ollama (local) and the Claude Code CLI
-/// (`claude -p`) so benchmarks can run against the user's Claude subscription.
+/// Default provider factory. Supports Ollama (local) and three subscription-driven CLIs —
+/// Claude Code (`claude -p`), OpenAI Codex (`codex exec`), and Google Gemini (`gemini -p`).
+/// Each CLI variant consumes the user's vendor subscription instead of an API key.
 /// </summary>
 public sealed class AgentOutcomeModelClientFactory : IAgentOutcomeModelClientFactory
 {
@@ -65,10 +66,14 @@ public sealed class AgentOutcomeModelClientFactory : IAgentOutcomeModelClientFac
                 endpoint ?? Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434"),
             "claude-cli" or "claude_cli" or "claudecli" => new ClaudeCliModelClient(
                 executable: endpoint),
+            "codex-cli" or "codex_cli" or "codexcli" => new CodexCliModelClient(
+                executable: endpoint),
+            "gemini-cli" or "gemini_cli" or "geminicli" => new GeminiCliModelClient(
+                executable: endpoint),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(provider),
                 provider,
-                "Unsupported live benchmark provider. Supported providers: ollama, claude-cli.")
+                "Unsupported live benchmark provider. Supported providers: ollama, claude-cli, codex-cli, gemini-cli.")
         };
     }
 }

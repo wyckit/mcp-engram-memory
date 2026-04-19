@@ -4,23 +4,26 @@ using System.Text;
 namespace McpEngramMemory.Core.Services.Evaluation;
 
 /// <summary>
-/// Drives the Claude Code CLI (`claude -p`) as a text-generation endpoint so benchmark runs
-/// charge against the user's Claude subscription instead of the Anthropic API.
+/// Drives the Google Gemini CLI (`gemini -p`) so MRCR runs charge against the user's
+/// Gemini subscription instead of the Gemini API. Prompts are piped over stdin (with
+/// <c>-p ""</c>) so 128K-token contexts don't hit shell-argument-length limits.
 ///
-/// Requires the `claude` CLI to be on PATH. Prompts are piped via stdin to bypass shell
-/// argument-length limits (MRCR prompts can exceed 100K characters).
+/// Requires the `gemini` CLI (npm package `@google/gemini-cli`) on PATH. Available
+/// subscription models: <c>gemini-2.5-pro</c>, <c>gemini-2.5-flash</c>,
+/// <c>gemini-2.5-flash-lite</c>.
 /// </summary>
-public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
+public sealed class GeminiCliModelClient : IAgentOutcomeModelClient
 {
-    public const string DefaultExecutable = "claude";
+    public const string DefaultExecutable = "gemini";
 
     private readonly string _executable;
     private readonly TimeSpan _timeout;
 
-    public ClaudeCliModelClient(string? executable = null, TimeSpan? timeout = null)
+    public GeminiCliModelClient(string? executable = null, TimeSpan? timeout = null)
     {
-        _executable = string.IsNullOrWhiteSpace(executable) ? DefaultExecutable : executable;
-        _timeout = timeout ?? TimeSpan.FromMinutes(5);
+        var baseName = string.IsNullOrWhiteSpace(executable) ? DefaultExecutable : executable;
+        _executable = CliExecutableResolver.Resolve(baseName);
+        _timeout = timeout ?? TimeSpan.FromMinutes(10);
     }
 
     public Task<bool> IsAvailableAsync(string model, CancellationToken ct = default)
@@ -34,16 +37,13 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-
             using var process = Process.Start(psi);
             if (process is null) return Task.FromResult(false);
-
             if (!process.WaitForExit(5000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return Task.FromResult(false);
             }
-
             return Task.FromResult(process.ExitCode == 0);
         }
         catch
@@ -59,8 +59,6 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
         float temperature = 0.1f,
         CancellationToken ct = default)
     {
-        var args = new List<string> { "-p", "--model", model };
-
         var psi = new ProcessStartInfo(_executable)
         {
             RedirectStandardInput = true,
@@ -72,11 +70,14 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8,
         };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add("--model");
+        psi.ArgumentList.Add(model);
+        psi.ArgumentList.Add("-p");
+        psi.ArgumentList.Add(string.Empty);
 
         using var process = Process.Start(psi);
         if (process is null)
-            throw new InvalidOperationException($"Failed to start '{_executable}'. Is the Claude Code CLI installed and on PATH?");
+            throw new InvalidOperationException($"Failed to start '{_executable}'. Is the Gemini CLI installed and on PATH?");
 
         await process.StandardInput.WriteAsync(prompt.AsMemory(), ct);
         await process.StandardInput.FlushAsync(ct);
@@ -97,7 +98,7 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException($"claude CLI exceeded {_timeout.TotalSeconds:F0}s timeout.");
+            throw new TimeoutException($"gemini CLI exceeded {_timeout.TotalSeconds:F0}s timeout.");
         }
 
         await Task.WhenAll(stdoutTask, stderrTask);
@@ -106,7 +107,7 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
         {
             var err = stderrBuffer.ToString().Trim();
             throw new InvalidOperationException(
-                $"claude CLI exited with code {process.ExitCode}. stderr: {(err.Length > 0 ? err : "(empty)")}");
+                $"gemini CLI exited with code {process.ExitCode}. stderr: {(err.Length > 0 ? err : "(empty)")}");
         }
 
         return stdoutBuffer.ToString().Trim();

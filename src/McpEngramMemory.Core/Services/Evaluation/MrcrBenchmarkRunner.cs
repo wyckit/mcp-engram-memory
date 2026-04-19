@@ -381,8 +381,11 @@ public sealed class MrcrBenchmarkRunner
         if (strategy == "ordinal" && retrieved.Count == 1)
         {
             sb.AppendLine("You are answering a retrieval question using a single retrieved snippet.");
-            sb.AppendLine("The snippet is the exact turn referenced by the probe's ordinal+category lookup.");
-            sb.AppendLine("Apply the probe's instruction to this snippet and answer with minimum text — no preamble, no markdown.");
+            sb.AppendLine("The snippet is the exact item referenced by the probe's ordinal + category lookup.");
+            sb.AppendLine("Do exactly what the probe asks. For MRCR-style 'Prepend X to the Nth ...' probes,");
+            sb.AppendLine("output the given random string immediately followed by the snippet's full content,");
+            sb.AppendLine("reproduced verbatim (do not summarize, paraphrase, or truncate).");
+            sb.AppendLine("No preamble. No commentary. No markdown wrapping. Just the required output.");
             sb.AppendLine();
             sb.AppendLine("=== RETRIEVED SNIPPET ===");
             sb.AppendLine(retrieved[0].Text);
