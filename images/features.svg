@@ -1,103 +1,167 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 340" role="img" aria-label="Why Engram Memory — six pillars: Hybrid Search, Knowledge Graph, Expert Routing, Lifecycle, Multi-Agent, Local-First">
   <defs>
-    <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f172a"/>
-      <stop offset="100%" style="stop-color:#1e293b"/>
+    <linearGradient id="fbg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1027"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
     </linearGradient>
-    <filter id="sh2">
-      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.25"/>
+    <linearGradient id="ftitle" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e0e7ff"/>
+      <stop offset="100%" stop-color="#f0abfc"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#d946ef"/>
+    </linearGradient>
+
+    <!-- per-card accent gradients -->
+    <linearGradient id="c1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#6366f1"/></linearGradient>
+    <linearGradient id="c2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#d946ef"/></linearGradient>
+    <linearGradient id="c3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#a855f7"/><stop offset="100%" stop-color="#f472b6"/></linearGradient>
+    <linearGradient id="c4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#10b981"/><stop offset="100%" stop-color="#22d3ee"/></linearGradient>
+    <linearGradient id="c5" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3b82f6"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient>
+    <linearGradient id="c6" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#f472b6"/></linearGradient>
+
+    <filter id="card" x="-5%" y="-5%" width="110%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/>
     </filter>
+    <filter id="gl" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <pattern id="fdots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#6366f1" fill-opacity="0.08"/>
+    </pattern>
   </defs>
 
-  <rect width="900" height="320" rx="12" fill="url(#bg3)"/>
+  <rect width="900" height="340" rx="14" fill="url(#fbg)"/>
+  <rect width="900" height="340" rx="14" fill="url(#fdots)"/>
 
   <!-- Title -->
-  <text x="450" y="40" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" font-weight="700" fill="#f8fafc">Why Engram Memory?</text>
+  <text x="450" y="42" text-anchor="middle" font-family="system-ui, sans-serif" font-size="24" font-weight="800" fill="url(#ftitle)" letter-spacing="-0.3">Why Engram Memory?</text>
+  <text x="450" y="64" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Six pillars that make it a first-class memory substrate for agents</text>
+  <rect x="380" y="72" width="140" height="2" rx="1" fill="url(#rail)" opacity="0.85"/>
 
-  <!-- Row 1 -->
-  <!-- Feature 1: Hybrid Search -->
-  <g transform="translate(30, 65)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#6366f1" opacity="0.15"/>
-    <g transform="translate(24, 24)" stroke="#6366f1" stroke-width="2" fill="none" stroke-linecap="round">
-      <circle cx="9" cy="9" r="7"/><line x1="14" y1="14" x2="20" y2="20" stroke-width="2.5"/>
+  <!-- CARD TEMPLATE positions
+       Row Y = 90 and 218; X = 30, 315, 600; W=270 H=112 -->
+
+  <!-- 1. Hybrid Search -->
+  <g transform="translate(30,90)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c1)"/>
+    <circle cx="40" cy="44" r="22" fill="#22d3ee" fill-opacity="0.14"/>
+    <g transform="translate(28,32)" stroke="url(#c1)" stroke-width="2.2" fill="none" stroke-linecap="round" filter="url(#gl)">
+      <circle cx="10" cy="10" r="8"/>
+      <line x1="16" y1="16" x2="24" y2="24" stroke-width="2.8"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Hybrid Search</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">BM25 + vector, MMR diversity</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Synonym expansion, stemming, PRF</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">0.792 recall on real-world queries</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Hybrid Search</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#a5b4fc">BM25 + vector · MMR diversity</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Synonym expansion · stemming · PRF</text>
+    <g transform="translate(20,88)">
+      <rect width="96" height="18" rx="9" fill="#22d3ee" fill-opacity="0.14"/>
+      <text x="48" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#67e8f9">recall 0.792</text>
+    </g>
   </g>
 
-  <!-- Feature 2: Knowledge Graph -->
-  <g transform="translate(315, 65)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#8b5cf6" opacity="0.15"/>
-    <g transform="translate(24, 22)" stroke="#8b5cf6" stroke-width="2" fill="none">
-      <circle cx="5" cy="5" r="3.5" fill="#8b5cf6" opacity="0.4"/>
-      <circle cx="20" cy="5" r="3.5" fill="#8b5cf6" opacity="0.4"/>
-      <circle cx="12" cy="20" r="3.5" fill="#8b5cf6" opacity="0.4"/>
-      <line x1="8" y1="6" x2="17" y2="6"/><line x1="7" y1="8" x2="10" y2="17"/><line x1="18" y1="8" x2="14" y2="17"/>
+  <!-- 2. Knowledge Graph -->
+  <g transform="translate(315,90)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c2)"/>
+    <circle cx="40" cy="44" r="22" fill="#8b5cf6" fill-opacity="0.14"/>
+    <g transform="translate(26,30)" stroke="url(#c2)" stroke-width="2" fill="none" filter="url(#gl)">
+      <line x1="8" y1="8" x2="24" y2="8"/>
+      <line x1="6" y1="11" x2="14" y2="24"/>
+      <line x1="26" y1="11" x2="18" y2="24"/>
+      <circle cx="8" cy="8" r="3.5" fill="#a78bfa"/>
+      <circle cx="24" cy="8" r="3.5" fill="#d946ef"/>
+      <circle cx="16" cy="25" r="3.5" fill="#c4b5fd"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Knowledge Graph</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">7 relation types, multi-hop BFS</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Auto-expand linked memories</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">Semantic clusters with centroids</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Knowledge Graph</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#c4b5fd">7 relations · multi-hop BFS</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Auto-expand linked memories</text>
+    <g transform="translate(20,88)">
+      <rect width="120" height="18" rx="9" fill="#8b5cf6" fill-opacity="0.14"/>
+      <text x="60" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#c4b5fd">clusters + centroids</text>
+    </g>
   </g>
 
-  <!-- Feature 3: Expert Routing -->
-  <g transform="translate(600, 65)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#a78bfa" opacity="0.15"/>
-    <g transform="translate(24, 24)" stroke="#a78bfa" stroke-width="2" fill="none" stroke-linecap="round">
-      <circle cx="11" cy="3" r="3" fill="#a78bfa" opacity="0.4"/>
-      <circle cx="4" cy="16" r="3" fill="#a78bfa" opacity="0.4"/>
-      <circle cx="18" cy="16" r="3" fill="#a78bfa" opacity="0.4"/>
-      <line x1="9" y1="6" x2="5" y2="13"/><line x1="13" y1="6" x2="17" y2="13"/>
+  <!-- 3. Expert Routing -->
+  <g transform="translate(600,90)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c3)"/>
+    <circle cx="40" cy="44" r="22" fill="#a855f7" fill-opacity="0.14"/>
+    <g transform="translate(26,28)" stroke="url(#c3)" stroke-width="2" fill="none" filter="url(#gl)">
+      <circle cx="14" cy="4" r="3.5" fill="#d8b4fe"/>
+      <circle cx="4" cy="22" r="3.5" fill="#f472b6"/>
+      <circle cx="24" cy="22" r="3.5" fill="#a855f7"/>
+      <line x1="12" y1="7" x2="6" y2="19"/>
+      <line x1="16" y1="7" x2="22" y2="19"/>
+      <line x1="7" y1="22" x2="21" y2="22"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Expert Routing</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">HMoE 3-level domain tree</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Semantic dispatch to specialists</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">Zero LLM API calls for routing</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Expert Routing</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#f0abfc">HMoE · 3-level domain tree</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Semantic dispatch to specialists</text>
+    <g transform="translate(20,88)">
+      <rect width="124" height="18" rx="9" fill="#a855f7" fill-opacity="0.14"/>
+      <text x="62" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#e9d5ff">zero LLM calls</text>
+    </g>
   </g>
 
-  <!-- Row 2 -->
-  <!-- Feature 4: Lifecycle -->
-  <g transform="translate(30, 190)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#22c55e" opacity="0.15"/>
-    <g transform="translate(24, 24)" stroke="#22c55e" stroke-width="2" fill="none" stroke-linecap="round">
-      <path d="M4 11 A8 8 0 1 1 18 11" /><line x1="18" y1="11" x2="18" y2="6"/><line x1="18" y1="11" x2="22" y2="11"/>
+  <!-- 4. Lifecycle -->
+  <g transform="translate(30,218)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c4)"/>
+    <circle cx="40" cy="44" r="22" fill="#10b981" fill-opacity="0.14"/>
+    <g transform="translate(26,30)" stroke="url(#c4)" stroke-width="2.2" fill="none" stroke-linecap="round" filter="url(#gl)">
+      <path d="M4 14 A10 10 0 1 1 22 14"/>
+      <polyline points="22,14 22,6 28,14" fill="none"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Lifecycle Management</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">STM / LTM / Archived states</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Activation energy decay</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">Auto-resurrect on deep recall</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Lifecycle Management</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#6ee7b7">STM → LTM → Archived</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Activation decay · auto-resurrect</text>
+    <g transform="translate(20,88)">
+      <rect width="110" height="18" rx="9" fill="#10b981" fill-opacity="0.14"/>
+      <text x="55" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#6ee7b7">deep_recall</text>
+    </g>
   </g>
 
-  <!-- Feature 5: Multi-Agent -->
-  <g transform="translate(315, 190)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#3b82f6" opacity="0.15"/>
-    <g transform="translate(22, 23)" stroke="#3b82f6" stroke-width="2" fill="none" stroke-linecap="round">
-      <circle cx="8" cy="8" r="5"/><circle cx="20" cy="8" r="5"/>
-      <path d="M13 10 L13 6" stroke-dasharray="2,2" opacity="0.6"/>
+  <!-- 5. Multi-Agent -->
+  <g transform="translate(315,218)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c5)"/>
+    <circle cx="40" cy="44" r="22" fill="#3b82f6" fill-opacity="0.14"/>
+    <g transform="translate(22,30)" stroke="url(#c5)" stroke-width="2" fill="none" stroke-linecap="round" filter="url(#gl)">
+      <circle cx="9" cy="9" r="6"/>
+      <circle cx="27" cy="9" r="6"/>
+      <path d="M15 9 L21 9" stroke-dasharray="2,2"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Multi-Agent Sharing</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Namespace ownership &amp; permissions</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Cross-namespace RRF search</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">Backward compatible defaults</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Multi-Agent Sharing</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#93c5fd">Namespace ownership + perms</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Cross-namespace RRF search</text>
+    <g transform="translate(20,88)">
+      <rect width="124" height="18" rx="9" fill="#3b82f6" fill-opacity="0.14"/>
+      <text x="62" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#93c5fd">cross_search · whoami</text>
+    </g>
   </g>
 
-  <!-- Feature 6: Local-First -->
-  <g transform="translate(600, 190)" filter="url(#sh2)">
-    <rect width="270" height="105" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
-    <circle cx="35" cy="35" r="18" fill="#f59e0b" opacity="0.15"/>
-    <g transform="translate(24, 24)" stroke="#f59e0b" stroke-width="2" fill="none" stroke-linecap="round">
-      <rect x="3" y="0" width="16" height="20" rx="3"/><line x1="8" y1="5" x2="14" y2="5"/><line x1="8" y1="10" x2="14" y2="10"/><line x1="8" y1="15" x2="12" y2="15"/>
+  <!-- 6. Local-First -->
+  <g transform="translate(600,218)" filter="url(#card)">
+    <rect width="270" height="112" rx="12" fill="#0f172a" stroke="#1e293b"/>
+    <rect width="270" height="3" rx="1.5" fill="url(#c6)"/>
+    <circle cx="40" cy="44" r="22" fill="#f59e0b" fill-opacity="0.14"/>
+    <g transform="translate(26,28)" stroke="url(#c6)" stroke-width="2" fill="none" stroke-linecap="round" filter="url(#gl)">
+      <rect x="2" y="0" width="20" height="26" rx="3"/>
+      <line x1="7" y1="7" x2="17" y2="7"/>
+      <line x1="7" y1="13" x2="17" y2="13"/>
+      <line x1="7" y1="19" x2="14" y2="19"/>
     </g>
-    <text x="65" y="33" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#e2e8f0">Local-First</text>
-    <text x="65" y="52" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">Concurrent ONNX embeddings</text>
-    <text x="65" y="70" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">JSON or SQLite storage</text>
-    <text x="65" y="88" font-family="system-ui, sans-serif" font-size="12" fill="#64748b">No cloud, no API keys, MIT license</text>
+    <text x="74" y="38" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#e2e8f0">Local-First</text>
+    <text x="74" y="58" font-family="system-ui, sans-serif" font-size="12" fill="#fcd34d">ONNX embeddings · concurrent</text>
+    <text x="74" y="76" font-family="system-ui, sans-serif" font-size="12" fill="#94a3b8">JSON or SQLite · no API keys</text>
+    <g transform="translate(20,88)">
+      <rect width="102" height="18" rx="9" fill="#f59e0b" fill-opacity="0.14"/>
+      <text x="51" y="12" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#fcd34d">MIT · offline</text>
+    </g>
   </g>
 </svg>

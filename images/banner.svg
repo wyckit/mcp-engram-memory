@@ -1,82 +1,149 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 220">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 240" role="img" aria-label="MCP Engram Memory — persistent cognitive memory for AI agents">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f172a"/>
-      <stop offset="100%" style="stop-color:#1e293b"/>
+      <stop offset="0%" stop-color="#0b1027"/>
+      <stop offset="55%" stop-color="#111a3a"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#e0e7ff"/>
+      <stop offset="45%" stop-color="#a5b4fc"/>
+      <stop offset="100%" stop-color="#f0abfc"/>
     </linearGradient>
     <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#6366f1"/>
-      <stop offset="100%" style="stop-color:#8b5cf6"/>
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#d946ef"/>
     </linearGradient>
-    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0.3"/>
-      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:0"/>
-    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#6366f1" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbA" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbB" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d946ef" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#d946ef" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.2"/>
+    </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#6366f1" fill-opacity="0.12"/>
+    </pattern>
   </defs>
 
-  <!-- Background -->
-  <rect width="900" height="220" rx="12" fill="url(#bg)"/>
+  <!-- Background + decor -->
+  <rect width="900" height="240" rx="14" fill="url(#bg)"/>
+  <rect width="900" height="240" rx="14" fill="url(#dots)"/>
+  <circle cx="780" cy="60" r="160" fill="url(#orbA)"/>
+  <circle cx="860" cy="210" r="180" fill="url(#orbB)"/>
+  <circle cx="120" cy="120" r="120" fill="url(#halo)"/>
 
-  <!-- Subtle grid pattern -->
-  <g opacity="0.04" stroke="#fff" stroke-width="0.5">
-    <line x1="0" y1="40" x2="900" y2="40"/><line x1="0" y1="80" x2="900" y2="80"/>
-    <line x1="0" y1="120" x2="900" y2="120"/><line x1="0" y1="160" x2="900" y2="160"/>
-    <line x1="0" y1="200" x2="900" y2="200"/>
-    <line x1="100" y1="0" x2="100" y2="220"/><line x1="200" y1="0" x2="200" y2="220"/>
-    <line x1="300" y1="0" x2="300" y2="220"/><line x1="400" y1="0" x2="400" y2="220"/>
-    <line x1="500" y1="0" x2="500" y2="220"/><line x1="600" y1="0" x2="600" y2="220"/>
-    <line x1="700" y1="0" x2="700" y2="220"/><line x1="800" y1="0" x2="800" y2="220"/>
-  </g>
+  <!-- Accent rail -->
+  <rect x="0" y="236" width="900" height="4" fill="url(#accent)" opacity="0.9"/>
 
-  <!-- Glow behind icon -->
-  <circle cx="110" cy="110" r="80" fill="url(#glow)"/>
+  <!-- Brain / neural emblem -->
+  <g transform="translate(60, 60)">
+    <!-- ambient synapse pulses -->
+    <g filter="url(#soft)" opacity="0.8">
+      <circle cx="55" cy="60" r="46" fill="none" stroke="url(#accent)" stroke-width="1.2" stroke-opacity="0.6"/>
+      <circle cx="55" cy="60" r="58" fill="none" stroke="#8b5cf6" stroke-width="0.8" stroke-opacity="0.35"/>
+    </g>
 
-  <!-- Brain/memory icon -->
-  <g transform="translate(70, 65)" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Outer brain shape -->
-    <path d="M40 5 C25 5 10 15 10 30 C10 38 14 44 20 48 C16 52 14 58 14 64 C14 78 25 85 40 85 C55 85 66 78 66 64 C66 58 64 52 60 48 C66 44 70 38 70 30 C70 15 55 5 40 5Z" stroke="url(#accent)" fill="none"/>
-    <!-- Neural connection lines -->
-    <line x1="30" y1="30" x2="50" y2="45" stroke="#6366f1" opacity="0.7"/>
-    <line x1="50" y1="30" x2="30" y2="50" stroke="#8b5cf6" opacity="0.7"/>
-    <line x1="40" y1="25" x2="40" y2="60" stroke="#7c3aed" opacity="0.5"/>
-    <line x1="25" y1="42" x2="55" y2="42" stroke="#7c3aed" opacity="0.5"/>
-    <!-- Neural nodes -->
-    <circle cx="30" cy="30" r="4" fill="#6366f1"/>
-    <circle cx="50" cy="30" r="4" fill="#818cf8"/>
-    <circle cx="40" cy="45" r="4" fill="#8b5cf6"/>
-    <circle cx="30" cy="55" r="4" fill="#7c3aed"/>
-    <circle cx="50" cy="55" r="4" fill="#a78bfa"/>
-    <circle cx="40" cy="68" r="3" fill="#6366f1" opacity="0.7"/>
+    <!-- Outer brain silhouette -->
+    <path d="M55 10 C30 10 12 24 12 46 C12 56 17 64 25 70
+             C19 76 17 84 17 92 C17 110 33 120 55 120
+             C77 120 93 110 93 92 C93 84 91 76 85 70
+             C93 64 98 56 98 46 C98 24 80 10 55 10Z"
+          fill="none" stroke="url(#accent)" stroke-width="2.2" stroke-linejoin="round"/>
+
+    <!-- Internal gyri -->
+    <path d="M55 18 C55 40 42 44 40 60 C38 76 52 84 55 108" fill="none" stroke="#a5b4fc" stroke-width="1.2" stroke-opacity="0.55"/>
+    <path d="M55 18 C55 40 70 44 72 60 C74 76 60 84 55 108" fill="none" stroke="#a5b4fc" stroke-width="1.2" stroke-opacity="0.55"/>
+
+    <!-- Synaptic links -->
+    <g stroke-linecap="round">
+      <line x1="34" y1="36" x2="58" y2="52" stroke="#22d3ee" stroke-width="1.5" stroke-opacity="0.75"/>
+      <line x1="78" y1="36" x2="54" y2="52" stroke="#a78bfa" stroke-width="1.5" stroke-opacity="0.75"/>
+      <line x1="26" y1="68" x2="84" y2="68" stroke="#d946ef" stroke-width="1.3" stroke-opacity="0.55"/>
+      <line x1="40" y1="90" x2="72" y2="90" stroke="#6366f1" stroke-width="1.3" stroke-opacity="0.55"/>
+      <line x1="55" y1="30" x2="55" y2="100" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.4"/>
+    </g>
+
+    <!-- Neurons -->
+    <g filter="url(#glow)">
+      <circle cx="34" cy="36" r="4" fill="#22d3ee"/>
+      <circle cx="78" cy="36" r="4" fill="#a78bfa"/>
+      <circle cx="55" cy="52" r="4.5" fill="#f0abfc"/>
+      <circle cx="26" cy="68" r="3.5" fill="#818cf8"/>
+      <circle cx="84" cy="68" r="3.5" fill="#c4b5fd"/>
+      <circle cx="40" cy="90" r="3.5" fill="#6366f1"/>
+      <circle cx="72" cy="90" r="3.5" fill="#8b5cf6"/>
+      <circle cx="55" cy="100" r="3" fill="#d946ef" opacity="0.9"/>
+    </g>
+
+    <!-- subtle pulse ring -->
+    <circle cx="55" cy="60" r="14" fill="none" stroke="#f0abfc" stroke-width="1" stroke-opacity="0.5">
+      <animate attributeName="r" values="14;32;14" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.5;0;0.5" dur="4s" repeatCount="indefinite"/>
+    </circle>
   </g>
 
   <!-- Title -->
-  <text x="195" y="85" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="42" font-weight="700" fill="#f8fafc" letter-spacing="-0.5">MCP Engram Memory</text>
+  <text x="200" y="92" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="44" font-weight="800" fill="url(#titleGrad)" letter-spacing="-1">MCP Engram Memory</text>
 
   <!-- Tagline -->
-  <text x="195" y="120" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" fill="#94a3b8">Persistent cognitive memory for AI agents</text>
+  <text x="201" y="122" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="500" fill="#cbd5e1">Persistent cognitive memory for AI agents — local, hybrid, graph-aware.</text>
 
   <!-- Feature pills -->
-  <g transform="translate(195, 145)">
-    <rect x="0" y="0" width="130" height="30" rx="15" fill="#6366f1" opacity="0.15" stroke="#6366f1" stroke-opacity="0.3" stroke-width="1"/>
-    <text x="65" y="20" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="500" fill="#a5b4fc">Vector Search</text>
-
-    <rect x="145" y="0" width="155" height="30" rx="15" fill="#8b5cf6" opacity="0.15" stroke="#8b5cf6" stroke-opacity="0.3" stroke-width="1"/>
-    <text x="222" y="20" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="500" fill="#c4b5fd">Knowledge Graph</text>
-
-    <rect x="315" y="0" width="140" height="30" rx="15" fill="#7c3aed" opacity="0.15" stroke="#7c3aed" stroke-opacity="0.3" stroke-width="1"/>
-    <text x="385" y="20" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="500" fill="#c4b5fd">Expert Routing</text>
-
-    <rect x="470" y="0" width="115" height="30" rx="15" fill="#6366f1" opacity="0.15" stroke="#6366f1" stroke-opacity="0.3" stroke-width="1"/>
-    <text x="527" y="20" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="500" fill="#a5b4fc">Local-First</text>
+  <g transform="translate(200, 146)" font-family="system-ui, sans-serif" font-size="12" font-weight="600">
+    <g>
+      <rect width="128" height="28" rx="14" fill="#22d3ee" fill-opacity="0.12" stroke="#22d3ee" stroke-opacity="0.45"/>
+      <text x="64" y="19" text-anchor="middle" fill="#67e8f9">Hybrid Search</text>
+    </g>
+    <g transform="translate(140,0)">
+      <rect width="148" height="28" rx="14" fill="#8b5cf6" fill-opacity="0.14" stroke="#8b5cf6" stroke-opacity="0.5"/>
+      <text x="74" y="19" text-anchor="middle" fill="#c4b5fd">Knowledge Graph</text>
+    </g>
+    <g transform="translate(300,0)">
+      <rect width="136" height="28" rx="14" fill="#a855f7" fill-opacity="0.14" stroke="#a855f7" stroke-opacity="0.5"/>
+      <text x="68" y="19" text-anchor="middle" fill="#d8b4fe">Expert Routing</text>
+    </g>
+    <g transform="translate(448,0)">
+      <rect width="108" height="28" rx="14" fill="#d946ef" fill-opacity="0.12" stroke="#d946ef" stroke-opacity="0.45"/>
+      <text x="54" y="19" text-anchor="middle" fill="#f0abfc">Local-First</text>
+    </g>
   </g>
 
-  <!-- Version + MCP badge -->
-  <g transform="translate(195, 190)">
-    <rect x="0" y="0" width="60" height="22" rx="4" fill="#334155"/>
-    <text x="30" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">v0.6.0</text>
-    <rect x="70" y="0" width="85" height="22" rx="4" fill="#334155"/>
-    <text x="112" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">52 MCP tools</text>
-    <rect x="165" y="0" width="55" height="22" rx="4" fill="#334155"/>
-    <text x="192" y="15" text-anchor="middle" font-family="monospace" font-size="11" fill="#94a3b8">.NET 8</text>
+  <!-- Stat chips -->
+  <g transform="translate(200, 190)" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="11">
+    <g>
+      <rect width="66" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
+      <text x="33" y="16" text-anchor="middle" fill="#93c5fd">v0.7.0</text>
+    </g>
+    <g transform="translate(76,0)">
+      <rect width="102" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
+      <text x="51" y="16" text-anchor="middle" fill="#c4b5fd">55 MCP tools</text>
+    </g>
+    <g transform="translate(188,0)">
+      <rect width="96" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
+      <text x="48" y="16" text-anchor="middle" fill="#67e8f9">.NET 8 · 9 · 10</text>
+    </g>
+    <g transform="translate(294,0)">
+      <rect width="92" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
+      <text x="46" y="16" text-anchor="middle" fill="#86efac">865 tests</text>
+    </g>
+    <g transform="translate(396,0)">
+      <rect width="76" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
+      <text x="38" y="16" text-anchor="middle" fill="#fcd34d">MIT</text>
+    </g>
   </g>
 </svg>
