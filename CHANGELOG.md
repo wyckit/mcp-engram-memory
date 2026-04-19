@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **MRCR v2 (8-needle) long-context benchmark**: A/B harness that drives the Claude Code CLI (`claude -p`) via the user's subscription — no Anthropic API key required.
+  - `run_mrcr_benchmark` runs two arms on the same probes: `full_context` (entire conversation in prompt) vs. `engram_retrieval` (hybrid BM25+vector search returns top-K chunks).
+  - `compare_mrcr_artifacts` reports per-arm similarity / pass-rate deltas and the change in prompt-token reduction ratio.
+  - Scoring uses local `bge-micro-v2` cosine similarity — matches the MRCR paper's metric and stays API-cost-free.
+  - New `claude-cli` provider in `AgentOutcomeModelClientFactory` shells out to `claude -p --model <name>` with prompts piped over stdin (bypasses shell-argument-length limits on 128K contexts).
+  - Dataset loader + HF download recipe in `benchmarks/datasets/mrcr-v2/README.md` (dataset is gitignored).
+  - Methodology, usage, and interpretation guide in `docs/benchmarks-mrcr.md`.
+
 ## [0.7.0] - 2026-04-16
 
 ### Added

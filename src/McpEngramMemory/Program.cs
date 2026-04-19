@@ -1,3 +1,4 @@
+using McpEngramMemory;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -13,6 +14,12 @@ using McpEngramMemory.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+
+// Subcommand: `dotnet run -- mrcr-pilot ...` runs the MRCR benchmark without starting the MCP server.
+if (args.Length > 0 && args[0] == "mrcr-pilot")
+{
+    return await MrcrPilotCommand.RunAsync(args.Skip(1).ToArray());
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -50,6 +57,8 @@ builder.Services.AddSingleton<BenchmarkRunner>();
 builder.Services.AddSingleton<AgentOutcomeBenchmarkRunner>();
 builder.Services.AddSingleton<LiveAgentOutcomeBenchmarkRunner>();
 builder.Services.AddSingleton<IAgentOutcomeModelClientFactory, AgentOutcomeModelClientFactory>();
+builder.Services.AddSingleton<MrcrScorer>();
+builder.Services.AddSingleton<MrcrBenchmarkRunner>();
 builder.Services.AddSingleton<DebateSessionManager>();
 builder.Services.AddSingleton<ExpertDispatcher>();
 builder.Services.AddSingleton<SpreadingActivationService>();
@@ -104,6 +113,7 @@ if (toolProfile is "full")
     mcpBuilder
         .WithTools<AccretionTools>()
         .WithTools<BenchmarkTools>()
+        .WithTools<MrcrBenchmarkTools>()
         .WithTools<DebateTools>()
         .WithTools<MaintenanceTools>()
         .WithTools<ExpertTools>()
@@ -112,4 +122,5 @@ if (toolProfile is "full")
 }
 
 await builder.Build().RunAsync();
+return 0;
 

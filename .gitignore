@@ -443,3 +443,7 @@ memory.db
 visualization/snapshot.json
 visualization/snapshot.json.raw
 visualization/*.json
+
+# MRCR v2 dataset (download locally; see benchmarks/datasets/mrcr-v2/README.md)
+benchmarks/datasets/mrcr-v2/raw/
+benchmarks/datasets/mrcr-v2/*.jsonl

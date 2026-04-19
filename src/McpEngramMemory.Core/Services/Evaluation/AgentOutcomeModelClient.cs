@@ -52,8 +52,8 @@ public sealed class OllamaAgentOutcomeModelClient : IAgentOutcomeModelClient
 }
 
 /// <summary>
-/// Default provider factory. The first implementation supports Ollama so the
-/// live benchmark can run against a real local model without adding another API dependency.
+/// Default provider factory. Supports Ollama (local) and the Claude Code CLI
+/// (`claude -p`) so benchmarks can run against the user's Claude subscription.
 /// </summary>
 public sealed class AgentOutcomeModelClientFactory : IAgentOutcomeModelClientFactory
 {
@@ -63,10 +63,12 @@ public sealed class AgentOutcomeModelClientFactory : IAgentOutcomeModelClientFac
         {
             "ollama" => new OllamaAgentOutcomeModelClient(
                 endpoint ?? Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434"),
+            "claude-cli" or "claude_cli" or "claudecli" => new ClaudeCliModelClient(
+                executable: endpoint),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(provider),
                 provider,
-                "Unsupported live benchmark provider. Supported providers: ollama.")
+                "Unsupported live benchmark provider. Supported providers: ollama, claude-cli.")
         };
     }
 }

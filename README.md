@@ -244,6 +244,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 | [AI Assistant Setup](docs/ai-assistant-setup.md) | Step-by-step setup prompts for each tool |
 | [Sample Prompts](docs/prompts.md) | Power prompts and usage patterns |
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
+| [MRCR v2 Benchmark](docs/benchmarks-mrcr.md) | Long-context A/B (full context vs. hybrid retrieval) via Claude CLI subscription |
 | [Testing](docs/testing.md) | Test coverage breakdown and current CI coverage |
 
 ## Build & Test
