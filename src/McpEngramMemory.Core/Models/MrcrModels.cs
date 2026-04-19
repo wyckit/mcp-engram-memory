@@ -24,6 +24,15 @@ public sealed record MrcrTurn(
 
 /// <summary>
 /// Execution settings for an MRCR v2 benchmark run.
+///
+/// <c>EngramMode</c> selects the retrieval policy for the engram arm:
+/// <list type="bullet">
+///   <item><c>"hybrid"</c> — dense BM25+vector search, flat ingest (default, matches the pilot baseline).</item>
+///   <item><c>"ordinal"</c> — pair-wise ingest tags each assistant turn with a category signature
+///     (normalized user ask) and within-category 1-based ordinal. Probes that match the
+///     "Nth X about Y" template resolve to an exact category+ordinal lookup; anything else
+///     falls back to hybrid.</item>
+/// </list>
 /// </summary>
 public sealed record MrcrGenerationOptions(
     [property: JsonPropertyName("provider")] string Provider,
@@ -35,7 +44,8 @@ public sealed record MrcrGenerationOptions(
     [property: JsonPropertyName("temperature")] float Temperature = 0.0f,
     [property: JsonPropertyName("maxContextTokens")] int MaxContextTokens = 131072,
     [property: JsonPropertyName("runFullContextArm")] bool RunFullContextArm = true,
-    [property: JsonPropertyName("runEngramArm")] bool RunEngramArm = true);
+    [property: JsonPropertyName("runEngramArm")] bool RunEngramArm = true,
+    [property: JsonPropertyName("engramMode")] string EngramMode = "hybrid");
 
 /// <summary>
 /// Per-task result within a single arm of the MRCR benchmark.
@@ -81,7 +91,8 @@ public sealed record MrcrBenchmarkResult(
     [property: JsonPropertyName("engramRetrieval")] MrcrArmResult? EngramRetrieval,
     [property: JsonPropertyName("similarityDelta")] float SimilarityDelta,
     [property: JsonPropertyName("promptTokenReductionRatio")] float PromptTokenReductionRatio,
-    [property: JsonPropertyName("notes")] string? Notes = null);
+    [property: JsonPropertyName("notes")] string? Notes = null,
+    [property: JsonPropertyName("engramMode")] string EngramMode = "hybrid");
 
 /// <summary>
 /// Artifact reference used by the MRCR comparer.

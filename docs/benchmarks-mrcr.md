@@ -26,10 +26,59 @@ Leaderboard: [llm-stats.com/benchmarks/mrcr-v2-(8-needle)](https://llm-stats.com
 | Arm | Memory condition | Prompt payload |
 |-----|------------------|----------------|
 | `full_context` | none | the entire MRCR conversation (up to 128K tokens) |
-| `engram_retrieval` | every turn ingested into a scratch namespace, one chunk per turn | top-K chunks returned by hybrid BM25 + vector search, keyed on the probe |
+| `engram_retrieval` | every turn ingested into a scratch namespace, one chunk per turn | top-K chunks (hybrid mode) **or** the single category+ordinal exact match (ordinal mode) |
 
 Both arms share identical probes, gold answers, embedding model, and generation
 parameters so the only difference between them is the memory policy.
+
+### Engram modes
+
+The engram arm has two retrieval policies, selectable via `engramMode`:
+
+- **`hybrid`** (default) — every turn is ingested flat, and the probe drives a BM25+vector
+  search for top-K chunks. This is the reference baseline; it has no positional awareness
+  and deliberately fails on workloads where positional information is load-bearing.
+
+- **`ordinal`** — pair-wise ingest: each (`user_ask`, `assistant_reply`) pair normalizes the
+  user's ask into a category signature and increments a within-category counter. The
+  assistant turn is stored with `Category` = signature and `Metadata["ordinal"]` = 1-based
+  position within that category. The probe parser extracts `(RandomString, Ordinal, Category)`
+  from the "Prepend X to the Nth (1 indexed) Y" template; retrieval is an exact category +
+  ordinal lookup against the scratch namespace. Probes that don't match the template fall
+  back to hybrid automatically, so the mode is safe to use on mixed datasets.
+
+## Pilot results (3 probes, ~18–19K-token contexts, 2026-04-19)
+
+The ordinal mode was developed in response to the hybrid pilot discovering that MRCR's
+8-needle probes are adversarial to content-similarity retrieval — they ask for positional
+recall ("the 6th scene") across cohorts of chunks that share topic keywords.
+
+| Model | Mode | Arm | Similarity | Pass | Prompt tokens |
+|-------|------|-----|-----------:|-----:|--------------:|
+| Sonnet | hybrid  | full_context      | 0.964 | 100% | 57,745 |
+| Sonnet | hybrid  | engram_retrieval  | 0.499 |   0% |  3,662 |
+| Sonnet | ordinal | full_context      | 0.987 | 100% | 57,745 |
+| Sonnet | ordinal | engram_retrieval  | **0.930** |  67% | **1,670** |
+| Opus   | hybrid  | full_context      | 0.898 | 100% | 57,745 |
+| Opus   | hybrid  | engram_retrieval  | 0.645 |  33% |  3,662 |
+| Opus   | ordinal | full_context      | 0.924 | 100% | 57,745 |
+| Opus   | ordinal | engram_retrieval  | **0.986** | **100%** | **1,670** |
+
+**Key findings**
+
+- Ordinal mode lifts engram similarity by **+0.43** (Sonnet) and **+0.34** (Opus) over hybrid
+  mode — because the probe parser converts an ordinal-recall task into a deterministic
+  category+ordinal lookup instead of a noisy dense-vector contest.
+- **Opus + ordinal engram** (sim=0.986) **beats Opus + full_context** (sim=0.924, +0.062)
+  at **34× fewer prompt tokens** (1,670 vs 57,745, a 97.1% reduction).
+- Sonnet + ordinal engram passes 2/3 probes and hits 0.930 similarity — slightly trailing
+  full-context Sonnet (0.987) but at the same 34× token savings.
+
+These numbers are n=3 and deliberately small (pilot scale); treat them as directional
+signal, not a production number. Scaling to 25+ probes per model would tighten the
+confidence intervals.
+
+Artifacts: `benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-claude-cli-{sonnet,opus}[-ordinal].json`.
 
 ## Scoring
 
@@ -56,7 +105,8 @@ run_mrcr_benchmark
   datasetId        = "mrcr-v2-8needle"
   provider         = "claude-cli"         // default — uses `claude -p` subprocess
   limit            = 25                   // pilot; set 0 for the full dataset
-  topK             = 8                    // snippets retrieved by the engram arm
+  topK             = 8                    // snippets retrieved by the engram arm (hybrid)
+  engramMode       = "ordinal"            // "hybrid" (default) or "ordinal"
 ```
 
 The `claude-cli` provider shells out to the Claude Code CLI, so generation charges

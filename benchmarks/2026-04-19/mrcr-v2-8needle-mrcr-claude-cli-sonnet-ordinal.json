@@ -1,0 +1,117 @@
+{
+  "datasetId": "mrcr-v2-8needle",
+  "runAt": "2026-04-19T03:12:33.1852691+00:00",
+  "provider": "claude-cli",
+  "model": "sonnet",
+  "endpoint": null,
+  "taskCount": 3,
+  "topK": 8,
+  "fullContext": {
+    "arm": "full_context",
+    "taskResults": [
+      {
+        "taskId": "mrcr-v2-8needle-0000",
+        "contextTokens": 18353,
+        "bucket": "73k-chars",
+        "promptTokens": 18653,
+        "similarity": 0.997401,
+        "passed": true,
+        "latencyMs": 25045.0145,
+        "answer": "el85MM9uD2**Title: Weathered Conversations**\n\n**Scene 1: Living Room, Midday.**\n\n*The stage is set with an old, comfy sofa, a coffee table scattered with weathered newspapers and two armchairs. A window is open, letting in a gentle breeze. MARGARET, a woman in her 60s, sits knitting in one of the chairs. JAMES, her brother, in his late 60s, paces the room holding a newspaper.*\n\n---\n\n**JAMES:** (fanning himself with a newspaper) Can you believe this heat, Margaret? It\u0027s October and it feels like mid-July!\n\n**MARGARET:** (without looking up) I remember summers that would make this feel like a cool spring day. We used to welcome this kind of weather, you know. \n\n**JAMES:** (stops pacing, chuckles) Yes, but we were younger then. Invincible, or so we thought. Now, just the idea of stepping outside makes me sweat.\n\n**MARGARET:** (smirking) You\u0027re getting soft, James. But truth be told, these temperatures are odd. Unsettling, even. Makes you wonder, is it just another cycle or something more?\n\n**JAMES:** (sits down, tossing the paper onto the table) I don\u0027t know, sister. But every year seems hotter than the last. It\u0027s like we\u0027re losing the seasons altogether. \n\n**MARGARET:** (nods, pausing her knitting) Autumn\u0027s always been my favorite. The colors, the crisp air. But you\u0027re right, things are changing. I barely needed a jacket last week.\n\n**JAMES:** Back then, we\u0027d jump into piles of leaves. Remember that one time I buried you in that huge stack, and you emerged with that ridiculous crown of twigs and leaves?\n\n**MARGARET:** (laughing) And you thought it was so funny until Mum spotted the whole mess we made. What I\u0027d give to relive those cool breezes, with a hint of wood smoke from the chimney.\n\n**JAMES:** (leans back, sighing) Maybe it\u0027s time to adjust, find new joys in this warmth we\u0027re given. \n\n**MARGARET:** (finishes a row, sets the knitting aside) Perhaps. Or maybe, it\u0027s time we take that trip north we\u0027ve been talking about. Find a place where the leaves still turn and the temperatures behave.\n\n**JAMES:** You know, that doesn\u0027t sound half bad. Fresh air...a real autumn. Let\u0027s do it.\n\n**MARGARET:** (smiling) It\u0027s settled then. But first, a cup of iced tea? \n\n**JAMES:** (smiling back) Yes, please. Better make it two.\n\n*Margaret rises, making her way to the kitchen as James gazes out the window, dreaming of cooler days.*\n\n*The scene fades to black.*\n\n---\n\n*End of Scene 1*",
+        "goldAnswer": "el85MM9uD2**Title: Weathered Conversations**\n\n**Scene 1: Living Room, Midday.**\n\n*The stage is set with an old, comfy sofa, a coffee table scattered with weathered newspapers and two armchairs. A window is open, letting in a gentle breeze. MARGARET, a woman in her 60s, sits knitting in one of the chairs. JAMES, her brother, in his late 60s, paces the room holding a newspaper.*\n\n---\n\n**JAMES:** (fanning himself with a newspaper) Can you believe this heat, Margaret? It\u0027s October and it feels like mid-July!\n\n**MARGARET:** (without looking up) I remember summers that would make this feel like a cool spring day. We used to welcome this kind of weather, you know. \n\n**JAMES:** (stops pacing, chuckles) Yes, but we were younger then. Invincible, or so we thought. Now, just the idea of stepping outside makes me sweat.\n\n**MARGARET:** (smirking) You\u0027re getting soft, James. But truth be told, these temperatures are odd. Unsettling, even. Makes you wonder, is it just another cycle or something more?\n\n**JAMES:** (sits down, tossing the paper onto the table) I don\u0027t know, sister. But every year seems hotter than the last. It\u0027s like we\u0027re losing the seasons altogether. \n\n**MARGARET:** (nods, pausing her knitting) Autumn\u0027s always been my favorite. The colors, the crisp air. But you\u0027re right, things are changing. I barely needed a jacket last week.\n\n**JAMES:** Back then, we\u2019d jump into piles of leaves. Remember that one time I buried you in that huge stack, and you emerged with that ridiculous crown of twigs and leaves?\n\n**MARGARET:** (laughing) And you thought it was so funny until Mum spotted the whole mess we made. What I\u2019d give to relive those cool breezes, with a hint of wood smoke from the chimney.\n\n**JAMES:** (leans back, sighing) Maybe it\u2019s time to adjust, find new joys in this warmth we\u0027re given. \n\n**MARGARET:** (finishes a row, sets the knitting aside) Perhaps. Or maybe, it\u2019s time we take that trip north we\u0027ve been talking about. Find a place where the leaves still turn and the temperatures behave.\n\n**JAMES:** You know, that doesn\u2019t sound half bad. Fresh air...a real autumn. Let\u2019s do it.\n\n**MARGARET:** (smiling) It\u2019s settled then. But first, a cup of iced tea? \n\n**JAMES:** (smiling back) Yes, please. Better make it two.\n\n*Margaret rises, making her way to the kitchen as James gazes out the window, dreaming of cooler days.*\n\n*The scene fades to black.*\n\n---\n\n*End of Scene 1*",
+        "error": null
+      },
+      {
+        "taskId": "mrcr-v2-8needle-0001",
+        "contextTokens": 19131,
+        "bucket": "76k-chars",
+        "promptTokens": 19453,
+        "similarity": 0.9652891,
+        "passed": true,
+        "latencyMs": 10987.8311,
+        "answer": "lm20V0QF3K?? **Let\u0027s Talk About Judgment ??**\n\nHey everyone! Today, I want to open up a conversation about something we all experience-judgment. ????\n\nWe live in a world where it\u0027s easy to judge and be judged. But what if we paused and tried to understand rather than criticize? ???\n\nHere\u0027s a gentle reminder to be kind, both to ourselves and others. Everyone has a unique story, a battle they\u0027re fighting, and dreams they\u0027re chasing. Instead of jumping to conclusions, let\u0027s choose empathy and connection. ??\n\nRemember, how we judge others says more about us than it does about them. Choose to look for the good. Let\u0027s create a community that lifts each other up! ????\n\nHow do you practice non-judgment in your daily life? Share your thoughts below! ????\n\n#NonJudgment #Empathy #BeKind #LiftEachOtherUp",
+        "goldAnswer": "lm20V0QF3K\uD83C\uDF1F **Let\u2019s Talk About Judgment \uD83C\uDF1F**\n\nHey everyone! Today, I want to open up a conversation about something we all experience\u2014judgment. \uD83E\uDD14\uD83D\uDCAD\n\nWe live in a world where it\u2019s easy to judge and be judged. But what if we paused and tried to understand rather than criticize? \uD83C\uDF08\u2728\n\nHere\u2019s a gentle reminder to be kind, both to ourselves and others. Everyone has a unique story, a battle they\u0027re fighting, and dreams they\u0027re chasing. Instead of jumping to conclusions, let\u2019s choose empathy and connection. \uD83D\uDC9E\n\nRemember, how we judge others says more about us than it does about them. Choose to look for the good. Let\u0027s create a community that lifts each other up! \uD83D\uDE80\uD83C\uDF1F\n\nHow do you practice non-judgment in your daily life? Share your thoughts below! \uD83D\uDC47\uD83D\uDC47\n\n#NonJudgment #Empathy #BeKind #LiftEachOtherUp",
+        "error": null
+      },
+      {
+        "taskId": "mrcr-v2-8needle-0002",
+        "contextTokens": 19365,
+        "bucket": "77k-chars",
+        "promptTokens": 19639,
+        "similarity": 0.9990362,
+        "passed": true,
+        "latencyMs": 17292.8115,
+        "answer": "WvdMOGcqjUSubject: The Unsung Hero: Celebrating the Humble Pencil\n\nDear [Recipient\u0027s Name],\n\nI hope this email finds you well. Today, I\u0027d like to take a moment to appreciate an indispensable tool that has silently supported creativity and productivity for centuries-the humble pencil.\n\nPencils have been a steadfast companion in our daily lives, from the scribbles of our earliest school days to the detailed sketches of artists and the frameworks of innovative ideas. Despite their simplicity, pencils are remarkable tools that offer precision, versatility, and, perhaps most importantly, the freedom to make mistakes and learn from them, all with the gentle swipe of an eraser.\n\nHere are a few reasons why pencils deserve our recognition:\n\n1. **Eco-Friendly and Sustainable**: Most pencils are made from sustainable wood sources and are biodegradable, making them an environmentally friendly option compared to many modern writing tools.\n\n2. **Artistic Flexibility**: Pencils are available in various grades of hardness and shades, enabling artists to explore a wide range of textures and effects in their work.\n\n3. **Universal Accessibility**: In many parts of the world, pencils are an affordable writing instrument, making them accessible to people of all ages and backgrounds.\n\n4. **Reliability**: Unlike pens, pencils do not dry out or run out of ink, ensuring they are always ready for use.\n\n5. **Rewritable History**: With an eraser at one end, pencils offer the unique ability to correct mistakes, fostering an environment where trial and error is encouraged.\n\nNext time you pick up a pencil, take a moment to appreciate its quiet strength and the role it plays in bringing ideas to life. Whether you\u0027re jotting down notes, sketching a masterpiece, or solving a math problem, the pencil is a trusted partner in your journey of creativity and learning.\n\nThank you for taking a moment to celebrate the simple yet powerful pencil with me. If you have any pencil-related stories or favorite brands you\u0027d like to share, I\u0027d love to hear them!\n\nWarm regards,\n\n[Your Name]  \n[Your Contact Information]",
+        "goldAnswer": "WvdMOGcqjUSubject: The Unsung Hero: Celebrating the Humble Pencil\n\nDear [Recipient\u0027s Name],\n\nI hope this email finds you well. Today, I\u0027d like to take a moment to appreciate an indispensable tool that has silently supported creativity and productivity for centuries\u2014the humble pencil.\n\nPencils have been a steadfast companion in our daily lives, from the scribbles of our earliest school days to the detailed sketches of artists and the frameworks of innovative ideas. Despite their simplicity, pencils are remarkable tools that offer precision, versatility, and, perhaps most importantly, the freedom to make mistakes and learn from them, all with the gentle swipe of an eraser.\n\nHere are a few reasons why pencils deserve our recognition:\n\n1. **Eco-Friendly and Sustainable**: Most pencils are made from sustainable wood sources and are biodegradable, making them an environmentally friendly option compared to many modern writing tools.\n\n2. **Artistic Flexibility**: Pencils are available in various grades of hardness and shades, enabling artists to explore a wide range of textures and effects in their work.\n\n3. **Universal Accessibility**: In many parts of the world, pencils are an affordable writing instrument, making them accessible to people of all ages and backgrounds.\n\n4. **Reliability**: Unlike pens, pencils do not dry out or run out of ink, ensuring they are always ready for use.\n\n5. **Rewritable History**: With an eraser at one end, pencils offer the unique ability to correct mistakes, fostering an environment where trial and error is encouraged.\n\nNext time you pick up a pencil, take a moment to appreciate its quiet strength and the role it plays in bringing ideas to life. Whether you\u0027re jotting down notes, sketching a masterpiece, or solving a math problem, the pencil is a trusted partner in your journey of creativity and learning.\n\nThank you for taking a moment to celebrate the simple yet powerful pencil with me. If you have any pencil-related stories or favorite brands you\u0027d like to share, I\u0027d love to hear them!\n\nWarm regards,\n\n[Your Name]  \n[Your Contact Information]",
+        "error": null
+      }
+    ],
+    "meanSimilarity": 0.9872421,
+    "passRate": 1,
+    "meanLatencyMs": 17775.21903333333,
+    "meanPromptTokens": 19248.334,
+    "totalPromptTokens": 57745,
+    "errorCount": 0,
+    "bucketMeans": {
+      "73k-chars": 0.997401,
+      "76k-chars": 0.9652891,
+      "77k-chars": 0.9990362
+    }
+  },
+  "engramRetrieval": {
+    "arm": "engram_retrieval",
+    "taskResults": [
+      {
+        "taskId": "mrcr-v2-8needle-0000",
+        "contextTokens": 18353,
+        "bucket": "73k-chars",
+        "promptTokens": 718,
+        "similarity": 0.8288898,
+        "passed": false,
+        "latencyMs": 24803.9562,
+        "answer": "el85MM9uD2**MARGARET:** (nods, pausing her knitting) Autumn\u0027s always been my favorite. The colors, the crisp air. But you\u0027re right, things are changing. I barely needed a jacket last week.",
+        "goldAnswer": "el85MM9uD2**Title: Weathered Conversations**\n\n**Scene 1: Living Room, Midday.**\n\n*The stage is set with an old, comfy sofa, a coffee table scattered with weathered newspapers and two armchairs. A window is open, letting in a gentle breeze. MARGARET, a woman in her 60s, sits knitting in one of the chairs. JAMES, her brother, in his late 60s, paces the room holding a newspaper.*\n\n---\n\n**JAMES:** (fanning himself with a newspaper) Can you believe this heat, Margaret? It\u0027s October and it feels like mid-July!\n\n**MARGARET:** (without looking up) I remember summers that would make this feel like a cool spring day. We used to welcome this kind of weather, you know. \n\n**JAMES:** (stops pacing, chuckles) Yes, but we were younger then. Invincible, or so we thought. Now, just the idea of stepping outside makes me sweat.\n\n**MARGARET:** (smirking) You\u0027re getting soft, James. But truth be told, these temperatures are odd. Unsettling, even. Makes you wonder, is it just another cycle or something more?\n\n**JAMES:** (sits down, tossing the paper onto the table) I don\u0027t know, sister. But every year seems hotter than the last. It\u0027s like we\u0027re losing the seasons altogether. \n\n**MARGARET:** (nods, pausing her knitting) Autumn\u0027s always been my favorite. The colors, the crisp air. But you\u0027re right, things are changing. I barely needed a jacket last week.\n\n**JAMES:** Back then, we\u2019d jump into piles of leaves. Remember that one time I buried you in that huge stack, and you emerged with that ridiculous crown of twigs and leaves?\n\n**MARGARET:** (laughing) And you thought it was so funny until Mum spotted the whole mess we made. What I\u2019d give to relive those cool breezes, with a hint of wood smoke from the chimney.\n\n**JAMES:** (leans back, sighing) Maybe it\u2019s time to adjust, find new joys in this warmth we\u0027re given. \n\n**MARGARET:** (finishes a row, sets the knitting aside) Perhaps. Or maybe, it\u2019s time we take that trip north we\u0027ve been talking about. Find a place where the leaves still turn and the temperatures behave.\n\n**JAMES:** You know, that doesn\u2019t sound half bad. Fresh air...a real autumn. Let\u2019s do it.\n\n**MARGARET:** (smiling) It\u2019s settled then. But first, a cup of iced tea? \n\n**JAMES:** (smiling back) Yes, please. Better make it two.\n\n*Margaret rises, making her way to the kitchen as James gazes out the window, dreaming of cooler days.*\n\n*The scene fades to black.*\n\n---\n\n*End of Scene 1*",
+        "error": null
+      },
+      {
+        "taskId": "mrcr-v2-8needle-0001",
+        "contextTokens": 19131,
+        "bucket": "76k-chars",
+        "promptTokens": 315,
+        "similarity": 0.9652891,
+        "passed": true,
+        "latencyMs": 7753.7743,
+        "answer": "lm20V0QF3K?? **Let\u0027s Talk About Judgment ??**\n\nHey everyone! Today, I want to open up a conversation about something we all experience-judgment. ????\n\nWe live in a world where it\u0027s easy to judge and be judged. But what if we paused and tried to understand rather than criticize? ???\n\nHere\u0027s a gentle reminder to be kind, both to ourselves and others. Everyone has a unique story, a battle they\u0027re fighting, and dreams they\u0027re chasing. Instead of jumping to conclusions, let\u0027s choose empathy and connection. ??\n\nRemember, how we judge others says more about us than it does about them. Choose to look for the good. Let\u0027s create a community that lifts each other up! ????\n\nHow do you practice non-judgment in your daily life? Share your thoughts below! ????\n\n#NonJudgment #Empathy #BeKind #LiftEachOtherUp",
+        "goldAnswer": "lm20V0QF3K\uD83C\uDF1F **Let\u2019s Talk About Judgment \uD83C\uDF1F**\n\nHey everyone! Today, I want to open up a conversation about something we all experience\u2014judgment. \uD83E\uDD14\uD83D\uDCAD\n\nWe live in a world where it\u2019s easy to judge and be judged. But what if we paused and tried to understand rather than criticize? \uD83C\uDF08\u2728\n\nHere\u2019s a gentle reminder to be kind, both to ourselves and others. Everyone has a unique story, a battle they\u0027re fighting, and dreams they\u0027re chasing. Instead of jumping to conclusions, let\u2019s choose empathy and connection. \uD83D\uDC9E\n\nRemember, how we judge others says more about us than it does about them. Choose to look for the good. Let\u0027s create a community that lifts each other up! \uD83D\uDE80\uD83C\uDF1F\n\nHow do you practice non-judgment in your daily life? Share your thoughts below! \uD83D\uDC47\uD83D\uDC47\n\n#NonJudgment #Empathy #BeKind #LiftEachOtherUp",
+        "error": null
+      },
+      {
+        "taskId": "mrcr-v2-8needle-0002",
+        "contextTokens": 19365,
+        "bucket": "77k-chars",
+        "promptTokens": 637,
+        "similarity": 0.9949459,
+        "passed": true,
+        "latencyMs": 9589.7149,
+        "answer": "WvdMOGcqjU Subject: The Unsung Hero: Celebrating the Humble Pencil\n\nDear [Recipient\u0027s Name],\n\nI hope this email finds you well. Today, I\u0027d like to take a moment to appreciate an indispensable tool that has silently supported creativity and productivity for centuries-the humble pencil.\n\nPencils have been a steadfast companion in our daily lives, from the scribbles of our earliest school days to the detailed sketches of artists and the frameworks of innovative ideas. Despite their simplicity, pencils are remarkable tools that offer precision, versatility, and, perhaps most importantly, the freedom to make mistakes and learn from them, all with the gentle swipe of an eraser.\n\nHere are a few reasons why pencils deserve our recognition:\n\n1. **Eco-Friendly and Sustainable**: Most pencils are made from sustainable wood sources and are biodegradable, making them an environmentally friendly option compared to many modern writing tools.\n\n2. **Artistic Flexibility**: Pencils are available in various grades of hardness and shades, enabling artists to explore a wide range of textures and effects in their work.\n\n3. **Universal Accessibility**: In many parts of the world, pencils are an affordable writing instrument, making them accessible to people of all ages and backgrounds.\n\n4. **Reliability**: Unlike pens, pencils do not dry out or run out of ink, ensuring they are always ready for use.\n\n5. **Rewritable History**: With an eraser at one end, pencils offer the unique ability to correct mistakes, fostering an environment where trial and error is encouraged.\n\nNext time you pick up a pencil, take a moment to appreciate its quiet strength and the role it plays in bringing ideas to life. Whether you\u0027re jotting down notes, sketching a masterpiece, or solving a math problem, the pencil is a trusted partner in your journey of creativity and learning.\n\nThank you for taking a moment to celebrate the simple yet powerful pencil with me. If you have any pencil-related stories or favorite brands you\u0027d like to share, I\u0027d love to hear them!\n\nWarm regards,\n\n[Your Name]  \n[Your Contact Information]",
+        "goldAnswer": "WvdMOGcqjUSubject: The Unsung Hero: Celebrating the Humble Pencil\n\nDear [Recipient\u0027s Name],\n\nI hope this email finds you well. Today, I\u0027d like to take a moment to appreciate an indispensable tool that has silently supported creativity and productivity for centuries\u2014the humble pencil.\n\nPencils have been a steadfast companion in our daily lives, from the scribbles of our earliest school days to the detailed sketches of artists and the frameworks of innovative ideas. Despite their simplicity, pencils are remarkable tools that offer precision, versatility, and, perhaps most importantly, the freedom to make mistakes and learn from them, all with the gentle swipe of an eraser.\n\nHere are a few reasons why pencils deserve our recognition:\n\n1. **Eco-Friendly and Sustainable**: Most pencils are made from sustainable wood sources and are biodegradable, making them an environmentally friendly option compared to many modern writing tools.\n\n2. **Artistic Flexibility**: Pencils are available in various grades of hardness and shades, enabling artists to explore a wide range of textures and effects in their work.\n\n3. **Universal Accessibility**: In many parts of the world, pencils are an affordable writing instrument, making them accessible to people of all ages and backgrounds.\n\n4. **Reliability**: Unlike pens, pencils do not dry out or run out of ink, ensuring they are always ready for use.\n\n5. **Rewritable History**: With an eraser at one end, pencils offer the unique ability to correct mistakes, fostering an environment where trial and error is encouraged.\n\nNext time you pick up a pencil, take a moment to appreciate its quiet strength and the role it plays in bringing ideas to life. Whether you\u0027re jotting down notes, sketching a masterpiece, or solving a math problem, the pencil is a trusted partner in your journey of creativity and learning.\n\nThank you for taking a moment to celebrate the simple yet powerful pencil with me. If you have any pencil-related stories or favorite brands you\u0027d like to share, I\u0027d love to hear them!\n\nWarm regards,\n\n[Your Name]  \n[Your Contact Information]",
+        "error": null
+      }
+    ],
+    "meanSimilarity": 0.92970824,
+    "passRate": 0.6666667,
+    "meanLatencyMs": 14049.148466666667,
+    "meanPromptTokens": 556.6667,
+    "totalPromptTokens": 1670,
+    "errorCount": 0,
+    "bucketMeans": {
+      "73k-chars": 0.8288898,
+      "76k-chars": 0.9652891,
+      "77k-chars": 0.9949459
+    }
+  },
+  "similarityDelta": -0.05753386,
+  "promptTokenReductionRatio": 0.97107977,
+  "notes": "MRCR v2 (8-needle) A/B \u2014 full-context baseline vs. ordinal-aware engram retrieval (pair-wise ingest, category \u002B within-category ordinal, fallback to hybrid). Scoring: mean cosine similarity via local ONNX embeddings.",
+  "engramMode": "ordinal"
+}

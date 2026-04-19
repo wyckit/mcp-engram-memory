@@ -64,7 +64,8 @@ internal static class MrcrPilotCommand
             Temperature: opts.Temperature,
             MaxContextTokens: opts.MaxContextTokens,
             RunFullContextArm: opts.RunFullContextArm,
-            RunEngramArm: opts.RunEngramArm);
+            RunEngramArm: opts.RunEngramArm,
+            EngramMode: opts.EngramMode);
 
         MrcrBenchmarkResult result;
         try
@@ -107,6 +108,7 @@ internal static class MrcrPilotCommand
                 case "--max-context-tokens": if (int.TryParse(Next(), out var mc)) opts.MaxContextTokens = mc; break;
                 case "--no-full-context": opts.RunFullContextArm = false; break;
                 case "--no-engram": opts.RunEngramArm = false; break;
+                case "--engram-mode": opts.EngramMode = Next() ?? opts.EngramMode; break;
                 case "--output-dir": opts.OutputDirectory = Next() ?? opts.OutputDirectory; break;
                 case "--claude-exe": opts.ClaudeExecutable = Next(); break;
                 case "-h": case "--help": return null;
@@ -139,6 +141,9 @@ Optional:
   --max-context-tokens <n>     Skip probes whose prompt exceeds this (default: 131072).
   --no-full-context            Skip the full_context arm.
   --no-engram                  Skip the engram_retrieval arm.
+  --engram-mode <mode>         'hybrid' (default) or 'ordinal' — pair-wise ingest with
+                               category+within-category ordinal; fallback to hybrid on probes
+                               that don't match the 'Nth X about Y' template.
   --output-dir <dir>           Artifact root (default: BENCHMARK_ARTIFACTS_PATH or ./benchmarks).
   --claude-exe <path>          Override the `claude` CLI path.
 ");
@@ -154,7 +159,7 @@ Optional:
         string datedDir = Path.Combine(root, $"{result.RunAt:yyyy-MM-dd}");
         Directory.CreateDirectory(datedDir);
         string path = Path.Combine(datedDir,
-            $"{result.DatasetId}-mrcr-{Sanitize(result.Provider)}-{Sanitize(result.Model)}.json");
+            $"{result.DatasetId}-mrcr-{Sanitize(result.Provider)}-{Sanitize(result.Model)}-{Sanitize(result.EngramMode)}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(result, new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -177,7 +182,7 @@ Optional:
         Console.WriteLine("=== MRCR v2 pilot summary ===");
         Console.WriteLine($"dataset:  {r.DatasetId}");
         Console.WriteLine($"model:    {r.Provider}/{r.Model}");
-        Console.WriteLine($"probes:   {r.TaskCount}   topK={r.TopK}");
+        Console.WriteLine($"probes:   {r.TaskCount}   topK={r.TopK}   engramMode={r.EngramMode}");
         Console.WriteLine();
 
         if (r.FullContext is { } fc)
@@ -208,6 +213,7 @@ Optional:
         public int MaxContextTokens { get; set; } = 131072;
         public bool RunFullContextArm { get; set; } = true;
         public bool RunEngramArm { get; set; } = true;
+        public string EngramMode { get; set; } = "hybrid";
         public string OutputDirectory { get; set; } = string.Empty;
         public string? ClaudeExecutable { get; set; }
     }

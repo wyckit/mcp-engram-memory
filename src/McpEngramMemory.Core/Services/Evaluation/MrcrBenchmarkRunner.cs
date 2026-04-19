@@ -21,6 +21,9 @@ public sealed class MrcrBenchmarkRunner
     public const string FullContextArm = "full_context";
     public const string EngramRetrievalArm = "engram_retrieval";
 
+    public const string EngramModeHybrid = "hybrid";
+    public const string EngramModeOrdinal = "ordinal";
+
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
     private readonly MrcrScorer _scorer;
@@ -53,6 +56,11 @@ public sealed class MrcrBenchmarkRunner
         float similarityDelta = (engram?.MeanSimilarity ?? 0f) - (fullContext?.MeanSimilarity ?? 0f);
         float promptTokenReduction = ComputePromptTokenReduction(fullContext, engram);
 
+        string mode = NormalizeMode(options.EngramMode);
+        string note = mode == EngramModeOrdinal
+            ? "MRCR v2 (8-needle) A/B — full-context baseline vs. ordinal-aware engram retrieval (pair-wise ingest, category + within-category ordinal, fallback to hybrid). Scoring: mean cosine similarity via local ONNX embeddings."
+            : "MRCR v2 (8-needle) A/B — full-context baseline vs. engram hybrid retrieval. Scoring: mean cosine similarity via local ONNX embeddings.";
+
         return new MrcrBenchmarkResult(
             datasetId,
             DateTimeOffset.UtcNow,
@@ -65,7 +73,18 @@ public sealed class MrcrBenchmarkRunner
             engram,
             similarityDelta,
             promptTokenReduction,
-            "MRCR v2 (8-needle) A/B — full-context baseline vs. engram hybrid retrieval. Scoring: mean cosine similarity via local ONNX embeddings.");
+            note,
+            mode);
+    }
+
+    private static string NormalizeMode(string? raw)
+    {
+        var m = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        return m switch
+        {
+            EngramModeOrdinal or "ordinal_aware" or "ordinal-aware" => EngramModeOrdinal,
+            _ => EngramModeHybrid,
+        };
     }
 
     private async Task<MrcrArmResult> RunFullContextAsync(
@@ -112,12 +131,15 @@ public sealed class MrcrBenchmarkRunner
         IAgentOutcomeModelClient client,
         CancellationToken ct)
     {
+        string mode = NormalizeMode(options.EngramMode);
         var results = new List<MrcrTaskResult>(tasks.Count);
 
         foreach (var task in tasks)
         {
             ct.ThrowIfCancellationRequested();
-            results.Add(await EvaluateEngramAsync(task, options, client, ct));
+            results.Add(mode == EngramModeOrdinal
+                ? await EvaluateEngramOrdinalAsync(task, options, client, ct)
+                : await EvaluateEngramAsync(task, options, client, ct));
         }
 
         return Aggregate(EngramRetrievalArm, results);
@@ -165,6 +187,140 @@ public sealed class MrcrBenchmarkRunner
         {
             _index.DeleteAllInNamespace(ns);
         }
+    }
+
+    /// <summary>
+    /// Ordinal-aware engram retrieval. Walks turns pair-wise: each (user, assistant) pair
+    /// normalizes the user ask to a category signature and increments a within-category
+    /// counter. Assistant turns are stored with <c>Category</c> = signature and
+    /// <c>Metadata["ordinal"]</c> = 1-based position within that category. Probes that
+    /// match the "Nth X about Y" template resolve to an exact category+ordinal lookup
+    /// against the scratch namespace; probes that don't match fall back to the hybrid
+    /// retrieval path so the mode is safe to use on mixed datasets.
+    /// </summary>
+    private async Task<MrcrTaskResult> EvaluateEngramOrdinalAsync(
+        MrcrTask task,
+        MrcrGenerationOptions options,
+        IAgentOutcomeModelClient client,
+        CancellationToken ct)
+    {
+        string ns = $"__mrcr_ord_{task.TaskId}_{Guid.NewGuid():N}";
+
+        try
+        {
+            // 1. Pair-wise ingest: carry the most recent user-side signature forward
+            //    and apply it to the assistant turn that answers it.
+            var counters = new Dictionary<string, int>(StringComparer.Ordinal);
+            string? pendingSignature = null;
+
+            for (int i = 0; i < task.Turns.Count; i++)
+            {
+                var turn = task.Turns[i];
+                string roleText = $"[{turn.Role}] {turn.Content}";
+                var vector = _embedding.Embed(roleText);
+
+                bool isUser = string.Equals(turn.Role, "user", StringComparison.OrdinalIgnoreCase);
+                bool isAssistant = string.Equals(turn.Role, "assistant", StringComparison.OrdinalIgnoreCase);
+
+                string signature = string.Empty;
+                int ordinalWithinCategory = 0;
+
+                if (isUser)
+                {
+                    signature = MrcrProbeParser.NormalizeSignature(turn.Content);
+                    pendingSignature = string.IsNullOrWhiteSpace(signature) ? null : signature;
+                }
+                else if (isAssistant && pendingSignature is not null)
+                {
+                    signature = pendingSignature;
+                    counters[signature] = counters.TryGetValue(signature, out var c) ? c + 1 : 1;
+                    ordinalWithinCategory = counters[signature];
+                    pendingSignature = null; // consume
+                }
+
+                string id = $"{ns}:turn-{i:D4}";
+                string category = string.IsNullOrWhiteSpace(signature) ? "mrcr-turn" : signature;
+                var entry = new CognitiveEntry(id, vector, ns, roleText, category, lifecycleState: "ltm");
+                if (ordinalWithinCategory > 0)
+                {
+                    entry.Metadata["ordinal"] = ordinalWithinCategory.ToString();
+                    entry.Metadata["ask_signature"] = signature;
+                }
+                entry.Metadata["role"] = turn.Role;
+                entry.Metadata["turn_index"] = i.ToString();
+                _index.Upsert(entry);
+            }
+
+            // 2. Try the ordinal path first.
+            IReadOnlyList<CognitiveSearchResult> retrieved;
+            string strategy;
+
+            if (MrcrProbeParser.TryParse(task.Probe, out var probeInfo)
+                && TryOrdinalLookup(ns, probeInfo, out retrieved))
+            {
+                strategy = "ordinal";
+            }
+            else
+            {
+                // 3. Fallback: hybrid top-K against the original probe text.
+                var queryVector = _embedding.Embed(task.Probe);
+                retrieved = _index.Search(new SearchRequest
+                {
+                    Query = queryVector,
+                    QueryText = task.Probe,
+                    Namespace = ns,
+                    K = options.TopK,
+                    Hybrid = true,
+                    Rerank = true
+                });
+                strategy = "hybrid_fallback";
+            }
+
+            string prompt = BuildEngramPrompt(task, retrieved, strategy);
+            int approxTokens = ApproximateTokens(prompt);
+            return await GenerateAndScoreAsync(task, prompt, approxTokens, options, client, ct);
+        }
+        finally
+        {
+            _index.DeleteAllInNamespace(ns);
+        }
+    }
+
+    private bool TryOrdinalLookup(
+        string ns,
+        MrcrProbeInfo info,
+        out IReadOnlyList<CognitiveSearchResult> retrieved)
+    {
+        var all = _index.GetAllInNamespace(ns);
+
+        // Exact category match + ordinal match.
+        var exact = all.FirstOrDefault(e =>
+            string.Equals(e.Category, info.CategorySignature, StringComparison.Ordinal)
+            && e.Metadata.TryGetValue("ordinal", out var o)
+            && o == info.Ordinal.ToString());
+
+        if (exact is not null)
+        {
+            retrieved = new[]
+            {
+                new CognitiveSearchResult(
+                    Id: exact.Id,
+                    Text: exact.Text,
+                    Score: 1.0f,
+                    LifecycleState: exact.LifecycleState,
+                    ActivationEnergy: exact.ActivationEnergy,
+                    Category: exact.Category,
+                    Metadata: new Dictionary<string, string>(exact.Metadata),
+                    IsSummaryNode: exact.IsSummaryNode,
+                    SourceClusterId: exact.SourceClusterId,
+                    AccessCount: exact.AccessCount)
+            };
+            return true;
+        }
+
+        // No exact category hit — signal fallback.
+        retrieved = Array.Empty<CognitiveSearchResult>();
+        return false;
     }
 
     private async Task<MrcrTaskResult> GenerateAndScoreAsync(
@@ -216,23 +372,39 @@ public sealed class MrcrBenchmarkRunner
         return sb.ToString();
     }
 
-    private static string BuildEngramPrompt(MrcrTask task, IReadOnlyList<CognitiveSearchResult> retrieved)
+    private static string BuildEngramPrompt(
+        MrcrTask task,
+        IReadOnlyList<CognitiveSearchResult> retrieved,
+        string? strategy = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("You are answering a question using only the retrieved conversation snippets below.");
-        sb.AppendLine("Answer with the minimum necessary text — no preamble, no restating the question, no markdown.");
-        sb.AppendLine();
-        sb.AppendLine("=== RETRIEVED SNIPPETS ===");
-        if (retrieved.Count == 0)
+        if (strategy == "ordinal" && retrieved.Count == 1)
         {
-            sb.AppendLine("(no snippets retrieved)");
+            sb.AppendLine("You are answering a retrieval question using a single retrieved snippet.");
+            sb.AppendLine("The snippet is the exact turn referenced by the probe's ordinal+category lookup.");
+            sb.AppendLine("Apply the probe's instruction to this snippet and answer with minimum text — no preamble, no markdown.");
+            sb.AppendLine();
+            sb.AppendLine("=== RETRIEVED SNIPPET ===");
+            sb.AppendLine(retrieved[0].Text);
+            sb.AppendLine("=== END SNIPPET ===");
         }
         else
         {
-            for (int i = 0; i < retrieved.Count; i++)
-                sb.Append('(').Append(i + 1).Append(") ").AppendLine(retrieved[i].Text);
+            sb.AppendLine("You are answering a question using only the retrieved conversation snippets below.");
+            sb.AppendLine("Answer with the minimum necessary text — no preamble, no restating the question, no markdown.");
+            sb.AppendLine();
+            sb.AppendLine("=== RETRIEVED SNIPPETS ===");
+            if (retrieved.Count == 0)
+            {
+                sb.AppendLine("(no snippets retrieved)");
+            }
+            else
+            {
+                for (int i = 0; i < retrieved.Count; i++)
+                    sb.Append('(').Append(i + 1).Append(") ").AppendLine(retrieved[i].Text);
+            }
+            sb.AppendLine("=== END SNIPPETS ===");
         }
-        sb.AppendLine("=== END SNIPPETS ===");
         sb.AppendLine();
         sb.Append("Probe: ").AppendLine(task.Probe);
         sb.Append("Answer: ");

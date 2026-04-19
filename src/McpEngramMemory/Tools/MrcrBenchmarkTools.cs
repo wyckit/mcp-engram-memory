@@ -46,6 +46,7 @@ public sealed class MrcrBenchmarkTools
         [Description("Hard cap on prompt tokens for the full_context arm (skips probes over the cap). Default: 131072.")] int maxContextTokens = 131072,
         [Description("When true, run the full_context baseline arm. Default: true.")] bool runFullContextArm = true,
         [Description("When true, run the engram_retrieval arm. Default: true.")] bool runEngramArm = true,
+        [Description("Engram retrieval mode: 'hybrid' (default, dense BM25+vector) or 'ordinal' (pair-wise ingest with category + within-category ordinal; falls back to hybrid on probes that don't match the 'Nth X about Y' template).")] string engramMode = "hybrid",
         [Description("When true, write the benchmark result to a JSON artifact under benchmarks/YYYY-MM-DD. Default: true.")] bool persistArtifact = true,
         [Description("Optional artifact root directory. Defaults to BENCHMARK_ARTIFACTS_PATH env var or ./benchmarks.")] string? artifactDirectory = null,
         CancellationToken cancellationToken = default)
@@ -78,7 +79,7 @@ public sealed class MrcrBenchmarkTools
             var options = new MrcrGenerationOptions(
                 provider, model, endpoint,
                 limit, topK, maxTokens, temperature, maxContextTokens,
-                runFullContextArm, runEngramArm);
+                runFullContextArm, runEngramArm, engramMode);
 
             var result = await _runner.RunAsync(datasetId, tasks, options, client, cancellationToken);
 
@@ -143,7 +144,8 @@ public sealed class MrcrBenchmarkTools
 
         string provider = SanitizeSegment(result.Provider);
         string model = SanitizeSegment(result.Model);
-        string path = Path.Combine(datedDir, $"{result.DatasetId}-mrcr-{provider}-{model}.json");
+        string mode = SanitizeSegment(result.EngramMode);
+        string path = Path.Combine(datedDir, $"{result.DatasetId}-mrcr-{provider}-{model}-{mode}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(result, JsonOptions));
         return Path.GetFullPath(path);
     }
