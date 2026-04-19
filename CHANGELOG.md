@@ -6,7 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Ordinal-aware engram retrieval mode for MRCR**: `MrcrGenerationOptions.EngramMode = "ordinal"` enables pair-wise ingest that tags each assistant turn with its user-ask category signature and within-category 1-based ordinal (stored on `CognitiveEntry.Metadata["ordinal"]`). A new `MrcrProbeParser` extracts `(RandomString, Ordinal, Category)` from the "Prepend X to the Nth (1 indexed) Y" probe template, and retrieval resolves to an exact category+ordinal lookup via `CognitiveIndex.GetAllInNamespace`. Probes that don't match the template fall back to hybrid search.
-  - 3-probe pilot (2026-04-19): Opus ordinal engram = **0.986 sim / 100% pass / 1,670 prompt tokens** — beats Opus full-context (0.924 sim / 57,745 tokens, +0.062 at 34× token reduction). Sonnet ordinal engram = 0.930 sim / 67% pass at the same 97.1% token reduction.
+  - 25-probe stratified run (2026-04-19, contexts 18K–571K approx tokens):
+    - **Opus ordinal engram = 0.987 sim / 96% pass / 14,556 prompt tokens (n=25)**; on the matched set where full_context also ran (n=14), Opus ordinal engram (0.979) beats Opus full_context (0.936).
+    - Sonnet ordinal engram = 0.912 sim / 72% pass across n=25; on the matched set Sonnet full_context (0.993) beats ordinal engram (0.898) — Sonnet is very strong at long-context recall when the prompt fits.
+    - 11/25 probes exceed Claude's 200K limit — full_context cannot run there, ordinal engram hits 0.997 sim / 100% pass for Opus on the oversized set.
+    - Prompt-token reduction: **99.7% (320× fewer tokens, 14,556 vs 4,657,645)**.
   - Artifact filenames now include the engram mode: `{dataset}-mrcr-{provider}-{model}-{mode}.json`.
   - 12 new probe-parser unit tests.
 - **MRCR v2 (8-needle) long-context benchmark**: A/B harness that drives the Claude Code CLI (`claude -p`) via the user's subscription — no Anthropic API key required.

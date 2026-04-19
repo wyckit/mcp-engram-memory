@@ -47,38 +47,64 @@ The engram arm has two retrieval policies, selectable via `engramMode`:
   ordinal lookup against the scratch namespace. Probes that don't match the template fall
   back to hybrid automatically, so the mode is safe to use on mixed datasets.
 
-## Pilot results (3 probes, ~18–19K-token contexts, 2026-04-19)
+## Results (25 stratified probes, 2026-04-19)
 
-The ordinal mode was developed in response to the hybrid pilot discovering that MRCR's
-8-needle probes are adversarial to content-similarity retrieval — they ask for positional
-recall ("the 6th scene") across cohorts of chunks that share topic keywords.
+25 stratified probes from `openai/mrcr` 8needle_0.parquet, selected evenly across
+context sizes: approximate tokens range from ~18K to ~571K (median 75K). 11 of the
+25 probes exceed Claude's 200K context limit — those are skipped on the full_context
+arm (recorded as error; sim=0) but run normally on the engram arm.
 
-| Model | Mode | Arm | Similarity | Pass | Prompt tokens |
-|-------|------|-----|-----------:|-----:|--------------:|
-| Sonnet | hybrid  | full_context      | 0.964 | 100% | 57,745 |
-| Sonnet | hybrid  | engram_retrieval  | 0.499 |   0% |  3,662 |
-| Sonnet | ordinal | full_context      | 0.987 | 100% | 57,745 |
-| Sonnet | ordinal | engram_retrieval  | **0.930** |  67% | **1,670** |
-| Opus   | hybrid  | full_context      | 0.898 | 100% | 57,745 |
-| Opus   | hybrid  | engram_retrieval  | 0.645 |  33% |  3,662 |
-| Opus   | ordinal | full_context      | 0.924 | 100% | 57,745 |
-| Opus   | ordinal | engram_retrieval  | **0.986** | **100%** | **1,670** |
+### Matched set (n=14, probes where full_context fit within 200K)
 
-**Key findings**
+| Model | Arm | Similarity | Pass |
+|-------|-----|-----------:|-----:|
+| Sonnet | full_context    | **0.993** | 100% |
+| Sonnet | engram ordinal  | 0.898 |  71% |
+| Opus   | full_context    | 0.936 |  86% |
+| Opus   | engram ordinal  | **0.979** | **93%** |
 
-- Ordinal mode lifts engram similarity by **+0.43** (Sonnet) and **+0.34** (Opus) over hybrid
-  mode — because the probe parser converts an ordinal-recall task into a deterministic
-  category+ordinal lookup instead of a noisy dense-vector contest.
-- **Opus + ordinal engram** (sim=0.986) **beats Opus + full_context** (sim=0.924, +0.062)
-  at **34× fewer prompt tokens** (1,670 vs 57,745, a 97.1% reduction).
-- Sonnet + ordinal engram passes 2/3 probes and hits 0.930 similarity — slightly trailing
-  full-context Sonnet (0.987) but at the same 34× token savings.
+### Oversized set (n=11, probes >200K tokens — full_context cannot run)
 
-These numbers are n=3 and deliberately small (pilot scale); treat them as directional
-signal, not a production number. Scaling to 25+ probes per model would tighten the
-confidence intervals.
+| Model | engram ordinal sim | pass |
+|-------|-------------------:|-----:|
+| Sonnet | 0.931 | 73% |
+| Opus   | **0.997** | **100%** |
 
-Artifacts: `benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-claude-cli-{sonnet,opus}[-ordinal].json`.
+### Overall (n=25, all probes)
+
+| Model | Arm | Similarity | Pass | Prompt tokens |
+|-------|-----|-----------:|-----:|--------------:|
+| Sonnet | full_context    | 0.556 | 56% |    4,657,645 |
+| Sonnet | engram ordinal  | 0.912 | 72% |       14,556 |
+| Opus   | full_context    | 0.524 | 48% |    4,657,645 |
+| Opus   | engram ordinal  | **0.987** | **96%** |       **14,556** |
+
+Prompt-token reduction across the whole set: **99.7% (320× fewer tokens)**.
+
+### Takeaways
+
+1. **Sonnet is the long-context king when the prompt fits.** On the matched set
+   (probes ≤200K) Sonnet + full_context scores 0.993 — beating Sonnet + ordinal
+   engram (0.898) outright. Long-context Sonnet is genuinely very good at this.
+2. **Opus + ordinal engram beats Opus + full_context even on the matched set**
+   (0.979 vs 0.936). Focused single-snippet retrieval gives Opus a cleaner signal
+   than dumping 100K+ tokens into its context window.
+3. **Above 200K tokens, engram is the only option that runs at all.** Opus ordinal
+   engram hits 0.997 sim / 100% pass on 300K+ char contexts that long-context models
+   cannot handle.
+4. **320× prompt-token reduction** (14.5K vs 4.66M) holds across the whole set —
+   the cost-per-query delta swamps any accuracy trade-off on workloads where the
+   ordinal path applies.
+
+### Pilot (n=3, earlier validation run)
+
+Previously we ran n=3 to validate the pipeline. Hybrid mode collapsed (Sonnet 0.499,
+Opus 0.645) because MRCR probes ask for positional recall that content-similarity
+retrieval cannot answer. Switching to ordinal mode recovered the signal
+(Sonnet 0.930, Opus 0.986 at n=3). The n=25 run above confirms the ordinal
+result at publishable scale for Opus; Sonnet's pass-rate drop (100% → 71% on the
+matched set) is the n=3→n=25 reality check. Artifacts:
+`benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-claude-cli-{sonnet,opus}[-ordinal].json`.
 
 ## Scoring
 

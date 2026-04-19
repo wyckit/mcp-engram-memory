@@ -22,6 +22,12 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="Output JSONL path")
     ap.add_argument("--rows", type=int, default=3, help="Number of rows to convert")
     ap.add_argument(
+        "--strategy",
+        choices=["smallest", "stratified"],
+        default="smallest",
+        help="smallest = shortest N contexts; stratified = evenly spaced across context sizes",
+    )
+    ap.add_argument(
         "--parquet",
         default="8needle/8needle_0.parquet",
         help="HF file path inside openai/mrcr (default: smallest 8-needle shard)",
@@ -41,9 +47,19 @@ def main() -> int:
         file=sys.stderr,
     )
 
-    # Sort ascending by prompt character count so the pilot hits the shortest probes
-    # first — keeps claude -p calls tractable.
-    df = df.sort_values("n_chars").head(args.rows).reset_index(drop=True)
+    # Select rows based on strategy.
+    if args.strategy == "smallest":
+        df = df.sort_values("n_chars").head(args.rows).reset_index(drop=True)
+    else:
+        # Stratified: evenly spaced across context sizes so the pilot covers the
+        # full range, not just the short tail.
+        df_sorted = df.sort_values("n_chars").reset_index(drop=True)
+        if len(df_sorted) < args.rows:
+            df = df_sorted
+        else:
+            step = len(df_sorted) / args.rows
+            indices = [int(i * step) for i in range(args.rows)]
+            df = df_sorted.iloc[indices].reset_index(drop=True)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
