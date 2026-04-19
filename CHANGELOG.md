@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
     - Sonnet ordinal engram = 0.912 sim / 72% pass across n=25; on the matched set Sonnet full_context (0.993) beats ordinal engram (0.898) — Sonnet is very strong at long-context recall when the prompt fits.
     - 11/25 probes exceed Claude's 200K limit — full_context cannot run there, ordinal engram hits 0.997 sim / 100% pass for Opus on the oversized set.
     - Prompt-token reduction: **99.7% (320× fewer tokens, 14,556 vs 4,657,645)**.
+  - 2/4/8-needle scaling run (2026-04-19): same harness, 25 stratified probes per variant, `openai/mrcr` parquet source. Ordinal engram holds **sim ≥ 0.912 with 72-96% pass** across every variant at the constant **99.7% (320×) prompt-token reduction**. Opus + ordinal engram beats Opus + full_context on the matched set for both 4-needle (0.975 vs 0.944) and 8-needle (0.979 vs 0.936); 2-needle is saturated (both arms ≥0.955).
+  - New MRCR engram expert `mrcr_benchmark_methodologist` registered via `create_expert` (auto-classified under `information_retrieval` → `ai_and_knowledge`, 0.796 confidence). Seeded with 6 linked memories documenting probe grammar, ingest pattern, retrieval policy, Claude CLI driver, scoring, and the context-ceiling regime finding.
   - Artifact filenames now include the engram mode: `{dataset}-mrcr-{provider}-{model}-{mode}.json`.
   - 12 new probe-parser unit tests.
 - **MRCR v2 (8-needle) long-context benchmark**: A/B harness that drives the Claude Code CLI (`claude -p`) via the user's subscription — no Anthropic API key required.

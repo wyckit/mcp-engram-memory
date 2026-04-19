@@ -47,6 +47,42 @@ The engram arm has two retrieval policies, selectable via `engramMode`:
   ordinal lookup against the scratch namespace. Probes that don't match the template fall
   back to hybrid automatically, so the mode is safe to use on mixed datasets.
 
+## Scaling across needle counts (25 stratified probes per variant, 2026-04-19)
+
+Run on `openai/mrcr` 2-needle, 4-needle, and 8-needle parquets — 25 stratified probes
+each (context size 18K–571K approx tokens, 11/25 exceed Claude's 200K limit in every
+variant). All runs use `engramMode: ordinal`, same harness, same scoring (bge-micro-v2
+cosine similarity).
+
+| Needles | Model | Matched fc-sim | Matched en-sim | Oversized en-sim | Overall en-sim | Overall en-pass |
+|---|---|---:|---:|---:|---:|---:|
+| 2 | opus   | 0.991 | 0.955 | 0.989 | 0.970 | 92% |
+| 2 | sonnet | 0.991 | 0.961 | 0.992 | 0.975 | 92% |
+| 4 | opus   | 0.944 | **0.975** | 0.961 | 0.969 | 88% |
+| 4 | sonnet | 0.977 | 0.910 | 0.922 | 0.915 | 72% |
+| 8 | opus   | 0.936 | **0.979** | **0.997** | **0.987** | 96% |
+| 8 | sonnet | 0.993 | 0.898 | 0.931 | 0.912 | 72% |
+
+Prompt-token reduction is a flat **99.7% (320× fewer tokens)** across all six runs —
+ordinal retrieval is a single-chunk lookup, so payload size is invariant to needle
+count or model choice.
+
+### Patterns that hold across needle counts
+
+1. **2-needle is saturated** — both arms score 0.97+. Too few planted items to create
+   positional ambiguity; hybrid or ordinal would both work.
+2. **At 4n and 8n, Opus + ordinal engram beats Opus + full_context** on the matched set
+   (0.975 vs 0.944; 0.979 vs 0.936). A focused single snippet outperforms 100K+ tokens
+   of haystack for Opus.
+3. **Sonnet is the long-context king when prompts fit** (8n matched: 0.993 vs 0.898).
+   Dumping the full conversation gives Sonnet enough signal to resolve ordinals on its
+   own; retrieval throws signal away.
+4. **Above 200K tokens, engram is the only option that runs at all**. Opus + ordinal
+   engram hits 0.997 sim / 100% pass on 300K+ char 8-needle probes.
+5. The 320× token-reduction payoff is independent of model and needle count.
+
+Artifacts: `benchmarks/2026-04-19/mrcr-v2-{2,4,8}needle-mrcr-claude-cli-{sonnet,opus}-ordinal.json`.
+
 ## Results (25 stratified probes, 2026-04-19)
 
 25 stratified probes from `openai/mrcr` 8needle_0.parquet, selected evenly across
