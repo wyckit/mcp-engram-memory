@@ -256,7 +256,8 @@ public sealed class BenchmarkTools
             return new LiveAgentOutcomeArtifactComparisonOutput(
                 "regressed",
                 report,
-                $"Full Engram success score regressed by {Math.Abs(fullEngramDiff.SuccessDelta):P2} (allowed: {successThreshold:P2}).");
+                FormattableString.Invariant(
+                    $"Full Engram success score regressed by {Math.Abs(fullEngramDiff.SuccessDelta) * 100:F2}% (allowed: {successThreshold * 100:F2}%)."));
         }
 
         if (fullEngramDiff.PassRateDelta < -passRateThreshold)
@@ -264,7 +265,8 @@ public sealed class BenchmarkTools
             return new LiveAgentOutcomeArtifactComparisonOutput(
                 "regressed",
                 report,
-                $"Full Engram pass rate regressed by {Math.Abs(fullEngramDiff.PassRateDelta):P2} (allowed: {passRateThreshold:P2}).");
+                FormattableString.Invariant(
+                    $"Full Engram pass rate regressed by {Math.Abs(fullEngramDiff.PassRateDelta) * 100:F2}% (allowed: {passRateThreshold * 100:F2}%)."));
         }
 
         return new LiveAgentOutcomeArtifactComparisonOutput("passed", report, "No regressions detected.");
