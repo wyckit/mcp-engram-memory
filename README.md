@@ -67,7 +67,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 4 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.7.0
+dotnet add package McpEngramMemory.Core --version 0.7.1
 ```
 
 > First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.

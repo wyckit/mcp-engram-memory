@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-20
+
 ### Added
+- **`OllamaClient.GenerateStreamAsync`**: NDJSON token-by-token streaming via `IAsyncEnumerable<string>`, with stop-token array threaded through to Ollama for early termination. Enables incremental UI updates without waiting for a full generation.
+- **`OllamaClient.KeepAlive`**: public property serialized as Ollama's `keep_alive` on every `/api/generate`. Set to `"24h"` to prevent Ollama from unloading models after its default 5-minute idle timeout — eliminates the 10–40 s reload tax on the first call after a pause.
+- **`OllamaOptions.Stop`**: stop-token array plumbed through the request payload.
 - **Cross-CLI MRCR benchmark drivers**: `CodexCliModelClient` (spawns `codex exec -o <tempfile>`) and `GeminiCliModelClient` (spawns `gemini -p ""` with stdin prompt) join the existing `ClaudeCliModelClient`. Each charges against the vendor subscription, not API keys. New `CliExecutableResolver` probes PATH for `.exe`/`.cmd`/`.bat` variants so npm-installed CLI shims on Windows resolve correctly. UTF-8 stdin/stdout encoding is now forced across all three clients (fixes codex's "input is not valid UTF-8 at offset N" failure on prompts containing emoji).
 - **Cross-CLI 8-needle comparison (2026-04-19, n=25 stratified)**:
     - gemini-cli/gemini-2.5-pro: **0.994 sim / 100% pass**
@@ -32,6 +37,9 @@ All notable changes to this project will be documented in this file.
   - New `claude-cli` provider in `AgentOutcomeModelClientFactory` shells out to `claude -p --model <name>` with prompts piped over stdin (bypasses shell-argument-length limits on 128K contexts).
   - Dataset loader + HF download recipe in `benchmarks/datasets/mrcr-v2/README.md` (dataset is gitignored).
   - Methodology, usage, and interpretation guide in `docs/benchmarks-mrcr.md`.
+
+### Fixed
+- **`publish-nuget.ps1` test filter** now excludes `LiveBenchmark` and `T2Benchmark` traits alongside `MSA`, so live-Ollama benchmark tests (`DeepSeekBenchmarkRun`, `ReasoningBenchmarkRun`, `T2LiveBenchmarkRun`, `T2BenchmarkRun`) no longer run on every publish and hit 120 s HttpClient timeouts.
 
 ## [0.7.0] - 2026-04-16
 
