@@ -72,13 +72,21 @@ public sealed class CognitiveIndex : IDisposable
     /// Throws <see cref="ObjectDisposedException"/> if Dispose has run (or begins to run
     /// during this call), including the TOCTOU window between the pre-check and
     /// GetOrAdd. A just-created-then-orphaned lock is disposed inline so nothing leaks.
+    ///
+    /// Hot path (ns already in the dict): one TryGetValue, zero allocations.
+    /// Cold path (first use of a ns): one RWLS allocation, race-safe publication.
     /// </summary>
     private ReaderWriterLockSlim NsLock(string ns)
     {
         if (Volatile.Read(ref _disposedFlag) != 0)
             throw new ObjectDisposedException(nameof(CognitiveIndex));
 
-        // Create-then-publish pattern so we can reclaim a lock we created if Dispose
+        // Fast path — the lock is already published. Avoids a RWLS allocation
+        // on every single-ns operation after the first.
+        if (_nsLocks.TryGetValue(ns, out var existing))
+            return existing;
+
+        // Cold path — create-then-publish so we can reclaim our own lock if Dispose
         // races with us between the pre-check and publication.
         var created = new ReaderWriterLockSlim();
         var published = _nsLocks.GetOrAdd(ns, created);
@@ -930,6 +938,16 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitWriteLock(); }
     }
 
+    /// <summary>
+    /// Release per-namespace locks. Per the standard <see cref="IDisposable"/> contract,
+    /// the caller is responsible for ensuring no in-flight operations are still
+    /// executing on this index when Dispose is called — a thread holding a per-ns
+    /// lock during Dispose would cause <see cref="ReaderWriterLockSlim.Dispose"/> to
+    /// throw <see cref="SynchronizationLockException"/>. Dispose is safe against
+    /// concurrent Dispose callers (once-and-only-once) and against racing NsLock
+    /// callers (they throw <see cref="ObjectDisposedException"/> before touching a
+    /// torn-down lock).
+    /// </summary>
     public void Dispose()
     {
         // Atomic once-and-only-once transition via Interlocked.Exchange. Concurrent
