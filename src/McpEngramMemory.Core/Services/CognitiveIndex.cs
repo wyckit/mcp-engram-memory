@@ -391,18 +391,40 @@ public sealed class CognitiveIndex : IDisposable
         float[] query, IReadOnlyList<string> namespaces, string? queryText = null,
         int k = 5, float minScore = 0f, string? category = null,
         HashSet<string>? includeStates = null, bool hybrid = false,
-        bool rerank = false, int rrfK = 60, bool summaryFirst = false)
+        bool rerank = false, int rrfK = 60, bool summaryFirst = false,
+        bool diversity = false, float diversityLambda = 0.5f)
     {
         if (namespaces.Count == 0)
             return Array.Empty<Models.CrossSearchResult>();
 
-        // Search each namespace independently
+        // Search each namespace independently. When diversity is requested we route
+        // through the SearchRequest path to pick up cluster-aware MMR reranking;
+        // otherwise we keep the fast hybrid/vector path for backward compat.
         var allRanked = new Dictionary<string, (Models.CrossSearchResult Result, float RrfScore)>();
 
         foreach (var ns in namespaces)
         {
             IReadOnlyList<CognitiveSearchResult> nsResults;
-            if (hybrid && queryText is not null)
+            if (diversity)
+            {
+                nsResults = Search(new SearchRequest
+                {
+                    Query = query,
+                    Namespace = ns,
+                    QueryText = queryText,
+                    K = k,
+                    MinScore = minScore,
+                    Category = category,
+                    IncludeStates = includeStates,
+                    Hybrid = hybrid && queryText is not null,
+                    Rerank = rerank,
+                    RrfK = rrfK,
+                    SummaryFirst = summaryFirst,
+                    Diversity = true,
+                    DiversityLambda = diversityLambda,
+                });
+            }
+            else if (hybrid && queryText is not null)
             {
                 nsResults = HybridSearch(query, queryText, ns, k, minScore, category, includeStates, rerank, rrfK);
             }

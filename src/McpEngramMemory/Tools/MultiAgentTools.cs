@@ -39,7 +39,10 @@ public sealed class MultiAgentTools
 
     [McpServerTool(Name = "cross_search")]
     [Description("Search multiple namespaces in one call with RRF-merged results. " +
-        "Use when information may span multiple knowledge domains. Supports hybrid search and reranking.")]
+        "Use when information may span multiple knowledge domains. Supports hybrid search, reranking, " +
+        "cluster-aware MMR diversity, min-score filtering, and category filtering. " +
+        "Note: expand_graph, expand_query, use_physics, and temperature are single-namespace features " +
+        "of search_memory and are not yet supported by cross_search.")]
     public object CrossSearch(
         [Description("Comma-separated list of namespaces to search (e.g. 'work,synthesis,mcp-engram-memory').")] string namespaces,
         [Description("The text query to search for.")] string text,
@@ -47,7 +50,11 @@ public sealed class MultiAgentTools
         [Description("When true, use hybrid BM25+vector search (default: false).")] bool hybrid = false,
         [Description("When true, apply token-level reranking (default: false).")] bool rerank = false,
         [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null,
-        [Description("Prioritize cluster summaries over individual members (default: false).")] bool summaryFirst = false)
+        [Description("Prioritize cluster summaries over individual members (default: false).")] bool summaryFirst = false,
+        [Description("Minimum cosine-similarity score threshold per namespace (default: 0).")] float minScore = 0f,
+        [Description("Filter by category within each namespace (default: null).")] string? category = null,
+        [Description("When true, apply cluster-aware MMR diversity reranking per namespace before RRF merge (default: false).")] bool diversity = false,
+        [Description("Diversity trade-off [0.0-1.0]. 1.0=pure relevance, 0.0=pure diversity (default: 0.5).")] float diversityLambda = 0.5f)
     {
         if (string.IsNullOrWhiteSpace(namespaces))
             return "Error: namespaces must not be empty.";
@@ -70,8 +77,10 @@ public sealed class MultiAgentTools
         var vector = _embedding.Embed(text);
         var results = _index.SearchMultiple(
             vector, accessible, queryText: text, k: k,
+            minScore: minScore, category: category,
             includeStates: states, hybrid: hybrid, rerank: rerank,
-            summaryFirst: summaryFirst);
+            summaryFirst: summaryFirst,
+            diversity: diversity, diversityLambda: diversityLambda);
 
         return new CrossSearchResponse(results, accessible.Count, results.Count);
     }
