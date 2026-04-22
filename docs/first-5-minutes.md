@@ -34,12 +34,18 @@ Add to your MCP client config:
 Paste into your AI assistant (replace the bracketed parts):
 
 ```
-Store a memory about switching from JSON to SQLite for persistence because JSON
-files caused write contention under parallel load in the my-app namespace with
-category decision.
+Use remember to store that we switched from JSON to SQLite for persistence
+because JSON files caused write contention under parallel load. id:
+sqlite-switch-rationale, namespace: my-app, category: decision.
 ```
 
-The AI calls `store_memory` and returns an ID. That memory is now persisted.
+The AI calls the `remember` tool, which:
+- Embeds your text (local ONNX, no network)
+- Blocks near-duplicates (> 0.95 cosine similarity)
+- Auto-links to related memories (> 0.65 cosine similarity)
+- Returns an acknowledgement with the ID
+
+That memory is now persisted to disk.
 
 ## 3. Close and Reopen
 
@@ -50,20 +56,37 @@ Close your current session entirely and start a fresh one. The AI has no memory 
 Paste into the new session:
 
 ```
-Search engram memory for database persistence in the my-app namespace using hybrid search.
+Use recall to find what we decided about database persistence in my-app.
 ```
 
-The AI will find what you stored even if your wording doesn't exactly match — semantic search understands meaning, not just keywords.
+The AI calls `recall`, which searches with hybrid BM25 + vector similarity,
+expands along graph neighbors, and falls back to deep_recall for archived
+entries. Semantic search understands meaning, not just keywords — your
+wording doesn't have to match what you stored.
 
-## 5. You're Done!
+## 5. You're Done
 
-This is the core loop: **store → close → recall**. Everything else (expert routing, lifecycle promotion, clustering, graph links) builds on top of this.
-
-See [docs/mcp-tools-reference.md](mcp-tools-reference.md) for the full tool list.
+That's the core loop: **remember → close → recall**. Everything else
+(expert routing, lifecycle promotion, clustering, multi-agent sharing)
+builds on top of this.
 
 ## What's Next?
 
-- Add `hybrid: true` to search prompts for better keyword + semantic fusion
-- Use `cross_search` to search multiple namespaces at once
-- Try `dispatch_task` for expert routing — describe a problem and let the system find the right knowledge domain
-- See [docs/prompts.md](prompts.md) for power prompts you can copy-paste directly
+- **`reflect`** — at the end of a work session, call `reflect` with a short
+  retrospective. It auto-stores as LTM (long-term memory), auto-links to
+  related entries, and surfaces past reflections on the same topic.
+- **`dispatch_task`** — describe a problem without specifying a namespace;
+  the system picks the expert whose domain matches.
+- **`cross_search`** — search across multiple namespaces in one call with
+  RRF-merged results. Handy when a question spans several projects.
+- **Multi-agent sharing** — set `AGENT_ID=my-agent` as an env var on the
+  server process, grant access via `share_namespace`, inspect with
+  `whoami` / `list_shared`. See [docs/multi-agent.md](multi-agent.md).
+
+## Reference
+
+- **[docs/core-10.md](core-10.md)** — the 10 tools that handle 80% of
+  common tasks, with usage examples and when to reach for each.
+- **[docs/mcp-tools-reference.md](mcp-tools-reference.md)** — full
+  reference for every tool.
+- **[docs/prompts.md](prompts.md)** — power prompts you can copy-paste.
