@@ -4,6 +4,127 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-04-22
+
+Post-v0.8.0 stabilisation. Two bodies of work land under this patch: a
+full per-namespace lock-hierarchy refactor that retires the global
+`ReaderWriterLockSlim` on `CognitiveIndex`, and a focused hygiene pass
+(MSA CI signal, resurrection coverage, error-wrapping on the composite
+tools, Core-10 documentation). No public API removals or renames; the
+sharing surface declared stable in v0.8.0 is unchanged.
+
+### Changed
+- **Per-namespace lock hierarchy on `CognitiveIndex`.** The single
+  process-wide `ReaderWriterLockSlim` is retired and replaced with a
+  `ConcurrentDictionary<string, ReaderWriterLockSlim>` keyed by
+  namespace. Writers to different namespaces run in parallel; readers
+  on namespace A are no longer blocked by writers on namespace B.
+  Id→namespace resolvers (`Get(id)`, `Delete(id)`, `RecordAccess(id)`,
+  `SetLifecycleState`, `SetActivationEnergyAndState`,
+  `SetLifecycleStateBatch`) resolve lock-free via
+  `NamespaceStore._idToNamespace` then acquire only the resolved
+  namespace's lock. `UpsertBatch` groups entries by namespace and
+  locks each once per sub-batch. Cross-namespace reads (`Count`,
+  `GetNamespaces`, `GetAll`, `GetStateCounts(null)`) are now lock-free
+  and rely on ConcurrentDictionary snapshot semantics plus the new
+  Interlocked `TotalCount` counter.
+- **`BM25Index._namespaces` upgraded to `ConcurrentDictionary`** so the
+  outer map is safe against concurrent writers under per-namespace
+  locking. Inner `NamespaceIndex` state remains bounded by the
+  caller's per-namespace write lock.
+- **`NamespaceStore.TotalCount`** is now an `O(1)` Interlocked read
+  backed by an atomic counter maintained by `TrackEntry` /
+  `UntrackEntry` / `RemoveNamespace` / `LoadEntries`.
+  `RemoveNamespace` only removes locator entries that still point at
+  the namespace being deleted — orphaned ids re-upserted to a
+  different namespace keep their locator and count.
+
+### Added
+- **`CognitiveIndex.Dispose` is now idempotent and guarded.** Atomic
+  once-and-only-once transition via `Interlocked.Exchange`; `NsLock`
+  throws `ObjectDisposedException` up front if the index has been
+  disposed, with a create-then-publish pattern so a lock we created
+  doesn't leak if Dispose races between pre-check and publication.
+- **LockHierarchyTests (9 tests).** Structural assertions that prove
+  cross-namespace parallelism, same-namespace serialisation, reader
+  independence, cross-namespace count consistency, deadlock-freedom
+  under 2000-op random stress, UpsertBatch per-group parallelism,
+  post-Dispose `ObjectDisposedException` on every touched method, and
+  the `RemoveNamespace` orphan-locator invariant.
+- **LifecycleEngineTests resurrection coverage (4 new tests).**
+  Resurrection increments `AccessCount`; returned
+  `CognitiveSearchResult` reflects the new `stm` state; multiple
+  archived entries above threshold all resurrect in one call;
+  non-archived entries above threshold stay put.
+- **`docs/core-10.md`** — the 10 tools that cover the typical workflow
+  grouped by usage stage (composite → low-level → multi-agent), plus a
+  "when to reach for what" lookup. Fulfils the P4 adoption item from
+  `priorities-2026-03-25-toward-1.0`.
+
+### Fixed
+- **`LiveAgentOutcomeRegressionTests` was comparing output from two
+  different LLMs.** The hard-coded candidate glob
+  `*-qwen2.5-7b.json` matched the 2026-04-17 qwen run, but the pinned
+  baselines were all `phi3.5:3.8b`. Every "regressed by X%" failure in
+  CI was pure model-variance. Fix derives the candidate model slug
+  from the baseline's `model` field and asserts `baseline.model ==
+  candidate.model` so future drift is caught immediately. With
+  matched models, all three `agent-outcome-*-baseline.json`
+  comparisons pass with zero delta.
+- **`remember` / `recall` / `reflect` composite tools** now validate
+  inputs up front and catch `ArgumentException` /
+  `InvalidOperationException` inside the body, returning
+  `"Error: {message}"` strings consistent with the pattern already in
+  `MultiAgentTools` / `CoreMemoryTools`. Previously these leaked raw
+  stack traces to MCP clients on empty inputs or degenerate
+  embeddings.
+- **Parallel-TFM ONNX model download race (MSB3677).** When a
+  multi-targeted project (net8.0;net9.0;net10.0) built for the first
+  time, three parallel inner builds all downloaded the same model to
+  separate temp files, then raced at `<Move>`. Fix adds `<MakeDir>`,
+  a `Condition="!Exists(dest)"` guard, and
+  `ContinueOnError="WarnAndContinue"` — losing racers no-op silently.
+  Applied to both `build/` and `buildMultiTargeting/` targets so
+  downstream multi-TFM consumers of `McpEngramMemory.Core` get the
+  fix too.
+- **Flaky `T2BenchmarkRun.Dispose`.** Debounced persistence writer
+  could race with the recursive `Directory.Delete` during teardown
+  under ablation mode. Added a short retry loop (5 attempts,
+  50ms→250ms backoff) on `IOException` / `UnauthorizedAccessException`
+  matching the pattern every other test class in the repo uses.
+
+### Documentation
+- `docs/first-5-minutes.md` updated to use the v0.8.0-recommended
+  composite tools (`remember`, `recall`) instead of `store_memory` +
+  low-level hybrid-search. "What's Next" block points to `reflect`,
+  `dispatch_task`, `cross_search`, and multi-agent setup.
+- `NamespaceRegistry.Share` / `Unshare` / `EnsureOwnership` XML docs
+  explicitly state the per-namespace serialisation guarantee from the
+  lost-update race fix in v0.8.0.
+- `CognitiveIndex` class-level XML doc expanded to describe the
+  per-namespace locking contract (single-ns operations hold only the
+  target ns's lock; cross-ns reads are lock-free; events fire after
+  lock release).
+- `CliExecutableResolver` `Process.Start` cref disambiguated to the
+  `(ProcessStartInfo)` overload; `HybridSearchEngine` constants moved
+  out from between `<param>` tags so the XML parser associates them
+  with the right method — 12 compiler warnings eliminated.
+
+### Known gaps (tracked for 0.9.0+)
+- **`BM25Index.NamespaceIndex` inner-state race during out-of-lock
+  `Search`.** Pre-existing HIGH-severity race flagged during PR #3
+  review: `CognitiveIndex.Search` releases the per-ns read lock
+  before calling `_hybridSearch.HybridSearch` → `_bm25.Search`, which
+  reads inner `Dictionary` / `HashSet` / `int` state a concurrent
+  writer can mutate. Not a regression of this release (same pattern
+  existed pre-refactor). Fix deserves a focused PR with before/after
+  concurrent-hybrid-search tests.
+- **Cross-process cache invalidation.** SQLite WAL prevents on-disk
+  corruption, but `NamespaceStore._loadedNamespaces` is a one-shot
+  cache with no cross-process refresh. Design captured in
+  `design-2026-04-21-lock-hierarchy-epoch-protocol` (per-namespace
+  `Epoch` counter persisted to SQLite, evict-on-stale).
+
 ## [0.8.0] - 2026-04-21
 
 Headline: **multi-agent memory sharing is now officially supported.** The

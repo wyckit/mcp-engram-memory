@@ -83,7 +83,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.8.0
+dotnet add package McpEngramMemory.Core --version 0.8.1
 ```
 
 ### Library Usage
