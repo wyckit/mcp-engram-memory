@@ -4,6 +4,83 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-21
+
+Headline: **multi-agent memory sharing is now officially supported.** The
+sharing API surface (`AGENT_ID`, `share_namespace`, `unshare_namespace`,
+`list_shared`, `whoami`, `cross_search`) is declared stable under SemVer
+for the 0.x line — breaking changes to these tools will bump the minor
+version. See `docs/multi-agent.md` for the quick-start and the explicit
+boundaries (single server process per data directory, global write-lock
+throughput ceiling).
+
+### Added
+- **`CognitiveIndex.EntryUpserted` / `EntryDeleted` events**: real-time
+  notification for parallel agents. Events fire **after** the internal
+  write lock is released, so handlers can call back into the index
+  safely. `UpsertBatch` raises one `EntryUpserted` per accepted entry.
+  Enables zero-poll fan-in patterns (see
+  `tests/McpEngramMemory.Tests/ParallelAgentTests.cs::RealtimeSharing_*`).
+- **`cross_search` parameter parity (partial)**: new optional params
+  `minScore`, `category`, `diversity`, `diversityLambda` match
+  `search_memory` defaults. `SearchMultiple` routes through the
+  `SearchRequest` path when `diversity` is requested so cluster-aware
+  MMR reranking applies per namespace before RRF merge.
+  Known gap: `expand_graph`, `expand_query`, `use_physics`, and
+  `temperature` are single-namespace orchestration features that remain
+  exclusive to `search_memory` — documented in `docs/multi-agent.md`.
+- **`docs/multi-agent.md`**: quick-start, permission semantics, live
+  event subscription pattern, explicit v0.8.0 boundaries and
+  troubleshooting.
+- **Parallel-agent test suite** (`ParallelAgentTests.cs`, 9 tests):
+  `ConcurrentShare_PreservesAllGrants` (regression for the lost-update
+  race), `ConcurrentEnsureOwnership_FirstWriterWins`,
+  `ConcurrentCrossSearch_WithShareChurn_NoExceptions`,
+  `ParallelAgents_ConcurrentStoresToOwnNamespaces_NoLostWrites`,
+  `ParallelAgents_ConcurrentWritesToSharedNamespace_AllVisible`,
+  `ConcurrentDuplicateIdInsert_NoTornWrite`,
+  `RealtimeSharing_ReaderObservesWriterEvent`,
+  `RealtimeSharing_FanInFromMultipleWriters_NoDroppedEvents`,
+  `ConcurrentAccessCheck_ConsistentVisibility`.
+- **`tests/McpEngramMemory.Tests/xunit.runner.json`**: enables
+  `parallelizeTestCollections=true` with `maxParallelThreads=4` for
+  deterministic parallel test execution.
+
+### Fixed
+- **Lost-update race in `NamespaceRegistry.Share` / `Unshare` /
+  `EnsureOwnership`**: concurrent grants to the same namespace could
+  silently drop prior grants because the read-modify-write on the
+  permission entry was unsynchronized. Fixed with a per-namespace
+  `ConcurrentDictionary<string, object>` of monitors. Grants to
+  different namespaces stay parallel; grants to the same namespace
+  serialize. Double-checked locking keeps `EnsureOwnership` lock-free
+  on the registered-path. Regression test:
+  `ConcurrentShare_PreservesAllGrants` (32 concurrent shares).
+
+### Documentation
+- **XML doc disambiguation**: `CliExecutableResolver` points its
+  `Process.Start` cref at the `(ProcessStartInfo)` overload (fixes
+  CS0419). `HybridSearchEngine` constants moved out from between the
+  `HybridSearch` method's `<param>` tags and its signature so the 11
+  CS1572 warnings go away; `queryVector` and `entryCount` parameter
+  docs added.
+- **API stability declaration** for the multi-agent sharing surface
+  in `docs/multi-agent.md` (v0.8.0 boundary note).
+
+### Known gaps (tracked for 0.8.1 / 0.9.0)
+- **Namespace-partitioned write locks on `CognitiveIndex`**: the
+  existing single `ReaderWriterLockSlim` gates all writers across all
+  namespaces. Research for the refactor (BM25Index ConcurrentDictionary
+  upgrade, `_idToNamespace` coordination, per-ns RWL) is complete but
+  out of scope for 0.8.0; a future release will lift the
+  single-process-writer ceiling.
+- **Cross-process sharing**: SQLite WAL prevents on-disk corruption
+  across processes, but `NamespaceStore._loadedNamespaces` is a
+  one-shot cache with no cross-process invalidation. One
+  `mcp-engram-memory` server process per data directory remains the
+  supported topology; a later release will add a version-counter-based
+  refresh protocol.
+
 ## [0.7.1] - 2026-04-20
 
 ### Added

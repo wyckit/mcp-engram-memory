@@ -6,8 +6,8 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.7.1-blue" alt="GitHub Packages"/></a>
-  <img src="https://img.shields.io/badge/tests-865%20non--MSA-brightgreen" alt="Tests"/>
+  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.8.0-blue" alt="GitHub Packages"/></a>
+  <img src="https://img.shields.io/badge/tests-902%20non--MSA-brightgreen" alt="Tests"/>
   <img src="https://img.shields.io/badge/MCP%20tools-55-blue" alt="MCP Tools"/>
 </p>
 
@@ -67,7 +67,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 4 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.7.1
+dotnet add package McpEngramMemory.Core --version 0.8.0
 ```
 
 > First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.
@@ -206,10 +206,10 @@ The core engine is available as a NuGet package for embedding in your own .NET a
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 0.7.1
+dotnet add package McpEngramMemory.Core --version 0.8.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 0.7.1 \
+dotnet add package McpEngramMemory.Core --version 0.8.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
