@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 
 namespace McpEngramMemory.Core.Services.Sharing;
@@ -17,6 +18,15 @@ public sealed class NamespaceRegistry
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
 
+    // Per-namespace locks serialize read-modify-write on permission entries
+    // (Share/Unshare/EnsureOwnership) so concurrent grants don't overwrite each
+    // other. Keyed by target namespace — grants to different namespaces stay
+    // parallel; grants to the same namespace serialize through one monitor.
+    private readonly ConcurrentDictionary<string, object> _permissionLocks = new();
+
+    private object LockFor(string ns) =>
+        _permissionLocks.GetOrAdd(ns, _ => new object());
+
     public NamespaceRegistry(CognitiveIndex index, IEmbeddingService embedding)
     {
         _index = index;
@@ -31,22 +41,25 @@ public sealed class NamespaceRegistry
         if (accessLevel is not ("read" or "write"))
             return new ShareResult("error", ns, targetAgentId, accessLevel);
 
-        var permission = GetOrCreatePermission(ns, ownerAgentId);
+        lock (LockFor(ns))
+        {
+            var permission = GetOrCreatePermissionUnlocked(ns, ownerAgentId);
 
-        // Check ownership (default agent bypasses ownership checks for backward compat)
-        if (permission.Owner != ownerAgentId && ownerAgentId != AgentIdentity.DefaultAgentId)
-            return new ShareResult("error_not_owner", ns, targetAgentId, accessLevel);
+            // Check ownership (default agent bypasses ownership checks for backward compat)
+            if (permission.Owner != ownerAgentId && ownerAgentId != AgentIdentity.DefaultAgentId)
+                return new ShareResult("error_not_owner", ns, targetAgentId, accessLevel);
 
-        // Update sharing list
-        var grants = permission.SharedWith.ToList();
-        var existing = grants.FindIndex(g => g.AgentId == targetAgentId);
-        if (existing >= 0)
-            grants[existing] = new ShareGrant(targetAgentId, accessLevel);
-        else
-            grants.Add(new ShareGrant(targetAgentId, accessLevel));
+            // Update sharing list
+            var grants = permission.SharedWith.ToList();
+            var existing = grants.FindIndex(g => g.AgentId == targetAgentId);
+            if (existing >= 0)
+                grants[existing] = new ShareGrant(targetAgentId, accessLevel);
+            else
+                grants.Add(new ShareGrant(targetAgentId, accessLevel));
 
-        SavePermission(ns, permission.Owner, grants);
-        return new ShareResult("shared", ns, targetAgentId, accessLevel);
+            SavePermission(ns, permission.Owner, grants);
+            return new ShareResult("shared", ns, targetAgentId, accessLevel);
+        }
     }
 
     /// <summary>
@@ -54,16 +67,19 @@ public sealed class NamespaceRegistry
     /// </summary>
     public ShareResult Unshare(string ns, string ownerAgentId, string targetAgentId)
     {
-        var permission = GetPermission(ns);
-        if (permission is null)
-            return new ShareResult("error_not_found", ns, targetAgentId, "none");
+        lock (LockFor(ns))
+        {
+            var permission = GetPermission(ns);
+            if (permission is null)
+                return new ShareResult("error_not_found", ns, targetAgentId, "none");
 
-        if (permission.Owner != ownerAgentId)
-            return new ShareResult("error_not_owner", ns, targetAgentId, "none");
+            if (permission.Owner != ownerAgentId)
+                return new ShareResult("error_not_owner", ns, targetAgentId, "none");
 
-        var grants = permission.SharedWith.Where(g => g.AgentId != targetAgentId).ToList();
-        SavePermission(ns, permission.Owner, grants);
-        return new ShareResult("unshared", ns, targetAgentId, "none");
+            var grants = permission.SharedWith.Where(g => g.AgentId != targetAgentId).ToList();
+            SavePermission(ns, permission.Owner, grants);
+            return new ShareResult("unshared", ns, targetAgentId, "none");
+        }
     }
 
     /// <summary>
@@ -151,10 +167,14 @@ public sealed class NamespaceRegistry
     {
         if (ns.StartsWith('_')) return; // System namespaces not tracked
 
-        var existing = GetPermission(ns);
-        if (existing is not null) return; // Already registered
+        // Double-checked: fast path avoids acquiring the per-ns lock once registered.
+        if (GetPermission(ns) is not null) return;
 
-        SavePermission(ns, agentId, Array.Empty<ShareGrant>());
+        lock (LockFor(ns))
+        {
+            if (GetPermission(ns) is not null) return; // Another thread registered first
+            SavePermission(ns, agentId, Array.Empty<ShareGrant>());
+        }
     }
 
     private NamespacePermission? GetPermission(string ns)
@@ -168,7 +188,8 @@ public sealed class NamespaceRegistry
         return new NamespacePermission(ns, owner, ParseGrants(grantsStr));
     }
 
-    private NamespacePermission GetOrCreatePermission(string ns, string ownerAgentId)
+    // Caller must hold LockFor(ns). Used by Share when the per-ns lock is already held.
+    private NamespacePermission GetOrCreatePermissionUnlocked(string ns, string ownerAgentId)
     {
         var existing = GetPermission(ns);
         if (existing is not null) return existing;

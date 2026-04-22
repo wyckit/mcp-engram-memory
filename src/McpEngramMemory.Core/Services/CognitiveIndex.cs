@@ -29,6 +29,20 @@ public sealed class CognitiveIndex : IDisposable
     private readonly QueryExpander _queryExpander = new();
     private readonly MemoryLimitsConfig _limits;
 
+    /// <summary>
+    /// Fires after an entry is successfully upserted (after the write lock is released).
+    /// Parallel readers/agents can subscribe to observe new memories in real time without polling.
+    /// Raised once per entry for both Upsert and UpsertBatch.
+    /// Handlers run synchronously on the writer's thread — keep them cheap or offload.
+    /// </summary>
+    public event EventHandler<CognitiveEntry>? EntryUpserted;
+
+    /// <summary>
+    /// Fires after an entry is successfully deleted (after the write lock is released).
+    /// Carries (namespace, id) so subscribers don't need to hold a stale entry reference.
+    /// </summary>
+    public event EventHandler<(string Namespace, string Id)>? EntryDeleted;
+
     public CognitiveIndex(IStorageProvider persistence, MemoryLimitsConfig? limits = null)
     {
         _store = new NamespaceStore(persistence, _bm25);
@@ -112,6 +126,9 @@ public sealed class CognitiveIndex : IDisposable
             _store.ScheduleEntryUpsert(entry.Ns, entry);
         }
         finally { _lock.ExitWriteLock(); }
+
+        // Fire event after lock release so handlers can call back into the index safely.
+        EntryUpserted?.Invoke(this, entry);
     }
 
     /// <summary>Batch upsert entries with a single write-lock acquisition.</summary>
@@ -159,6 +176,14 @@ public sealed class CognitiveIndex : IDisposable
         }
         finally { _lock.ExitWriteLock(); }
 
+        // Fire events after lock release, one per accepted entry.
+        var handler = EntryUpserted;
+        if (handler is not null)
+        {
+            for (int i = 0; i < count; i++)
+                handler(this, prepared[i].Entry);
+        }
+
         return count;
     }
 
@@ -197,6 +222,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Delete an entry by ID, searching all namespaces.</summary>
     public bool Delete(string id)
     {
+        string? deletedFromNs = null;
         _lock.EnterWriteLock();
         try
         {
@@ -210,11 +236,17 @@ public sealed class CognitiveIndex : IDisposable
                 _store.RemoveBM25(id, ns);
                 _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id);
-                return true;
+                deletedFromNs = ns;
             }
-            return false;
         }
         finally { _lock.ExitWriteLock(); }
+
+        if (deletedFromNs is not null)
+        {
+            EntryDeleted?.Invoke(this, (deletedFromNs, id));
+            return true;
+        }
+        return false;
     }
 
     // ── Search ──
