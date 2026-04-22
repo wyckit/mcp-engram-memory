@@ -13,12 +13,16 @@
     <PackageId>McpEngramMemory.Core</PackageId>
     <Version>0.8.1</Version>
     <Authors>wyckit</Authors>
+    <Company>wyckit</Company>
+    <Copyright>Copyright (c) 2026 WyckIt</Copyright>
     <Description>Cognitive engram memory engine with semantic search, knowledge graphs, clustering, lifecycle management, and hierarchical expert routing (HMoE). Core library for MCP Engram Memory.</Description>
     <PackageTags>mcp;engram;vector;memory;embeddings;semantic-search;knowledge-graph;expert-routing;hmoe</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/wyckit/mcp-engram-memory</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>

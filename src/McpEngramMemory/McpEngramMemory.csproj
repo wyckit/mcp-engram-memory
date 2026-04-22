@@ -14,12 +14,16 @@
     <PackageId>McpEngramMemory</PackageId>
     <Version>0.8.1</Version>
     <Authors>wyckit</Authors>
+    <Company>wyckit</Company>
+    <Copyright>Copyright (c) 2026 WyckIt</Copyright>
     <Description>Cognitive memory MCP server with vector search, knowledge graph, lifecycle management, and hierarchical expert routing. Install as a dotnet global tool for single-line setup.</Description>
     <PackageTags>mcp;engram;memory;ai;vector-search;knowledge-graph;expert-routing;model-context-protocol;dotnet-tool</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/wyckit/mcp-engram-memory</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

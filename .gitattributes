@@ -1,0 +1,41 @@
+# Normalize line endings on checkin and checkout
+* text=auto eol=lf
+
+# Explicit text files
+*.cs          text eol=lf diff=csharp
+*.csproj      text eol=lf
+*.props       text eol=lf
+*.targets     text eol=lf
+*.slnx        text eol=lf
+*.json        text eol=lf
+*.md          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.txt         text eol=lf
+.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore    text eol=lf
+
+# Shell scripts must stay LF even on Windows checkouts
+*.sh          text eol=lf
+
+# PowerShell scripts stay CRLF for Windows tooling
+*.ps1         text eol=crlf
+*.psm1        text eol=crlf
+*.psd1        text eol=crlf
+
+# Binary assets — no diff, no merge
+*.png         binary
+*.jpg         binary
+*.jpeg        binary
+*.gif         binary
+*.ico         binary
+*.pdf         binary
+*.zip         binary
+*.nupkg       binary
+*.onnx        binary
+*.bin         binary
+
+# Large / generated artifacts — hide from diff summaries
+benchmarks/**/*.json  -diff
+*.snap                -diff linguist-generated=true
