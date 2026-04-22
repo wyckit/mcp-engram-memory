@@ -63,26 +63,50 @@ public class LiveAgentOutcomeRegressionTests : IDisposable
 
         string baselinePath = Path.Combine(root, baselineRelativePath);
         string latestDir = Path.Combine(root, "benchmarks", "2026-04-17");
-        
+
         if (!Directory.Exists(latestDir)) return;
 
-        string pattern = $"{datasetId}-live-agent-outcome-ollama-qwen2.5-7b.json";
+        // Derive candidate model from the baseline so we never compare apples-to-oranges.
+        // Prior bug: candidate glob hard-coded "qwen2.5-7b" while baselines were generated
+        // with phi3.5:3.8b — every "regression" was pure model-variance between two
+        // different LLMs. The model-match assertion below locks this down.
+        string baselineModel;
+        using (var baselineDoc = JsonDocument.Parse(File.ReadAllText(baselinePath)))
+        {
+            baselineModel = baselineDoc.RootElement.GetProperty("model").GetString()!;
+        }
+
+        // Filename slug uses '-' in place of the model-tag ':' (e.g. "phi3.5:3.8b" → "phi3.5-3.8b").
+        string modelSlug = baselineModel.Replace(':', '-');
+        string pattern = $"{datasetId}-live-agent-outcome-ollama-{modelSlug}.json";
         string? candidatePath = Directory.GetFiles(latestDir, pattern).FirstOrDefault();
 
         if (candidatePath == null)
         {
-            // Skip if no candidate found for comparison
+            // Skip if no candidate found for this model in the latest run — baseline
+            // model may not have been re-run. Not a regression signal.
             return;
         }
 
-        // We allow 2% success regression and 5% pass rate regression for model variance
+        // Apples-to-apples: baseline and candidate MUST share the same LLM. Catches
+        // future drift where someone updates the baseline model without regenerating
+        // matching candidates.
+        string candidateModel;
+        using (var candidateDoc = JsonDocument.Parse(File.ReadAllText(candidatePath)))
+        {
+            candidateModel = candidateDoc.RootElement.GetProperty("model").GetString()!;
+        }
+        Assert.Equal(baselineModel, candidateModel);
+
+        // We allow 2% success regression and 5% pass rate regression for stochastic
+        // run-to-run variance on the SAME model.
         var result = _tools.CheckForRegression(
-            baselinePath, 
-            candidatePath, 
-            successThreshold: 0.02f, 
+            baselinePath,
+            candidatePath,
+            successThreshold: 0.02f,
             passRateThreshold: 0.05f);
 
-        Assert.True(result.Status == "passed" || result.Status == "completed", 
-            $"Regression detected for {datasetId}: {result.Message}");
+        Assert.True(result.Status == "passed" || result.Status == "completed",
+            $"Regression detected for {datasetId} ({baselineModel}): {result.Message}");
     }
 }
