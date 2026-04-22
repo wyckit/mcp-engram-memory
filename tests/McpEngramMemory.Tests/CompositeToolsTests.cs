@@ -213,6 +213,34 @@ public class CompositeToolsTests : IDisposable
         Assert.Equal("stored", result!.Status);
     }
 
+    // ── input-validation: empty inputs return friendly "Error: ..." strings instead of throwing ──
+
+    [Fact]
+    public void Remember_EmptyInputs_ReturnsFriendlyError()
+    {
+        Assert.Equal("Error: id must not be empty.", _tools.Remember("", "ns", "text"));
+        Assert.Equal("Error: ns must not be empty.", _tools.Remember("id", "", "text"));
+        Assert.Equal("Error: text must not be empty.", _tools.Remember("id", "ns", ""));
+        Assert.Equal("Error: id must not be empty.", _tools.Remember("   ", "ns", "text"));
+    }
+
+    [Fact]
+    public void Recall_EmptyInputs_ReturnsFriendlyError()
+    {
+        Assert.Equal("Error: query must not be empty.", _tools.Recall(""));
+        Assert.Equal("Error: query must not be empty.", _tools.Recall("  "));
+        Assert.Equal("Error: k must be positive.", _tools.Recall("hello", k: 0));
+        Assert.Equal("Error: k must be positive.", _tools.Recall("hello", k: -1));
+    }
+
+    [Fact]
+    public void Reflect_EmptyInputs_ReturnsFriendlyError()
+    {
+        Assert.Equal("Error: text must not be empty.", _tools.Reflect("", "ns", "topic"));
+        Assert.Equal("Error: ns must not be empty.", _tools.Reflect("text", "", "topic"));
+        Assert.Equal("Error: topic must not be empty.", _tools.Reflect("text", "ns", ""));
+    }
+
     public void Dispose()
     {
         _index.Dispose();

@@ -51,10 +51,16 @@ public sealed class CompositeTools
         [Description("Optional metadata as key-value pairs.")] Dictionary<string, string>? metadata = null,
         [Description("Lifecycle state: 'stm' (default) or 'ltm' for stable knowledge.")] string? lifecycleState = null)
     {
+        if (string.IsNullOrWhiteSpace(id)) return "Error: id must not be empty.";
+        if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
+        if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
+
         using var timer = _metrics.StartTimer("remember");
         var state = lifecycleState ?? "stm";
         var actions = new List<string>();
 
+        try
+        {
         // 1. Embed with contextual prefix
         var prefix = BenchmarkRunner.BuildContextualPrefix(ns, category);
         var vector = _embedding.Embed(prefix + text);
@@ -105,6 +111,9 @@ public sealed class CompositeTools
         return new RememberResult("stored", id, ns,
             $"Remembered '{id}' in '{ns}'. Actions: {string.Join(", ", actions)}.",
             actions, warnings.Length > 0 ? warnings : null);
+        }
+        catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
+        catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
     }
 
     [McpServerTool(Name = "recall")]
@@ -119,9 +128,18 @@ public sealed class CompositeTools
         [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
         [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true)
     {
+        if (string.IsNullOrWhiteSpace(query)) return "Error: query must not be empty.";
+        if (k <= 0) return "Error: k must be positive.";
+
         using var timer = _metrics.StartTimer("recall");
-        var vector = _embedding.Embed(query);
+        float[] vector;
+        try { vector = _embedding.Embed(query); }
+        catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
+        catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
         var strategy = "direct";
+
+        try
+        {
 
         // Strategy 1: If namespace provided, search directly with optional hybrid + graph expansion
         if (ns is not null)
@@ -187,6 +205,9 @@ public sealed class CompositeTools
         var sorted = allResults.OrderByDescending(r => r.Score).Take(k).ToList();
         return new RecallResult("broadcast", null, sorted,
             $"Searched {namespaces.Count} namespace(s), no expert match");
+        }
+        catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
+        catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
     }
 
     [McpServerTool(Name = "reflect")]
@@ -197,9 +218,15 @@ public sealed class CompositeTools
         [Description("Brief topic identifier for the reflection (e.g. 'architecture-decomposition', 'dll-lock-debugging').")] string topic,
         [Description("IDs of specific memories this reflection relates to (auto-linked).")] string[]? relatedIds = null)
     {
+        if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
+        if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
+        if (string.IsNullOrWhiteSpace(topic)) return "Error: topic must not be empty.";
+
         using var timer = _metrics.StartTimer("reflect");
         var actions = new List<string>();
 
+        try
+        {
         // 1. Generate ID
         var id = $"retro-{DateTimeOffset.UtcNow:yyyy-MM-dd}-{topic}";
 
@@ -262,6 +289,9 @@ public sealed class CompositeTools
         return new ReflectResult("stored", id, ns,
             $"Reflected on '{topic}'. Actions: {string.Join(", ", actions)}.",
             actions, pastReflections.Count > 0 ? pastReflections : null);
+        }
+        catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
+        catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
     }
 
     [McpServerTool(Name = "get_context_block")]
