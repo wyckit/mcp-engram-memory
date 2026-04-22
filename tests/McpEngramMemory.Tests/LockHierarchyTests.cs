@@ -33,49 +33,59 @@ public class LockHierarchyTests : IDisposable
     // ── 1. Cross-namespace write parallelism ──────────────────────────────────
 
     /// <summary>
-    /// A writer holding ns=A's write lock must NOT block a concurrent writer on ns=B.
-    /// We hold A's write lock by subscribing an EntryUpserted handler that stalls the
-    /// FIRST callback (post-lock-release but still on the writer thread) — no, that
-    /// only blocks the thread, not the lock. Instead, we take A's write lock ourselves
-    /// via reflection-free means: use GetAllInNamespace in a loop from a second thread
-    /// while the writer is churning — and the writer on ns=B must complete quickly.
+    /// Two orthogonal signals in one test:
     ///
-    /// Simpler signal: 8 parallel Upsert calls to 8 different namespaces must complete
-    /// in roughly the same wall time as a single Upsert. If there were a global write
-    /// lock they would serialize to ~8x. We assert they complete within a generous
-    /// 3x-single bound to avoid flakiness while still catching the regression.
+    /// 1. Events fire AFTER the per-ns write lock is released. We verify this by
+    ///    parking the ns=A handler on a gate: if events fired INSIDE the lock,
+    ///    ns=A's lock would still be held, but since events fire AFTER release
+    ///    an ns=B writer is free to grab its own (independent) lock immediately.
+    ///
+    /// 2. Per-ns locks are independent. The ns=B writer proceeds while the ns=A
+    ///    writer is parked post-lock-release; if they shared a lock, the ns=B
+    ///    writer would block waiting for ns=A to finish (which cannot happen
+    ///    until the gate opens). This only fully discriminates if callers ever
+    ///    interleave writer + handler; in practice the stronger proof of lock
+    ///    independence comes from ConcurrentWrites_SameNamespace_Serialize +
+    ///    UpsertBatch_MixedNamespaces_ParallelizesByGroup + RandomOps_*.
     /// </summary>
     [Fact]
-    public async Task ConcurrentWrites_AcrossDifferentNamespaces_Parallelize()
+    public async Task Events_FireAfterLockRelease_DoNotBlockOtherNamespaceWrites()
     {
-        // Warm up — first call may pay embedding/jit cost
-        _index.Upsert(MakeEntry("warm", "warm-ns", "warm up"));
-        _index.Delete("warm");
+        using var gate = new ManualResetEventSlim(false);
+        using var aReached = new ManualResetEventSlim(false);
+        int stalledNs = 0;
 
-        // Baseline: one Upsert to one ns
-        var sw = Stopwatch.StartNew();
-        _index.Upsert(MakeEntry("solo", "solo-ns", "solo write"));
-        sw.Stop();
-        var singleMs = sw.Elapsed.TotalMilliseconds;
+        void Handler(object? sender, CognitiveEntry e)
+        {
+            if (e.Ns == "ns-a" && Interlocked.Exchange(ref stalledNs, 1) == 0)
+            {
+                aReached.Set();
+                gate.Wait(TimeSpan.FromSeconds(5));
+            }
+        }
 
-        // 8 parallel Upserts to 8 different namespaces
-        sw.Restart();
-        var tasks = Enumerable.Range(0, 8).Select(i => Task.Run(() =>
-            _index.Upsert(MakeEntry($"p{i}", $"par-{i}-ns", $"parallel {i}")))).ToArray();
-        await Task.WhenAll(tasks);
-        sw.Stop();
-        var parallelMs = sw.Elapsed.TotalMilliseconds;
+        _index.EntryUpserted += Handler;
+        try
+        {
+            var aTask = Task.Run(() => _index.Upsert(MakeEntry("a-1", "ns-a", "A content")));
+            Assert.True(aReached.Wait(TimeSpan.FromSeconds(2)), "ns-a writer did not reach handler");
 
-        // Under a global lock, parallelMs would approach 8 * singleMs. Under per-ns
-        // locks, it should be bounded by thread-pool scheduling overhead — typically
-        // 1-3x singleMs. Use a generous 6x bound: still proves parallelism, tolerates
-        // CI flakiness. (Pure serial would be ~8x.)
-        Assert.True(parallelMs < Math.Max(50, singleMs * 6),
-            $"Expected cross-ns parallelism but parallel={parallelMs:F1}ms exceeded 6x single={singleMs:F1}ms");
+            // A is parked in its handler — its lock is already released. B must proceed.
+            var bTask = Task.Run(() => _index.Upsert(MakeEntry("b-1", "ns-b", "B content")));
+            Assert.True(bTask.Wait(TimeSpan.FromSeconds(2)),
+                "ns-b writer blocked while ns-a was in its event handler — either events fire inside the lock, or per-ns locks are not independent");
 
-        // And all 8 must be committed.
-        for (int i = 0; i < 8; i++)
-            Assert.NotNull(_index.Get($"p{i}", $"par-{i}-ns"));
+            gate.Set();
+            await aTask;
+
+            Assert.NotNull(_index.Get("a-1", "ns-a"));
+            Assert.NotNull(_index.Get("b-1", "ns-b"));
+        }
+        finally
+        {
+            gate.Set();
+            _index.EntryUpserted -= Handler;
+        }
     }
 
     /// <summary>
@@ -273,9 +283,41 @@ public class LockHierarchyTests : IDisposable
             index.Upsert(MakeEntry($"d-{i}", $"dispose-ns-{i}", $"d{i}"));
 
         // Should complete without exception even after heavy namespace creation.
+        // Second Dispose must be a no-op (idempotent).
+        index.Dispose();
         index.Dispose();
         persistence.Dispose();
 
+        try { Directory.Delete(dataPath, recursive: true); } catch { }
+    }
+
+    /// <summary>
+    /// After Dispose, any method that needs a per-ns lock must throw
+    /// ObjectDisposedException rather than reaching into a torn-down
+    /// ReaderWriterLockSlim. The volatile _disposed flag is set BEFORE locks are
+    /// torn down so a racing caller gets a clean exception instead of a hard
+    /// failure from deep inside ReaderWriterLockSlim.
+    /// </summary>
+    [Fact]
+    public void Operations_AfterDispose_ThrowObjectDisposedException()
+    {
+        var dataPath = Path.Combine(Path.GetTempPath(), $"lockhier_afterdispose_{Guid.NewGuid():N}");
+        var persistence = new PersistenceManager(dataPath);
+        var index = new CognitiveIndex(persistence);
+
+        // Prime a namespace so its lock exists in _nsLocks.
+        index.Upsert(MakeEntry("primed", "primed-ns", "before dispose"));
+        index.Dispose();
+
+        // A representative sample of methods that must all fail cleanly.
+        Assert.Throws<ObjectDisposedException>(() =>
+            index.Upsert(MakeEntry("late", "primed-ns", "after dispose")));
+        Assert.Throws<ObjectDisposedException>(() => index.CountInNamespace("primed-ns"));
+        Assert.Throws<ObjectDisposedException>(() => index.Get("primed", "primed-ns"));
+        Assert.Throws<ObjectDisposedException>(() => index.Delete("primed"));
+        Assert.Throws<ObjectDisposedException>(() => index.GetAllInNamespace("primed-ns"));
+
+        persistence.Dispose();
         try { Directory.Delete(dataPath, recursive: true); } catch { }
     }
 

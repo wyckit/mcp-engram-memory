@@ -34,6 +34,7 @@ public sealed class CognitiveIndex : IDisposable
 
     private readonly NamespaceStore _store;
     private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _nsLocks = new();
+    private volatile bool _disposed;
     private readonly BM25Index _bm25 = new();
     private readonly TokenReranker _reranker = new();
     private readonly VectorSearchEngine _vectorSearch = new();
@@ -67,9 +68,16 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>
     /// Get or lazily create the ReaderWriterLockSlim for a namespace. Lock-free lookup
     /// via ConcurrentDictionary.GetOrAdd — callers never coordinate on creation.
+    /// Throws <see cref="ObjectDisposedException"/> if the index has been disposed,
+    /// so callers racing with Dispose get a clean error instead of an
+    /// ObjectDisposedException from a torn-down lock.
     /// </summary>
     private ReaderWriterLockSlim NsLock(string ns)
-        => _nsLocks.GetOrAdd(ns, _ => new ReaderWriterLockSlim());
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(CognitiveIndex));
+        return _nsLocks.GetOrAdd(ns, _ => new ReaderWriterLockSlim());
+    }
 
     // ── Counts + Metadata ──
 
@@ -899,6 +907,13 @@ public sealed class CognitiveIndex : IDisposable
 
     public void Dispose()
     {
+        // Set the disposed flag BEFORE tearing down locks so any NsLock(ns) call
+        // racing with Dispose sees the flag and throws ObjectDisposedException up
+        // front instead of calling Enter*Lock on an already-disposed RWLS. The
+        // flag is volatile so the write is immediately visible to other threads.
+        if (_disposed) return;
+        _disposed = true;
+
         foreach (var kv in _nsLocks)
             kv.Value.Dispose();
         _nsLocks.Clear();
