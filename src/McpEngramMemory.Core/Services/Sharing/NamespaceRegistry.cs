@@ -34,7 +34,9 @@ public sealed class NamespaceRegistry
     }
 
     /// <summary>
-    /// Grant an agent access to a namespace. Creates permission entry if it doesn't exist.
+    /// Grant an agent access to a namespace. Creates the permission entry if it doesn't exist.
+    /// Thread-safe: concurrent Share calls to the same namespace are serialized by a per-namespace
+    /// monitor, so grants cannot overwrite one another. Calls to different namespaces stay parallel.
     /// </summary>
     public ShareResult Share(string ns, string ownerAgentId, string targetAgentId, string accessLevel)
     {
@@ -64,6 +66,7 @@ public sealed class NamespaceRegistry
 
     /// <summary>
     /// Revoke an agent's access to a namespace.
+    /// Thread-safe under the same per-namespace serialization as <see cref="Share"/>.
     /// </summary>
     public ShareResult Unshare(string ns, string ownerAgentId, string targetAgentId)
     {
@@ -162,6 +165,9 @@ public sealed class NamespaceRegistry
 
     /// <summary>
     /// Register namespace ownership (called implicitly on first write).
+    /// Uses double-checked locking so the registered-path is lock-free; concurrent callers that
+    /// race to register the same namespace are serialized per-namespace and only the first write
+    /// wins (subsequent callers become no-ops).
     /// </summary>
     public void EnsureOwnership(string ns, string agentId)
     {
