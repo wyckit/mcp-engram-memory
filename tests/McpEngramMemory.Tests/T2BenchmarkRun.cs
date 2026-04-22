@@ -52,8 +52,32 @@ public sealed class T2BenchmarkRun : IDisposable
     {
         _index.Dispose();
         _persistence.Dispose();
-        if (Directory.Exists(_testDataPath))
-            Directory.Delete(_testDataPath, true);
+        if (!Directory.Exists(_testDataPath)) return;
+
+        // The PersistenceManager has a 50ms debounced writer; its Dispose cancels
+        // the timer but a final flush can still be racing with this teardown when
+        // the test wrote many ablation artifacts. On CI this shows up as
+        // IOException: Directory not empty — files reappear during the recursive
+        // walk. Short retry loop lets the filesystem settle; last attempt
+        // swallows the exception so we don't fail an otherwise-passing test.
+        for (int i = 0; i < 5; i++)
+        {
+            try
+            {
+                Directory.Delete(_testDataPath, recursive: true);
+                return;
+            }
+            catch (IOException) when (i < 4)
+            {
+                Thread.Sleep(50 * (i + 1));
+            }
+            catch (UnauthorizedAccessException) when (i < 4)
+            {
+                Thread.Sleep(50 * (i + 1));
+            }
+        }
+        // Final attempt — swallow so we don't fail a green test on cleanup.
+        try { Directory.Delete(_testDataPath, recursive: true); } catch { }
     }
 
     [Theory]
