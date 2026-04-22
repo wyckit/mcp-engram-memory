@@ -71,9 +71,13 @@ public class LockHierarchyTests : IDisposable
             Assert.True(aReached.Wait(TimeSpan.FromSeconds(2)), "ns-a writer did not reach handler");
 
             // A is parked in its handler — its lock is already released. B must proceed.
+            // Await the task after the wait so any exception thrown inside the Upsert
+            // propagates instead of being stashed on the Task and silently lost.
             var bTask = Task.Run(() => _index.Upsert(MakeEntry("b-1", "ns-b", "B content")));
-            Assert.True(bTask.Wait(TimeSpan.FromSeconds(2)),
+            Assert.True(
+                ReferenceEquals(await Task.WhenAny(bTask, Task.Delay(TimeSpan.FromSeconds(2))), bTask),
                 "ns-b writer blocked while ns-a was in its event handler — either events fire inside the lock, or per-ns locks are not independent");
+            await bTask;
 
             gate.Set();
             await aTask;
@@ -289,6 +293,40 @@ public class LockHierarchyTests : IDisposable
         persistence.Dispose();
 
         try { Directory.Delete(dataPath, recursive: true); } catch { }
+    }
+
+    /// <summary>
+    /// Regression: RemoveNamespace must not remove locator entries whose current value
+    /// points at a DIFFERENT namespace. If id X was upserted to ns=A (becoming an orphan
+    /// there) and then re-upserted to ns=B, deleting ns=A must leave ns=B's X intact
+    /// and the total count correct.
+    ///
+    /// Before the fix, RemoveNamespace("A") called _idToNamespace.TryRemove("X") which
+    /// blew away the ns=B locator AND decremented TotalCount, driving Count negative
+    /// while ns=B's entries dict still held X.
+    /// </summary>
+    [Fact]
+    public void RemoveNamespace_PreservesOrphanedIdInOtherNamespace()
+    {
+        // Step 1: upsert X into ns=A
+        _index.Upsert(MakeEntry("X", "orphan-ns-a", "first home"));
+        Assert.Equal(1, _index.Count);
+
+        // Step 2: upsert X into ns=B — per the pre-existing orphan invariant, X still
+        // lives in ns=A's entries dict but the locator now points at ns=B. Count stays
+        // at 1 because TrackEntry does not double-count (the id was already present in
+        // the locator; overwriting a locator value does not increment).
+        _index.Upsert(MakeEntry("X", "orphan-ns-b", "second home"));
+        Assert.Equal(1, _index.Count);
+
+        // Step 3: delete ns=A. The orphan in ns=A is gone; ns=B still has X.
+        _index.DeleteAllInNamespace("orphan-ns-a");
+
+        // Count must stay at 1 — not 0, not negative.
+        Assert.Equal(1, _index.Count);
+        Assert.Equal(1, _index.CountInNamespace("orphan-ns-b"));
+        Assert.NotNull(_index.Get("X", "orphan-ns-b"));
+        Assert.NotNull(_index.Get("X")); // resolves via locator
     }
 
     /// <summary>

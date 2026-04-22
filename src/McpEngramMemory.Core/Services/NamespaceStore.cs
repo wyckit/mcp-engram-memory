@@ -48,15 +48,25 @@ internal sealed class NamespaceStore
         return _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
     }
 
-    /// <summary>Remove a namespace entirely from in-memory state (entries, locator, BM25, HNSW, loaded tracking).</summary>
+    /// <summary>
+    /// Remove a namespace entirely from in-memory state (entries, locator, BM25, HNSW, loaded tracking).
+    /// Only removes locator entries that still point at this ns — an orphaned id that was later
+    /// upserted into a different ns keeps its updated locator + count entry.
+    /// </summary>
     public void RemoveNamespace(string ns)
     {
         if (_namespaces.TryRemove(ns, out var entries))
         {
             int removed = 0;
+            // Use the KeyValuePair overload of TryRemove so we only delete a locator entry
+            // when it currently points at THIS namespace. Guards against a rare but real
+            // scenario: id X was upserted to ns=A (orphan), then re-upserted to ns=B (locator
+            // now points at B). If we unconditionally TryRemove(X), we'd blow away B's
+            // locator AND decrement the total count while B's entries dict still has X —
+            // driving TotalCount negative.
             foreach (var id in entries.Keys)
             {
-                if (_idToNamespace.TryRemove(id, out _))
+                if (_idToNamespace.TryRemove(new KeyValuePair<string, string>(id, ns)))
                     removed++;
             }
             if (removed > 0)

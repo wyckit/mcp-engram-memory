@@ -34,7 +34,9 @@ public sealed class CognitiveIndex : IDisposable
 
     private readonly NamespaceStore _store;
     private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _nsLocks = new();
-    private volatile bool _disposed;
+    // 0 = live, 1 = disposed. Int rather than bool so Interlocked.Exchange can provide
+    // an atomic "once and only once" transition across concurrent Dispose callers.
+    private int _disposedFlag;
     private readonly BM25Index _bm25 = new();
     private readonly TokenReranker _reranker = new();
     private readonly VectorSearchEngine _vectorSearch = new();
@@ -66,17 +68,40 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>
-    /// Get or lazily create the ReaderWriterLockSlim for a namespace. Lock-free lookup
-    /// via ConcurrentDictionary.GetOrAdd — callers never coordinate on creation.
-    /// Throws <see cref="ObjectDisposedException"/> if the index has been disposed,
-    /// so callers racing with Dispose get a clean error instead of an
-    /// ObjectDisposedException from a torn-down lock.
+    /// Get or lazily create the ReaderWriterLockSlim for a namespace.
+    /// Throws <see cref="ObjectDisposedException"/> if Dispose has run (or begins to run
+    /// during this call), including the TOCTOU window between the pre-check and
+    /// GetOrAdd. A just-created-then-orphaned lock is disposed inline so nothing leaks.
     /// </summary>
     private ReaderWriterLockSlim NsLock(string ns)
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposedFlag) != 0)
             throw new ObjectDisposedException(nameof(CognitiveIndex));
-        return _nsLocks.GetOrAdd(ns, _ => new ReaderWriterLockSlim());
+
+        // Create-then-publish pattern so we can reclaim a lock we created if Dispose
+        // races with us between the pre-check and publication.
+        var created = new ReaderWriterLockSlim();
+        var published = _nsLocks.GetOrAdd(ns, created);
+
+        if (Volatile.Read(ref _disposedFlag) != 0)
+        {
+            // Dispose ran between our pre-check and GetOrAdd. If WE are the one who
+            // just published (Dispose already iterated before we added), yank it out
+            // and dispose it so it doesn't leak.
+            if (ReferenceEquals(published, created) &&
+                ((ICollection<KeyValuePair<string, ReaderWriterLockSlim>>)_nsLocks)
+                    .Remove(new KeyValuePair<string, ReaderWriterLockSlim>(ns, created)))
+            {
+                created.Dispose();
+            }
+            throw new ObjectDisposedException(nameof(CognitiveIndex));
+        }
+
+        // Another thread won the race and published first — discard our unused instance.
+        if (!ReferenceEquals(published, created))
+            created.Dispose();
+
+        return published;
     }
 
     // ── Counts + Metadata ──
@@ -907,12 +932,12 @@ public sealed class CognitiveIndex : IDisposable
 
     public void Dispose()
     {
-        // Set the disposed flag BEFORE tearing down locks so any NsLock(ns) call
-        // racing with Dispose sees the flag and throws ObjectDisposedException up
-        // front instead of calling Enter*Lock on an already-disposed RWLS. The
-        // flag is volatile so the write is immediately visible to other threads.
-        if (_disposed) return;
-        _disposed = true;
+        // Atomic once-and-only-once transition via Interlocked.Exchange. Concurrent
+        // Dispose callers never both reach the teardown — only the first to flip 0→1
+        // proceeds; the rest see a non-zero prior value and return immediately.
+        // The flag flips BEFORE teardown so any racing NsLock(ns) call sees it and
+        // throws ObjectDisposedException up front.
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
 
         foreach (var kv in _nsLocks)
             kv.Value.Dispose();
