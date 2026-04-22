@@ -146,6 +146,75 @@ public class LifecycleEngineTests : IDisposable
         Assert.Equal("archived", entry!.LifecycleState);
     }
 
+    /// <summary>
+    /// Resurrection must increment the entry's access count — it's a meaningful access
+    /// event, not a silent state flip. Without this, downstream decay/lifecycle logic
+    /// would immediately re-archive the freshly-resurrected entry.
+    /// </summary>
+    [Fact]
+    public void DeepRecall_Resurrection_IncrementsAccessCount()
+    {
+        _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
+        var before = _index.Get("a")!.AccessCount;
+
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+
+        var after = _index.Get("a")!.AccessCount;
+        Assert.True(after > before, $"Expected AccessCount to increment on resurrection; before={before}, after={after}");
+    }
+
+    /// <summary>
+    /// Returned CognitiveSearchResult for a resurrected entry must reflect the new
+    /// lifecycle state ("stm"), not the pre-resurrection state ("archived"). Callers
+    /// of DeepRecall shouldn't have to re-query the index to get the post-resurrection
+    /// state. Guards the `result with { LifecycleState = "stm" }` re-emit in the engine.
+    /// </summary>
+    [Fact]
+    public void DeepRecall_Resurrection_ReturnedResultReflectsNewState()
+    {
+        _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
+
+        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+
+        var resurrected = Assert.Single(results);
+        Assert.Equal("stm", resurrected.LifecycleState);
+    }
+
+    /// <summary>
+    /// Multiple archived entries that all cross the resurrection threshold must ALL
+    /// be resurrected in a single DeepRecall call — no early-exit, no bail on first.
+    /// </summary>
+    [Fact]
+    public void DeepRecall_ResurrectsMultipleHighScoringArchivedInOneCall()
+    {
+        _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
+        _index.Upsert(new CognitiveEntry("b", new[] { 0.99f, 0.01f }, "test", lifecycleState: "archived"));
+        _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f }, "test", lifecycleState: "archived"));
+
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+
+        Assert.Equal("stm", _index.Get("a")!.LifecycleState);
+        Assert.Equal("stm", _index.Get("b")!.LifecycleState);
+        Assert.Equal("stm", _index.Get("c")!.LifecycleState);
+    }
+
+    /// <summary>
+    /// Non-archived entries that happen to score above the resurrection threshold
+    /// must NOT be touched — resurrection applies only to archived→stm transitions.
+    /// An ltm entry staying ltm is the invariant here.
+    /// </summary>
+    [Fact]
+    public void DeepRecall_DoesNotPromoteNonArchivedEntriesAboveThreshold()
+    {
+        _index.Upsert(new CognitiveEntry("ltm-entry", new[] { 1f, 0f }, "test", lifecycleState: "ltm"));
+        _index.Upsert(new CognitiveEntry("stm-entry", new[] { 0.99f, 0.01f }, "test", lifecycleState: "stm"));
+
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+
+        Assert.Equal("ltm", _index.Get("ltm-entry")!.LifecycleState);
+        Assert.Equal("stm", _index.Get("stm-entry")!.LifecycleState);
+    }
+
     // Issue 15: Two decay cycles should transition STM → LTM → Archived
     [Fact]
     public void DecayCycle_TwoCycles_StmToLtmToArchived()
