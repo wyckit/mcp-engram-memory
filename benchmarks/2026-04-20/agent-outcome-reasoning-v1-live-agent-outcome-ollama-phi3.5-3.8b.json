@@ -1,0 +1,516 @@
+{
+  "datasetId": "agent-outcome-reasoning-v1",
+  "runAt": "2026-04-20T13:26:50.5047799+00:00",
+  "provider": "ollama",
+  "model": "phi3.5:3.8b",
+  "endpoint": null,
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskResults": [
+      {
+        "taskId": "reason-resolve-port",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 39683.8518,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Consider using port 443 for internal signaling, but be aware that it conflicts with historical use of port 8080.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Consider using port 443 for internal signaling, but be aware that it conflicts with historical use of port 8080.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "reason-low-latency-search",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 14375.0453,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Implement using Int8 precision to balance core performance and low latency",
+        "rawResponse": "{\u0022answer\u0022:\u0022Implement using Int8 precision to balance core performance and low latency\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "reason-rename-resolution",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 16660.7457,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Nexus-SHI is the current project, with no evidence of a name change provided in the given memory context.",
+        "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI is the current project, with no evidence of a name change provided in the given memory context.\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "reason-safe-exit",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 12718.6423,
+        "responseFormatValid": true,
+        "insufficientContext": true,
+        "contextMemoryIds": [],
+        "citedMemoryIds": [],
+        "answer": "Server should gracefully terminate and ensure data integrity by flushing transactions before shutting down",
+        "rawResponse": "{\u0022answer\u0022:\u0022Server should gracefully terminate and ensure data integrity by flushing transactions before shutting down\u0022,\u0022evidence_ids\u0022:[],\u0022insufficient_context\u0022:true}\n",
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 1
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 20859.571275000002,
+    "formatValidityRate": 1,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanNoiseResistanceScoreRanked": 1,
+    "meanContradictionHandlingScore": 1
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskResults": [
+          {
+            "taskId": "reason-resolve-port",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 33671.4453,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-port-legacy"
+            ],
+            "citedMemoryIds": [
+              "reason-port-legacy"
+            ],
+            "answer": "Port 8080 should not be used for internal signaling as it is a legacy rule.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Port 8080 should not be used for internal signaling as it is a legacy rule.\u0022,\u0022evidence_ids\u0022:[\u0022reason-port-legacy\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The provided context suggests that port 8080, which was once standard practice according to the \u0022reason-port-legacy\u0022 memory ID, should no longer be used due to legacy system constraints. However, it does not provide specific details about current conflicting rules or alternative ports for internal signaling beyond indicating a shift towards using port 443 as per modern standards and practices mentioned in migration contexts like the one provided (\u0022Tests contradiction awareness\u0022). Therefore, additional information would be required to fully address any potential conflicts.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-low-latency-search",
+            "requiredCoverage": 0.33333334,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.33333334,
+            "passed": false,
+            "latencyMs": 37105.6818,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-quant-impl"
+            ],
+            "citedMemoryIds": [
+              "reason-quant-impl"
+            ],
+            "answer": "Implement search using Int8 quantization",
+            "rawResponse": "{\u0022answer\u0022:\u0022Implement search using Int8 quantization\u0022,\u0022evidence_ids\u0022:[\u0022reason-quant-impl\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.33333334,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-rename-resolution",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 20745.01,
+            "responseFormatValid": true,
+            "insufficientContext": true,
+            "contextMemoryIds": [
+              "reason-name-old"
+            ],
+            "citedMemoryIds": [
+              "reason-name-old"
+            ],
+            "answer": "The project\u0027s current name is not specified, but it was previously known as \u0027Project Icarus\u0027, which has become obsolete due to copyright issues.",
+            "rawResponse": "{\u0022answer\u0022:\u0022The project\u0027s current name is not specified, but it was previously known as \u0027Project Icarus\u0027, which has become obsolete due to copyright issues.\u0022,\u0022evidence_ids\u0022:[\u0022reason-name-old\u0022],\u0022insufficient_context\u0022:true}",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-safe-exit",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 29269.5518,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-shutdown-mcp"
+            ],
+            "citedMemoryIds": [
+              "reason-shutdown-mcp"
+            ],
+            "answer": "Flush transactions (DB).",
+            "rawResponse": "{\u0022answer\u0022:\u0022Flush transactions (DB).\u0022,\u0022evidence_ids\u0022:[\u0022reason-shutdown-mcp\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.45833334,
+        "passRate": 0,
+        "meanRequiredCoverage": 0.45833334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 30197.922225,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.45833334,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.45833334,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0.45833334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 9338.350949999996,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskResults": [
+          {
+            "taskId": "reason-resolve-port",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 30642.6079,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-port-legacy"
+            ],
+            "citedMemoryIds": [
+              "reason-port-legacy"
+            ],
+            "answer": "Port 8080 should not be used for internal signaling as it is a legacy rule.",
+            "rawResponse": "{\u0022answer\u0022:\u0022Port 8080 should not be used for internal signaling as it is a legacy rule.\u0022,\u0022evidence_ids\u0022:[\u0022reason-port-legacy\u0022],\u0022insufficient_context\u0022:false}\n\nNote: The provided context suggests that port 8080, which was once standard practice according to the \u0022reason-port-legacy\u0022 memory ID, should not be used for internal signaling in modern systems. However, it also implies a migration towards using port 443 without providing specific conflicting rules regarding its use or potential issues with that choice within this context alone.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-low-latency-search",
+            "requiredCoverage": 0.33333334,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.33333334,
+            "passed": false,
+            "latencyMs": 40262.2515,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-quant-core"
+            ],
+            "citedMemoryIds": [
+              "reason-quant-core"
+            ],
+            "answer": "Implement search using Int8 precision to improve FP32 vector dot-product throughput and reduce latency",
+            "rawResponse": "{\u0022answer\u0022:\u0022Implement search using Int8 precision to improve FP32 vector dot-product throughput and reduce latency\u0022,\u0022evidence_ids\u0022:[\u0022reason-quant-core\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.33333334,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-rename-resolution",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 19661.3079,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-name-new"
+            ],
+            "citedMemoryIds": [
+              "reason-name-new"
+            ],
+            "answer": "Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022reason-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-safe-exit",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 27789.0997,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-shutdown-mcp"
+            ],
+            "citedMemoryIds": [
+              "reason-shutdown-mcp"
+            ],
+            "answer": "Flush transactions (DB).",
+            "rawResponse": "{\u0022answer\u0022:\u0022Flush transactions (DB).\u0022,\u0022evidence_ids\u0022:[\u0022reason-shutdown-mcp\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.45833334,
+        "passRate": 0,
+        "meanRequiredCoverage": 0.45833334,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 29588.816749999998,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.45833334,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.45833334,
+      "passRateDelta": 0,
+      "requiredCoverageDelta": 0.45833334,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 8729.245474999996,
+      "formatValidityDelta": 0
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskResults": [
+          {
+            "taskId": "reason-resolve-port",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 40761.9217,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-port-legacy",
+              "reason-port-secure"
+            ],
+            "citedMemoryIds": [
+              "reason-port-secure"
+            ],
+            "answer": "Migrate to port 443 using TLS 1.3 for secure signaling",
+            "rawResponse": "{\u0022answer\u0022:\u0022Migrate to port 443 using TLS 1.3 for secure signaling\u0022,\u0022evidence_ids\u0022:[\u0022reason-port-secure\u0022],\u0022insufficient_context\u0022:false}\n\n### Explanation:\nThe provided memory context indicates that internal signaling should move from the legacy architecture\u0027s use of port 8080 to a more secure method, specifically migrating to port 443 with TLS 1.3 as per security policy updates (reason-port-secure). The mention of \u0022legacy\u0022 and specific instructions for using port 443 align directly with the task\u0027s requirement about conflicting rules regarding internal signaling ports and their migration, making this answer fully grounded in provided evidence without needing additional context.",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-low-latency-search",
+            "requiredCoverage": 0.6666667,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.6666667,
+            "passed": false,
+            "latencyMs": 23951.7587,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-quant-core",
+              "reason-quant-pref"
+            ],
+            "citedMemoryIds": [
+              "reason-quant-core",
+              "reason-quant-pref"
+            ],
+            "answer": "Implement using Int8 precision to balance between search speed and latency",
+            "rawResponse": "{\u0022answer\u0022:\u0022Implement using Int8 precision to balance between search speed and latency\u0022,\u0022evidence_ids\u0022:[\u0022reason-quant-core\u0022, \u0022reason-quant-pref\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.6666667,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-rename-resolution",
+            "requiredCoverage": 0.5,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.5,
+            "passed": false,
+            "latencyMs": 22031.4195,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-name-new",
+              "reason-name-old"
+            ],
+            "citedMemoryIds": [
+              "reason-name-new"
+            ],
+            "answer": "The current project name is Nexus-SHI",
+            "rawResponse": "{\u0022answer\u0022:\u0022The current project name is Nexus-SHI\u0022,\u0022evidence_ids\u0022:[\u0022reason-name-new\u0022],\u0022insufficient_context\u0022:false}\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0.5,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "reason-safe-exit",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 28941.2896,
+            "responseFormatValid": true,
+            "insufficientContext": false,
+            "contextMemoryIds": [
+              "reason-shutdown-mcp",
+              "reason-shutdown-db"
+            ],
+            "citedMemoryIds": [
+              "reason-shutdown-mcp",
+              "reason-shutdown-db"
+            ],
+            "answer": "Flush storage transactions",
+            "rawResponse": "{\u0022answer\u0022:\u0022Flush storage transactions\u0022,\u0022evidence_ids\u0022:[\u0022reason-shutdown-mcp\u0022, \u0022reason-shutdown-db\u0022],\u0022insufficient_context\u0022:false}\n\n",
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 0.6666667,
+        "passRate": 0.25,
+        "meanRequiredCoverage": 0.6666667,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 28921.597375,
+        "formatValidityRate": 1,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.6666667,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 0.6666667,
+      "passRateDelta": 0.25,
+      "requiredCoverageDelta": 0.6666667,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 8062.026099999999,
+      "formatValidityDelta": 0
+    }
+  ],
+  "notes": "Live model benchmark with condition-specific memory context, structured JSON output, and deterministic grading."
+}

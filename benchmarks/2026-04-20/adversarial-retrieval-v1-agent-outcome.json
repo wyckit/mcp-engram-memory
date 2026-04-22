@@ -1,0 +1,728 @@
+{
+  "datasetId": "adversarial-retrieval-v1",
+  "runAt": "2026-04-20T13:19:30.817795+00:00",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskScores": [
+      {
+        "taskId": "adv-stem",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 0,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "adv-archive",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 0,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "adv-spread",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 0,
+        "contradictionHandlingScore": 1
+      },
+      {
+        "taskId": "adv-rerank",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 0,
+        "contradictionHandlingScore": 1
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 0,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanNoiseResistanceScoreRanked": 0,
+    "meanContradictionHandlingScore": 0.75
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5525,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-stem-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0.5,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.4721,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5428,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.486,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 0.51335,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.125,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 0.51335
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3.2603,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.2683,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.625,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3.4175,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2.8927750000000003,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.25,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2.8927750000000003
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.9796,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.635,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.7462,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.2715,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 1.9080750000000002,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.75,
+        "meanNoiseResistanceScore": 0.25,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1.9080750000000002
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 3.2253,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.2145,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.324,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 6.0119,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 3.443925,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 0.25,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 3.443925
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.2572,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.038,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.9615,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.626,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2.220675,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.75,
+        "meanNoiseResistanceScore": 0.25,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2.220675
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskScores": [
+          {
+            "taskId": "adv-stem",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.0202,
+            "retrievedMemoryIds": [
+              "adv-stem-real",
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 0,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-archive",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.6736,
+            "retrievedMemoryIds": [
+              "adv-archive-near",
+              "adv-archive-real"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 0,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-spread",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.7849,
+            "retrievedMemoryIds": [
+              "adv-spread-real",
+              "adv-spread-near"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "adv-rerank",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 2.3373,
+            "retrievedMemoryIds": [
+              "adv-rerank-real",
+              "adv-rerank-wrong"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 0,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 1.954,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 0.75,
+        "meanNoiseResistanceScore": 0.25,
+        "meanNoiseResistanceScoreRanked": 0.75,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1.954
+    }
+  ],
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Task-style proxy benchmark comparing memory conditions on evidence coverage, conflict rate, and latency."
+}
