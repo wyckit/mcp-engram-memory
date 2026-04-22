@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Skill(code-review:code-review)",
-      "Skill(code-review:code-review:*)"
-    ]
-  }
-}

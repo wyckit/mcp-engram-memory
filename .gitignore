@@ -436,8 +436,8 @@ FodyWeavers.xsd
 # Local AI tooling SQLite database
 memory.db
 
-# Claude Code agent worktrees (internal scratch space)
-.claude/worktrees/
+# Claude Code workspace (local agent state, worktrees, per-user settings)
+.claude/
 
 # Generated visualization snapshots
 visualization/snapshot.json
