@@ -9,6 +9,15 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 public sealed class HybridSearchEngine
 {
     /// <summary>
+    /// Threshold above which vector results are considered high-confidence,
+    /// allowing the search to skip BM25 fusion for better P95 latency.
+    /// </summary>
+    private const float HighConfidenceThreshold = 0.85f;
+    private const float LowConfidenceThreshold = 0.50f;
+    private const int CascadeThreshold = 100;
+    private const float Bm25SemanticGate = 0.30f;
+
+    /// <summary>
     /// Execute a hybrid search combining vector and BM25 results via RRF.
     /// </summary>
     /// <param name="vectorResults">Pre-computed vector search results (broad candidate set).</param>
@@ -22,15 +31,8 @@ public sealed class HybridSearchEngine
     /// <param name="bm25">BM25 index for keyword search.</param>
     /// <param name="reranker">Token reranker.</param>
     /// <param name="getEntry">Delegate to resolve entry by (id, ns) — used for BM25-only results.</param>
-    /// <summary>
-    /// Threshold above which vector results are considered high-confidence,
-    /// allowing the search to skip BM25 fusion for better P95 latency.
-    /// </summary>
-    private const float HighConfidenceThreshold = 0.85f;
-    private const float LowConfidenceThreshold = 0.50f;
-    private const int CascadeThreshold = 100;
-    private const float Bm25SemanticGate = 0.30f;
-
+    /// <param name="queryVector">Optional query vector for late-fusion scoring.</param>
+    /// <param name="entryCount">Optional entry-count hint for cost-based cascading.</param>
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         IReadOnlyList<CognitiveSearchResult> vectorResults,
         string queryText,

@@ -3,7 +3,8 @@ namespace McpEngramMemory.Core.Services.Evaluation;
 /// <summary>
 /// Resolves a CLI executable name on Windows by probing PATH for common shim
 /// extensions (.exe, .cmd, .bat). npm-installed CLIs like `codex` and `gemini` ship
-/// extensionless bash shims plus a sibling `.cmd` shim; <see cref="System.Diagnostics.Process.Start"/>
+/// extensionless bash shims plus a sibling `.cmd` shim;
+/// <see cref="System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo)"/>
 /// on Windows will not automatically apply PATHEXT to an extensionless name, so we
 /// have to find the .cmd ourselves.
 ///
