@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 
 namespace McpEngramMemory.Core.Services.Retrieval;
@@ -5,11 +6,15 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 /// <summary>
 /// BM25 keyword index for hybrid search alongside vector similarity.
 /// Maintains an inverted index per namespace with TF-IDF-like scoring.
-/// Thread-safety: callers must hold appropriate locks on the CognitiveIndex.
+/// Thread-safety: the outer namespace map is a ConcurrentDictionary so per-namespace
+/// writers don't race on the map structure. Callers must still hold a per-namespace
+/// write lock (CognitiveIndex's NsLock(ns).EnterWriteLock) around Index/Remove to
+/// protect the inner NamespaceIndex state; readers holding a per-ns read lock are
+/// safe since Search does not mutate inner state.
 /// </summary>
 public sealed class BM25Index
 {
-    private readonly Dictionary<string, NamespaceIndex> _namespaces = new();
+    private readonly ConcurrentDictionary<string, NamespaceIndex> _namespaces = new();
 
     // BM25 parameters (standard defaults)
     private const float K1 = 1.2f;
@@ -131,7 +136,7 @@ public sealed class BM25Index
     /// <summary>Clear a namespace index.</summary>
     public void ClearNamespace(string ns)
     {
-        _namespaces.Remove(ns);
+        _namespaces.TryRemove(ns, out _);
     }
 
     /// <summary>Check if a namespace has been indexed.</summary>
@@ -146,14 +151,7 @@ public sealed class BM25Index
     }
 
     private NamespaceIndex GetOrCreateNamespace(string ns)
-    {
-        if (!_namespaces.TryGetValue(ns, out var nsIndex))
-        {
-            nsIndex = new NamespaceIndex();
-            _namespaces[ns] = nsIndex;
-        }
-        return nsIndex;
-    }
+        => _namespaces.GetOrAdd(ns, _ => new NamespaceIndex());
 
     /// <summary>
     /// Tokenize text into lowercase terms. Splits on non-alphanumeric characters,

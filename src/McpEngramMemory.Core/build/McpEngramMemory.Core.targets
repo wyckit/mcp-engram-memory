@@ -18,23 +18,42 @@
         </ItemGroup>
     </Target>
 
+    <!--
+      Parallel-TFM safety: when a project multi-targets (e.g. net8.0;net9.0;net10.0),
+      MSBuild fans out one inner build per TFM in parallel. Each inner build invokes
+      these targets, all see the cache missing, all download to their own temp file,
+      then race at the Move. Without mitigation, N-1 racers fail with MSB3677.
+
+      Mitigation: ContinueOnError="WarnAndContinue" on the Move so a losing racer
+      emits a warning and proceeds; Delete cleans any leftover temp file. Since every
+      downloader writes the same bytes (deterministic URL + hash), last-writer-wins
+      is semantically safe. The winner leaves a valid cache; the losers no-op.
+    -->
     <Target Name="AcquireBgeMicroModel" Condition="!Exists('$(BgeMicroModelPath)')">
+        <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
             <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroModelUrl)"
                       DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
                       DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)"
+              ContinueOnError="WarnAndContinue"
+              Condition="!Exists('$(BgeMicroModelPath)')" />
+        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
     </Target>
 
     <Target Name="AcquireBgeMicroVocab" Condition="!Exists('$(BgeMicroVocabPath)')">
+        <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
             <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroVocabUrl)"
                       DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
                       DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)"
+              ContinueOnError="WarnAndContinue"
+              Condition="!Exists('$(BgeMicroVocabPath)')" />
+        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
     </Target>
 </Project>

@@ -24,6 +24,12 @@ internal sealed class NamespaceStore
     private readonly IStorageProvider _persistence;
     private readonly BM25Index _bm25;
 
+    // Atomic total-entry count across all namespaces — maintained by TrackEntry /
+    // UntrackEntry / RemoveNamespace / LoadEntries so memory-limits checks can run
+    // without a cross-namespace lock. Approximate under concurrent mutations but
+    // reliably incremented once per distinct id insertion.
+    private long _totalCountApprox;
+
     public NamespaceStore(IStorageProvider persistence, BM25Index bm25)
     {
         _persistence = persistence;
@@ -42,13 +48,29 @@ internal sealed class NamespaceStore
         return _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
     }
 
-    /// <summary>Remove a namespace entirely from in-memory state (entries, locator, BM25, HNSW, loaded tracking).</summary>
+    /// <summary>
+    /// Remove a namespace entirely from in-memory state (entries, locator, BM25, HNSW, loaded tracking).
+    /// Only removes locator entries that still point at this ns — an orphaned id that was later
+    /// upserted into a different ns keeps its updated locator + count entry.
+    /// </summary>
     public void RemoveNamespace(string ns)
     {
         if (_namespaces.TryRemove(ns, out var entries))
         {
+            int removed = 0;
+            // Use the KeyValuePair overload of TryRemove so we only delete a locator entry
+            // when it currently points at THIS namespace. Guards against a rare but real
+            // scenario: id X was upserted to ns=A (orphan), then re-upserted to ns=B (locator
+            // now points at B). If we unconditionally TryRemove(X), we'd blow away B's
+            // locator AND decrement the total count while B's entries dict still has X —
+            // driving TotalCount negative.
             foreach (var id in entries.Keys)
-                _idToNamespace.TryRemove(id, out _);
+            {
+                if (_idToNamespace.TryRemove(new KeyValuePair<string, string>(id, ns)))
+                    removed++;
+            }
+            if (removed > 0)
+                Interlocked.Add(ref _totalCountApprox, -removed);
         }
         _loadedNamespaces.TryRemove(ns, out _);
         _bm25.ClearNamespace(ns);
@@ -60,8 +82,8 @@ internal sealed class NamespaceStore
     public IEnumerable<KeyValuePair<string, ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>>> AllNamespaces
         => _namespaces;
 
-    /// <summary>Total entries across all loaded namespaces.</summary>
-    public int TotalCount => _namespaces.Values.Sum(ns => ns.Count);
+    /// <summary>Total entries across all loaded namespaces. O(1) atomic read — safe without a lock.</summary>
+    public int TotalCount => (int)Interlocked.Read(ref _totalCountApprox);
 
     /// <summary>Get all known namespace names (loaded + persisted).</summary>
     public IReadOnlyList<string> GetNamespaceNames()
@@ -157,13 +179,27 @@ internal sealed class NamespaceStore
         return _idToNamespace.TryGetValue(entryId, out ns!);
     }
 
-    /// <summary>Track an entry's namespace in the locator.</summary>
+    /// <summary>
+    /// Track an entry's namespace in the locator. Increments TotalCount atomically only
+    /// when the id was not already tracked (so upsert-of-existing doesn't drift the count).
+    /// Invariant: an entry id does not move between namespaces — upserting an existing id
+    /// to a different ns silently leaves the locator pointing at the new ns (pre-existing
+    /// behavior), but the count is not double-incremented.
+    /// </summary>
     public void TrackEntry(string entryId, string ns)
-        => _idToNamespace[entryId] = ns;
+    {
+        if (_idToNamespace.TryAdd(entryId, ns))
+            Interlocked.Increment(ref _totalCountApprox);
+        else
+            _idToNamespace[entryId] = ns;
+    }
 
-    /// <summary>Remove an entry from the locator.</summary>
+    /// <summary>Remove an entry from the locator. Decrements TotalCount atomically if the id was tracked.</summary>
     public void UntrackEntry(string entryId)
-        => _idToNamespace.TryRemove(entryId, out _);
+    {
+        if (_idToNamespace.TryRemove(entryId, out _))
+            Interlocked.Decrement(ref _totalCountApprox);
+    }
 
     // ── HNSW Index Management ──
 
@@ -254,6 +290,7 @@ internal sealed class NamespaceStore
     private void LoadEntries(string ns, List<CognitiveEntry> entries)
     {
         var nsDict = _namespaces.GetOrAdd(ns, _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
+        int added = 0;
         foreach (var entry in entries)
         {
             float norm = VectorMath.Norm(entry.Vector);
@@ -261,7 +298,12 @@ internal sealed class NamespaceStore
                 ? VectorQuantizer.Quantize(entry.Vector)
                 : null;
             nsDict[entry.Id] = (entry, norm, quantized);
-            _idToNamespace[entry.Id] = ns;
+            if (_idToNamespace.TryAdd(entry.Id, ns))
+                added++;
+            else
+                _idToNamespace[entry.Id] = ns;
         }
+        if (added > 0)
+            Interlocked.Add(ref _totalCountApprox, added);
     }
 }

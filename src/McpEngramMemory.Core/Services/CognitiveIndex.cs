@@ -8,17 +8,35 @@ namespace McpEngramMemory.Core.Services;
 
 /// <summary>
 /// Thread-safe namespace-partitioned vector index with lifecycle awareness.
-/// Thin facade that delegates search to VectorSearchEngine/HybridSearchEngine,
-/// duplicate detection to DuplicateDetector, and manages CRUD + locking.
-/// Read paths use ReadLock (concurrent), write paths use WriteLock (exclusive).
-/// NamespaceStore uses ConcurrentDictionary infrastructure for safe lazy loading under ReadLock.
+///
+/// Locking: per-namespace ReaderWriterLockSlim in <c>_nsLocks</c>. Each single-namespace
+/// operation (Upsert, Search, Get(id, ns), Delete, RecordAccess, etc.) holds only the
+/// target namespace's lock, so writers to different namespaces run in parallel. Readers
+/// of a namespace parallelize with each other; a writer to the same namespace is exclusive
+/// against other readers and writers OF THAT NAMESPACE only.
+///
+/// Cross-namespace reads (Count, GetNamespaces, GetAll, GetStateCounts(null)) are lock-free
+/// and rely on ConcurrentDictionary semantics — they see a consistent snapshot per entry
+/// but not a linearizable snapshot across the whole store. This is intentional and matches
+/// the semantics of diagnostic counts.
+///
+/// Operations that resolve id → namespace (Get(id), Delete(id), RecordAccess(id),
+/// SetLifecycleState, SetActivationEnergyAndState) resolve lock-free via the
+/// NamespaceStore._idToNamespace ConcurrentDictionary, then acquire the resolved
+/// namespace's lock for the actual work.
+///
+/// Events (<see cref="EntryUpserted"/>, <see cref="EntryDeleted"/>) fire AFTER the
+/// per-namespace lock is released, so handlers can call back into the index safely.
 /// </summary>
 public sealed class CognitiveIndex : IDisposable
 {
     private static readonly HashSet<string> AllStates = new() { "stm", "ltm", "archived" };
 
     private readonly NamespaceStore _store;
-    private readonly ReaderWriterLockSlim _lock = new();
+    private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _nsLocks = new();
+    // 0 = live, 1 = disposed. Int rather than bool so Interlocked.Exchange can provide
+    // an atomic "once and only once" transition across concurrent Dispose callers.
+    private int _disposedFlag;
     private readonly BM25Index _bm25 = new();
     private readonly TokenReranker _reranker = new();
     private readonly VectorSearchEngine _vectorSearch = new();
@@ -49,42 +67,86 @@ public sealed class CognitiveIndex : IDisposable
         _limits = limits ?? new MemoryLimitsConfig();
     }
 
+    /// <summary>
+    /// Get or lazily create the ReaderWriterLockSlim for a namespace.
+    /// Throws <see cref="ObjectDisposedException"/> if Dispose has run (or begins to run
+    /// during this call), including the TOCTOU window between the pre-check and
+    /// GetOrAdd. A just-created-then-orphaned lock is disposed inline so nothing leaks.
+    ///
+    /// Hot path (ns already in the dict): one TryGetValue, zero allocations.
+    /// Cold path (first use of a ns): one RWLS allocation, race-safe publication.
+    /// </summary>
+    private ReaderWriterLockSlim NsLock(string ns)
+    {
+        if (Volatile.Read(ref _disposedFlag) != 0)
+            throw new ObjectDisposedException(nameof(CognitiveIndex));
+
+        // Fast path — the lock is already published. Avoids a RWLS allocation
+        // on every single-ns operation after the first.
+        if (_nsLocks.TryGetValue(ns, out var existing))
+            return existing;
+
+        // Cold path — create-then-publish so we can reclaim our own lock if Dispose
+        // races with us between the pre-check and publication.
+        var created = new ReaderWriterLockSlim();
+        var published = _nsLocks.GetOrAdd(ns, created);
+
+        if (Volatile.Read(ref _disposedFlag) != 0)
+        {
+            // Dispose ran between our pre-check and GetOrAdd. If WE are the one who
+            // just published (Dispose already iterated before we added), yank it out
+            // and dispose it so it doesn't leak.
+            if (ReferenceEquals(published, created) &&
+                ((ICollection<KeyValuePair<string, ReaderWriterLockSlim>>)_nsLocks)
+                    .Remove(new KeyValuePair<string, ReaderWriterLockSlim>(ns, created)))
+            {
+                created.Dispose();
+            }
+            throw new ObjectDisposedException(nameof(CognitiveIndex));
+        }
+
+        // Another thread won the race and published first — discard our unused instance.
+        if (!ReferenceEquals(published, created))
+            created.Dispose();
+
+        return published;
+    }
+
     // ── Counts + Metadata ──
 
-    /// <summary>Total entry count across all loaded namespaces.</summary>
+    /// <summary>
+    /// Total entry count across all loaded namespaces. Lock-free: TotalCount is an
+    /// Interlocked atomic on NamespaceStore, so this returns an eventually-consistent
+    /// snapshot under concurrent writers — exact for diagnostic / memory-limit checks.
+    /// </summary>
     public int Count
     {
         get
         {
-            _lock.EnterReadLock();
-            try
-            {
-                _store.LoadAll();
-                return _store.TotalCount;
-            }
-            finally { _lock.ExitReadLock(); }
+            _store.LoadAll();
+            return _store.TotalCount;
         }
     }
 
-    /// <summary>Count entries in a specific namespace.</summary>
+    /// <summary>Count entries in a specific namespace. Per-namespace read lock.</summary>
     public int CountInNamespace(string ns)
     {
-        _lock.EnterReadLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
             return _store.GetNamespace(ns)?.Count ?? 0;
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Get all known namespace names.</summary>
+    /// <summary>
+    /// Get all known namespace names. Lock-free: reads from a ConcurrentDictionary snapshot
+    /// and the persisted-namespace list from storage.
+    /// </summary>
     public IReadOnlyList<string> GetNamespaces()
-    {
-        _lock.EnterReadLock();
-        try { return _store.GetNamespaceNames(); }
-        finally { _lock.ExitReadLock(); }
-    }
+        => _store.GetNamespaceNames();
 
     // ── CRUD ──
 
@@ -102,7 +164,8 @@ public sealed class CognitiveIndex : IDisposable
             ? VectorQuantizer.Quantize(entry.Vector)
             : null;
 
-        _lock.EnterWriteLock();
+        var nsLock = NsLock(entry.Ns);
+        nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(entry.Ns);
@@ -125,7 +188,7 @@ public sealed class CognitiveIndex : IDisposable
             _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
             _store.ScheduleEntryUpsert(entry.Ns, entry);
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
 
         // Fire event after lock release so handlers can call back into the index safely.
         EntryUpserted?.Invoke(this, entry);
@@ -149,65 +212,80 @@ public sealed class CognitiveIndex : IDisposable
             prepared.Add((entry, norm, quantized));
         }
 
-        int count = 0;
-        _lock.EnterWriteLock();
-        try
+        // Group by namespace so we can take one write lock per ns (parallel across ns).
+        // Batch entries that belong to the same ns share that ns's write lock for the
+        // duration of their sub-batch; ns A and ns B never block each other.
+        var totalLimitHit = false;
+        var accepted = new List<CognitiveEntry>(prepared.Count);
+        foreach (var nsGroup in prepared.GroupBy(p => p.Entry.Ns))
         {
-            foreach (var (entry, norm, quantized) in prepared)
+            if (totalLimitHit) break;
+
+            var nsLock = NsLock(nsGroup.Key);
+            nsLock.EnterWriteLock();
+            try
             {
-                _store.EnsureLoaded(entry.Ns);
-                var nsEntries = _store.GetOrCreateNamespace(entry.Ns);
+                _store.EnsureLoaded(nsGroup.Key);
+                var nsEntries = _store.GetOrCreateNamespace(nsGroup.Key);
 
-                if (!nsEntries.ContainsKey(entry.Id))
+                foreach (var (entry, norm, quantized) in nsGroup)
                 {
-                    if (nsEntries.Count >= _limits.MaxNamespaceSize)
-                        continue; // skip entries that would exceed namespace limit
-                    if (_store.TotalCount >= _limits.MaxTotalCount)
-                        break; // stop if total limit reached
+                    if (!nsEntries.ContainsKey(entry.Id))
+                    {
+                        if (nsEntries.Count >= _limits.MaxNamespaceSize)
+                            continue; // skip entries that would exceed namespace limit
+                        if (_store.TotalCount >= _limits.MaxTotalCount)
+                        {
+                            totalLimitHit = true;
+                            break; // stop if total limit reached
+                        }
+                    }
+
+                    nsEntries[entry.Id] = (entry, norm, quantized);
+                    _store.TrackEntry(entry.Id, entry.Ns);
+                    _store.IndexBM25(entry);
+                    _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
+                    _store.ScheduleEntryUpsert(entry.Ns, entry);
+                    accepted.Add(entry);
                 }
-
-                nsEntries[entry.Id] = (entry, norm, quantized);
-                _store.TrackEntry(entry.Id, entry.Ns);
-                _store.IndexBM25(entry);
-                _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
-                _store.ScheduleEntryUpsert(entry.Ns, entry);
-                count++;
             }
+            finally { nsLock.ExitWriteLock(); }
         }
-        finally { _lock.ExitWriteLock(); }
 
-        // Fire events after lock release, one per accepted entry.
+        // Fire events after all locks released, one per accepted entry.
         var handler = EntryUpserted;
         if (handler is not null)
         {
-            for (int i = 0; i < count; i++)
-                handler(this, prepared[i].Entry);
+            foreach (var entry in accepted)
+                handler(this, entry);
         }
 
-        return count;
+        return accepted.Count;
     }
 
-    /// <summary>Get an entry by ID, searching all namespaces.</summary>
+    /// <summary>Get an entry by ID, searching all namespaces. Resolves id→ns lock-free then takes that ns's read lock.</summary>
     public CognitiveEntry? Get(string id)
     {
-        _lock.EnterReadLock();
+        if (!_store.TryResolveOrLoad(id, out var ns))
+            return null;
+
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
-            if (!_store.TryResolveOrLoad(id, out var ns))
-                return null;
-
             var resolved = _store.GetNamespace(ns);
             if (resolved is not null && resolved.TryGetValue(id, out var tuple))
                 return tuple.Entry;
             return null;
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Get an entry by ID within a specific namespace.</summary>
+    /// <summary>Get an entry by ID within a specific namespace. Per-namespace read lock.</summary>
     public CognitiveEntry? Get(string id, string ns)
     {
-        _lock.EnterReadLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -216,19 +294,20 @@ public sealed class CognitiveIndex : IDisposable
                 return tuple.Entry;
             return null;
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Delete an entry by ID, searching all namespaces.</summary>
+    /// <summary>Delete an entry by ID, searching all namespaces. Resolves id→ns lock-free then takes that ns's write lock.</summary>
     public bool Delete(string id)
     {
+        if (!_store.TryResolveOrLoad(id, out var ns))
+            return false;
+
         string? deletedFromNs = null;
-        _lock.EnterWriteLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
-            if (!_store.TryResolveOrLoad(id, out var ns))
-                return false;
-
             var nsEntries = _store.GetNamespace(ns);
             if (nsEntries is not null && nsEntries.TryRemove(id, out _))
             {
@@ -239,7 +318,7 @@ public sealed class CognitiveIndex : IDisposable
                 deletedFromNs = ns;
             }
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
 
         if (deletedFromNs is not null)
         {
@@ -261,7 +340,8 @@ public sealed class CognitiveIndex : IDisposable
 
         IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot;
         HnswIndex? hnswIndex;
-        _lock.EnterReadLock();
+        var nsLock = NsLock(request.Namespace);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(request.Namespace);
@@ -271,7 +351,7 @@ public sealed class CognitiveIndex : IDisposable
             snapshot = nsEntries.Values.ToList();
             hnswIndex = _store.GetHnswIndex(request.Namespace);
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
 
         // When diversity is active, fetch more candidates so MMR has a broader pool
         int diversityMultiplier = request.Diversity ? 3 : 1;
@@ -470,7 +550,8 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicatesForEntry(
         string ns, string entryId, float threshold = 0.95f)
     {
-        _lock.EnterReadLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -481,7 +562,7 @@ public sealed class CognitiveIndex : IDisposable
             nsEntries.TryGetValue(entryId, out var target);
             return _duplicateDetector.FindDuplicatesForEntry(entryId, target, nsEntries, threshold);
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
     }
 
     /// <summary>Find near-duplicate entries within a namespace by pairwise cosine similarity.</summary>
@@ -495,7 +576,8 @@ public sealed class CognitiveIndex : IDisposable
         includeStates ??= new HashSet<string> { "stm", "ltm" };
 
         List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates;
-        _lock.EnterReadLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -509,7 +591,7 @@ public sealed class CognitiveIndex : IDisposable
                     && t.Norm > 0f)
                 .ToList();
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
 
         // Sort by norm ascending for early-exit optimization
         candidates.Sort((a, b) => a.Norm.CompareTo(b.Norm));
@@ -518,15 +600,16 @@ public sealed class CognitiveIndex : IDisposable
 
     // ── Access Tracking ──
 
-    /// <summary>Record an access (increments count and updates timestamp).</summary>
+    /// <summary>Record an access (increments count and updates timestamp). Resolves id→ns lock-free, then per-ns write.</summary>
     public void RecordAccess(string id)
     {
-        _lock.EnterWriteLock();
+        if (!_store.TryResolveOrLoad(id, out var ns))
+            return;
+
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
-            if (!_store.TryResolveOrLoad(id, out var ns))
-                return;
-
             var nsEntries = _store.GetNamespace(ns);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
@@ -535,13 +618,14 @@ public sealed class CognitiveIndex : IDisposable
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
             }
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
-    /// <summary>Record an access hit within a known namespace.</summary>
+    /// <summary>Record an access hit within a known namespace. Per-ns write lock.</summary>
     public void RecordAccess(string id, string ns)
     {
-        _lock.EnterWriteLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -553,13 +637,18 @@ public sealed class CognitiveIndex : IDisposable
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
             }
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
-    /// <summary>Boost activation energy for an entry (spreading activation). Returns true if entry was found and updated.</summary>
+    /// <summary>
+    /// Boost activation energy for an entry (spreading activation). Per-ns write on the provided ns;
+    /// falls back to id→ns resolve if not found there. Returns true if entry was found and updated.
+    /// </summary>
     public bool BoostActivationEnergy(string id, string ns, float delta)
     {
-        _lock.EnterWriteLock();
+        // Fast path: try the caller's supplied ns first
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -570,34 +659,41 @@ public sealed class CognitiveIndex : IDisposable
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
                 return true;
             }
+        }
+        finally { nsLock.ExitWriteLock(); }
 
-            // Try to resolve across namespaces if not found in specified ns
-            if (_store.TryResolveOrLoad(id, out var resolvedNs))
+        // Fallback: resolve id→ns lock-free, then take the resolved ns's write lock
+        if (!_store.TryResolveOrLoad(id, out var resolvedNs) || resolvedNs == ns)
+            return false;
+
+        var resolvedLock = NsLock(resolvedNs);
+        resolvedLock.EnterWriteLock();
+        try
+        {
+            var resolvedEntries = _store.GetNamespace(resolvedNs);
+            if (resolvedEntries is not null && resolvedEntries.TryGetValue(id, out var resolvedTuple))
             {
-                var resolvedEntries = _store.GetNamespace(resolvedNs);
-                if (resolvedEntries is not null && resolvedEntries.TryGetValue(id, out var resolvedTuple))
-                {
-                    resolvedTuple.Entry.ActivationEnergy += delta;
-                    _store.ScheduleEntryUpsert(resolvedNs, resolvedTuple.Entry);
-                    return true;
-                }
+                resolvedTuple.Entry.ActivationEnergy += delta;
+                _store.ScheduleEntryUpsert(resolvedNs, resolvedTuple.Entry);
+                return true;
             }
             return false;
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { resolvedLock.ExitWriteLock(); }
     }
 
     // ── Lifecycle State Management ──
 
-    /// <summary>Update an entry's lifecycle state. Quantizes on STM→LTM, dequantizes on →STM.</summary>
+    /// <summary>Update an entry's lifecycle state. Resolves id→ns lock-free, then per-ns write. Quantizes on STM→LTM, dequantizes on →STM.</summary>
     public bool SetLifecycleState(string id, string state)
     {
-        _lock.EnterWriteLock();
+        if (!_store.TryResolveOrLoad(id, out var ns))
+            return false;
+
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
-            if (!_store.TryResolveOrLoad(id, out var ns))
-                return false;
-
             var nsEntries = _store.GetNamespace(ns);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
@@ -609,47 +705,65 @@ public sealed class CognitiveIndex : IDisposable
             }
             return false;
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
-    /// <summary>Update lifecycle state for multiple entries in a single write lock acquisition.</summary>
+    /// <summary>
+    /// Update lifecycle state for multiple entries. Groups by resolved namespace so each ns is
+    /// locked once for its sub-batch; entries in different namespaces run under different locks.
+    /// </summary>
     public int SetLifecycleStateBatch(IEnumerable<string> ids, string state)
     {
-        _lock.EnterWriteLock();
-        try
-        {
-            int updated = 0;
-
-            foreach (var id in ids)
-            {
-                if (!_store.TryResolveOrLoad(id, out var ns))
-                    continue;
-
-                var nsEntries = _store.GetNamespace(ns);
-                if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
-                {
-                    var previousState = tuple.Entry.LifecycleState;
-                    tuple.Entry.LifecycleState = state;
-                    UpdateQuantization(nsEntries, id, tuple, previousState, state);
-                    _store.ScheduleEntryUpsert(ns, tuple.Entry);
-                    updated++;
-                }
-            }
-
-            return updated;
-        }
-        finally { _lock.ExitWriteLock(); }
-    }
-
-    /// <summary>Update activation energy and lifecycle state atomically.</summary>
-    public bool SetActivationEnergyAndState(string id, float activationEnergy, string? newState = null)
-    {
-        _lock.EnterWriteLock();
-        try
+        // Resolve all ids first (lock-free), then group by resolved ns so we take each ns's
+        // write lock exactly once.
+        var byNs = new Dictionary<string, List<string>>();
+        foreach (var id in ids)
         {
             if (!_store.TryResolveOrLoad(id, out var ns))
-                return false;
+                continue;
+            if (!byNs.TryGetValue(ns, out var list))
+                byNs[ns] = list = new List<string>();
+            list.Add(id);
+        }
 
+        int updated = 0;
+        foreach (var (ns, idList) in byNs)
+        {
+            var nsLock = NsLock(ns);
+            nsLock.EnterWriteLock();
+            try
+            {
+                var nsEntries = _store.GetNamespace(ns);
+                if (nsEntries is null) continue;
+
+                foreach (var id in idList)
+                {
+                    if (nsEntries.TryGetValue(id, out var tuple))
+                    {
+                        var previousState = tuple.Entry.LifecycleState;
+                        tuple.Entry.LifecycleState = state;
+                        UpdateQuantization(nsEntries, id, tuple, previousState, state);
+                        _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                        updated++;
+                    }
+                }
+            }
+            finally { nsLock.ExitWriteLock(); }
+        }
+
+        return updated;
+    }
+
+    /// <summary>Update activation energy and lifecycle state atomically. Resolves id→ns lock-free, then per-ns write.</summary>
+    public bool SetActivationEnergyAndState(string id, float activationEnergy, string? newState = null)
+    {
+        if (!_store.TryResolveOrLoad(id, out var ns))
+            return false;
+
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
+        try
+        {
             var nsEntries = _store.GetNamespace(ns);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
@@ -665,15 +779,16 @@ public sealed class CognitiveIndex : IDisposable
             }
             return false;
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
     // ── Bulk Reads ──
 
-    /// <summary>Get all entries in a namespace.</summary>
+    /// <summary>Get all entries in a namespace. Per-namespace read lock.</summary>
     public IReadOnlyList<CognitiveEntry> GetAllInNamespace(string ns)
     {
-        _lock.EnterReadLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -682,13 +797,14 @@ public sealed class CognitiveIndex : IDisposable
                 return Array.Empty<CognitiveEntry>();
             return nsEntries.Values.Select(t => t.Entry).ToList();
         }
-        finally { _lock.ExitReadLock(); }
+        finally { nsLock.ExitReadLock(); }
     }
 
     /// <summary>Delete all entries in a namespace and remove it from in-memory state. Does NOT cascade to graph edges or clusters — callers must handle that.</summary>
     public int DeleteAllInNamespace(string ns)
     {
-        _lock.EnterWriteLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -711,40 +827,51 @@ public sealed class CognitiveIndex : IDisposable
             _store.RemoveNamespace(ns);
             return count;
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
-    /// <summary>Get all entries across all namespaces.</summary>
+    /// <summary>
+    /// Get all entries across all namespaces. Lock-free: snapshots ConcurrentDictionary entries.
+    /// Diagnostic-grade consistency — may observe in-flight writes to any single ns but never
+    /// returns a torn entry record.
+    /// </summary>
     public IReadOnlyList<CognitiveEntry> GetAll()
     {
-        _lock.EnterReadLock();
-        try
-        {
-            _store.LoadAll();
-            return _store.AllNamespaces
-                .SelectMany(kv => kv.Value.Values.Select(t => t.Entry))
-                .ToList();
-        }
-        finally { _lock.ExitReadLock(); }
+        _store.LoadAll();
+        return _store.AllNamespaces
+            .SelectMany(kv => kv.Value.Values.Select(t => t.Entry))
+            .ToList();
     }
 
-    /// <summary>Get count of entries by lifecycle state.</summary>
+    /// <summary>
+    /// Get count of entries by lifecycle state. Single-ns path takes that ns's read lock;
+    /// cross-ns path is lock-free (diagnostic-grade consistency via ConcurrentDictionary).
+    /// </summary>
     public (int stm, int ltm, int archived) GetStateCounts(string? ns = null)
     {
-        _lock.EnterReadLock();
-        try
+        if (ns is null || ns == "*")
         {
-            if (ns is null || ns == "*")
-                _store.LoadAll();
-            else
+            _store.LoadAll();
+            var entries = _store.AllNamespaces.SelectMany(kv => kv.Value.Values.Select(t => t.Entry));
+            return CountStates(entries);
+        }
+        else
+        {
+            var nsLock = NsLock(ns);
+            nsLock.EnterReadLock();
+            try
+            {
                 _store.EnsureLoaded(ns);
-
-            var entries = ns is null || ns == "*"
-                ? _store.AllNamespaces.SelectMany(kv => kv.Value.Values.Select(t => t.Entry))
-                : _store.GetNamespace(ns) is { } nsEntries
+                var entries = _store.GetNamespace(ns) is { } nsEntries
                     ? nsEntries.Values.Select(t => t.Entry)
                     : Enumerable.Empty<CognitiveEntry>();
+                return CountStates(entries);
+            }
+            finally { nsLock.ExitReadLock(); }
+        }
 
+        static (int stm, int ltm, int archived) CountStates(IEnumerable<CognitiveEntry> entries)
+        {
             int stm = 0, ltm = 0, archived = 0;
             foreach (var e in entries)
             {
@@ -757,13 +884,13 @@ public sealed class CognitiveIndex : IDisposable
             }
             return (stm, ltm, archived);
         }
-        finally { _lock.ExitReadLock(); }
     }
 
-    /// <summary>Re-embed all entries in a namespace.</summary>
+    /// <summary>Re-embed all entries in a namespace. Per-namespace write lock.</summary>
     public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding)
     {
-        _lock.EnterWriteLock();
+        var nsLock = NsLock(ns);
+        nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
@@ -808,10 +935,32 @@ public sealed class CognitiveIndex : IDisposable
 
             return (updated, skipped);
         }
-        finally { _lock.ExitWriteLock(); }
+        finally { nsLock.ExitWriteLock(); }
     }
 
-    public void Dispose() => _lock.Dispose();
+    /// <summary>
+    /// Release per-namespace locks. Per the standard <see cref="IDisposable"/> contract,
+    /// the caller is responsible for ensuring no in-flight operations are still
+    /// executing on this index when Dispose is called — a thread holding a per-ns
+    /// lock during Dispose would cause <see cref="ReaderWriterLockSlim.Dispose"/> to
+    /// throw <see cref="SynchronizationLockException"/>. Dispose is safe against
+    /// concurrent Dispose callers (once-and-only-once) and against racing NsLock
+    /// callers (they throw <see cref="ObjectDisposedException"/> before touching a
+    /// torn-down lock).
+    /// </summary>
+    public void Dispose()
+    {
+        // Atomic once-and-only-once transition via Interlocked.Exchange. Concurrent
+        // Dispose callers never both reach the teardown — only the first to flip 0→1
+        // proceeds; the rest see a non-zero prior value and return immediately.
+        // The flag flips BEFORE teardown so any racing NsLock(ns) call sees it and
+        // throws ObjectDisposedException up front.
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
+
+        foreach (var kv in _nsLocks)
+            kv.Value.Dispose();
+        _nsLocks.Clear();
+    }
 
     // ── Internal Helpers ──
 

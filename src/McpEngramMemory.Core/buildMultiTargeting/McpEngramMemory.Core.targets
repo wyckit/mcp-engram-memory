@@ -18,23 +18,32 @@
         </ItemGroup>
     </Target>
 
+    <!-- See build/McpEngramMemory.Core.targets for the parallel-TFM race explanation. -->
     <Target Name="AcquireBgeMicroModel" Condition="!Exists('$(BgeMicroModelPath)')">
+        <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
             <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroModelUrl)"
                       DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
                       DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)"
+              ContinueOnError="WarnAndContinue"
+              Condition="!Exists('$(BgeMicroModelPath)')" />
+        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
     </Target>
 
     <Target Name="AcquireBgeMicroVocab" Condition="!Exists('$(BgeMicroVocabPath)')">
+        <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
             <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroVocabUrl)"
                       DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
                       DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)" />
+        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)"
+              ContinueOnError="WarnAndContinue"
+              Condition="!Exists('$(BgeMicroVocabPath)')" />
+        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
     </Target>
 </Project>
