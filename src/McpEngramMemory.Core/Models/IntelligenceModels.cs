@@ -34,11 +34,36 @@ public sealed class DecayConfig
     [JsonPropertyName("archivedDecayMultiplier")]
     public float ArchivedDecayMultiplier { get; set; } = 0.1f;
 
+    /// <summary>
+    /// Opt in to graph-Laplacian spectral diffusion of decay debt. When true (and the
+    /// namespace has enough nodes/edges to qualify for the spine), per-entry decay
+    /// debt is diffused through the memory-graph heat kernel before being subtracted
+    /// from activation energy: tightly-linked clusters share forgetting pressure,
+    /// isolated entries bear theirs alone. Default false to preserve existing
+    /// pointwise behavior on rollout.
+    /// </summary>
+    [JsonPropertyName("useSpectralDecay")]
+    public bool UseSpectralDecay { get; set; } = false;
+
+    /// <summary>
+    /// Fractional-Laplacian exponent for the heat kernel filter
+    /// <c>exp(-lambda^alpha * dt)</c>. Default 1.0 = standard heat kernel. Values
+    /// less than 1 implement subdiffusive dynamics (changes how fast modes at
+    /// different positions in the spectrum decay); values greater than 1 implement
+    /// superdiffusive dynamics. Behavior depends on the eigenvalue range, which
+    /// for the normalized Laplacian is [0, 2], so the crossover lambda = 1
+    /// determines whether a given mode decays faster or slower than standard.
+    /// Tune empirically per namespace.
+    /// </summary>
+    [JsonPropertyName("subdiffusiveExponent")]
+    public float SubdiffusiveExponent { get; set; } = 1.0f;
+
     [JsonConstructor]
     public DecayConfig(string ns, float decayRate = 0.1f, float reinforcementWeight = 1.0f,
         float stmThreshold = 2.0f, float archiveThreshold = -5.0f,
         float stmDecayMultiplier = 3.0f, float ltmDecayMultiplier = 1.0f,
-        float archivedDecayMultiplier = 0.1f)
+        float archivedDecayMultiplier = 0.1f,
+        bool useSpectralDecay = false, float subdiffusiveExponent = 1.0f)
     {
         Ns = ns;
         DecayRate = decayRate;
@@ -48,6 +73,8 @@ public sealed class DecayConfig
         StmDecayMultiplier = stmDecayMultiplier;
         LtmDecayMultiplier = ltmDecayMultiplier;
         ArchivedDecayMultiplier = archivedDecayMultiplier;
+        UseSpectralDecay = useSpectralDecay;
+        SubdiffusiveExponent = subdiffusiveExponent;
     }
 }
 

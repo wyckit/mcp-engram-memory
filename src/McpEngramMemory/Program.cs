@@ -47,6 +47,7 @@ var limits = new MemoryLimitsConfig(
 builder.Services.AddSingleton(limits);
 builder.Services.AddSingleton<CognitiveIndex>();
 builder.Services.AddSingleton<KnowledgeGraph>();
+builder.Services.AddSingleton<GraphLaplacianSpine>();
 builder.Services.AddSingleton<ClusterManager>();
 builder.Services.AddSingleton<LifecycleEngine>();
 builder.Services.AddSingleton<PhysicsEngine>();
@@ -105,7 +106,8 @@ if (toolProfile is "standard" or "full")
         .WithTools<GraphTools>()
         .WithTools<ClusterTools>()
         .WithTools<LifecycleTools>()
-        .WithTools<IntelligenceTools>();
+        .WithTools<IntelligenceTools>()
+        .WithTools<LaplacianTools>();
 }
 
 if (toolProfile is "full")

@@ -22,6 +22,14 @@ public sealed class KnowledgeGraph
     private readonly IStorageProvider _persistence;
     private readonly CognitiveIndex _index;
     private bool _loaded;
+    private long _revision;
+
+    /// <summary>
+    /// Monotonic counter incremented on any topology change (edge added or removed).
+    /// Consumers that cache derived structures (e.g., GraphLaplacianSpine) compare against
+    /// this to detect staleness. Read is lock-free via Interlocked.
+    /// </summary>
+    public long Revision => Interlocked.Read(ref _revision);
 
     public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index)
     {
@@ -61,6 +69,7 @@ public sealed class KnowledgeGraph
                 AddEdgeInternal(reverse);
             }
 
+            Interlocked.Increment(ref _revision);
             ScheduleSaveEdges();
             return edge.Relation == "cross_reference"
                 ? $"Linked '{edge.SourceId}' <-> '{edge.TargetId}' (cross_reference, bidirectional)."
@@ -89,7 +98,10 @@ public sealed class KnowledgeGraph
                 count++;
             }
             if (count > 0)
+            {
+                Interlocked.Increment(ref _revision);
                 ScheduleSaveEdges();
+            }
             return count;
         }
         finally { _lock.ExitWriteLock(); }
@@ -107,7 +119,10 @@ public sealed class KnowledgeGraph
             removed += RemoveMatching(_incoming, targetId, e => e.SourceId == sourceId && (relation == null || e.Relation == relation));
 
             if (removed > 0)
+            {
+                Interlocked.Increment(ref _revision);
                 ScheduleSaveEdges();
+            }
 
             return removed > 0
                 ? $"Removed {removed} edge(s) between '{sourceId}' and '{targetId}'."
@@ -144,7 +159,10 @@ public sealed class KnowledgeGraph
             }
 
             if (removed > 0)
+            {
+                Interlocked.Increment(ref _revision);
                 ScheduleSaveEdges();
+            }
 
             return removed;
         }
@@ -365,7 +383,10 @@ public sealed class KnowledgeGraph
             }
 
             if (transferred > 0)
+            {
+                Interlocked.Increment(ref _revision);
                 ScheduleSaveEdges();
+            }
 
             return transferred;
         }

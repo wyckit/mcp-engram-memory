@@ -1,4 +1,5 @@
 using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Storage;
 
 namespace McpEngramMemory.Core.Services.Lifecycle;
@@ -10,19 +11,25 @@ public sealed class LifecycleEngine
 {
     private readonly CognitiveIndex _index;
     private readonly IStorageProvider? _persistence;
+    private readonly GraphLaplacianSpine? _spine;
     private readonly Dictionary<string, DecayConfig> _decayConfigs = new();
     private readonly object _configLock = new();
     private bool _configsLoaded;
 
-    public LifecycleEngine(CognitiveIndex index, IStorageProvider? persistence = null)
+    public LifecycleEngine(
+        CognitiveIndex index,
+        IStorageProvider? persistence = null,
+        GraphLaplacianSpine? spine = null)
     {
         _index = index;
         _persistence = persistence;
+        _spine = spine;
     }
 
     /// <summary>Set or update a per-namespace decay configuration.</summary>
     public DecayConfig SetDecayConfig(string ns, float? decayRate = null, float? reinforcementWeight = null,
-        float? stmThreshold = null, float? archiveThreshold = null)
+        float? stmThreshold = null, float? archiveThreshold = null,
+        bool? useSpectralDecay = null, float? subdiffusiveExponent = null)
     {
         lock (_configLock)
         {
@@ -37,6 +44,8 @@ public sealed class LifecycleEngine
             if (reinforcementWeight.HasValue) config.ReinforcementWeight = reinforcementWeight.Value;
             if (stmThreshold.HasValue) config.StmThreshold = stmThreshold.Value;
             if (archiveThreshold.HasValue) config.ArchiveThreshold = archiveThreshold.Value;
+            if (useSpectralDecay.HasValue) config.UseSpectralDecay = useSpectralDecay.Value;
+            if (subdiffusiveExponent.HasValue) config.SubdiffusiveExponent = subdiffusiveExponent.Value;
 
             ScheduleSaveConfigs();
             return config;
@@ -93,6 +102,8 @@ public sealed class LifecycleEngine
             float stmMultiplier = 3.0f;
             float ltmMultiplier = 1.0f;
             float archivedMultiplier = 0.1f;
+            bool useSpectral = false;
+            float subdiffusiveExponent = 1.0f;
 
             if (useStoredConfig)
             {
@@ -106,19 +117,26 @@ public sealed class LifecycleEngine
                     stmMultiplier = config.StmDecayMultiplier;
                     ltmMultiplier = config.LtmDecayMultiplier;
                     archivedMultiplier = config.ArchivedDecayMultiplier;
+                    useSpectral = config.UseSpectralDecay && _spine is not null;
+                    subdiffusiveExponent = config.SubdiffusiveExponent;
                 }
             }
 
             // GetAllInNamespace returns a snapshot list — safe to iterate
             var entries = _index.GetAllInNamespace(currentNs);
-            foreach (var entry in entries)
+            var nonSummary = new List<CognitiveEntry>(entries.Count);
+            foreach (var e in entries)
+                if (!e.IsSummaryNode) nonSummary.Add(e);
+
+            // Pass 1: compute per-entry "decay debt" — the amount the entry would
+            // lose pointwise. We diffuse this debt (not the activation itself, which
+            // is the input/source field, not the dissipative field) when spectral
+            // mode is on.
+            var debt = new Dictionary<string, float>(nonSummary.Count);
+            var now = DateTimeOffset.UtcNow;
+            foreach (var entry in nonSummary)
             {
-                if (entry.IsSummaryNode) continue; // Don't decay summary nodes
-
-                processedCount++;
-                var hoursSinceAccess = (float)(DateTimeOffset.UtcNow - entry.LastAccessedAt).TotalHours;
-
-                // Asymmetric decay: each lifecycle state has its own decay rate multiplier
+                var hoursSinceAccess = (float)(now - entry.LastAccessedAt).TotalHours;
                 float stateMultiplier = entry.LifecycleState switch
                 {
                     "stm" => stmMultiplier,
@@ -126,9 +144,30 @@ public sealed class LifecycleEngine
                     "archived" => archivedMultiplier,
                     _ => 1.0f
                 };
-                float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - (hoursSinceAccess * effectiveDecayRate * stateMultiplier);
+                debt[entry.Id] = hoursSinceAccess * effectiveDecayRate * stateMultiplier;
+            }
 
-                // Determine new state
+            // Optional pass 1.5: diffuse debt through the graph heat kernel. The
+            // filter exp(-lambda^alpha) with t=1 means "one unit of diffusion per
+            // decay cycle"; the magnitude of debt is already scaled by decayRate
+            // and hours-since-access on the way in, so the spectral step here
+            // controls only the *shape* (which entries share their forgetting
+            // pressure with their neighbors). Falls back silently to pointwise
+            // debt if the spine declines (namespace too small, no qualifying edges).
+            IReadOnlyDictionary<string, float> appliedDebt = debt;
+            if (useSpectral)
+            {
+                appliedDebt = _spine!.ApplySpectralFilter(currentNs, debt,
+                    lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)));
+            }
+
+            // Pass 2: apply debt and resolve state transitions.
+            foreach (var entry in nonSummary)
+            {
+                processedCount++;
+                float entryDebt = appliedDebt.TryGetValue(entry.Id, out var d) ? d : 0f;
+                float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - entryDebt;
+
                 string? newState = null;
                 switch (entry.LifecycleState)
                 {
@@ -142,7 +181,6 @@ public sealed class LifecycleEngine
                         break;
                 }
 
-                // Atomically update activation energy and optional state transition via the index
                 _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState);
             }
         }
