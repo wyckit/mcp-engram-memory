@@ -120,6 +120,14 @@ public sealed class LifecycleEngine
                     useSpectral = config.UseSpectralDecay && _diffusion is not null;
                     subdiffusiveExponent = config.SubdiffusiveExponent;
                 }
+                else
+                {
+                    // No stored config — apply defaults. Spectral diffusion is on
+                    // by default whenever a kernel is available; the kernel itself
+                    // self-bypasses for namespaces that don't qualify, so this is
+                    // safe even on tiny / sparsely-linked namespaces.
+                    useSpectral = _diffusion is not null;
+                }
             }
 
             // GetAllInNamespace returns a snapshot list — safe to iterate

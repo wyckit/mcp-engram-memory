@@ -35,15 +35,17 @@ public sealed class DecayConfig
     public float ArchivedDecayMultiplier { get; set; } = 0.1f;
 
     /// <summary>
-    /// Opt in to graph-Laplacian spectral diffusion of decay debt. When true (and the
-    /// namespace has enough nodes/edges to qualify for the spine), per-entry decay
-    /// debt is diffused through the memory-graph heat kernel before being subtracted
-    /// from activation energy: tightly-linked clusters share forgetting pressure,
-    /// isolated entries bear theirs alone. Default false to preserve existing
-    /// pointwise behavior on rollout.
+    /// Spectral diffusion of decay debt through the memory graph. When true (the
+    /// default) and the namespace qualifies for a diffusion kernel (>=32 nodes,
+    /// >=8 positive-relation edges), per-entry decay debt is diffused through the
+    /// graph heat kernel before being subtracted from activation energy:
+    /// tightly-linked clusters share forgetting pressure, isolated entries bear
+    /// theirs alone. Set to false to force classical pointwise decay regardless
+    /// of graph structure. Namespaces below the qualification threshold silently
+    /// fall back to pointwise either way — the kernel self-bypasses.
     /// </summary>
     [JsonPropertyName("useSpectralDecay")]
-    public bool UseSpectralDecay { get; set; } = false;
+    public bool UseSpectralDecay { get; set; } = true;
 
     /// <summary>
     /// Fractional-Laplacian exponent for the heat kernel filter
@@ -63,7 +65,7 @@ public sealed class DecayConfig
         float stmThreshold = 2.0f, float archiveThreshold = -5.0f,
         float stmDecayMultiplier = 3.0f, float ltmDecayMultiplier = 1.0f,
         float archivedDecayMultiplier = 0.1f,
-        bool useSpectralDecay = false, float subdiffusiveExponent = 1.0f)
+        bool useSpectralDecay = true, float subdiffusiveExponent = 1.0f)
     {
         Ns = ns;
         DecayRate = decayRate;

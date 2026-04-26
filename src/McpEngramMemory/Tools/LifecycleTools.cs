@@ -89,7 +89,7 @@ public sealed class LifecycleTools
         [Description("Weight per access (default: 1.0).")] float? reinforcementWeight = null,
         [Description("Below this, STM demotes to LTM (default: 2.0).")] float? stmThreshold = null,
         [Description("Below this, LTM archives (default: -5.0).")] float? archiveThreshold = null,
-        [Description("Opt in to graph-Laplacian spectral diffusion of decay debt: tightly-linked clusters share forgetting pressure, isolated entries fade alone. Off by default; namespace must have >=32 nodes and >=8 positive-relation edges to qualify.")] bool? useSpectralDecay = null,
+        [Description("Override spectral diffusion of decay debt. Defaults to ON when the namespace qualifies (>=32 nodes, >=8 positive-relation edges); set false to force classical pointwise decay regardless of graph structure. Namespaces below the qualification threshold silently fall back to pointwise either way.")] bool? useSpectralDecay = null,
         [Description("Fractional-Laplacian exponent alpha for the heat kernel filter exp(-lambda^alpha). Default 1.0 = standard heat kernel. Values <1 are subdiffusive, >1 superdiffusive.")] float? subdiffusiveExponent = null)
     {
         if (string.IsNullOrWhiteSpace(ns))

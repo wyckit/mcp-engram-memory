@@ -82,6 +82,7 @@ builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<Onn
 builder.Services.AddHostedService<EmbeddingWarmupService>();
 builder.Services.AddHostedService<DecayBackgroundService>();
 builder.Services.AddHostedService<AccretionBackgroundService>();
+builder.Services.AddHostedService<DiffusionKernelWarmupService>();
 
 // Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
 //   "minimal"  → 16 tools: core CRUD + admin + composite + multi-agent
