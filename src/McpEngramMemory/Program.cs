@@ -50,6 +50,7 @@ builder.Services.AddSingleton<KnowledgeGraph>();
 builder.Services.AddSingleton<MemoryDiffusionKernel>();
 builder.Services.AddSingleton<DuplicateDetector>();
 builder.Services.AddSingleton<AutoLinkScanner>();
+builder.Services.AddSingleton<SpectralRetrievalReranker>();
 builder.Services.AddSingleton<ClusterManager>();
 builder.Services.AddSingleton<LifecycleEngine>();
 builder.Services.AddSingleton<PhysicsEngine>();
@@ -112,7 +113,8 @@ if (toolProfile is "standard" or "full")
         .WithTools<ClusterTools>()
         .WithTools<LifecycleTools>()
         .WithTools<IntelligenceTools>()
-        .WithTools<MemoryDiffusionTools>();
+        .WithTools<MemoryDiffusionTools>()
+        .WithTools<SpectralRetrievalTools>();
 }
 
 if (toolProfile is "full")
