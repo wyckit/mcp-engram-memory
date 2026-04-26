@@ -201,6 +201,130 @@ public sealed class LifecycleEngine
             ltmToArchivedIds);
     }
 
+    /// <summary>
+    /// Sleep-consolidation pass: smooth the activation field through a long-time
+    /// graph heat kernel and drive lifecycle transitions based on the smoothed
+    /// (cluster-aware) values rather than the raw per-entry energy.
+    ///
+    /// Semantics. The smoothed activation <c>A_smooth = exp(-tL) A</c> at large t
+    /// converges to the mean activation within each connected component of the
+    /// memory graph. So <c>A_smooth[i]</c> reads as "how much support does memory
+    /// i's cluster collectively give it." Transitions:
+    ///
+    /// - STM -&gt; LTM when <c>A_smooth[i] >= ConsolidationPromotionThreshold</c>:
+    ///   the memory's cluster is collectively warm enough to anchor it as a
+    ///   stable long-term memory, even if its own access count is modest.
+    /// - LTM -&gt; archived when <c>A_smooth[i] &lt; ConsolidationArchiveThreshold</c>:
+    ///   the memory's cluster has cooled below the archive floor; even if this
+    ///   particular entry was recently accessed, its surrounding context is gone.
+    ///
+    /// Complements <see cref="RunDecayCycle"/>, which drives transitions by
+    /// per-entry decay debt. Topology-driven transitions here can rescue memories
+    /// whose own activation is low but whose cluster is hot, and conversely
+    /// archive memories whose cluster has dispersed.
+    ///
+    /// Skips namespaces that do not qualify for the diffusion kernel (too small
+    /// or too sparsely linked) — without a graph to diffuse on, this pass has
+    /// nothing to add over the regular decay cycle.
+    /// </summary>
+    /// <param name="ns">Namespace to consolidate, or "*" for every non-system namespace.</param>
+    public ConsolidationResult RunConsolidationPass(string ns)
+    {
+        var stmToLtmIds = new List<string>();
+        var ltmToArchivedIds = new List<string>();
+        int processedNamespaces = 0;
+        int skippedNamespaces = 0;
+        int processedEntries = 0;
+
+        if (_diffusion is null)
+        {
+            // Without a kernel injected, consolidation has no graph diffusion to
+            // run; report a single skip so callers can distinguish "no kernel" from
+            // "no qualifying namespaces."
+            return new ConsolidationResult(0, 1, 0, 0, 0, stmToLtmIds, ltmToArchivedIds);
+        }
+
+        var allNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
+
+        foreach (var currentNs in allNamespaces)
+        {
+            if (currentNs.StartsWith('_'))
+            {
+                // Skip system namespaces (sharing registry, etc.).
+                skippedNamespaces++;
+                continue;
+            }
+
+            var config = GetDecayConfig(currentNs) ?? new DecayConfig(currentNs);
+            if (!config.EnableConsolidation)
+            {
+                skippedNamespaces++;
+                continue;
+            }
+
+            var entries = _index.GetAllInNamespace(currentNs);
+            var nonSummary = new List<CognitiveEntry>(entries.Count);
+            foreach (var e in entries)
+                if (!e.IsSummaryNode) nonSummary.Add(e);
+            if (nonSummary.Count == 0)
+            {
+                skippedNamespaces++;
+                continue;
+            }
+
+            // Snapshot current activation field. The kernel handles namespaces
+            // that don't qualify by returning the signal unchanged; we detect
+            // that case explicitly to skip rather than make essentially-no-op
+            // threshold decisions on raw activation (which would duplicate the
+            // existing decay cycle's role).
+            var basis = _diffusion.GetBasis(currentNs);
+            if (basis is null)
+            {
+                skippedNamespaces++;
+                continue;
+            }
+
+            var activation = new Dictionary<string, float>(nonSummary.Count);
+            foreach (var entry in nonSummary)
+                activation[entry.Id] = entry.ActivationEnergy;
+
+            // Long-time heat kernel diffusion: exp(-t * lambda).
+            float t = config.ConsolidationDiffusionTime;
+            var smoothed = _diffusion.ApplySpectralFilter(currentNs, activation,
+                lambda => MathF.Exp(-lambda * t));
+
+            // Apply topology-driven transitions.
+            foreach (var entry in nonSummary)
+            {
+                if (!smoothed.TryGetValue(entry.Id, out var smoothAE)) continue;
+                processedEntries++;
+
+                switch (entry.LifecycleState)
+                {
+                    case "stm" when smoothAE >= config.ConsolidationPromotionThreshold:
+                        if (_index.SetLifecycleState(entry.Id, "ltm"))
+                            stmToLtmIds.Add(entry.Id);
+                        break;
+                    case "ltm" when smoothAE < config.ConsolidationArchiveThreshold:
+                        if (_index.SetLifecycleState(entry.Id, "archived"))
+                            ltmToArchivedIds.Add(entry.Id);
+                        break;
+                }
+            }
+
+            processedNamespaces++;
+        }
+
+        return new ConsolidationResult(
+            processedNamespaces,
+            skippedNamespaces,
+            processedEntries,
+            stmToLtmIds.Count,
+            ltmToArchivedIds.Count,
+            stmToLtmIds,
+            ltmToArchivedIds);
+    }
+
     /// <summary>Promote (or demote) an entry to a specific lifecycle state.</summary>
     public string PromoteMemory(string id, string targetState)
     {

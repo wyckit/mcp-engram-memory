@@ -60,12 +60,51 @@ public sealed class DecayConfig
     [JsonPropertyName("subdiffusiveExponent")]
     public float SubdiffusiveExponent { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Sleep-consolidation pass: long-time graph diffusion of the activation field
+    /// to drive topology-aware lifecycle transitions (STM-&gt;LTM promotion when a
+    /// memory has cluster support; LTM-&gt;archived when its cluster has decayed).
+    /// Complements access-count-driven transitions of the regular decay cycle.
+    /// Default true; namespaces below the diffusion-kernel qualification threshold
+    /// silently skip consolidation since the heat kernel needs a graph to diffuse on.
+    /// </summary>
+    [JsonPropertyName("enableConsolidation")]
+    public bool EnableConsolidation { get; set; } = true;
+
+    /// <summary>
+    /// Diffusion time t for the sleep-consolidation heat kernel exp(-tL).
+    /// Larger t = stronger smoothing toward cluster means. Default 10.0, which
+    /// is well into the long-time regime where the smoothed activation closely
+    /// reflects each connected component's mean rather than per-entry detail.
+    /// </summary>
+    [JsonPropertyName("consolidationDiffusionTime")]
+    public float ConsolidationDiffusionTime { get; set; } = 10.0f;
+
+    /// <summary>
+    /// Smoothed-activation threshold above which STM entries are promoted to LTM
+    /// during consolidation. Set on the same scale as raw activation energy.
+    /// Default 0.0: any cluster with net-positive collective activation graduates
+    /// its STM members.
+    /// </summary>
+    [JsonPropertyName("consolidationPromotionThreshold")]
+    public float ConsolidationPromotionThreshold { get; set; } = 0.0f;
+
+    /// <summary>
+    /// Smoothed-activation threshold below which LTM entries are archived during
+    /// consolidation. Defaults to the same value as <see cref="ArchiveThreshold"/>
+    /// so consolidation and decay-cycle archival use a consistent floor.
+    /// </summary>
+    [JsonPropertyName("consolidationArchiveThreshold")]
+    public float ConsolidationArchiveThreshold { get; set; } = -5.0f;
+
     [JsonConstructor]
     public DecayConfig(string ns, float decayRate = 0.1f, float reinforcementWeight = 1.0f,
         float stmThreshold = 2.0f, float archiveThreshold = -5.0f,
         float stmDecayMultiplier = 3.0f, float ltmDecayMultiplier = 1.0f,
         float archivedDecayMultiplier = 0.1f,
-        bool useSpectralDecay = true, float subdiffusiveExponent = 1.0f)
+        bool useSpectralDecay = true, float subdiffusiveExponent = 1.0f,
+        bool enableConsolidation = true, float consolidationDiffusionTime = 10.0f,
+        float consolidationPromotionThreshold = 0.0f, float consolidationArchiveThreshold = -5.0f)
     {
         Ns = ns;
         DecayRate = decayRate;
@@ -77,6 +116,10 @@ public sealed class DecayConfig
         ArchivedDecayMultiplier = archivedDecayMultiplier;
         UseSpectralDecay = useSpectralDecay;
         SubdiffusiveExponent = subdiffusiveExponent;
+        EnableConsolidation = enableConsolidation;
+        ConsolidationDiffusionTime = consolidationDiffusionTime;
+        ConsolidationPromotionThreshold = consolidationPromotionThreshold;
+        ConsolidationArchiveThreshold = consolidationArchiveThreshold;
     }
 }
 

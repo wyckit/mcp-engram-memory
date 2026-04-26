@@ -96,6 +96,20 @@ public sealed record DecayCycleResult(
     [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds);
 
 /// <summary>
+/// Result of a sleep-consolidation pass. Reports namespaces processed, lifecycle
+/// transitions driven by topology (cluster support / cluster decay), and any
+/// namespaces skipped because they didn't qualify for the diffusion kernel.
+/// </summary>
+public sealed record ConsolidationResult(
+    [property: JsonPropertyName("processedNamespaces")] int ProcessedNamespaces,
+    [property: JsonPropertyName("skippedNamespaces")] int SkippedNamespaces,
+    [property: JsonPropertyName("processedEntries")] int ProcessedEntries,
+    [property: JsonPropertyName("stmToLtm")] int StmToLtm,
+    [property: JsonPropertyName("ltmToArchived")] int LtmToArchived,
+    [property: JsonPropertyName("stmToLtmIds")] IReadOnlyList<string> StmToLtmIds,
+    [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds);
+
+/// <summary>
 /// System overview statistics.
 /// </summary>
 public sealed record LifecycleStats(
