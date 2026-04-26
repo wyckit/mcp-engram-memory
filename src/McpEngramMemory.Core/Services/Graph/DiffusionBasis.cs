@@ -1,15 +1,19 @@
 namespace McpEngramMemory.Core.Services.Graph;
 
 /// <summary>
-/// Cached top-K eigenbasis of a per-namespace memory-graph normalized Laplacian
-/// L_norm = I - D^(-1/2) W D^(-1/2), with W built from positive-relation edges only
-/// (parent_child, cross_reference, similar_to, elaborates, depends_on). Contradicts
-/// edges are excluded to preserve PSD-ness of L (heat kernel exp(-tL) stays a contraction).
+/// Cached top-K eigenbasis of the memory-graph normalized Laplacian
+/// L_norm = I - D^(-1/2) W D^(-1/2), held by <see cref="MemoryDiffusionKernel"/>
+/// and used to apply spectral filters (heat-kernel diffusion of decay debt and
+/// other per-entry signals).
 ///
-/// Row order in <see cref="Eigenvectors"/> follows <see cref="EntryIds"/>; the spine
-/// returns a stable id->index map for callers that need to project signals.
+/// W is built from positive-relation edges only (parent_child, cross_reference,
+/// similar_to, elaborates, depends_on). Contradicts edges are excluded to keep L
+/// positive semi-definite, so the heat kernel exp(-tL) stays a contraction.
+///
+/// Row order in <see cref="Eigenvectors"/> follows <see cref="EntryIds"/>; the
+/// kernel returns a stable id-&gt;index map for callers that need to project signals.
 /// </summary>
-public sealed class LaplacianBasis
+public sealed class DiffusionBasis
 {
     /// <summary>Namespace this basis was computed for.</summary>
     public string Namespace { get; }
@@ -46,14 +50,14 @@ public sealed class LaplacianBasis
     public DateTime ComputedAt { get; }
 
     /// <summary>
-    /// <see cref="KnowledgeGraph.Revision"/> at the time of computation. The spine
+    /// <see cref="KnowledgeGraph.Revision"/> at the time of computation. The kernel
     /// recomputes when the live revision diverges.
     /// </summary>
     public long GraphRevision { get; }
 
     private readonly Dictionary<string, int> _indexOf;
 
-    public LaplacianBasis(
+    public DiffusionBasis(
         string ns,
         IReadOnlyList<string> entryIds,
         float[] eigenvalues,
@@ -85,8 +89,8 @@ public sealed class LaplacianBasis
         _indexOf.TryGetValue(entryId, out var idx) ? idx : -1;
 }
 
-/// <summary>Lightweight diagnostics view of a basis without exposing the dense matrix.</summary>
-public sealed record LaplacianStats(
+/// <summary>Lightweight diagnostics view of a diffusion basis without exposing the dense matrix.</summary>
+public sealed record DiffusionStats(
     string Namespace,
     int NodeCount,
     int EdgeCount,

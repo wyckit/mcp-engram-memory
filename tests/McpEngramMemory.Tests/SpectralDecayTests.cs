@@ -12,7 +12,7 @@ public class SpectralDecayTests : IDisposable
     private readonly PersistenceManager _persistence;
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
-    private readonly GraphLaplacianSpine _spine;
+    private readonly MemoryDiffusionKernel _diffusion;
     private readonly LifecycleEngine _lifecycle;
 
     public SpectralDecayTests()
@@ -21,8 +21,8 @@ public class SpectralDecayTests : IDisposable
         _persistence = new PersistenceManager(_testDataPath, debounceMs: 50);
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
-        _spine = new GraphLaplacianSpine(_index, _graph);
-        _lifecycle = new LifecycleEngine(_index, _persistence, _spine);
+        _diffusion = new MemoryDiffusionKernel(_index, _graph);
+        _lifecycle = new LifecycleEngine(_index, _persistence, _diffusion);
     }
 
     public void Dispose()
@@ -104,25 +104,25 @@ public class SpectralDecayTests : IDisposable
     }
 
     /// <summary>
-    /// When the spine is missing, useSpectralDecay=true must transparently fall
-    /// back to pointwise decay rather than throwing. Tests the null-spine path.
+    /// When the diffusion kernel is missing, useSpectralDecay=true must transparently
+    /// fall back to pointwise decay rather than throwing. Tests the null-kernel path.
     /// </summary>
     [Fact]
-    public void SpectralDecayWithoutSpineFallsBackToPointwise()
+    public void SpectralDecayWithoutKernelFallsBackToPointwise()
     {
-        const string ns = "no_spine";
+        const string ns = "no_diffusion";
         SeedTestGraph(ns, 16, 16);
         _index.Get("c_0")!.LastAccessedAt = DateTimeOffset.UtcNow.AddHours(-100);
 
-        // Construct a fresh LifecycleEngine WITHOUT spine.
-        var lifecycleNoSpine = new LifecycleEngine(_index, _persistence, spine: null);
-        lifecycleNoSpine.SetDecayConfig(ns, decayRate: 0.1f, useSpectralDecay: true);
+        // Construct a fresh LifecycleEngine WITHOUT a diffusion kernel.
+        var lifecycleNoKernel = new LifecycleEngine(_index, _persistence, diffusion: null);
+        lifecycleNoKernel.SetDecayConfig(ns, decayRate: 0.1f, useSpectralDecay: true);
 
         // Should not throw; pointwise debt is applied.
-        var result = lifecycleNoSpine.RunDecayCycle(ns, useStoredConfig: true);
+        var result = lifecycleNoKernel.RunDecayCycle(ns, useStoredConfig: true);
         Assert.Equal(32, result.ProcessedCount);
         Assert.True(_index.Get("c_0")!.ActivationEnergy < -10f,
-            "Without spine, pointwise debt should land directly on the backdated node.");
+            "Without a diffusion kernel, pointwise debt should land directly on the backdated node.");
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

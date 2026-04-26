@@ -11,7 +11,7 @@ public sealed class LifecycleEngine
 {
     private readonly CognitiveIndex _index;
     private readonly IStorageProvider? _persistence;
-    private readonly GraphLaplacianSpine? _spine;
+    private readonly MemoryDiffusionKernel? _diffusion;
     private readonly Dictionary<string, DecayConfig> _decayConfigs = new();
     private readonly object _configLock = new();
     private bool _configsLoaded;
@@ -19,11 +19,11 @@ public sealed class LifecycleEngine
     public LifecycleEngine(
         CognitiveIndex index,
         IStorageProvider? persistence = null,
-        GraphLaplacianSpine? spine = null)
+        MemoryDiffusionKernel? diffusion = null)
     {
         _index = index;
         _persistence = persistence;
-        _spine = spine;
+        _diffusion = diffusion;
     }
 
     /// <summary>Set or update a per-namespace decay configuration.</summary>
@@ -117,7 +117,7 @@ public sealed class LifecycleEngine
                     stmMultiplier = config.StmDecayMultiplier;
                     ltmMultiplier = config.LtmDecayMultiplier;
                     archivedMultiplier = config.ArchivedDecayMultiplier;
-                    useSpectral = config.UseSpectralDecay && _spine is not null;
+                    useSpectral = config.UseSpectralDecay && _diffusion is not null;
                     subdiffusiveExponent = config.SubdiffusiveExponent;
                 }
             }
@@ -153,11 +153,11 @@ public sealed class LifecycleEngine
             // and hours-since-access on the way in, so the spectral step here
             // controls only the *shape* (which entries share their forgetting
             // pressure with their neighbors). Falls back silently to pointwise
-            // debt if the spine declines (namespace too small, no qualifying edges).
+            // debt if the kernel declines (namespace too small, no qualifying edges).
             IReadOnlyDictionary<string, float> appliedDebt = debt;
             if (useSpectral)
             {
-                appliedDebt = _spine!.ApplySpectralFilter(currentNs, debt,
+                appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
                     lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)));
             }
 

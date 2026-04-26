@@ -5,9 +5,19 @@ using Microsoft.Extensions.Logging;
 namespace McpEngramMemory.Core.Services.Graph;
 
 /// <summary>
-/// Per-namespace cache of the top-K eigenbasis of the memory-graph normalized
-/// Laplacian. Consumed by spectral diffusion of decay debt (LifecycleEngine, PR 2)
-/// and any future spectral retrieval / consolidation operators.
+/// Per-namespace cache and operator for diffusing per-entry signals through the
+/// memory graph. Internally holds the top-K eigenbasis of the normalized
+/// Laplacian; externally exposes <see cref="ApplySpectralFilter"/> as the
+/// primary verb. Consumed today by spectral diffusion of decay debt
+/// (LifecycleEngine) and reserved for future spectral retrieval and
+/// sleep-consolidation operators.
+///
+/// What "diffusion" means here. Each memory entry has a position on the graph
+/// (its node) and a scalar associated with it (decay debt, activation pressure,
+/// retrieval relevance — whatever the caller needs to spread). Applying the
+/// heat-kernel filter <c>exp(-tL)</c> to this scalar field moves it from each
+/// node to its neighbors weighted by edge connectivity, exactly the way
+/// activation spreads in classical cognitive-science models of associative memory.
 ///
 /// Construction. For namespace <c>ns</c>:
 /// 1. Snapshot entry ids in stable order from <see cref="CognitiveIndex.GetAllInNamespace"/>.
@@ -29,7 +39,7 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// under a per-namespace lock — concurrent calls for the same namespace serialize,
 /// but different namespaces compute independently.
 /// </summary>
-public sealed class GraphLaplacianSpine
+public sealed class MemoryDiffusionKernel
 {
     /// <summary>Edge relations that contribute positive weight to the Laplacian.</summary>
     public static readonly IReadOnlySet<string> PositiveRelations = new HashSet<string>
@@ -40,8 +50,11 @@ public sealed class GraphLaplacianSpine
     /// <summary>Default top-K. 96 covers the dominant low-frequency modes for typical namespaces.</summary>
     public const int DefaultTopK = 96;
 
-    /// <summary>Below this node count, spectral methods give no benefit and the spine is bypassed.</summary>
+    /// <summary>Below this node count, spectral methods give no benefit and the kernel is bypassed.</summary>
     public const int MinimumNodesForSpectral = 32;
+
+    /// <summary>Minimum positive-relation edges required to construct a meaningful basis.</summary>
+    public const int MinimumEdgesForSpectral = 8;
 
     /// <summary>Random sketch oversample (Halko-Martinsson-Tropp typical value).</summary>
     private const int Oversample = 10;
@@ -51,15 +64,15 @@ public sealed class GraphLaplacianSpine
 
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
-    private readonly ILogger<GraphLaplacianSpine>? _logger;
+    private readonly ILogger<MemoryDiffusionKernel>? _logger;
 
-    private readonly ConcurrentDictionary<string, LaplacianBasis> _cache = new();
+    private readonly ConcurrentDictionary<string, DiffusionBasis> _cache = new();
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
-    public GraphLaplacianSpine(
+    public MemoryDiffusionKernel(
         CognitiveIndex index,
         KnowledgeGraph graph,
-        ILogger<GraphLaplacianSpine>? logger = null)
+        ILogger<MemoryDiffusionKernel>? logger = null)
     {
         _index = index;
         _graph = graph;
@@ -67,12 +80,14 @@ public sealed class GraphLaplacianSpine
     }
 
     /// <summary>
-    /// Return the top-K eigenbasis for <paramref name="ns"/>, recomputing if the cache
-    /// is missing, stale (graph revision diverged), or has fewer eigenpairs than requested.
-    /// Returns <c>null</c> if the namespace has fewer than <see cref="MinimumNodesForSpectral"/>
-    /// nodes — callers should fall back to non-spectral behavior in that case.
+    /// Return the top-K diffusion basis for <paramref name="ns"/>, recomputing if
+    /// the cache is missing, stale (graph revision diverged), or has fewer
+    /// eigenpairs than requested. Returns <c>null</c> if the namespace is too
+    /// small or sparsely linked to qualify (see <see cref="MinimumNodesForSpectral"/>
+    /// and <see cref="MinimumEdgesForSpectral"/>) — callers should fall back to
+    /// non-spectral behavior in that case.
     /// </summary>
-    public LaplacianBasis? GetBasis(string ns, int topK = DefaultTopK)
+    public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK)
     {
         long currentRev = _graph.Revision;
         if (_cache.TryGetValue(ns, out var cached)
@@ -106,9 +121,10 @@ public sealed class GraphLaplacianSpine
     }
 
     /// <summary>
-    /// Apply a per-mode spectral filter to a per-entry signal. Entries not present in
-    /// the cached basis pass through unchanged (e.g., entries added after basis
-    /// computation, on a stale-but-not-yet-rebuilt basis).
+    /// Apply a per-mode spectral filter to a per-entry signal — the kernel's
+    /// primary verb. Entries not present in the cached basis pass through
+    /// unchanged (e.g., entries added after basis computation, on a
+    /// stale-but-not-yet-rebuilt basis).
     ///
     /// Mechanism: project signal into the basis (sigma_hat[k] = sum_i U[i,k] · signal[i]),
     /// apply <paramref name="modeFilter"/> to each mode, project back. For diffusion of
@@ -153,12 +169,12 @@ public sealed class GraphLaplacianSpine
     }
 
     /// <summary>Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.</summary>
-    public LaplacianStats? GetStats(string ns)
+    public DiffusionStats? GetStats(string ns)
     {
         var basis = GetBasis(ns);
         if (basis is null) return null;
         bool stale = basis.GraphRevision != _graph.Revision;
-        return new LaplacianStats(
+        return new DiffusionStats(
             ns,
             basis.NodeCount,
             basis.EdgeCount,
@@ -175,13 +191,13 @@ public sealed class GraphLaplacianSpine
 
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private LaplacianBasis? ComputeBasis(string ns, int topK, long graphRevision)
+    private DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision)
     {
         var entries = _index.GetAllInNamespace(ns);
         if (entries.Count < MinimumNodesForSpectral)
         {
             _logger?.LogDebug(
-                "Spine bypass for ns={Namespace}: {Count} nodes < {Min} minimum.",
+                "Diffusion kernel bypass for ns={Namespace}: {Count} nodes < {Min} minimum.",
                 ns, entries.Count, MinimumNodesForSpectral);
             return null;
         }
@@ -208,11 +224,11 @@ public sealed class GraphLaplacianSpine
         }
         edgeCount = weights.Count;
 
-        if (edgeCount < 8)
+        if (edgeCount < MinimumEdgesForSpectral)
         {
             _logger?.LogDebug(
-                "Spine bypass for ns={Namespace}: only {EdgeCount} positive-relation edges.",
-                ns, edgeCount);
+                "Diffusion kernel bypass for ns={Namespace}: only {EdgeCount} positive-relation edges (< {Min}).",
+                ns, edgeCount, MinimumEdgesForSpectral);
             return null;
         }
 
@@ -301,9 +317,9 @@ public sealed class GraphLaplacianSpine
         }
 
         _logger?.LogInformation(
-            "Spine: built basis for ns={Namespace} (n={Nodes}, edges={Edges}, k={TopK}) in {Ms}ms.",
+            "Diffusion kernel: built basis for ns={Namespace} (n={Nodes}, edges={Edges}, k={TopK}) in {Ms}ms.",
             ns, n, edgeCount, lEigs.Length, sw.ElapsedMilliseconds);
 
-        return new LaplacianBasis(ns, entryIds, lEigs, lVecs, edgeCount, graphRevision);
+        return new DiffusionBasis(ns, entryIds, lEigs, lVecs, edgeCount, graphRevision);
     }
 }

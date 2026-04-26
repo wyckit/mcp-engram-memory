@@ -5,21 +5,21 @@ using McpEngramMemory.Core.Services.Storage;
 
 namespace McpEngramMemory.Tests;
 
-public class GraphLaplacianSpineTests : IDisposable
+public class MemoryDiffusionKernelTests : IDisposable
 {
     private readonly string _testDataPath;
     private readonly PersistenceManager _persistence;
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
-    private readonly GraphLaplacianSpine _spine;
+    private readonly MemoryDiffusionKernel _kernel;
 
-    public GraphLaplacianSpineTests()
+    public MemoryDiffusionKernelTests()
     {
         _testDataPath = Path.Combine(Path.GetTempPath(), $"spine_test_{Guid.NewGuid():N}");
         _persistence = new PersistenceManager(_testDataPath, debounceMs: 50);
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
-        _spine = new GraphLaplacianSpine(_index, _graph);
+        _kernel = new MemoryDiffusionKernel(_index, _graph);
     }
 
     public void Dispose()
@@ -46,7 +46,7 @@ public class GraphLaplacianSpineTests : IDisposable
         const int perCluster = 8;
         SeedClusteredGraph(ns, clusters, perCluster, withinDensity: 0.6f);
 
-        var basis = _spine.GetBasis(ns, topK: 8);
+        var basis = _kernel.GetBasis(ns, topK: 8);
         Assert.NotNull(basis);
         Assert.Equal(clusters * perCluster, basis!.NodeCount);
 
@@ -101,7 +101,7 @@ public class GraphLaplacianSpineTests : IDisposable
         const string ns = "heat";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var basis = _spine.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns);
         Assert.NotNull(basis);
 
         var signal = new Dictionary<string, float>();
@@ -115,7 +115,7 @@ public class GraphLaplacianSpineTests : IDisposable
         for (int k = 0; k < dts.Length; k++)
         {
             float dt = dts[k];
-            var filtered = _spine.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
+            var filtered = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
             float ns2 = 0f;
             foreach (var id in basis.EntryIds) ns2 += filtered[id] * filtered[id];
             outNormSq[k] = ns2;
@@ -150,7 +150,7 @@ public class GraphLaplacianSpineTests : IDisposable
         const string ns = "frac";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var basis = _spine.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns);
         Assert.NotNull(basis);
 
         var signal = new Dictionary<string, float>();
@@ -158,8 +158,8 @@ public class GraphLaplacianSpineTests : IDisposable
         signal[basis.EntryIds[0]] = 1f;
 
         const float dt = 1.0f;
-        var standard = _spine.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
-        var subdiff = _spine.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-MathF.Pow(lambda, 0.7f) * dt));
+        var standard = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
+        var subdiff = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-MathF.Pow(lambda, 0.7f) * dt));
 
         float diffSq = 0f;
         foreach (var id in basis.EntryIds)
@@ -182,20 +182,20 @@ public class GraphLaplacianSpineTests : IDisposable
         const string ns = "invalidate";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var first = _spine.GetBasis(ns);
+        var first = _kernel.GetBasis(ns);
         Assert.NotNull(first);
         long firstRev = first!.GraphRevision;
         var firstComputedAt = first.ComputedAt;
 
         // Cache hit: same revision, same instance.
-        var cached = _spine.GetBasis(ns);
+        var cached = _kernel.GetBasis(ns);
         Assert.Same(first, cached);
 
         // Sleep ensures ComputedAt strictly advances past resolution noise.
         Thread.Sleep(20);
         _graph.AddEdge(new GraphEdge("c0_0", "c1_0", "similar_to", 0.5f));
 
-        var second = _spine.GetBasis(ns);
+        var second = _kernel.GetBasis(ns);
         Assert.NotNull(second);
         Assert.True(second!.GraphRevision > firstRev,
             $"Basis should be recomputed at higher revision; was {firstRev}, now {second.GraphRevision}.");
@@ -215,10 +215,10 @@ public class GraphLaplacianSpineTests : IDisposable
         for (int n = 0; n < nsCount; n++)
             SeedClusteredGraph($"par_{n}", clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var bases = new LaplacianBasis?[nsCount];
+        var bases = new DiffusionBasis?[nsCount];
         Parallel.For(0, nsCount, n =>
         {
-            bases[n] = _spine.GetBasis($"par_{n}");
+            bases[n] = _kernel.GetBasis($"par_{n}");
         });
 
         for (int n = 0; n < nsCount; n++)
@@ -241,7 +241,7 @@ public class GraphLaplacianSpineTests : IDisposable
             _index.Upsert(new CognitiveEntry($"t_{i}", new[] { 1f, 0f }, ns, $"entry {i}"));
         _graph.AddEdge(new GraphEdge("t_0", "t_1", "similar_to"));
 
-        var basis = _spine.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns);
         Assert.Null(basis);
     }
 
@@ -254,7 +254,7 @@ public class GraphLaplacianSpineTests : IDisposable
     {
         const string ns = "ortho";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
-        var basis = _spine.GetBasis(ns, topK: 8);
+        var basis = _kernel.GetBasis(ns, topK: 8);
         Assert.NotNull(basis);
 
         int n = basis!.NodeCount;
@@ -292,7 +292,7 @@ public class GraphLaplacianSpineTests : IDisposable
         for (int i = 0; i < 8; i++)
             _graph.AddEdge(new GraphEdge($"c0_{i}", $"c1_{i}", "contradicts", 1.0f));
 
-        var basis = _spine.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns);
         Assert.NotNull(basis);
 
         // Two disconnected components -> multiplicity 2 at eigenvalue 0.
