@@ -1,6 +1,7 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Graph;
+using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -20,7 +21,8 @@ public class GraphToolsTests : IDisposable
         _persistence = new PersistenceManager(_testDataPath, debounceMs: 50);
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
-        _tools = new GraphTools(_graph);
+        var autoLink = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
+        _tools = new GraphTools(_graph, autoLink);
 
         // Seed entries
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", "entry a"));

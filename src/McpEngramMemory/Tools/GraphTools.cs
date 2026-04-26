@@ -13,10 +13,12 @@ namespace McpEngramMemory.Tools;
 public sealed class GraphTools
 {
     private readonly KnowledgeGraph _graph;
+    private readonly AutoLinkScanner _autoLink;
 
-    public GraphTools(KnowledgeGraph graph)
+    public GraphTools(KnowledgeGraph graph, AutoLinkScanner autoLink)
     {
         _graph = graph;
+        _autoLink = autoLink;
     }
 
     [McpServerTool(Name = "link_memories")]
@@ -69,5 +71,15 @@ public sealed class GraphTools
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
         return _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
+    }
+
+    [McpServerTool(Name = "auto_link_namespace")]
+    [Description("Scan a namespace for high-cosine-similarity entry pairs and add similar_to edges between them. Pairs that already have any edge between them (any relation, either direction) are skipped, so this is safe to re-run. Background sweep runs this every 6 hours by default; this tool is for explicit on-demand triggers.")]
+    public AutoLinkResult AutoLinkNamespace(
+        [Description("Namespace to scan.")] string ns,
+        [Description("Cosine-similarity threshold above which a pair gets a similar_to edge. Default 0.85 (clear semantic neighbors but not duplicates).")] float threshold = 0.85f,
+        [Description("Per-scan safety cap on new edges. Default 1000.")] int maxNewEdges = 1000)
+    {
+        return _autoLink.Scan(ns, threshold, maxNewEdges);
     }
 }

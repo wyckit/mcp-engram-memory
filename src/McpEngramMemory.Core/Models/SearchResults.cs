@@ -110,6 +110,19 @@ public sealed record ConsolidationResult(
     [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds);
 
 /// <summary>
+/// Result of an auto-link scan: a periodic background pass that adds
+/// <c>similar_to</c> edges between high-cosine-similarity pairs so the diffusion
+/// kernel and consolidation operate on a richer graph topology.
+/// </summary>
+public sealed record AutoLinkResult(
+    [property: JsonPropertyName("namespace")] string Namespace,
+    [property: JsonPropertyName("scannedEntries")] int ScannedEntries,
+    [property: JsonPropertyName("pairsExamined")] int PairsExamined,
+    [property: JsonPropertyName("edgesCreated")] int EdgesCreated,
+    [property: JsonPropertyName("edgesSkippedExisting")] int EdgesSkippedExisting,
+    [property: JsonPropertyName("hitMaxEdgeCap")] bool HitMaxEdgeCap);
+
+/// <summary>
 /// System overview statistics.
 /// </summary>
 public sealed record LifecycleStats(

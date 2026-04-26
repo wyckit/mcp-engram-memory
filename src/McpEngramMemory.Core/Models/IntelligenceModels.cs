@@ -97,6 +97,32 @@ public sealed class DecayConfig
     [JsonPropertyName("consolidationArchiveThreshold")]
     public float ConsolidationArchiveThreshold { get; set; } = -5.0f;
 
+    /// <summary>
+    /// Background auto-link scanner: periodically finds semantically-similar pairs
+    /// in the namespace and creates <c>similar_to</c> edges between them, giving
+    /// the diffusion kernel and consolidation pass more topology to work with
+    /// without requiring explicit <c>link_memories</c> calls. Default true.
+    /// </summary>
+    [JsonPropertyName("enableAutoLink")]
+    public bool EnableAutoLink { get; set; } = true;
+
+    /// <summary>
+    /// Cosine-similarity threshold above which auto-link creates a <c>similar_to</c>
+    /// edge between a pair. Default 0.85 — high enough to skip noise pairs,
+    /// low enough to capture clear semantic neighbors that aren't outright
+    /// duplicates (which sit near 0.95).
+    /// </summary>
+    [JsonPropertyName("autoLinkSimilarityThreshold")]
+    public float AutoLinkSimilarityThreshold { get; set; } = 0.85f;
+
+    /// <summary>
+    /// Per-scan safety cap on the number of new edges auto-link will create.
+    /// Prevents pathological edge explosions on very dense namespaces; the next
+    /// scheduled scan will pick up any pairs that hit the cap.
+    /// </summary>
+    [JsonPropertyName("autoLinkMaxNewEdgesPerScan")]
+    public int AutoLinkMaxNewEdgesPerScan { get; set; } = 1000;
+
     [JsonConstructor]
     public DecayConfig(string ns, float decayRate = 0.1f, float reinforcementWeight = 1.0f,
         float stmThreshold = 2.0f, float archiveThreshold = -5.0f,
@@ -104,7 +130,9 @@ public sealed class DecayConfig
         float archivedDecayMultiplier = 0.1f,
         bool useSpectralDecay = true, float subdiffusiveExponent = 1.0f,
         bool enableConsolidation = true, float consolidationDiffusionTime = 10.0f,
-        float consolidationPromotionThreshold = 0.0f, float consolidationArchiveThreshold = -5.0f)
+        float consolidationPromotionThreshold = 0.0f, float consolidationArchiveThreshold = -5.0f,
+        bool enableAutoLink = true, float autoLinkSimilarityThreshold = 0.85f,
+        int autoLinkMaxNewEdgesPerScan = 1000)
     {
         Ns = ns;
         DecayRate = decayRate;
@@ -120,6 +148,9 @@ public sealed class DecayConfig
         ConsolidationDiffusionTime = consolidationDiffusionTime;
         ConsolidationPromotionThreshold = consolidationPromotionThreshold;
         ConsolidationArchiveThreshold = consolidationArchiveThreshold;
+        EnableAutoLink = enableAutoLink;
+        AutoLinkSimilarityThreshold = autoLinkSimilarityThreshold;
+        AutoLinkMaxNewEdgesPerScan = autoLinkMaxNewEdgesPerScan;
     }
 }
 

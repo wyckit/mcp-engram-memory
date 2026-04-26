@@ -48,6 +48,8 @@ builder.Services.AddSingleton(limits);
 builder.Services.AddSingleton<CognitiveIndex>();
 builder.Services.AddSingleton<KnowledgeGraph>();
 builder.Services.AddSingleton<MemoryDiffusionKernel>();
+builder.Services.AddSingleton<DuplicateDetector>();
+builder.Services.AddSingleton<AutoLinkScanner>();
 builder.Services.AddSingleton<ClusterManager>();
 builder.Services.AddSingleton<LifecycleEngine>();
 builder.Services.AddSingleton<PhysicsEngine>();
@@ -84,6 +86,7 @@ builder.Services.AddHostedService<DecayBackgroundService>();
 builder.Services.AddHostedService<AccretionBackgroundService>();
 builder.Services.AddHostedService<DiffusionKernelWarmupService>();
 builder.Services.AddHostedService<ConsolidationBackgroundService>();
+builder.Services.AddHostedService<AutoLinkBackgroundService>();
 
 // Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
 //   "minimal"  → 16 tools: core CRUD + admin + composite + multi-agent
