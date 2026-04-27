@@ -201,9 +201,9 @@ for tool in $FOR_TOOLS; do
 done
 
 # ── 6. Done ───────────────────────────────────────────────────────────────────
-TOOL_COUNT=52
+TOOL_COUNT=65
 [[ "$PROFILE" == "minimal"  ]] && TOOL_COUNT=16
-[[ "$PROFILE" == "standard" ]] && TOOL_COUNT=35
+[[ "$PROFILE" == "standard" ]] && TOOL_COUNT=41
 
 printf "\n  -----------------------------------------\n"
 printf "  \033[32mSetup complete!\033[0m\n\n"

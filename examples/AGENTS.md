@@ -4,6 +4,9 @@ You have access to a persistent engram memory system via the `engram-memory` MCP
 
 ## Recall: Search Before You Work
 
+> **v0.9.0**: `recall` defaults to `spectralMode="auto"` (graph-aware re-ranking; short queries get cluster-boost, longer queries get cluster-mean subtraction). Background consolidation, auto-link, and diffusion-kernel warmup run automatically on `standard`+ profiles. Pass `spectralMode="none"` to disable.
+
+
 Before starting any task:
 
 1. Use `cross_search` across `[project_namespace, "work", "synthesis"]` with `hybrid: true` to recall context from all namespaces in a single RRF-merged call.
@@ -85,8 +88,8 @@ Set `MEMORY_TOOL_PROFILE` in your MCP config to control exposed tools:
 | Profile | Tools | Includes |
 |---------|-------|---------|
 | `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin, multi-agent |
-| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 52 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
+| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 65 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
 
 `get_graph_snapshot` requires `full`. Most daily use works on `minimal`.
 

@@ -31,6 +31,8 @@ At the start of every conversation, search engram memory for relevant context us
 4. If the user references past decisions, patterns, or bugs — search for them before answering
 5. For graph-connected knowledge, use `expandGraph: true` to automatically pull in linked memories (neighbors, cluster members)
 
+> **v0.9.0 note**: `recall` defaults to `spectralMode="auto"` — short conceptual queries get cluster-boost (Broad), longer/precise queries get cluster-mean subtraction (Specific). Local word-count heuristic, no extra LLM calls. Pass `"none"` to opt out, or `"broad"` / `"specific"` to force. Background services (consolidation every 24h, auto-link every 6h, diffusion-kernel warmup every 30m) run automatically on `standard`+ profiles — no LLM invocation needed.
+
 ## Tool Selection: Which Search Tool to Use
 
 Pick the right tool for the situation:
@@ -149,8 +151,8 @@ Set `MEMORY_TOOL_PROFILE` in your MCP config env to control which tools are expo
 | Profile | Tools | Includes |
 |---------|-------|---------|
 | `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin, multi-agent |
-| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 52 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
+| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 65 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
 
 `get_graph_snapshot` (graph visualizer) requires `full`. Most daily use works fine on `minimal`.
 

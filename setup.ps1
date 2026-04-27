@@ -214,7 +214,7 @@ foreach ($tool in $targets) {
 }
 
 # ── 6. Done ───────────────────────────────────────────────────────────────────
-$toolCount = switch ($Profile) { "minimal" { 16 } "standard" { 35 } default { 52 } }
+$toolCount = switch ($Profile) { "minimal" { 16 } "standard" { 41 } default { 65 } }
 
 Write-Host ""
 Write-Host "  -----------------------------------------" -ForegroundColor DarkGray
