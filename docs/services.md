@@ -21,12 +21,17 @@
 | `TokenReranker` | `Retrieval` | Token-overlap reranker implementing `IReranker` |
 | `VectorMath` | `Retrieval` | SIMD-accelerated dot product and norm (static utility) |
 | `VectorQuantizer` | `Retrieval` | Int8 scalar quantization: `Quantize`, `Dequantize`, SIMD `Int8DotProduct`, `ApproximateCosine` |
-| `DuplicateDetector` | `Intelligence` | Stateless pairwise cosine similarity duplicate detection (O(N) single-entry, O(N²) namespace-wide) |
-| `KnowledgeGraph` | `Graph` | In-memory directed graph with adjacency lists, bidirectional edge support, edge transfer, and contradiction surfacing |
+| `DuplicateDetector` | `Intelligence` | Pairwise cosine similarity duplicate detection. Above 256 candidates, switches to a three-pass spectral pre-filter via `EmbeddingSubspace`: project to a 64-dim subspace via randomized SVD over E^T E, scan in projection space at a widened threshold, confirm survivors with full FP32 cosine. Recall preserved against the original O(N²) scan; cost grows much more gracefully on large namespaces |
+| `EmbeddingSubspace` | `Retrieval` | Builds a low-rank approximation of an embedding matrix via randomized SVD. Returns the right singular vector basis (V) plus per-row projections; consumed by `DuplicateDetector` and any future low-rank Gram-style operation. Stateless |
+| `KnowledgeGraph` | `Graph` | In-memory directed graph with adjacency lists, bidirectional edge support, edge transfer, contradiction surfacing, and a monotonic `Revision` counter incremented on every edge mutation (consumed by `MemoryDiffusionKernel` for lock-free staleness detection) |
+| `MemoryDiffusionKernel` | `Graph` | Per-namespace cache and operator for diffusing per-entry signals through the memory graph. Holds the top-K eigenbasis of the normalized Laplacian L = I − D^(-1/2) W D^(-1/2) built from positive-relation edges only (`parent_child`, `cross_reference`, `similar_to`, `elaborates`, `depends_on`; `contradicts` excluded so L stays PSD). `ApplySpectralFilter` is the primary verb. Consumed by spectral decay debt diffusion (`LifecycleEngine.RunDecayCycle`), sleep consolidation (`LifecycleEngine.RunConsolidationPass`), and spectral retrieval re-ranking (`SpectralRetrievalReranker`) |
+| `RandomizedEigensolver` | `Graph` | Halko-Martinsson-Tropp randomized subspace iteration for top-K largest-magnitude eigenpairs of symmetric matrices supplied via a matrix-vector callback. Internal Modified Gram-Schmidt + cyclic Jacobi; falls through to direct dense Jacobi when m ≥ n. No external numerical dependency. Static utility |
+| `AutoLinkScanner` | `Graph` | Periodic background pass that scans a namespace for high-cosine-similarity pairs and adds `similar_to` edges between them. Reuses `DuplicateDetector`'s spectral pre-filter at a looser threshold (default 0.85). Skips pairs with any pre-existing edge between them. Idempotent (re-scans don't duplicate). The graph builds itself from embedding similarity, giving the diffusion kernel and consolidation more topology to work with |
+| `SpectralRetrievalReranker` | `Retrieval` | Re-ranks search results through the memory-diffusion kernel. Modes: `None` (passthrough), `Broad` (low-pass — boosts cluster-supported memories for thematic queries), `Specific` (high-pass — emphasizes per-entry deviation from cluster mean for precise queries) |
 | `ClusterManager` | `Intelligence` | Semantic cluster CRUD with automatic centroid computation and membership transfer |
 | `AccretionScanner` | `Intelligence` | DBSCAN-based density scanning with reversible collapse history (persisted to disk) |
 | `AutoSummarizer` | `Intelligence` | TF-IDF keyword extraction for auto-generated cluster summaries |
-| `LifecycleEngine` | `Lifecycle` | Activation energy computation, agent feedback reinforcement, per-namespace decay configs, decay cycles, and state transitions (STM/LTM/archived) |
+| `LifecycleEngine` | `Lifecycle` | Activation energy computation, agent feedback reinforcement, per-namespace decay configs, decay cycles, sleep consolidation, and state transitions (STM/LTM/archived). When the memory-diffusion kernel is injected and a namespace qualifies, `RunDecayCycle` diffuses per-entry decay debt through the graph heat kernel before applying it, and `RunConsolidationPass` drives lifecycle transitions on the smoothed (cluster-aware) activation field |
 | `PhysicsEngine` | `Services` | Gravitational force re-ranking with "Asteroid" (semantic) + "Sun" (importance) output |
 | `BenchmarkRunner` | `Evaluation` | IR quality benchmark execution with Recall@K, Precision@K, MRR, nDCG@K scoring |
 | `AgentOutcomeBenchmarkRunner` | `Evaluation` | Proxy task-style benchmark comparing no-memory, transcript replay, vector memory, and full Engram memory policies |
@@ -48,8 +53,11 @@
 | Service | Interval | Description |
 |---------|----------|-------------|
 | `EmbeddingWarmupService` | Startup | Warms up the embedding model on server start so first queries are fast |
-| `DecayBackgroundService` | 15 minutes | Runs activation energy decay on all namespaces using stored per-namespace configs |
+| `DecayBackgroundService` | 15 minutes | Runs activation energy decay on all namespaces using stored per-namespace configs. Spectral diffusion of decay debt fires automatically on qualifying namespaces |
 | `AccretionBackgroundService` | 30 minutes | Scans all namespaces for dense LTM clusters needing summarization |
+| `DiffusionKernelWarmupService` | 30 minutes (after 5s startup delay) | Pre-computes the diffusion basis for all qualifying namespaces, so the first decay/consolidation/retrieval call after startup doesn't pay the eigendecomposition cost on the foreground path |
+| `AutoLinkBackgroundService` | 6 hours (after 15-min startup delay) | Sweeps all non-system namespaces, runs `AutoLinkScanner`, adds `similar_to` edges between high-similarity pairs. Per-namespace opt-out via `DecayConfig.EnableAutoLink` |
+| `ConsolidationBackgroundService` | 24 hours (after 10-min startup delay) | Runs `LifecycleEngine.RunConsolidationPass` across every namespace. Topology-driven STM→LTM promotion and LTM→archived archival without LLM involvement |
 
 ### Models
 
@@ -99,7 +107,7 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (35 tools), `full` (55 tools) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (41 tools), `full` (65 tools) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |

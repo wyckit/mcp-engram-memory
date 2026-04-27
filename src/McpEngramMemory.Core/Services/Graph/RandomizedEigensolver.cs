@@ -3,7 +3,7 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// <summary>
 /// Randomized subspace iteration for the top-K largest-magnitude eigenpairs of a
 /// symmetric matrix M, supplied implicitly via a matrix-vector product callback.
-/// Used by <see cref="GraphLaplacianSpine"/> to find the top-K eigenpairs of the
+/// Used by <see cref="MemoryDiffusionKernel"/> to find the top-K eigenpairs of the
 /// normalized adjacency D^(-1/2) W D^(-1/2); these convert to the smallest
 /// eigenpairs of the normalized Laplacian via lambda_L = 1 - lambda_M.
 ///

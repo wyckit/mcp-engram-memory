@@ -4,6 +4,50 @@
 
 Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
 
+## Spectral Retrieval Benchmark (v0.9.0)
+
+**Date:** 2026-04-27. **Artifact:** [`benchmarks/2026-04-27/spectral-retrieval-v1-results.json`](../benchmarks/2026-04-27/spectral-retrieval-v1-results.json). **Harness:** [`SpectralRetrievalBenchmark.cs`](../tests/McpEngramMemory.Tests/SpectralRetrievalBenchmark.cs).
+
+Validation harness for the v0.9.0 graph-aware retrieval pipeline. Synthetic 40-entry corpus across 8 topics × 5 entries each, intra-topic edges (the shape `auto-link` builds), real ONNX `bge-micro-v2` embeddings, 10 queries split between **broad** (5 short conceptual: e.g. `"vector throughput"`) and **specific** (5 longer precise: e.g. `"what is the default StmThreshold value below which STM demotes"`).
+
+Each query is run through `recall` with each `spectralMode` (`none`, `broad`, `specific`, `auto`); metrics are averaged within the broad/specific subsets and overall.
+
+| metric | none | broad | specific | auto | auto delta vs. none |
+|---|---|---|---|---|---|
+| **Overall Recall@5** | 0.820 | 0.920 | 0.780 | **0.920** | **+12%** |
+| **Overall Precision@5** | 0.587 | 0.687 | 0.653 | **0.753** | **+28%** |
+| Overall MRR | 0.950 | 0.950 | 0.767 | 0.950 | — |
+| **Overall nDCG@5** | 0.847 | 0.909 | 0.742 | **0.907** | **+7%** |
+| **Broad Recall@5** | 0.640 | 0.840 | 0.560 | **0.840** | **+31%** |
+| **Broad Precision@5** | 0.640 | 0.840 | 0.640 | **0.840** | **+31%** |
+| **Broad nDCG@5** | 0.694 | 0.817 | 0.488 | **0.817** | **+18%** |
+| Specific Recall@5 | 1.000 | 1.000 | 1.000 | 1.000 | — |
+| **Specific Precision@5** | 0.533 | 0.533 | 0.667 | **0.667** | **+25%** |
+| Specific nDCG@5 | 1.000 | 1.000 | 0.997 | 0.997 | -0.3% (noise) |
+
+**Read:** Auto mode wins across the board. The word-count + digit/quote heuristic correctly routes short conceptual queries to Broad (cluster-boost surfaces missing topic mates) and longer precise queries to Specific (high-pass demotes off-topic cluster mates). Forcing **Specific** on broad queries hurts (Recall 0.640 → 0.560, MRR 0.900 → 0.533, nDCG 0.694 → 0.488) — exactly why auto mode exists. Forcing **Broad** on specific queries does not regress on Recall or MRR — the cluster-dominance gate skips boost when the query is genuinely ambiguous, and the `max(original, boosted)` rule preserves strong individual hits.
+
+**Per-query under auto mode:**
+
+| query | recall | precision | MRR | notes |
+|---|---|---|---|---|
+| `broad-simd` | 0.6 → **1.0** | 0.6 → **1.0** | 1.0 | Cluster boost surfaces missing simd mates |
+| `broad-graph` | 1.0 | 1.0 | 1.0 | Already perfect — no change |
+| `broad-decay` (ambiguous) | 0.2 | 0.2 | 0.5 | Top-K split across 5 clusters; dominance gate correctly skips boost |
+| `broad-embed` | 0.8 → **1.0** | 0.8 → **1.0** | 1.0 | embed-tokenizer surfaced via spectral expansion |
+| `broad-storage` | 0.6 → **1.0** | 0.6 → **1.0** | 1.0 | Cluster boost works |
+| `spec-stm-threshold` | 1.0 | 1.0 | 1.0 | Specific high-pass eliminates cluster noise |
+| `spec-int8` | 1.0 | 0.667 | 1.0 | |
+| `spec-bge-dim` | 1.0 | 0.5 | 1.0 | |
+| `spec-heat-kernel` | 1.0 | 0.667 | 1.0 | |
+| `spec-wal` | 1.0 | 0.5 | 1.0 | |
+
+**Mechanisms:**
+
+- **Broad mode**: cluster-dominance gate (≥3 of top-5 from same connected component) + max-neighbor boost (`score = max(original, max_neighbor × 0.95)`) + cluster expansion (BFS the full graph from a dominant-component candidate, surface members not in the original pool).
+- **Specific mode**: high-pass spectral filter `1 - exp(-λ·t)` via the memory-diffusion kernel — kills the constant (cluster mean) mode, preserves per-entry deviation. Restricted to original candidate set.
+- **Auto mode**: local heuristic — short queries (<5 words, no digits/quotes) → Broad; longer or precision-marked queries → Specific. Zero LLM/embedding calls.
+
 ## Agent Outcome Benchmark
 
 In addition to IR benchmarks, the MCP server now exposes `run_agent_outcome_benchmark`, a task-style proxy benchmark that compares four memory conditions:

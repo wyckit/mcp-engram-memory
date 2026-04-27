@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-Engram Memory exposes 50+ MCP tools. You don't need most of them on day
+Engram Memory exposes 65 MCP tools. You don't need most of them on day
 one. This page lists the 10 tools that cover the typical workflow — from
 first memory to multi-agent setups — in the order you'll naturally
 encounter them.
@@ -18,9 +18,12 @@ to related entries (≥ 0.65). Use this unless you have a reason not to.
 
 **2. `recall`** — *the default way to retrieve a memory.*
 Hybrid search (BM25 + vector) with graph neighbor expansion, falls back
-to `deep_recall` if top results are weak. Omit `ns` to auto-route via the
-expert dispatcher.
-→ Takes: `query`, optional `ns`, `k`, `hybrid`, `rerank`, `expandGraph`
+to `deep_recall` if top results are weak, then graph-aware spectral
+re-ranking via the memory-diffusion kernel (default `spectralMode="auto"` —
+short conceptual queries get cluster-boost, longer/precise queries get
+cluster-mean subtraction; pass `"none"` to opt out). Omit `ns` to
+auto-route via the expert dispatcher.
+→ Takes: `query`, optional `ns`, `k`, `hybrid`, `rerank`, `expandGraph`, `spectralMode`
 
 **3. `reflect`** — *store a retrospective or lesson.*
 Auto-stores as LTM, auto-links to explicitly-mentioned ids plus any
@@ -79,7 +82,7 @@ contexts. Set `hierarchical: true` to walk the root → branch → leaf tree.
 | Check who you are / what you can see | `whoami` |
 | Auto-route to the right domain | `dispatch_task` |
 
-## The other 40+ tools
+## The other 55 tools
 
 - **Graph** — `link_memories`, `unlink_memories`, `get_neighbors`,
   `traverse_graph` for explicit relation management.

@@ -6,6 +6,7 @@ using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Lifecycle;
+using McpEngramMemory.Core.Services.Retrieval;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -28,10 +29,12 @@ public sealed class CompositeTools
     private readonly LifecycleEngine _lifecycle;
     private readonly ExpertDispatcher _dispatcher;
     private readonly MetricsCollector _metrics;
+    private readonly SpectralRetrievalReranker _spectral;
 
     public CompositeTools(
         CognitiveIndex index, IEmbeddingService embedding, KnowledgeGraph graph,
-        LifecycleEngine lifecycle, ExpertDispatcher dispatcher, MetricsCollector metrics)
+        LifecycleEngine lifecycle, ExpertDispatcher dispatcher, MetricsCollector metrics,
+        SpectralRetrievalReranker spectral)
     {
         _index = index;
         _embedding = embedding;
@@ -39,6 +42,7 @@ public sealed class CompositeTools
         _lifecycle = lifecycle;
         _dispatcher = dispatcher;
         _metrics = metrics;
+        _spectral = spectral;
     }
 
     [McpServerTool(Name = "remember")]
@@ -126,7 +130,8 @@ public sealed class CompositeTools
         [Description("Use hybrid BM25+vector search (default: true).")] bool hybrid = true,
         [Description("Apply token-level reranking (default: true).")] bool rerank = true,
         [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
-        [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true)
+        [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true,
+        [Description("Spectral re-ranking mode applied to the candidate set after standard retrieval+graph expansion. 'auto' (default): infer from query — short conceptual queries get broad, longer specific queries get specific; runs entirely from a local word-count heuristic, no extra LLM/embedding calls. 'broad': low-pass filter, boosts cluster-supported memories. 'specific': high-pass filter, boosts entries that score high relative to their cluster. 'none': skip spectral re-ranking. Only applied when a namespace is provided; gracefully degrades to passthrough on namespaces without a qualifying diffusion basis.")] string spectralMode = "auto")
     {
         if (string.IsNullOrWhiteSpace(query)) return "Error: query must not be empty.";
         if (k <= 0) return "Error: k must be positive.";
@@ -151,14 +156,12 @@ public sealed class CompositeTools
                     ? _index.Rerank(query, _index.Search(vector, ns, k * 2, minScore, summaryFirst: summaryFirst)).Take(k).ToList()
                     : _index.Search(vector, ns, k, minScore, summaryFirst: summaryFirst));
 
-            // Record access for returned entries
-            foreach (var r in results)
-                _index.RecordAccess(r.Id, ns);
-
             // Expand with graph neighbors
             var expanded = expandGraph ? ExpandWithGraph(results, states) : results;
 
-            // Fallback: if poor results, try deep_recall
+            // Fallback FIRST: if hybrid produced poor scores, swap in deep_recall
+            // before spectral re-ranking. Otherwise spectral runs on the low-score
+            // expansion and gets discarded when fallback overrides it.
             if (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f))
             {
                 var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f);
@@ -170,7 +173,19 @@ public sealed class CompositeTools
                 }
             }
 
-            return new RecallResult(strategy, ns, expanded.Take(k).ToList());
+            // Optional spectral re-ranking on whatever candidate set we ended up
+            // with (post-graph-expansion or post-deep_recall fallback). Restricted
+            // to entries already in the candidate pool for Specific mode; Broad
+            // mode applies a cluster-dominance-gated max-neighbor boost.
+            expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
+
+            // Record access for actually-returned entries (after spectral
+            // re-ranking, since that may have reshaped the top-K).
+            var finalResults = expanded.Take(k).ToList();
+            foreach (var r in finalResults)
+                _index.RecordAccess(r.Id, ns);
+
+            return new RecallResult(strategy, ns, finalResults);
         }
 
         // Strategy 2: No namespace — auto-route via expert dispatcher
@@ -358,6 +373,281 @@ public sealed class CompositeTools
         }
 
         return expanded;
+    }
+
+    /// <summary>
+    /// Apply the spectral retrieval reranker to <paramref name="candidates"/>,
+    /// restricting the output to entries already in the candidate set so the
+    /// existing recall API contract (results were retrieved by query relevance)
+    /// is preserved. Mode 'none' or unrecognized falls through unchanged. Mode
+    /// 'auto' is resolved by <see cref="InferSpectralMode"/>.
+    /// </summary>
+    private IReadOnlyList<CognitiveSearchResult> ApplySpectralRerankRestricted(
+        string ns,
+        IReadOnlyList<CognitiveSearchResult> candidates,
+        string spectralMode,
+        string query,
+        int k)
+    {
+        if (candidates.Count == 0) return candidates;
+        if (string.IsNullOrWhiteSpace(spectralMode)) return candidates;
+
+        var resolved = spectralMode.Trim().ToLowerInvariant() switch
+        {
+            "broad" => SpectralRetrievalMode.Broad,
+            "specific" => SpectralRetrievalMode.Specific,
+            "auto" => InferSpectralMode(query),
+            "none" => SpectralRetrievalMode.None,
+            _ => SpectralRetrievalMode.None,
+        };
+        if (resolved == SpectralRetrievalMode.None) return candidates;
+
+        // Different modes use different mechanisms:
+        // - Specific: spectral high-pass via the diffusion kernel — suppresses
+        //   cluster-mate noise from graph expansion when the query is precise.
+        // - Broad: graph-adjacency-based cluster boost, gated by dominance —
+        //   only fires when the candidate set is dominated by one cluster
+        //   (i.e., the query is unambiguously about that topic). The spectral
+        //   low-pass filter doesn't work here: it converges scores to cluster
+        //   mean, which is structurally below ExpandWithGraph's pre-assigned
+        //   scores, so the lift never beats lexical false positives.
+        if (resolved == SpectralRetrievalMode.Broad)
+            return ApplyBroadModeClusterBoost(ns, candidates, k);
+
+        // Specific mode: spectral high-pass via the kernel.
+        var byId = new Dictionary<string, CognitiveSearchResult>(candidates.Count);
+        foreach (var c in candidates) byId[c.Id] = c;
+
+        var scoreList = new List<(string Id, float Score)>(candidates.Count);
+        foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
+
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3);
+
+        var output = new List<CognitiveSearchResult>(k);
+        foreach (var (id, score) in reranked)
+        {
+            if (output.Count >= k) break;
+            if (byId.TryGetValue(id, out var orig))
+                output.Add(orig with { Score = score });
+        }
+        return output.Count > 0 ? output : candidates;
+    }
+
+    /// <summary>
+    /// Broad-mode re-rank: detect whether the candidate top-K is dominated by
+    /// one connected component of the graph. If yes (the query is unambiguously
+    /// about that topic), boost every candidate in that component to at least
+    /// <c>α * max-neighbor-score</c> so cluster mates can outrank lexical false
+    /// positives from other topics. If no (top-K is split across clusters, the
+    /// query is ambiguous), pass through unchanged — better to give the user
+    /// the original distinct-topic ordering than to arbitrarily pick one.
+    ///
+    /// This combines two ideas from the panel synthesis: max-neighbor boost
+    /// (compares cluster members to non-cluster competitors directly, not to
+    /// cluster mean) and cluster-dominance detection (only boost when the
+    /// query's intent is clear).
+    /// </summary>
+    private IReadOnlyList<CognitiveSearchResult> ApplyBroadModeClusterBoost(
+        string ns, IReadOnlyList<CognitiveSearchResult> candidates, int k)
+    {
+        if (candidates.Count == 0) return candidates;
+
+        // Assign each candidate to its connected component within the
+        // candidate set itself — we only consider edges between candidates,
+        // so an entry whose graph neighbors aren't in the pool is in a
+        // singleton component.
+        var componentOf = AssignComponentsWithinCandidates(candidates);
+        if (componentOf.Count == 0) return candidates;
+
+        // Find the dominant component among the top-K candidates by score.
+        var topK = candidates.OrderByDescending(c => c.Score).Take(Math.Min(k, candidates.Count));
+        var counts = new Dictionary<int, int>();
+        foreach (var c in topK)
+            if (componentOf.TryGetValue(c.Id, out var comp))
+                counts[comp] = counts.TryGetValue(comp, out var existing) ? existing + 1 : 1;
+
+        if (counts.Count == 0) return candidates;
+
+        int dominantComponent = -1;
+        int dominantCount = 0;
+        foreach (var kv in counts)
+        {
+            if (kv.Value > dominantCount)
+            {
+                dominantComponent = kv.Key;
+                dominantCount = kv.Value;
+            }
+        }
+
+        // Require strict majority of top-K (not just plurality) to call a
+        // cluster dominant. With k=5 that's >= 3 entries from the same
+        // component. Below this threshold the query is ambiguous and we
+        // pass through.
+        int threshold = (k / 2) + 1;
+        if (dominantCount < threshold) return candidates;
+
+        // Apply max-neighbor boost to every candidate in the dominant
+        // component. The boost uses graph neighbors that are also in the
+        // candidate pool, taking the highest score among them × discount.
+        // The discount keeps original top hits stably ranked.
+        var byId = new Dictionary<string, CognitiveSearchResult>(candidates.Count);
+        foreach (var c in candidates) byId[c.Id] = c;
+
+        // Find the maximum score within the dominant cluster — used both for
+        // boosting candidates in the cluster and for setting the score of
+        // newly-surfaced cluster members not yet in the candidate pool.
+        float clusterMaxScore = 0f;
+        foreach (var c in candidates)
+        {
+            if (!componentOf.TryGetValue(c.Id, out var comp) || comp != dominantComponent) continue;
+            if (c.Score > clusterMaxScore) clusterMaxScore = c.Score;
+        }
+        float clusterBoostedScore = clusterMaxScore * BroadMaxNeighborDiscount;
+
+        var output = new List<CognitiveSearchResult>(candidates.Count);
+        var seen = new HashSet<string>(candidates.Count);
+        foreach (var c in candidates)
+        {
+            if (!componentOf.TryGetValue(c.Id, out var comp) || comp != dominantComponent)
+            {
+                output.Add(c);
+                seen.Add(c.Id);
+                continue;
+            }
+
+            float final = Math.Max(c.Score, clusterBoostedScore);
+            output.Add(c with { Score = final });
+            seen.Add(c.Id);
+        }
+
+        // Surface dominant-cluster members that weren't in the candidate pool.
+        // BFS the full graph (not restricted to candidates) starting from any
+        // candidate in the dominant component; every reachable id we haven't
+        // already seen is a cluster member that BM25/ANN missed and that
+        // graph expansion didn't reach. Surface them at the cluster's
+        // boosted score so they can compete for the top-K.
+        var clusterMember = candidates.FirstOrDefault(c =>
+            componentOf.TryGetValue(c.Id, out var comp) && comp == dominantComponent);
+        if (clusterMember is not null)
+        {
+            var queue = new Queue<string>();
+            var fullClusterSeen = new HashSet<string> { clusterMember.Id };
+            queue.Enqueue(clusterMember.Id);
+            while (queue.Count > 0)
+            {
+                var id = queue.Dequeue();
+                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                foreach (var n in neighbors.Neighbors)
+                {
+                    if (fullClusterSeen.Contains(n.Entry.Id)) continue;
+                    fullClusterSeen.Add(n.Entry.Id);
+                    queue.Enqueue(n.Entry.Id);
+
+                    if (seen.Contains(n.Entry.Id)) continue;
+                    var entry = _index.Get(n.Entry.Id, ns);
+                    if (entry is null) continue;
+                    output.Add(new CognitiveSearchResult(
+                        entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
+                        entry.ActivationEnergy, entry.Category,
+                        entry.Metadata.Count > 0 ? new Dictionary<string, string>(entry.Metadata) : null,
+                        entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
+                    seen.Add(n.Entry.Id);
+                }
+            }
+        }
+
+        output.Sort((a, b) => b.Score.CompareTo(a.Score));
+        if (output.Count > k) output = output.GetRange(0, k);
+        return output;
+    }
+
+    /// <summary>
+    /// Group candidates into connected components considering only graph edges
+    /// where both endpoints are in the candidate set. Returns id -&gt; component-index.
+    /// </summary>
+    private Dictionary<string, int> AssignComponentsWithinCandidates(
+        IReadOnlyList<CognitiveSearchResult> candidates)
+    {
+        var candidateIds = new HashSet<string>(candidates.Count);
+        foreach (var c in candidates) candidateIds.Add(c.Id);
+
+        var componentOf = new Dictionary<string, int>(candidates.Count);
+        int nextComponent = 0;
+
+        foreach (var c in candidates)
+        {
+            if (componentOf.ContainsKey(c.Id)) continue;
+
+            // BFS from this candidate, following edges that stay inside the pool.
+            var queue = new Queue<string>();
+            queue.Enqueue(c.Id);
+            componentOf[c.Id] = nextComponent;
+
+            while (queue.Count > 0)
+            {
+                var id = queue.Dequeue();
+                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                foreach (var n in neighbors.Neighbors)
+                {
+                    if (!candidateIds.Contains(n.Entry.Id)) continue;
+                    if (componentOf.ContainsKey(n.Entry.Id)) continue;
+                    componentOf[n.Entry.Id] = nextComponent;
+                    queue.Enqueue(n.Entry.Id);
+                }
+            }
+            nextComponent++;
+        }
+
+        return componentOf;
+    }
+
+    /// <summary>
+    /// Discount factor on max-neighbor score for the broad-mode cluster boost.
+    /// Slightly below 1.0 so the original top hit in a cluster stays ahead of
+    /// its boosted peers — preserves the existing best-match-first ranking
+    /// within a cluster while lifting cluster mates above non-cluster competitors.
+    /// </summary>
+    private const float BroadMaxNeighborDiscount = 0.95f;
+
+    /// <summary>
+    /// Local heuristic to pick a spectral mode from a query string. No external
+    /// LLM or embedding calls — runs in microseconds inline. The rule:
+    ///
+    /// - Queries with explicit precision markers (digits, quoted phrases) lean
+    ///   <see cref="SpectralRetrievalMode.Specific"/>: the user is asking about a
+    ///   particular value or exact phrase, surface outliers within the cluster.
+    /// - Queries with 5 or more words also lean Specific: longer queries usually
+    ///   carry enough disambiguating context that the user wants the precise entry.
+    /// - Otherwise <see cref="SpectralRetrievalMode.Broad"/>: short queries are
+    ///   typically conceptual ("memory consolidation", "auth flow"), surface
+    ///   the cluster they belong to.
+    /// </summary>
+    public static SpectralRetrievalMode InferSpectralMode(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return SpectralRetrievalMode.Broad;
+
+        // Precision markers: digits or quoted phrases push toward Specific.
+        bool hasDigit = false;
+        bool hasQuote = false;
+        foreach (var ch in query)
+        {
+            if (char.IsDigit(ch)) { hasDigit = true; break; }
+        }
+        if (!hasDigit)
+        {
+            for (int i = 0; i < query.Length; i++)
+            {
+                if (query[i] == '"' || query[i] == '\'')
+                {
+                    // Need a matching closer to count as a quoted phrase.
+                    if (query.IndexOf(query[i], i + 1) > i) { hasQuote = true; break; }
+                }
+            }
+        }
+        if (hasDigit || hasQuote) return SpectralRetrievalMode.Specific;
+
+        var words = query.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 5 ? SpectralRetrievalMode.Specific : SpectralRetrievalMode.Broad;
     }
 }
 

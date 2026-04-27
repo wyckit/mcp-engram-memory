@@ -7,8 +7,8 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// <summary>
 /// Periodic background scan that runs <see cref="AutoLinkScanner.Scan"/> across
 /// every non-system namespace at a 6-hour cadence. Reads each namespace's
-/// <see cref="DecayConfig"/> for its threshold and edge cap, and respects
-/// <see cref="DecayConfig.EnableAutoLink"/> for opt-out.
+/// <see cref="Models.DecayConfig"/> for its threshold and edge cap, and respects
+/// <see cref="Models.DecayConfig.EnableAutoLink"/> for opt-out.
 ///
 /// Schedule rationale: edge structure changes far more slowly than activation
 /// does, so 6 hours is plenty often. The first pass starts 15 minutes after

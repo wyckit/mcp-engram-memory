@@ -1,0 +1,120 @@
+{
+  "datasetId": "spectral-retrieval-v1",
+  "name": "Spectral Retrieval Validation",
+  "runDate": "2026-04-27",
+  "version": "0.9.0",
+  "harness": "tests/McpEngramMemory.Tests/SpectralRetrievalBenchmark.cs",
+  "embedding": "bge-micro-v2 (ONNX, 384-dim)",
+  "corpus": {
+    "entryCount": 40,
+    "topicCount": 8,
+    "entriesPerTopic": 5,
+    "edgeCount": 80,
+    "edgeRelation": "similar_to (intra-topic, weight 0.85)"
+  },
+  "queries": {
+    "total": 10,
+    "broadCount": 5,
+    "specificCount": 5
+  },
+  "modes": {
+    "none": {
+      "overall": {
+        "recallAtK": 0.820,
+        "precisionAtK": 0.587,
+        "mrr": 0.950,
+        "ndcgAtK": 0.847
+      },
+      "broad": {
+        "recallAtK": 0.640,
+        "precisionAtK": 0.640,
+        "mrr": 0.900,
+        "ndcgAtK": 0.694
+      },
+      "specific": {
+        "recallAtK": 1.000,
+        "precisionAtK": 0.533,
+        "mrr": 1.000,
+        "ndcgAtK": 1.000
+      }
+    },
+    "broad": {
+      "overall": {
+        "recallAtK": 0.920,
+        "precisionAtK": 0.687,
+        "mrr": 0.950,
+        "ndcgAtK": 0.909
+      },
+      "broad": {
+        "recallAtK": 0.840,
+        "precisionAtK": 0.840,
+        "mrr": 0.900,
+        "ndcgAtK": 0.817
+      },
+      "specific": {
+        "recallAtK": 1.000,
+        "precisionAtK": 0.533,
+        "mrr": 1.000,
+        "ndcgAtK": 1.000
+      }
+    },
+    "specific": {
+      "overall": {
+        "recallAtK": 0.780,
+        "precisionAtK": 0.653,
+        "mrr": 0.767,
+        "ndcgAtK": 0.742
+      },
+      "broad": {
+        "recallAtK": 0.560,
+        "precisionAtK": 0.640,
+        "mrr": 0.533,
+        "ndcgAtK": 0.488
+      },
+      "specific": {
+        "recallAtK": 1.000,
+        "precisionAtK": 0.667,
+        "mrr": 1.000,
+        "ndcgAtK": 0.997
+      }
+    },
+    "auto": {
+      "overall": {
+        "recallAtK": 0.920,
+        "precisionAtK": 0.753,
+        "mrr": 0.950,
+        "ndcgAtK": 0.907
+      },
+      "broad": {
+        "recallAtK": 0.840,
+        "precisionAtK": 0.840,
+        "mrr": 0.900,
+        "ndcgAtK": 0.817
+      },
+      "specific": {
+        "recallAtK": 1.000,
+        "precisionAtK": 0.667,
+        "mrr": 1.000,
+        "ndcgAtK": 0.997
+      }
+    }
+  },
+  "perQueryAuto": [
+    { "queryId": "broad-simd", "recallAtK": 0.600, "precisionAtK": 0.600, "mrr": 1.000, "inferredMode": "broad" },
+    { "queryId": "broad-graph", "recallAtK": 1.000, "precisionAtK": 1.000, "mrr": 1.000, "inferredMode": "broad" },
+    { "queryId": "broad-decay", "recallAtK": 0.200, "precisionAtK": 0.200, "mrr": 0.500, "inferredMode": "broad", "note": "Ambiguous query; cluster dominance gate correctly skips boost" },
+    { "queryId": "broad-embed", "recallAtK": 1.000, "precisionAtK": 1.000, "mrr": 1.000, "inferredMode": "broad" },
+    { "queryId": "broad-storage", "recallAtK": 1.000, "precisionAtK": 1.000, "mrr": 1.000, "inferredMode": "broad" },
+    { "queryId": "spec-stm-threshold", "recallAtK": 1.000, "precisionAtK": 1.000, "mrr": 1.000, "inferredMode": "specific" },
+    { "queryId": "spec-int8", "recallAtK": 1.000, "precisionAtK": 0.667, "mrr": 1.000, "inferredMode": "specific" },
+    { "queryId": "spec-bge-dim", "recallAtK": 1.000, "precisionAtK": 0.500, "mrr": 1.000, "inferredMode": "specific" },
+    { "queryId": "spec-heat-kernel", "recallAtK": 1.000, "precisionAtK": 0.667, "mrr": 1.000, "inferredMode": "specific" },
+    { "queryId": "spec-wal", "recallAtK": 1.000, "precisionAtK": 0.500, "mrr": 1.000, "inferredMode": "specific" }
+  ],
+  "summary": {
+    "headline": "Auto mode delivers +12% Recall@5 and +28% Precision@5 overall vs. baseline",
+    "broadGain": "+31% recall on broad queries via cluster-dominance-gated max-neighbor boost",
+    "specificGain": "+25% precision on specific queries via spectral high-pass",
+    "regressions": "None on auto mode. Forcing Specific on broad queries hurts (correctly avoided by auto). Forcing Broad on specific queries does not regress on Recall, MRR, or nDCG."
+  }
+}

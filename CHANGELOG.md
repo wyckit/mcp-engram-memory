@@ -4,6 +4,172 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-27
+
+Memory-diffusion subsystem. The memory graph's connectivity now actively
+shapes how the system forgets, consolidates, and retrieves — not just how
+it traverses on demand. One precomputed structure (the per-namespace
+eigenbasis of the graph Laplacian) drives four subsystems: graph-aware
+decay, sleep-consolidation lifecycle transitions, low-rank duplicate
+detection, and spectral retrieval re-ranking. The same brain-style
+spreading-activation primitive serves all four.
+
+This release also closes the loop on automation. Storing memories and
+linking them is now the entire LLM-facing contract; everything else
+(decay, consolidation, graph density, basis warmup, similarity-based
+linking) runs as ambient background infrastructure.
+
+### Added
+
+- **`MemoryDiffusionKernel`** (`Services.Graph`). Per-namespace cache
+  and operator for diffusing per-entry signals through the memory graph.
+  Holds the top-K eigenbasis of the normalized Laplacian
+  `L = I - D^(-1/2) W D^(-1/2)` built from positive-relation edges only
+  (`parent_child`, `cross_reference`, `similar_to`, `elaborates`,
+  `depends_on`; `contradicts` excluded so `L` stays PSD and the heat
+  kernel `exp(-tL)` stays a contraction). `ApplySpectralFilter` is the
+  primary verb. Cache invalidation is revision-based via the new
+  `KnowledgeGraph.Revision` counter — any edge mutation increments the
+  live revision and the next read rebuilds. Computed lazily on first
+  read; pre-warmed every 30 minutes by the new
+  `DiffusionKernelWarmupService`.
+- **`RandomizedEigensolver`** (`Services.Graph`). Halko-Martinsson-Tropp
+  randomized subspace iteration for top-K largest-magnitude eigenpairs of
+  symmetric matrices supplied via a matrix-vector callback. Falls
+  through to direct dense Jacobi when `m >= n`. Internal Modified
+  Gram-Schmidt + cyclic Jacobi; no external numerical dependency.
+- **Spectral graph-diffusion decay.** When a namespace qualifies for the
+  diffusion kernel (≥32 nodes, ≥8 positive-relation edges), per-entry
+  decay debt is diffused through the heat kernel `exp(-lambda^alpha · t)`
+  before being subtracted from activation energy. Tightly-linked clusters
+  share forgetting pressure; isolated entries fade alone. Default on;
+  opt-out per-namespace via `configure_decay(useSpectralDecay=false)`.
+  Subdiffusive exponent `α` configurable via
+  `DecayConfig.SubdiffusiveExponent` (default 1.0 = standard heat kernel).
+- **Sleep-consolidation pass.** New `LifecycleEngine.RunConsolidationPass`
+  runs a long-time heat-kernel diffusion of the activation field and
+  drives lifecycle transitions on the smoothed (cluster-aware) values:
+  STM→LTM when a memory's cluster collectively supports it, LTM→archived
+  when its surrounding cluster has decayed. Topology-driven, complementing
+  the access-count-driven decay cycle. New
+  `ConsolidationBackgroundService` runs every 24 hours after a 10-minute
+  startup delay. New MCP tool `run_consolidation` for explicit invocation.
+  New `DecayConfig` fields: `EnableConsolidation` (default true),
+  `ConsolidationDiffusionTime` (default 10.0),
+  `ConsolidationPromotionThreshold` (default 0.0),
+  `ConsolidationArchiveThreshold` (default -5.0).
+- **Auto-link scanner.** Periodic background pass (`AutoLinkScanner` +
+  `AutoLinkBackgroundService`, 6-hour cadence) scans each namespace for
+  high-cosine-similarity entry pairs and creates `similar_to` edges
+  between them. Reuses `DuplicateDetector`'s spectral pre-filter at a
+  looser threshold (default 0.85 vs. 0.95 for duplicate detection).
+  Pairs with any pre-existing edge between them are skipped — auto-link
+  never overwrites manually-curated structure and re-scans are
+  idempotent. Per-scan edge cap prevents runaway densification on
+  pathological corpora. New MCP tool `auto_link_namespace` for explicit
+  invocation. New `DecayConfig` fields: `EnableAutoLink` (default true),
+  `AutoLinkSimilarityThreshold` (default 0.85),
+  `AutoLinkMaxNewEdgesPerScan` (default 1000).
+- **Spectral retrieval re-ranking** (`SpectralRetrievalReranker`,
+  `Services.Retrieval`). Re-ranks search results through the same
+  diffusion kernel applied to relevance scores instead of decay debt.
+  Three modes plus passthrough:
+  - `Broad`: cluster-dominance gate + max-neighbor boost. When top-K
+    candidates concentrate in one connected component (≥3 of top-5),
+    cluster mates get lifted above lexical false positives, and any
+    dominant-cluster members not yet in the candidate pool surface
+    via graph BFS. When top-K is split across clusters, pass through
+    (the query is genuinely ambiguous).
+  - `Specific`: spectral high-pass via the kernel. Subtracts cluster
+    mean from each entry's score so outliers — the precise entry that
+    actually answers a precision query — outrank cluster mates that
+    came in via graph expansion.
+  - `Auto`: word-count + digit/quote heuristic picks Broad or Specific
+    locally (no LLM/embedding calls). Default for the `recall` tool.
+  - `None`: passthrough.
+  New MCP tool `spectral_recall` and a new `spectralMode` parameter on
+  the existing `recall` composite tool (default `"auto"`).
+- **Low-rank duplicate detection.** `DuplicateDetector.FindDuplicates`
+  switches to a three-pass spectral pre-filter above 256 candidates:
+  project to a 64-dim subspace via randomized SVD over `E^T E`, scan in
+  projection space at a widened threshold, confirm survivors with full
+  FP32 cosine. New `EmbeddingSubspace` service (`Services.Retrieval`)
+  for the projection primitive. Recall preserved against the original
+  pairwise scan; cost grows much more gracefully on large namespaces.
+- **6 new MCP tools.** `compute_diffusion_basis`, `diffusion_stats`,
+  `invalidate_diffusion` (`MemoryDiffusionTools`); `run_consolidation`
+  (added to `LifecycleTools`); `auto_link_namespace` (added to
+  `GraphTools`); `spectral_recall` (`SpectralRetrievalTools`). Total
+  surface: 65 tools (was 55).
+- **3 new background services.** `DiffusionKernelWarmupService`,
+  `ConsolidationBackgroundService`, `AutoLinkBackgroundService`.
+
+### Changed
+
+- **`recall` defaults to `spectralMode="auto"`.** The auto heuristic
+  inspects query characteristics and picks Broad for short conceptual
+  queries (e.g., "memory consolidation") or Specific for longer or
+  precision-marked queries (digits, quoted phrases). Local-only
+  inference, no extra LLM/embedding calls. Resolves to passthrough on
+  namespaces below the diffusion-kernel qualification threshold. Pass
+  `spectralMode="none"` to opt out.
+- **`configure_decay` accepts new params.** `useSpectralDecay`,
+  `subdiffusiveExponent` for spectral decay control. Defaults preserve
+  the new auto-on behavior.
+- **`KnowledgeGraph.Revision` counter.** Monotonic counter incremented
+  by every edge mutator (`AddEdge`, `AddEdges`, `RemoveEdges`,
+  `RemoveAllEdgesForEntry`, `TransferEdges`). Consumers that cache
+  derived structures (the diffusion kernel, future spectral subsystems)
+  compare against this to detect staleness without taking the graph lock.
+- **`LifecycleEngine` constructor.** Optional third parameter
+  `MemoryDiffusionKernel? diffusion`. Backward-compatible — all existing
+  call sites work unchanged.
+- **`CompositeTools` constructor.** Required new parameter
+  `SpectralRetrievalReranker spectral`. Test sites (and any custom
+  callers that construct this manually) need to provide it; production
+  DI is automatic.
+
+### Performance (synthetic 40-entry, 8-topic benchmark)
+
+Spectral retrieval (auto mode) vs. existing pipeline:
+
+| metric | none | auto | delta |
+|---|---|---|---|
+| Overall Recall@5 | 0.820 | **0.920** | +12% |
+| Overall Precision@5 | 0.587 | **0.753** | +28% |
+| Overall nDCG@5 | 0.847 | **0.907** | +7% |
+| Specific-query Precision@5 | 0.533 | **0.667** | +25% |
+| Broad-query Recall@5 | 0.640 | **0.840** | +31% |
+| Broad-query nDCG@5 | 0.694 | **0.817** | +18% |
+
+MRR holds at 0.95 — spectral re-ranking improves discovery of relevant
+cluster mates without reordering the top-1 answer. Genuinely ambiguous
+queries (top-K split across multiple clusters) correctly bypass the
+boost via the dominance gate and remain at baseline. Forced-Broad on
+specific queries does not regress on Recall, MRR, or nDCG (the
+`max(original, boosted)` rule preserves strong individual hits).
+
+### Naming
+
+The internal vocabulary uses "memory-diffusion kernel" throughout —
+`MemoryDiffusionKernel` (was `GraphLaplacianSpine` during early
+development), `DiffusionBasis` (was `LaplacianBasis`), `DiffusionStats`,
+`MemoryDiffusionTools`. The math underlying the implementation is still
+the graph Laplacian eigenbasis — class XML docs make the bridge
+explicit — but the exposed surface uses the behavioral name so cold
+readers reach the right mental model immediately.
+
+### Tests
+
+12 new test classes covering diffusion-kernel construction and
+filtering, randomized eigensolver correctness, spectral decay debt
+diffusion, consolidation lifecycle transitions, auto-link
+edge-creation idempotency, embedding subspace projection,
+spectral-retrieval mode behaviors, and the spectral-retrieval
+benchmark harness. 202/202 tests pass across affected suites; no
+regressions in CompositeTools, GraphTools, LifecycleEngine,
+KnowledgeGraph, Decay, Feedback, or Intelligence.
+
 ## [0.8.1] - 2026-04-22
 
 Post-v0.8.0 stabilisation. Two bodies of work land under this patch: a

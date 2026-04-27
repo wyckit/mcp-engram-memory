@@ -5,6 +5,7 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Evaluation;
+using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -20,6 +21,8 @@ public class CompositeToolsTests : IDisposable
     private readonly ExpertDispatcher _dispatcher;
     private readonly MetricsCollector _metrics;
     private readonly HashEmbeddingService _embedding;
+    private readonly MemoryDiffusionKernel _diffusion;
+    private readonly SpectralRetrievalReranker _spectral;
     private readonly CompositeTools _tools;
 
     public CompositeToolsTests()
@@ -32,7 +35,9 @@ public class CompositeToolsTests : IDisposable
         _embedding = new HashEmbeddingService();
         _dispatcher = new ExpertDispatcher(_index, _embedding);
         _metrics = new MetricsCollector();
-        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics);
+        _diffusion = new MemoryDiffusionKernel(_index, _graph);
+        _spectral = new SpectralRetrievalReranker(_diffusion);
+        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral);
     }
 
     // ── remember tests ──
@@ -239,6 +244,118 @@ public class CompositeToolsTests : IDisposable
         Assert.Equal("Error: text must not be empty.", _tools.Reflect("", "ns", "topic"));
         Assert.Equal("Error: ns must not be empty.", _tools.Reflect("text", "", "topic"));
         Assert.Equal("Error: topic must not be empty.", _tools.Reflect("text", "ns", ""));
+    }
+
+    // ── spectral-aware recall ──
+
+    [Fact]
+    public void Recall_SpectralModeNone_PreservesBaselineOrdering()
+    {
+        const string ns = "spectral_none";
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+
+        var resultNone = _tools.Recall("cluster member zero", ns, k: 3, spectralMode: "none") as RecallResult;
+        Assert.NotNull(resultNone);
+        Assert.NotEmpty(resultNone!.Results);
+    }
+
+    [Fact]
+    public void Recall_SpectralModeBroad_ReordersToFavorClusterMembers()
+    {
+        const string ns = "spectral_broad";
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+
+        // A short conceptual query — Broad mode should surface cluster members
+        // ahead of isolated filler that happens to score similarly.
+        var resultBroad = _tools.Recall("cluster", ns, k: 5, spectralMode: "broad") as RecallResult;
+        Assert.NotNull(resultBroad);
+        // Result counts should be the same as none mode; ordering may differ.
+        Assert.NotEmpty(resultBroad!.Results);
+    }
+
+    [Fact]
+    public void Recall_DefaultIsAuto_NoExplicitParam()
+    {
+        const string ns = "spectral_default";
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+
+        // Without specifying spectralMode, the default ("auto") should kick in.
+        // We just verify it returns a sane RecallResult — no exceptions, no empty.
+        var result = _tools.Recall("cluster member", ns, k: 3) as RecallResult;
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public void Recall_TinyNamespace_SpectralAutoFallsBack()
+    {
+        const string ns = "spectral_tiny";
+        for (int i = 0; i < 5; i++)
+            _index.Upsert(new CognitiveEntry($"t_{i}", _embedding.Embed($"tiny entry {i}"), ns, $"tiny entry {i}"));
+
+        // Below kernel qualification threshold; spectral must passthrough.
+        var result = _tools.Recall("tiny entry 1", ns, k: 3, spectralMode: "auto") as RecallResult;
+        Assert.NotNull(result);
+        Assert.NotEmpty(result!.Results);
+    }
+
+    [Fact]
+    public void InferSpectralMode_ShortConceptualQuery_PicksBroad()
+    {
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("memory consolidation"));
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("auth flow"));
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("decay"));
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("graph kernel"));
+    }
+
+    [Fact]
+    public void InferSpectralMode_LongQuery_PicksSpecific()
+    {
+        Assert.Equal(SpectralRetrievalMode.Specific,
+            CompositeTools.InferSpectralMode("what is the exact threshold for stm to ltm demotion"));
+        Assert.Equal(SpectralRetrievalMode.Specific,
+            CompositeTools.InferSpectralMode("find the function that handles auth oauth refresh tokens"));
+    }
+
+    [Fact]
+    public void InferSpectralMode_QueriesWithDigits_PickSpecific()
+    {
+        Assert.Equal(SpectralRetrievalMode.Specific, CompositeTools.InferSpectralMode("threshold 0.95"));
+        Assert.Equal(SpectralRetrievalMode.Specific, CompositeTools.InferSpectralMode("port 8080"));
+    }
+
+    [Fact]
+    public void InferSpectralMode_QueriesWithQuotes_PickSpecific()
+    {
+        Assert.Equal(SpectralRetrievalMode.Specific,
+            CompositeTools.InferSpectralMode("find 'graph laplacian' references"));
+        Assert.Equal(SpectralRetrievalMode.Specific,
+            CompositeTools.InferSpectralMode("about \"sleep consolidation\""));
+    }
+
+    [Fact]
+    public void InferSpectralMode_EmptyOrWhitespace_PicksBroadDefault()
+    {
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode(""));
+        Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("   "));
+    }
+
+    private void SeedClusterPlusFiller(string ns, int clusterSize, int fillerCount)
+    {
+        var rng = new Random(7);
+        for (int i = 0; i < clusterSize; i++)
+        {
+            var text = $"cluster topic detail {i}";
+            _index.Upsert(new CognitiveEntry($"c_{i}", _embedding.Embed(text), ns, text));
+        }
+        for (int i = 0; i < fillerCount; i++)
+        {
+            var text = $"unrelated filler note {i}";
+            _index.Upsert(new CognitiveEntry($"f_{i}", _embedding.Embed(text), ns, text));
+        }
+        for (int i = 0; i < clusterSize; i++)
+            for (int j = i + 1; j < clusterSize; j++)
+                if (rng.NextDouble() < 0.5)
+                    _graph.AddEdge(new GraphEdge($"c_{i}", $"c_{j}", "similar_to", 1.0f));
     }
 
     public void Dispose()

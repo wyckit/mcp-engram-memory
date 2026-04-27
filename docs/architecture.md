@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["15 Tool Classes<br/>55 MCP Tools"]
+        Tools["17 Tool Classes<br/>65 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]
@@ -29,21 +29,26 @@ graph TD
         TR["TokenReranker"]
         DR["DiversityReranker<br/><i>Cluster-aware MMR</i>"]
         VQ["VectorQuantizer<br/><i>SIMD Int8</i>"]
+        SR["SpectralRetrievalReranker<br/><i>Broad / Specific / Auto</i>"]
+        ES["EmbeddingSubspace<br/><i>Randomized SVD</i>"]
     end
 
     subgraph GR["Knowledge Graph"]
-        KG["KnowledgeGraph<br/><i>Directed edges, BFS</i>"]
+        KG["KnowledgeGraph<br/><i>Directed edges, BFS, Revision counter</i>"]
+        MDK["MemoryDiffusionKernel<br/><i>Top-K Laplacian eigenbasis</i>"]
+        ALS["AutoLinkScanner<br/><i>similar_to densification</i>"]
+        RES["RandomizedEigensolver<br/><i>Halko-Martinsson-Tropp</i>"]
     end
 
     subgraph LC["Lifecycle Engine"]
-        LE["LifecycleEngine<br/><i>Decay, state transitions</i>"]
+        LE["LifecycleEngine<br/><i>Decay, consolidation, state transitions</i>"]
         PE["PhysicsEngine<br/><i>Gravitational re-ranking</i>"]
     end
 
     subgraph IN["Intelligence"]
         CM["ClusterManager"]
         AS["AccretionScanner<br/><i>DBSCAN</i>"]
-        DD["DuplicateDetector"]
+        DD["DuplicateDetector<br/><i>Spectral pre-filter ≥256</i>"]
     end
 
     subgraph EX["Expert Routing"]
@@ -82,6 +87,27 @@ graph TD
         BG1["EmbeddingWarmup<br/><i>startup</i>"]
         BG2["DecayService<br/><i>every 15 min</i>"]
         BG3["AccretionService<br/><i>every 30 min</i>"]
+        BG4["DiffusionKernelWarmup<br/><i>every 30 min</i>"]
+        BG5["AutoLinkScanner<br/><i>every 6 hours</i>"]
+        BG6["ConsolidationPass<br/><i>every 24 hours</i>"]
     end
+
+    LE -.->|reads| MDK
+    SR -.->|reads| MDK
+    ALS -.->|invalidates| KG
+    KG -.->|revision counter| MDK
+    MDK -.->|uses| RES
+    DD -.->|uses| ES
 ```
+
+The **memory-diffusion subsystem** (added in v0.9.0) is the spine of all
+graph-aware behavior in the engine. `MemoryDiffusionKernel` computes the
+top-K eigenbasis of each namespace's normalized Laplacian once, then
+serves three downstream consumers: `LifecycleEngine` reads it to diffuse
+decay debt and run consolidation passes; `SpectralRetrievalReranker`
+reads it to apply low-pass / high-pass filters to relevance scores;
+duplicate detection uses the parallel `EmbeddingSubspace` projector for
+its own low-rank pre-filter. The `KnowledgeGraph.Revision` counter
+makes cache invalidation lock-free — any edge mutation increments the
+revision and the next kernel read rebuilds.
 

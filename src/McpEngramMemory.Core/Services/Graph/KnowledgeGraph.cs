@@ -26,7 +26,7 @@ public sealed class KnowledgeGraph
 
     /// <summary>
     /// Monotonic counter incremented on any topology change (edge added or removed).
-    /// Consumers that cache derived structures (e.g., GraphLaplacianSpine) compare against
+    /// Consumers that cache derived structures (e.g., MemoryDiffusionKernel) compare against
     /// this to detect staleness. Read is lock-free via Interlocked.
     /// </summary>
     public long Revision => Interlocked.Read(ref _revision);

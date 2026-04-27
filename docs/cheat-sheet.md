@@ -53,6 +53,7 @@ Think of it this way: **namespaces = folders, memories = documents, search = sma
 | `diversity: true` | Dense namespaces — cluster-aware MMR spreads results across sub-topics |
 | `diversityLambda: 0.5` | Trade-off: 1.0 = pure relevance, 0.0 = pure diversity (default 0.5) |
 | `summaryFirst: true` | Large namespaces — searches cluster summaries first, then drills in |
+| `spectralMode: "auto"` | Default on `recall`. Re-ranks results through the memory-diffusion kernel: short conceptual queries get cluster-boost (Broad), longer/precise queries get cluster-mean subtraction (Specific). Pass `"none"` to opt out, or force `"broad"` / `"specific"` explicitly |
 
 ## Lifecycle
 
@@ -69,8 +70,8 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 | Profile | Tools | What's included |
 |---------|-------|----------------|
 | `minimal` | 16 | Core CRUD, admin, composite tools, multi-agent sharing |
-| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence tools |
-| `full` | 55 | Everything: expert routing, debate, synthesis, benchmarks (default) |
+| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 65 | Everything: expert routing, debate, synthesis, benchmarks (default) |
 
 Use `minimal` or `standard` to reduce context window pressure on smaller models.
 

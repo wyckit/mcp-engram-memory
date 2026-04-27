@@ -6,14 +6,14 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.8.1-blue" alt="GitHub Packages"/></a>
+  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.9.0-blue" alt="GitHub Packages"/></a>
   <img src="https://img.shields.io/badge/tests-918%20non--MSA-brightgreen" alt="Tests"/>
-  <img src="https://img.shields.io/badge/MCP%20tools-55-blue" alt="MCP Tools"/>
+  <img src="https://img.shields.io/badge/MCP%20tools-65-blue" alt="MCP Tools"/>
 </p>
 
 **Give your AI agent persistent memory that survives across sessions.** Store decisions, recall context, and build expertise — all locally, no cloud required.
 
-A cognitive memory engine exposed as an [MCP](https://modelcontextprotocol.io/) server with hybrid search (BM25 + vector), knowledge graph, lifecycle management, and hierarchical expert routing.
+A cognitive memory engine exposed as an [MCP](https://modelcontextprotocol.io/) server with hybrid search (BM25 + vector), knowledge graph, lifecycle management, hierarchical expert routing, and a graph-aware **memory-diffusion subsystem** (v0.9.0) that drives spreading-activation decay, sleep-style consolidation, and spectral retrieval re-ranking — all from a single per-namespace eigenbasis of the graph Laplacian.
 
 <p align="center">
   <img src="images/features.svg" alt="Features" width="900"/>
@@ -67,7 +67,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 4 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.8.1
+dotnet add package McpEngramMemory.Core --version 0.9.0
 ```
 
 > First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.
@@ -110,14 +110,14 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Profile | Tools | What's included |
 |---------|-------|-----------------|
 | `minimal` | 16 | Core CRUD + composite + admin + multi-agent — recommended starting point |
-| `standard` | 35 | Adds graph, lifecycle, clustering, intelligence |
-| `full` | 55 | Everything including expert routing, debate, synthesis, benchmarks (default) |
+| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 65 | Everything including expert routing, debate, synthesis, benchmarks (default) |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 55 (profiles: 16 / 35 / 55) |
+| MCP tools | 65 (profiles: 16 / 41 / 65) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
@@ -168,15 +168,16 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (55)
+## MCP Tools (65)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
 | Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
-| Composite | `remember`, `recall`, `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, and context assembly |
-| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS traversal |
+| Composite | `remember`, `recall` (with `spectralMode`), `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, context assembly, and graph-aware spectral re-ranking on `recall` (default `auto`) |
+| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph`, `auto_link_namespace` | Directed graph with 7 relation types, multi-hop BFS, and similarity-based auto-link densification |
 | Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
-| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `decay_cycle`, `configure_decay` | State transitions (STM/LTM/archived), activation energy decay |
+| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `decay_cycle`, `run_consolidation`, `configure_decay` | State transitions (STM/LTM/archived), spectral decay diffusion, and topology-driven sleep consolidation |
+| Memory Diffusion | `compute_diffusion_basis`, `diffusion_stats`, `invalidate_diffusion`, `spectral_recall` | Graph-Laplacian eigenbasis primitive shared by decay, consolidation, and retrieval; standalone graph-aware retrieval |
 | Intelligence | `detect_duplicates`, `find_contradictions`, `merge_memories`, `uncollapse_cluster`, `list_collapse_history` | Dedup, contradiction detection, merge, collapse reversal |
 | Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
 | Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
@@ -193,7 +194,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (35), `full` (55) |
+| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (41), `full` (65) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
@@ -206,10 +207,10 @@ The core engine is available as a NuGet package for embedding in your own .NET a
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 0.8.1
+dotnet add package McpEngramMemory.Core --version 0.9.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 0.8.1 \
+dotnet add package McpEngramMemory.Core --version 0.9.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -236,7 +237,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 55 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 65 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |

@@ -1,6 +1,6 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (55 tools)
+# MCP Tools Reference (65 tools)
 
 ### Core Memory (4 tools)
 
@@ -11,16 +11,17 @@
 | `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, BM25 semantic gate, and auto-PRF), cluster-aware MMR diversity reranking (`diversity: true`), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
 | `delete_memory` | Remove a memory entry by ID. Cascades to remove associated graph edges and cluster memberships. |
 
-### Composite Tools (4 tools)
+### Composite Tools (5 tools)
 
 | Tool | Description |
 |------|-------------|
 | `remember` | Intelligent store: saves a memory with auto-generated embedding, duplicate detection, and auto-linking to related existing memories. Use instead of store_memory + detect_duplicates + link_memories. |
-| `recall` | Intelligent search: searches with auto-routing to the best namespace via expert dispatch, with fallback to direct search. Combines search_memory + dispatch_task in one call. |
+| `recall` | Intelligent search: searches with auto-routing to the best namespace via expert dispatch, with fallback to direct search. Combines search_memory + dispatch_task in one call. New `spectralMode` parameter (default `"auto"`) re-ranks results through the memory-diffusion kernel: short conceptual queries get a cluster-boost (Broad), longer/precise queries get cluster-mean subtraction (Specific). Pass `"none"` to disable. |
+| `spectral_recall` | Standalone graph-aware retrieval: runs hybrid search to gather candidates, then re-ranks them through the memory-diffusion kernel. Use `mode="broad"` for thematic queries (cluster-boost surfaces topic-related memories the upstream search missed), `mode="specific"` for precise queries (boost outliers above cluster mates), `mode="none"` to bypass spectral re-ranking. Falls back gracefully on namespaces below the kernel threshold. |
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
 | `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 
-### Knowledge Graph (4 tools)
+### Knowledge Graph (5 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -28,6 +29,7 @@
 | `unlink_memories` | Remove edges between entries, optionally filtered by relation type. |
 | `get_neighbors` | Get directly connected entries with edges. Supports direction filtering (outgoing/incoming/both). |
 | `traverse_graph` | Multi-hop BFS traversal with configurable depth (max 5), relation filter, minimum weight, and max results. |
+| `auto_link_namespace` | Scan a namespace for high-cosine-similarity entry pairs and add `similar_to` edges between them. Skips pairs that already have any edge between them. Background sweep runs every 6 hours by default; this tool is for explicit on-demand triggers. |
 
 Supported relation types: `parent_child`, `cross_reference`, `similar_to`, `contradicts`, `elaborates`, `depends_on`, `custom`.
 
@@ -41,17 +43,18 @@ Supported relation types: `parent_child`, `cross_reference`, `similar_to`, `cont
 | `get_cluster` | Retrieve full cluster details including members and summary info. |
 | `list_clusters` | List all clusters in a namespace with summary status. |
 
-### Lifecycle Management (5 tools)
+### Lifecycle Management (6 tools)
 
 | Tool | Description |
 |------|-------------|
 | `promote_memory` | Manually transition a memory between lifecycle states (`stm`, `ltm`, `archived`). |
 | `memory_feedback` | Provide agent feedback on a memory's usefulness. Positive feedback boosts activation energy and records an access; negative feedback suppresses it. Triggers state transitions when thresholds are crossed. Closes the agent reinforcement loop. |
 | `deep_recall` | Search across ALL lifecycle states. Auto-resurrects high-scoring archived entries above the resurrection threshold. |
-| `decay_cycle` | Trigger activation energy recomputation and state transitions for a namespace. |
-| `configure_decay` | Set per-namespace decay parameters (decayRate, reinforcementWeight, stmThreshold, archiveThreshold). Used by background service and `decay_cycle` with `useStoredConfig=true`. |
+| `decay_cycle` | Trigger activation energy recomputation and state transitions for a namespace. When the namespace qualifies for the memory-diffusion kernel (≥32 nodes, ≥8 positive-relation edges) and `useSpectralDecay` is enabled (default), per-entry decay debt is diffused through the heat kernel before being applied — tightly-linked clusters share forgetting pressure. |
+| `run_consolidation` | Sleep-consolidation pass: long-time graph diffusion of the activation field, then drive lifecycle transitions on the smoothed (cluster-aware) values. Promotes STM entries with cluster support to LTM; archives LTM entries whose cluster has decayed. Topology-driven, complementing the access-count-driven `decay_cycle`. Runs automatically every 24 hours via `ConsolidationBackgroundService`. |
+| `configure_decay` | Set per-namespace decay parameters: `decayRate`, `reinforcementWeight`, `stmThreshold`, `archiveThreshold`, plus the new spectral / consolidation / auto-link knobs (`useSpectralDecay`, `subdiffusiveExponent`, `enableConsolidation`, `consolidationDiffusionTime`, `consolidationPromotionThreshold`, `consolidationArchiveThreshold`, `enableAutoLink`, `autoLinkSimilarityThreshold`, `autoLinkMaxNewEdgesPerScan`). Used by background services and `decay_cycle` with `useStoredConfig=true`. |
 
-Activation energy formula: `(accessCount x reinforcementWeight) - (hoursSinceLastAccess x decayRate)`
+Activation energy formula: `(accessCount × reinforcementWeight) - (hoursSinceLastAccess × decayRate × stateMultiplier)`. When spectral decay is on and the namespace qualifies, the second term (decay debt) is filtered through `exp(-λ^α · t)` over the graph Laplacian eigenbasis before being applied per-entry, so cluster mates share forgetting pressure.
 
 ### Admin (3 tools)
 
@@ -147,3 +150,13 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 | `whoami` | Return the current agent identity and accessible namespaces summary. |
 
 Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Namespace ownership is established on first write. Use `share_namespace` to grant cross-agent access, `cross_search` to query across shared namespaces. The default agent (`AGENT_ID` not set) has unrestricted access for backward compatibility.
+
+### Memory Diffusion Kernel (3 tools)
+
+| Tool | Description |
+|------|-------------|
+| `compute_diffusion_basis` | Force computation of the top-K diffusion basis (graph-Laplacian eigenbasis) for a namespace. Returns diagnostics; the basis is held in-memory by the server and consumed by spectral decay, sleep consolidation, and spectral retrieval. Returns null if the namespace is below the spectral threshold (32 nodes / 8 positive-relation edges). Background pre-warming runs every 30 minutes via `DiffusionKernelWarmupService`. |
+| `diffusion_stats` | Diagnostics for the cached diffusion basis of a namespace: node count, edge count, top-K, smallest/largest eigenvalues, graph revision, computed-at timestamp, and stale flag. Does not force recomputation. |
+| `invalidate_diffusion` | Drop the cached diffusion basis for a namespace. Useful after manual graph surgery or if you suspect drift. The next read recomputes lazily. |
+
+The diffusion kernel holds the top-K eigenbasis of the normalized Laplacian `L = I - D^(-1/2) W D^(-1/2)` built from positive-relation edges only (`parent_child`, `cross_reference`, `similar_to`, `elaborates`, `depends_on`; `contradicts` excluded so `L` stays positive semi-definite). Same primitive serves three subsystems: spectral decay (debt diffusion), sleep consolidation (long-time heat-kernel propagation), and spectral retrieval (low-pass / high-pass relevance re-ranking).

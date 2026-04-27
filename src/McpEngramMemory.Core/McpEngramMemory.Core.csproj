@@ -11,7 +11,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Core</PackageId>
-    <Version>0.8.1</Version>
+    <Version>0.9.0</Version>
     <Authors>wyckit</Authors>
     <Company>wyckit</Company>
     <Copyright>Copyright (c) 2026 WyckIt</Copyright>

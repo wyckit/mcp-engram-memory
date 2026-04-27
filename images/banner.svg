@@ -127,11 +127,11 @@
   <g transform="translate(200, 190)" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="11">
     <g>
       <rect width="66" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
-      <text x="33" y="16" text-anchor="middle" fill="#93c5fd">v0.8.1</text>
+      <text x="33" y="16" text-anchor="middle" fill="#93c5fd">v0.9.0</text>
     </g>
     <g transform="translate(76,0)">
       <rect width="102" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
-      <text x="51" y="16" text-anchor="middle" fill="#c4b5fd">55 MCP tools</text>
+      <text x="51" y="16" text-anchor="middle" fill="#c4b5fd">65 MCP tools</text>
     </g>
     <g transform="translate(188,0)">
       <rect width="96" height="24" rx="5" fill="#0f172a" stroke="#334155"/>
