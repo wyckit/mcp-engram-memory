@@ -16,7 +16,7 @@
 A cognitive memory engine exposed as an [MCP](https://modelcontextprotocol.io/) server with hybrid search (BM25 + vector), knowledge graph, lifecycle management, hierarchical expert routing, and a graph-aware **memory-diffusion subsystem** (v0.9.0) that drives spreading-activation decay, sleep-style consolidation, and spectral retrieval re-ranking — all from a single per-namespace eigenbasis of the graph Laplacian.
 
 <p align="center">
-  <img src="images/features.svg" alt="Features" width="900"/>
+  <img src="images/features.svg?v=0.9.0" alt="Features — six pillars plus the v0.9.0 memory-diffusion subsystem" width="900"/>
 </p>
 
 ## Quickstart
@@ -136,11 +136,11 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks |
 
 <p align="center">
-  <img src="images/how-it-works.svg" alt="How It Works" width="900"/>
+  <img src="images/how-it-works.svg?v=0.9.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
 </p>
 
 <p align="center">
-  <img src="images/retrieval-pipeline.svg" alt="Retrieval Pipeline" width="900"/>
+  <img src="images/retrieval-pipeline.svg?v=0.9.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
 </p>
 
 ## AI Assistant Setup
