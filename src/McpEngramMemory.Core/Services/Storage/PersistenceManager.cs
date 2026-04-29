@@ -28,6 +28,12 @@ public sealed class PersistenceManager : IStorageProvider
     private readonly ILogger<PersistenceManager>? _logger;
     private bool _disposed;
 
+    // Tracks debounced write callbacks that have already passed the timer-lock checkpoint
+    // and are running file I/O outside the lock. Flush() waits on _writesIdle so callers
+    // (e.g. tests deleting the data dir on teardown) cannot race a still-running write.
+    private int _inFlightWrites;
+    private readonly ManualResetEventSlim _writesIdle = new(initialState: true);
+
     // Pending namespace saves (keyed by namespace name)
     private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
@@ -196,13 +202,36 @@ public sealed class PersistenceManager : IStorageProvider
                         provider = entry.DataProvider;
                         entry.Timer.Dispose();
                         _pendingNsSaves.Remove(ns);
+                        BeginTrackedWrite();
                     }
                 }
                 if (provider is not null)
-                    WriteNamespace(ns, provider);
+                    RunWriteAndRelease(() => WriteNamespace(ns, provider));
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
 
             _pendingNsSaves[ns] = (timer, dataProvider);
+        }
+    }
+
+    // Mark a debounced write as in-flight. Must be called while holding _timerLock so
+    // Flush() — which takes the same lock — observes the increment before it inspects
+    // _writesIdle. Without that ordering, a callback could pass the lock check, exit
+    // the lock, and only then increment, after Flush already returned through Wait().
+    private void BeginTrackedWrite()
+    {
+        if (Interlocked.Increment(ref _inFlightWrites) == 1)
+            _writesIdle.Reset();
+    }
+
+    // Run the write and release the in-flight slot. The lock must already have been
+    // exited so the file I/O does not block other ScheduleSave callers.
+    private void RunWriteAndRelease(Action write)
+    {
+        try { write(); }
+        finally
+        {
+            if (Interlocked.Decrement(ref _inFlightWrites) == 0)
+                _writesIdle.Set();
         }
     }
 
@@ -228,9 +257,10 @@ public sealed class PersistenceManager : IStorageProvider
                     _pendingEdgeProvider = null;
                     _pendingEdgeTimer?.Dispose();
                     _pendingEdgeTimer = null;
+                    if (provider is not null) BeginTrackedWrite();
                 }
                 if (provider is not null)
-                    WriteGlobalEdges(provider);
+                    RunWriteAndRelease(() => WriteGlobalEdges(provider));
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
         }
     }
@@ -257,9 +287,10 @@ public sealed class PersistenceManager : IStorageProvider
                     _pendingClusterProvider = null;
                     _pendingClusterTimer?.Dispose();
                     _pendingClusterTimer = null;
+                    if (provider is not null) BeginTrackedWrite();
                 }
                 if (provider is not null)
-                    WriteClusters(provider);
+                    RunWriteAndRelease(() => WriteClusters(provider));
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
         }
     }
@@ -285,9 +316,10 @@ public sealed class PersistenceManager : IStorageProvider
                     _pendingCollapseHistoryProvider = null;
                     _pendingCollapseHistoryTimer?.Dispose();
                     _pendingCollapseHistoryTimer = null;
+                    if (provider is not null) BeginTrackedWrite();
                 }
                 if (provider is not null)
-                    WriteCollapseHistory(provider);
+                    RunWriteAndRelease(() => WriteCollapseHistory(provider));
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
         }
     }
@@ -313,9 +345,10 @@ public sealed class PersistenceManager : IStorageProvider
                     _pendingDecayConfigProvider = null;
                     _pendingDecayConfigTimer?.Dispose();
                     _pendingDecayConfigTimer = null;
+                    if (provider is not null) BeginTrackedWrite();
                 }
                 if (provider is not null)
-                    WriteDecayConfigs(provider);
+                    RunWriteAndRelease(() => WriteDecayConfigs(provider));
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
         }
     }
@@ -402,6 +435,12 @@ public sealed class PersistenceManager : IStorageProvider
 
         if (decayConfigProvider is not null)
             WriteDecayConfigs(decayConfigProvider);
+
+        // Wait for any debounced timer callback that escaped the timer lock before we
+        // disposed it — its WriteX call runs outside the lock and can still be in
+        // progress here. Without this, a caller deleting the data dir on teardown can
+        // race a still-running write and observe "Directory not empty".
+        _writesIdle.Wait();
     }
 
     /// <summary>Load persisted HNSW graph snapshot for a namespace.</summary>
@@ -461,6 +500,7 @@ public sealed class PersistenceManager : IStorageProvider
             _disposed = true;
         }
         Flush();
+        _writesIdle.Dispose();
     }
 
     private string GetNamespacePath(string ns)

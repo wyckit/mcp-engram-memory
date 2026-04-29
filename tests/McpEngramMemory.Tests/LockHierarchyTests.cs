@@ -68,7 +68,11 @@ public class LockHierarchyTests : IDisposable
         try
         {
             var aTask = Task.Run(() => _index.Upsert(MakeEntry("a-1", "ns-a", "A content")));
-            Assert.True(aReached.Wait(TimeSpan.FromSeconds(2)), "ns-a writer did not reach handler");
+            // 10 s gives slack for a saturated CI ThreadPool (xunit runs many test classes in
+            // parallel) where Task.Run scheduling alone can spike past 2 s under load. The
+            // healthy path fires the handler in milliseconds, so this only relaxes the false-
+            // negative bound, not the test's discriminative power.
+            Assert.True(aReached.Wait(TimeSpan.FromSeconds(10)), "ns-a writer did not reach handler");
 
             // A is parked in its handler — its lock is already released. B must proceed.
             // Await the task after the wait so any exception thrown inside the Upsert
