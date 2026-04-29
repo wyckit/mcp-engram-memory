@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-29
+
+### Added
+
+- **Microsoft SQL Server storage backend.** Set `MEMORY_STORAGE=sqlserver`
+  with `MEMORY_SQLSERVER_CONNECTION` (and optionally `MEMORY_SQLSERVER_SCHEMA`,
+  default `dbo`) to persist memory state to MS SQL Server. The provider is
+  bundled directly into `McpEngramMemory.Core` via `Microsoft.Data.SqlClient
+  6.0.2`, alongside the existing JSON and SQLite backends. Semantics mirror
+  `SqliteStorageProvider`: `MERGE … WITH (HOLDLOCK)` upserts, transactional
+  incremental per-entry writes, debounced flushes, SHA-256 row checksums,
+  HNSW snapshots in `global_data`, and crash-safe namespace deletes. Schema
+  names are validated against `^[A-Za-z_][A-Za-z0-9_]*$` and bracket-quoted
+  before interpolation to prevent injection.
+
 ## [0.9.0] - 2026-04-27
 
 Memory-diffusion subsystem. The memory graph's connectivity now actively

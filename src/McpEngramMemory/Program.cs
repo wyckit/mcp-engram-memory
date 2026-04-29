@@ -25,7 +25,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-// Storage provider — set MEMORY_STORAGE=sqlite to use SQLite backend
+// Storage provider — set MEMORY_STORAGE=sqlite|sqlserver to switch backends
 var storageMode = Environment.GetEnvironmentVariable("MEMORY_STORAGE");
 if (string.Equals(storageMode, "sqlite", StringComparison.OrdinalIgnoreCase))
 {
@@ -33,6 +33,18 @@ if (string.Equals(storageMode, "sqlite", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddSingleton(sp => new SqliteStorageProvider(
         dbPath: dbPath, logger: sp.GetService<ILogger<SqliteStorageProvider>>()));
     builder.Services.AddSingleton<IStorageProvider>(sp => sp.GetRequiredService<SqliteStorageProvider>());
+}
+else if (string.Equals(storageMode, "sqlserver", StringComparison.OrdinalIgnoreCase))
+{
+    var conn = Environment.GetEnvironmentVariable("MEMORY_SQLSERVER_CONNECTION")
+        ?? throw new InvalidOperationException(
+            "MEMORY_STORAGE=sqlserver requires MEMORY_SQLSERVER_CONNECTION to be set.");
+    var schema = Environment.GetEnvironmentVariable("MEMORY_SQLSERVER_SCHEMA"); // default 'dbo' inside provider
+    builder.Services.AddSingleton(sp => new SqlServerStorageProvider(
+        connectionString: conn,
+        schema: schema,
+        logger: sp.GetService<ILogger<SqlServerStorageProvider>>()));
+    builder.Services.AddSingleton<IStorageProvider>(sp => sp.GetRequiredService<SqlServerStorageProvider>());
 }
 else
 {

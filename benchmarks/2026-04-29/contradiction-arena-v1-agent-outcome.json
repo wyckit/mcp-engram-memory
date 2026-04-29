@@ -1,0 +1,725 @@
+{
+  "datasetId": "contradiction-arena-v1",
+  "runAt": "2026-04-29T21:59:15.7261774+00:00",
+  "baselineCondition": "no_memory",
+  "baseline": {
+    "condition": "no_memory",
+    "taskScores": [
+      {
+        "taskId": "contra-port",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-quant",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-name",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      },
+      {
+        "taskId": "contra-auth",
+        "requiredCoverage": 0,
+        "helpfulCoverage": 1,
+        "conflictRate": 0,
+        "successScore": 0,
+        "passed": false,
+        "latencyMs": 0,
+        "retrievedMemoryIds": [],
+        "reasoningPathValidity": 1,
+        "dependencyCompletionScore": 1,
+        "staleMemoryPenalty": 0,
+        "minimalEvidenceScore": 0,
+        "noiseResistanceScore": 1,
+        "noiseResistanceScoreRanked": 1,
+        "contradictionHandlingScore": 0
+      }
+    ],
+    "meanSuccessScore": 0,
+    "passRate": 0,
+    "meanRequiredCoverage": 0,
+    "meanConflictRate": 0,
+    "meanLatencyMs": 0,
+    "meanReasoningPathValidity": 1,
+    "meanDependencyCompletionScore": 1,
+    "meanStaleMemoryPenalty": 0,
+    "meanMinimalEvidenceScore": 0,
+    "meanNoiseResistanceScore": 1,
+    "meanNoiseResistanceScoreRanked": 1,
+    "meanContradictionHandlingScore": 0
+  },
+  "comparisons": [
+    {
+      "condition": "transcript_replay",
+      "result": {
+        "condition": "transcript_replay",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.75,
+            "passed": false,
+            "latencyMs": 0.1502,
+            "retrievedMemoryIds": [
+              "contra-port-old",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 1,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 0.5
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.1078,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-port-old"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.75,
+            "passed": false,
+            "latencyMs": 0.1037,
+            "retrievedMemoryIds": [
+              "contra-name-old",
+              "contra-name-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 1,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 0.5
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 0.75,
+            "passed": false,
+            "latencyMs": 0.1075,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-auth-old"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 1,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 0.5
+          }
+        ],
+        "meanSuccessScore": 0.8125,
+        "passRate": 0.25,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 0.1173,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0.75,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 0.625
+      },
+      "successDelta": 0.8125,
+      "passRateDelta": 0.25,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 0.1173
+    },
+    {
+      "condition": "vector_memory",
+      "result": {
+        "condition": "vector_memory",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 14.1181,
+            "retrievedMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.9337,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.6063,
+            "retrievedMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5933,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 4.06285,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 4.06285
+    },
+    {
+      "condition": "full_engram",
+      "result": {
+        "condition": "full_engram",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.7046,
+            "retrievedMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 8.0221,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.4448,
+            "retrievedMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.8457,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 2.7543,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 2.7543
+    },
+    {
+      "condition": "full_engram_no_graph",
+      "result": {
+        "condition": "full_engram_no_graph",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.1167,
+            "retrievedMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5895,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5374,
+            "retrievedMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.9479,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 0.7978749999999999,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 0.7978749999999999
+    },
+    {
+      "condition": "full_engram_no_lifecycle",
+      "result": {
+        "condition": "full_engram_no_lifecycle",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.6559,
+            "retrievedMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.5675,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.8371,
+            "retrievedMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 0.7676,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 0.707025,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 0.707025
+    },
+    {
+      "condition": "full_engram_no_hybrid",
+      "result": {
+        "condition": "full_engram_no_hybrid",
+        "taskScores": [
+          {
+            "taskId": "contra-port",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.7166,
+            "retrievedMemoryIds": [
+              "contra-port-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-quant",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.8248,
+            "retrievedMemoryIds": [
+              "contra-quant-new",
+              "contra-auth-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-name",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.345,
+            "retrievedMemoryIds": [
+              "contra-name-new",
+              "contra-quant-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          },
+          {
+            "taskId": "contra-auth",
+            "requiredCoverage": 1,
+            "helpfulCoverage": 1,
+            "conflictRate": 0,
+            "successScore": 1,
+            "passed": true,
+            "latencyMs": 1.4627,
+            "retrievedMemoryIds": [
+              "contra-auth-new",
+              "contra-port-new"
+            ],
+            "reasoningPathValidity": 1,
+            "dependencyCompletionScore": 1,
+            "staleMemoryPenalty": 0,
+            "minimalEvidenceScore": 1,
+            "noiseResistanceScore": 1,
+            "noiseResistanceScoreRanked": 1,
+            "contradictionHandlingScore": 1
+          }
+        ],
+        "meanSuccessScore": 1,
+        "passRate": 1,
+        "meanRequiredCoverage": 1,
+        "meanConflictRate": 0,
+        "meanLatencyMs": 1.587275,
+        "meanReasoningPathValidity": 1,
+        "meanDependencyCompletionScore": 1,
+        "meanStaleMemoryPenalty": 0,
+        "meanMinimalEvidenceScore": 1,
+        "meanNoiseResistanceScore": 1,
+        "meanNoiseResistanceScoreRanked": 1,
+        "meanContradictionHandlingScore": 1
+      },
+      "successDelta": 1,
+      "passRateDelta": 1,
+      "requiredCoverageDelta": 1,
+      "conflictDelta": 0,
+      "latencyDeltaMs": 1.587275
+    }
+  ],
+  "embeddingModel": "ONNX bge-micro-v2",
+  "embeddingDimensions": 384,
+  "notes": "Task-style proxy benchmark comparing memory conditions on evidence coverage, conflict rate, and latency."
+}

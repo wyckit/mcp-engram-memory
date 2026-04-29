@@ -338,13 +338,13 @@ public class PersistenceManagerTests : IDisposable
     }
 
     [Fact]
-    public void DeleteNamespaceAsync_AlsoDeletesHnswSnapshot()
+    public async Task DeleteNamespaceAsync_AlsoDeletesHnswSnapshot()
     {
         var persistence = new PersistenceManager(_testDataPath);
         persistence.SaveNamespaceSync("test", new NamespaceData());
         persistence.SaveHnswSnapshotSync("test", new HnswSnapshot { NodeIds = new() { "a" } });
 
-        persistence.DeleteNamespaceAsync("test").Wait();
+        await persistence.DeleteNamespaceAsync("test");
 
         Assert.Null(persistence.LoadHnswSnapshot("test"));
         persistence.Dispose();

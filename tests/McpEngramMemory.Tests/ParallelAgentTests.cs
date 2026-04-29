@@ -64,9 +64,9 @@ public class ParallelAgentTests : IDisposable
             .Select(i => Task.Run(() => _registry.Share(ns, "owner-a", $"peer-{i:D2}", "read")))
             .ToArray();
 
-        await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks);
 
-        Assert.All(tasks, t => Assert.Equal("shared", t.Result.Status));
+        Assert.All(results, r => Assert.Equal("shared", r.Status));
 
         // Every granted peer must still have access.
         for (int i = 0; i < grantCount; i++)

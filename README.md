@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="images/banner.svg?v=0.9.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=1.0.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v0.9.0-blue" alt="GitHub Packages"/></a>
-  <img src="https://img.shields.io/badge/tests-918%20non--MSA-brightgreen" alt="Tests"/>
+  <a href="https://github.com/wyckit/mcp-engram-memory/packages"><img src="https://img.shields.io/badge/GitHub%20Packages-v1.0.0-blue" alt="GitHub Packages"/></a>
+  <img src="https://img.shields.io/badge/tests-972%20non--MSA-brightgreen" alt="Tests"/>
   <img src="https://img.shields.io/badge/MCP%20tools-65-blue" alt="MCP Tools"/>
 </p>
 
@@ -16,7 +16,7 @@
 A cognitive memory engine exposed as an [MCP](https://modelcontextprotocol.io/) server with hybrid search (BM25 + vector), knowledge graph, lifecycle management, hierarchical expert routing, and a graph-aware **memory-diffusion subsystem** (v0.9.0) that drives spreading-activation decay, sleep-style consolidation, and spectral retrieval re-ranking — all from a single per-namespace eigenbasis of the graph Laplacian.
 
 <p align="center">
-  <img src="images/features.svg?v=0.9.0" alt="Features — six pillars plus the v0.9.0 memory-diffusion subsystem" width="900"/>
+  <img src="images/features.svg?v=1.0.0" alt="Features — six pillars plus the v0.9.0 memory-diffusion subsystem" width="900"/>
 </p>
 
 ## Quickstart
@@ -67,7 +67,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **Option 4 — NuGet library** (embed the engine in your own app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 0.9.0
+dotnet add package McpEngramMemory.Core --version 1.0.0
 ```
 
 > First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.
@@ -136,11 +136,11 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks |
 
 <p align="center">
-  <img src="images/how-it-works.svg?v=0.9.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
+  <img src="images/how-it-works.svg?v=1.0.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
 </p>
 
 <p align="center">
-  <img src="images/retrieval-pipeline.svg?v=0.9.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
+  <img src="images/retrieval-pipeline.svg?v=1.0.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
 </p>
 
 ## AI Assistant Setup
@@ -196,8 +196,10 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 |----------|---------|-------------|
 | `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (41), `full` (65) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
-| `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
+| `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
+| `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (when `MEMORY_STORAGE=sqlserver`) |
+| `MEMORY_SQLSERVER_SCHEMA` | `dbo` | SQL Server schema name (when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Max entries per namespace |
 | `MEMORY_MAX_TOTAL_COUNT` | unlimited | Max total entries across all namespaces |
 
@@ -207,10 +209,10 @@ The core engine is available as a NuGet package for embedding in your own .NET a
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 0.9.0
+dotnet add package McpEngramMemory.Core --version 1.0.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 0.9.0 \
+dotnet add package McpEngramMemory.Core --version 1.0.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 

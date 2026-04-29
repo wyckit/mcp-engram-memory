@@ -264,10 +264,10 @@ public class LockHierarchyTests : IDisposable
         // Two concurrent UpsertBatch calls to disjoint namespaces
         var t1 = Task.Run(() => _index.UpsertBatch(batchA));
         var t2 = Task.Run(() => _index.UpsertBatch(batchB));
-        await Task.WhenAll(t1, t2);
+        var results = await Task.WhenAll(t1, t2);
 
-        Assert.Equal(30, t1.Result);
-        Assert.Equal(30, t2.Result);
+        Assert.Equal(30, results[0]);
+        Assert.Equal(30, results[1]);
         Assert.Equal(30, _index.CountInNamespace("batch-a"));
         Assert.Equal(30, _index.CountInNamespace("batch-b"));
         Assert.Equal(60, _index.Count);

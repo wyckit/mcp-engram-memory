@@ -42,6 +42,7 @@
 | `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, crash recovery, storage version validation, and HNSW snapshot persistence |
 | `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, busy_timeout for multi-process safety, schema migration framework, incremental per-entry writes, and HNSW snapshot persistence |
+| `SqlServerStorageProvider` | `Storage` | Microsoft SQL Server-backed `IStorageProvider`. Configurable schema (default `dbo`), `MERGE`-based upserts, transactional writes, incremental per-entry persistence, HNSW snapshots stored as `hnsw_{ns}` keys |
 | `DiversityReranker` | `Retrieval` | Cluster-aware Maximal Marginal Relevance (MMR) reranking — spreads results across sub-topics using cluster and category penalties. Activated via `diversity: true` on search. Configurable lambda trade-off (0.0 = pure diversity, 1.0 = pure relevance, default 0.5) |
 | `SpreadingActivationService` | `Services` | Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming |
 | `SynthesisEngine` | `Synthesis` | Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows. Paired with `OllamaClient` for local SLM inference |
@@ -103,13 +104,22 @@ Two storage backends are available, selectable via environment variable:
 - Automatic schema migrations (v1→v2 adds `lifecycle_state` column with backfill)
 - Suitable for higher-throughput or multi-process scenarios
 
+**SQL Server backend** (`MEMORY_STORAGE=sqlserver`):
+- Bundled into the `McpEngramMemory.Core` package via `Microsoft.Data.SqlClient`.
+- Configurable schema via `MEMORY_SQLSERVER_SCHEMA` (default `dbo`); the schema is created automatically if missing. Schema name is validated against `^[A-Za-z_][A-Za-z0-9_]*$` to prevent injection.
+- Tables (all under the chosen schema): `entries`, `global_data` (holds edges, clusters, collapse history, decay configs, and HNSW snapshots), `schema_version`
+- Upserts use `MERGE … WITH (HOLDLOCK)` for safe concurrent writes
+- Connection string supplied via `MEMORY_SQLSERVER_CONNECTION` — auth (SQL, integrated, Azure AD) is whatever the connection string specifies
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (41 tools), `full` (65 tools) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
-| `MEMORY_STORAGE` | `json` | Storage backend: `json` or `sqlite` |
+| `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
+| `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (only when `MEMORY_STORAGE=sqlserver`) |
+| `MEMORY_SQLSERVER_SCHEMA` | `dbo` | SQL Server schema name (only when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Maximum entries per namespace |
 | `MEMORY_MAX_TOTAL_COUNT` | unlimited | Maximum total entries across all namespaces |

@@ -182,7 +182,7 @@ public class CompositeToolsTests : IDisposable
             relatedIds: new[] { "related1" }) as ReflectResult;
 
         Assert.NotNull(result);
-        Assert.True(result!.Actions.Any(a => a.Contains("related1")));
+        Assert.Contains(result!.Actions, a => a.Contains("related1"));
     }
 
     [Fact]
