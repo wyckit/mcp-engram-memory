@@ -40,7 +40,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "store_memory")]
-    [Description("Low-level store with explicit vector/text control. Use remember instead for auto-dedup and auto-linking. Supports namespace isolation, categorical metadata, and lifecycle tracking.")]
+    [Description("Save a memory when you need to supply a pre-computed embedding vector or control lifecycle state exactly. Don't use this by default; use `remember` instead — it auto-embeds, blocks duplicates, and links related entries without extra steps.")]
     public string StoreMemory(
         [Description("Unique identifier for this memory entry.")] string id,
         [Description("Namespace (e.g. 'work', 'personal').")] string ns,
@@ -82,7 +82,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "store_batch")]
-    [Description("Bulk-store multiple entries in one write-lock. Faster than repeated store_memory calls. Each entry gets contextual prefix embedding. Returns stored count and duplicate warnings.")]
+    [Description("Save many memories at once in a single write operation — use this when storing 5 or more entries to avoid repeated round-trips. Don't use it for one or two entries; use `remember` for those to get per-entry duplicate blocking and auto-linking.")]
     public object StoreBatch(
         [Description("Namespace for all entries.")] string ns,
         [Description("Array of entries to store. Each must have 'id' and 'text' fields. Optional: 'category', 'metadata', 'lifecycleState'.")] BatchEntry[] entries,
@@ -139,7 +139,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "search_memory")]
-    [Description("Low-level namespace search with full parameter control. Use recall instead for auto-routing and fallback. Supports hybrid BM25+vector, reranking, query expansion, graph expansion, physics re-ranking, and explain mode.")]
+    [Description("Find memories in one namespace with full parameter control (hybrid search, physics ranking, explain mode). Don't use this as your default search; use `recall` instead — it adds auto-routing, fallback to archived entries, and spectral re-ranking automatically.")]
     public object SearchMemory(
         [Description("Namespace to search.")] string ns,
         [Description("The original text to search for.")] string? text = null,
@@ -370,7 +370,7 @@ public sealed class CoreMemoryTools
     }
 
     [McpServerTool(Name = "delete_memory")]
-    [Description("Delete a memory entry by ID. Cascades to remove graph edges and cluster memberships.")]
+    [Description("Permanently remove a single memory and all its graph edges and cluster memberships by ID. Don't use this to archive old memories; change the lifecycle state to 'archived' via `store_memory` or `remember` to preserve them for deep recall.")]
     public string DeleteMemory(
         [Description("The identifier of the entry to delete.")] string id)
     {

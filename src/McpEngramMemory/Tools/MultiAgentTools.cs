@@ -38,11 +38,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "cross_search")]
-    [Description("Search multiple namespaces in one call with RRF-merged results. " +
-        "Use when information may span multiple knowledge domains. Supports hybrid search, reranking, " +
-        "cluster-aware MMR diversity, min-score filtering, and category filtering. " +
-        "Note: expand_graph, expand_query, use_physics, and temperature are single-namespace features " +
-        "of search_memory and are not yet supported by cross_search.")]
+    [Description("Find memories across multiple specific namespaces in one call, merging results by relevance rank. Don't use it when you know which single namespace to search — use `recall` for that, which also adds graph expansion and archived-entry fallback.")]
     public object CrossSearch(
         [Description("Comma-separated list of namespaces to search (e.g. 'work,synthesis,mcp-engram-memory').")] string namespaces,
         [Description("The text query to search for.")] string text,
@@ -86,7 +82,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "share_namespace")]
-    [Description("Grant another agent read or write access to a namespace you own.")]
+    [Description("Grant another agent read or write access to a namespace you own. Don't use it to check what's already shared; use `list_shared` for that.")]
     public object ShareNamespace(
         [Description("The namespace to share.")] string ns,
         [Description("The agent ID to grant access to.")] string agentId,
@@ -102,7 +98,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "unshare_namespace")]
-    [Description("Revoke an agent's access to a namespace you own.")]
+    [Description("Revoke another agent's access to a namespace you own. Don't use it to check current sharing state first; call `list_shared` to confirm what to revoke before calling this.")]
     public object UnshareNamespace(
         [Description("The namespace to unshare.")] string ns,
         [Description("The agent ID to revoke access from.")] string agentId)
@@ -117,7 +113,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "list_shared")]
-    [Description("List all namespaces that OTHER agents have shared with the current agent, showing owner and access level for each.")]
+    [Description("List every namespace other agents have shared with you, showing owner and access level. Don't use it to check your own namespaces or identity; use `whoami` for the full picture of what you own and can access.")]
     public object ListShared()
     {
         using var timer = _metrics.StartTimer("list_shared");
@@ -126,7 +122,7 @@ public sealed class MultiAgentTools
     }
 
     [McpServerTool(Name = "whoami")]
-    [Description("Return current agent identity and accessible namespaces (owned + shared with this agent). Use to verify multi-agent configuration.")]
+    [Description("Check this agent's ID and the full list of namespaces it owns or has access to. Don't use it only to see shared namespaces; use `list_shared` when you specifically want the inbound-sharing view with owner attribution.")]
     public object WhoAmI()
     {
         using var timer = _metrics.StartTimer("whoami");

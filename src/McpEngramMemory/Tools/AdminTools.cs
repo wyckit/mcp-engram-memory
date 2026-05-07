@@ -32,7 +32,7 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "get_memory")]
-    [Description("Inspect a single entry's full context: lifecycle state, graph edges, cluster memberships. Does not count as an access.")]
+    [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
     public object GetMemory(
         [Description("Entry ID.")] string id)
     {
@@ -57,7 +57,7 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "cognitive_stats")]
-    [Description("Get system overview: entry counts by lifecycle state, cluster count, edge count, and namespace list.")]
+    [Description("Check how many memories exist across lifecycle states (STM/LTM/archived), plus cluster and edge counts and the full namespace list. Don't use it to check background worker health; use `engram_status` for that.")]
     public LifecycleStats CognitiveStats(
         [Description("Namespace ('*' for all, default).")] string ns = "*")
     {

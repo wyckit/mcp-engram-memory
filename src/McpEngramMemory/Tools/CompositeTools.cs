@@ -46,7 +46,7 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "remember")]
-    [Description("Default way to store memories. Auto-embeds text, blocks near-duplicates, and links to related entries. Use this instead of store_memory unless you need raw vector control.")]
+    [Description("Save a new memory with automatic duplicate detection and graph linking — the default way to store anything. Don't use `store_memory` directly unless you need to supply a raw embedding vector or skip duplicate checking.")]
     public object Remember(
         [Description("Unique identifier for this memory (kebab-case recommended).")] string id,
         [Description("Namespace (e.g. project directory name, 'work', 'synthesis').")] string ns,
@@ -121,7 +121,7 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "recall")]
-    [Description("Default search tool. Searches a namespace with hybrid+graph expansion and falls back to deep_recall for archived entries. Omit namespace to auto-route via expert dispatcher. Use search_memory only for low-level queries without fallback.")]
+    [Description("Find memories in one namespace (or auto-route across all) — the default search for any retrieval task. Don't use it to search across multiple specific namespaces simultaneously; use `cross_search` instead.")]
     public object Recall(
         [Description("What to search for.")] string query,
         [Description("Namespace to search (omit to auto-route via expert dispatcher).")] string? ns = null,
@@ -226,7 +226,7 @@ public sealed class CompositeTools
     }
 
     [McpServerTool(Name = "reflect")]
-    [Description("Store a lesson or retrospective as LTM with auto-linking. Use at the end of work sessions to capture what went well, what went wrong, and key decisions.")]
+    [Description("Save an end-of-session lesson or retrospective — always stored as long-term memory with automatic cross-linking to related work. Don't use it for general notes or decisions; use `remember` for those.")]
     public object Reflect(
         [Description("The lesson or reflection text. Be specific about what happened and what was learned.")] string text,
         [Description("Namespace (project directory name).")] string ns,

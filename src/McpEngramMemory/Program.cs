@@ -108,11 +108,11 @@ builder.Services.AddHostedService<DiffusionKernelWarmupService>();
 builder.Services.AddHostedService<ConsolidationBackgroundService>();
 builder.Services.AddHostedService<AutoLinkBackgroundService>();
 
-// Tool profiles — control how many tools are exposed via MEMORY_TOOL_PROFILE env var:
-//   "minimal"  → 16 tools: core CRUD + admin + composite + multi-agent
-//   "standard" → 35 tools: minimal + graph, lifecycle, clusters, intelligence
-//   "full"     → 55 tools: everything (default for backward compatibility)
-var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "full";
+// Tool profile (default: "minimal", set MEMORY_TOOL_PROFILE=standard or full to expand):
+//   "minimal"  → 16 tools: core memory ops + composite + multi-agent + admin (recommended for most agents)
+//   "standard" → graph, lifecycle, clusters, intelligence, diffusion, spectral
+//   "full"     → adds benchmarks, debate, expert routing, synthesis, visualization, maintenance
+var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "minimal";
 
 var mcpBuilder = builder.Services
     .AddMcpServer()

@@ -34,9 +34,7 @@ public sealed class ExpertTools
     }
 
     [McpServerTool(Name = "dispatch_task")]
-    [Description("Route a query to the best-matching expert namespace. Returns expert profile and top memories as context. " +
-        "Use when you need domain-specific knowledge but don't know which namespace holds it. " +
-        "Set hierarchical=true for tree routing (root → branch → leaf).")]
+    [Description("Find which expert namespace best matches your question, then retrieve relevant memories from it — use this when you don't know which namespace holds the answer. Don't use it as a general search; if you already know the namespace, use `recall` directly.")]
     public object DispatchTask(
         [Description("The core problem, question, or task to route to an expert.")] string taskDescription,
         [Description("How many memories to retrieve from the matched expert's namespace (default: 3).")] int autoSearchK = 3,
