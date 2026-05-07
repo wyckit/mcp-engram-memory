@@ -4,6 +4,115 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-07
+
+Proof of Memory. v1.1 ships the marketing artifact v1.0 was missing — a reproducible
+cold-start benchmark proving Engram makes coding agents measurably better — and aligns
+the LLM-facing surface with what agents actually use day-to-day. Maintenance, lifecycle
+transitions, and graph linking all run as background infrastructure since v0.9.0; this
+release removes the now-redundant LLM-facing wrappers, flips the default tool profile
+to `minimal` (16 tools, down from 65), and rewrites every minimal-profile tool
+description for explicit negative guidance.
+
+The narrative collapses to: _Engram searches your memory and stores new memory.
+Maintenance runs in the background. We can prove it lifts task performance._
+
+### Added
+
+- **Cold-start self-referential benchmark.** New `cold-start` CLI subcommand and
+  `ColdStartBenchmarkRunner` that prove Engram lift on real coding tasks. Two-phase
+  protocol: Phase 1 primes Engram with a transcript; Phase 2 spawns a fresh
+  `claude -p` process and runs `no_memory` (vanilla baseline) and `full_engram` arms
+  on a coldPrompt. Scored against rubric criteria via deterministic pattern matching.
+  New dataset `self-referential-cold-start-v1` with 6 hand-curated tasks targeting
+  repo-internal facts (priming transcripts, gold rubrics, expected memory IDs). Run
+  via `dotnet run -- cold-start --model opus --tasks 6 --seeds 3`. Artifact JSON
+  drops to `benchmarks/{YYYY-MM-DD}/cold-start-...json` with full provenance (model,
+  claude-cli version, scoring method).
+- **Headline result** (Claude Opus 4.6, 4 measurable tasks × 3 seeds):
+  **+30.75pp pass-rate lift · σ 6.2pp · ~equal tokens**. See
+  [`docs/why-engram.md`](docs/why-engram.md#the-proof) for the full scorecard.
+  On 2 ceiling-control tasks (no_memory baseline already 100%), Engram showed no
+  degradation — safe to enable on tasks the agent already handles.
+- **`engram_status` MCP tool** (admin / minimal profile). Returns last-run
+  timestamps, cycle counts, total entries processed, and last error per
+  background worker (decay, consolidation, auto-link, accretion). Replaces the
+  four removed maintenance tools as the read-only inspect surface.
+- **`IBackgroundWorkerStatusTracker`** (`Services`). Singleton service that all
+  four background workers publish cycle results to. Thread-safe; null-safe DI
+  for backward compat with existing test constructors.
+- **Structured JSON log lines per cycle** in `DecayBackgroundService`,
+  `ConsolidationBackgroundService`, `AutoLinkBackgroundService`, and
+  `AccretionBackgroundService`. Pattern:
+  `{worker, namespace, durationMs, entriesProcessed, statesChanged|edgesCreated|...}`.
+  Stderr-friendly for IDE parsing.
+- **`docs/why-engram.md`** — one-page pitch with the cold-start scorecard table,
+  the recall→work→remember diagram, and links into architecture/internals for
+  the technical deep-dive.
+- **Lock-upgrade regression test suite.**
+  `tests/Lifecycle/LockUpgradeRegressionTests.cs` — five cases verifying that
+  maintenance passes (decay, consolidation, auto-link, accretion) do NOT block
+  foreground writes across namespaces, and that same-namespace writes serialize
+  without deadlock under concurrent maintenance. 30s outer deadline as deadlock
+  detector; 500ms latency ceiling for cross-namespace independence.
+- **`docs/v1.1-planning/`** — committed planning artifacts that informed v1.1:
+  - `A1-lock-audit.md` — concurrency audit, verdict SAFE.
+  - `B1-task-curation.md` — task curation methodology and post-run refinement.
+  - `C1-description-audit.md` — 16-tool description rewrite + 20-prompt
+    selection-accuracy matrix.
+  - `D1-readme-draft.md` — README and why-engram drafts.
+
+### Changed
+
+- **Default `MEMORY_TOOL_PROFILE` flipped from `full` (65 tools) to `minimal`
+  (16 tools).** Set `MEMORY_TOOL_PROFILE=standard` or `=full` to restore prior
+  behavior. Most agents perform better with the minimal surface — see C1 audit
+  for the selection-accuracy reasoning.
+- **All 16 minimal-profile tool descriptions rewritten** to add explicit negative
+  guidance (`Don't use it for X — use Z instead`). Each description is now
+  ≤2 sentences, leads with the primary use-case verb, and disambiguates the
+  tool from its closest neighbors. Particular focus pairs:
+  - `recall` ↔ `cross_search` (single vs. multi namespace)
+  - `remember` ↔ `store_memory` (auto vs. manual / vector pinning)
+  - `dispatch_task` ↔ `recall` (route-to-expert vs. direct search)
+  - `reflect` ↔ `remember` (lessons vs. general)
+  See `docs/v1.1-planning/C1-description-audit.md` for the per-tool table.
+- **README hero rewritten.** Diffusion / Laplacian / eigenbasis content moved
+  from above-fold to `docs/why-engram.md` and `docs/internals.md`. Hero is now:
+  one-sentence pitch + 3 user-benefit bullets + scorecard link + quickstart link.
+  Install section restructured: `setup.ps1` / `setup.sh` script visible at top;
+  manual clone, Docker, and NuGet collapsed under `<details>`.
+- **`docs/first-5-minutes.md`** — `deep_recall` mention generalized to
+  "automatically resurfaces archived entries when they score highly"; profile
+  caveat added before the "What's Next?" advanced-tools section so users on the
+  new `minimal` default don't hit "tool not found".
+
+### Removed
+
+- **Four maintenance MCP tools** removed from the LLM-facing surface — they ran
+  redundantly via `IHostedService` background workers since v0.9.0:
+  - `decay_cycle` — now via `DecayBackgroundService`, 15-min cadence
+  - `run_consolidation` — now via `ConsolidationBackgroundService`, 24-hour
+    cadence
+  - `auto_link_namespace` — now via `AutoLinkBackgroundService`, 6-hour cadence
+  - `trigger_accretion_scan` — now via `AccretionBackgroundService`, 30-min
+    cadence
+
+  Underlying methods (`LifecycleEngine.RunDecayCycle`, etc.) remain in
+  `McpEngramMemory.Core` for library use; only the MCP tool wrappers are gone.
+  Use the new `engram_status` tool to inspect last-run timestamps and counters.
+
+### Verified Safe (no code change)
+
+- **Lock-upgrade pattern audit.** All four maintenance entry points snapshot via
+  `GetAllInNamespace` (read lock → `.ToList()` → release) before iterating with
+  per-entry write calls. No code path holds a `ReaderWriterLockSlim` read lock
+  while attempting to acquire a write lock. Cross-namespace operations remain
+  fully independent. Same-namespace writes serialize at per-entry granularity
+  rather than blocking for the full pass duration. See
+  `docs/v1.1-planning/A1-lock-audit.md` for evidence and the new regression
+  test suite for ongoing verification.
+
 ## [1.0.0] - 2026-04-29
 
 ### Added
