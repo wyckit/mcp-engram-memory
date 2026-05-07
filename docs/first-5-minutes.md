@@ -60,8 +60,7 @@ Use recall to find what we decided about database persistence in my-app.
 ```
 
 The AI calls `recall`, which searches with hybrid BM25 + vector similarity,
-expands along graph neighbors, and falls back to deep_recall for archived
-entries. Semantic search understands meaning, not just keywords — your
+expands along graph neighbors, and automatically resurfaces archived entries when they score highly. Semantic search understands meaning, not just keywords — your
 wording doesn't have to match what you stored.
 
 ## 5. You're Done
@@ -71,6 +70,8 @@ That's the core loop: **remember → close → recall**. Everything else
 builds on top of this.
 
 ## What's Next?
+
+_These tools are available in the `standard` and `full` profiles (set `MEMORY_TOOL_PROFILE=standard` in your MCP config)._
 
 - **`reflect`** — at the end of a work session, call `reflect` with a short
   retrospective. It auto-stores as LTM (long-term memory), auto-links to
