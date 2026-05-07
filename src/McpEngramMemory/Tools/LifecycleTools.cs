@@ -69,8 +69,6 @@ public sealed class LifecycleTools
         return result;
     }
 
-    [McpServerTool(Name = "decay_cycle")]
-    [Description("Run activation energy decay and state transitions for a namespace. Demotes stale STM to LTM and LTM to archived based on configurable thresholds.")]
     public DecayCycleResult DecayCycle(
         [Description("Namespace ('*' for all).")] string ns,
         [Description("Decay per hour (default: 0.1).")] float decayRate = 0.1f,
@@ -81,8 +79,6 @@ public sealed class LifecycleTools
         return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold);
     }
 
-    [McpServerTool(Name = "run_consolidation")]
-    [Description("Sleep-consolidation pass: long-time graph diffusion of the activation field, then drive lifecycle transitions on the smoothed (cluster-aware) values. Promotes STM entries with cluster support to LTM; archives LTM entries whose cluster has decayed. Topology-driven, complementing the access-count-driven decay_cycle. Skips namespaces that don't qualify for the diffusion kernel (too small / too sparsely linked).")]
     public ConsolidationResult RunConsolidation(
         [Description("Namespace to consolidate, or '*' for every non-system namespace.")] string ns)
     {

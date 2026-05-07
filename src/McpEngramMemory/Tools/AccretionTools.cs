@@ -56,8 +56,6 @@ public sealed class AccretionTools
         return _scanner.DismissCollapse(collapseId);
     }
 
-    [McpServerTool(Name = "trigger_accretion_scan")]
-    [Description("Scan LTM entries for dense clusters using DBSCAN. Detected clusters appear in get_pending_collapses. Set autoSummarize=true to auto-generate summaries without archiving.")]
     public AccretionScanResult TriggerAccretionScan(
         [Description("Namespace to scan.")] string ns,
         [Description("DBSCAN distance threshold (default: 0.15). Lower values require tighter clusters.")] float epsilon = 0.15f,

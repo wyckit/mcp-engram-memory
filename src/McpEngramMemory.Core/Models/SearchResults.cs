@@ -214,6 +214,28 @@ public sealed record FeedbackResult(
     [property: JsonPropertyName("newState")] string NewState,
     [property: JsonPropertyName("stateChanged")] bool StateChanged);
 
+// ── Background Worker Status ─────────────────────────────────────────────────
+
+/// <summary>
+/// Status snapshot for a single background maintenance worker.
+/// </summary>
+public sealed record EngramWorkerStatus(
+    [property: JsonPropertyName("worker")]               string  Worker,
+    [property: JsonPropertyName("lastRunUtc")]           DateTime? LastRunUtc,
+    [property: JsonPropertyName("lastDurationMs")]       long    LastDurationMs,
+    [property: JsonPropertyName("cyclesCompleted")]      long    CyclesCompleted,
+    [property: JsonPropertyName("totalEntriesProcessed")] long   TotalEntriesProcessed,
+    [property: JsonPropertyName("lastErrorMessage")]     string? LastErrorMessage);
+
+/// <summary>
+/// Aggregate status snapshot returned by the <c>engram_status</c> tool.
+/// </summary>
+public sealed record EngramStatusOutput(
+    [property: JsonPropertyName("decay")]         EngramWorkerStatus Decay,
+    [property: JsonPropertyName("consolidation")] EngramWorkerStatus Consolidation,
+    [property: JsonPropertyName("autoLink")]      EngramWorkerStatus AutoLink,
+    [property: JsonPropertyName("accretion")]     EngramWorkerStatus Accretion);
+
 // ── Graph Snapshot (visualization) ──────────────────────────────────────────
 
 /// <summary>

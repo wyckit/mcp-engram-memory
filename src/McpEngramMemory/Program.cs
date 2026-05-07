@@ -78,6 +78,7 @@ builder.Services.AddSingleton<MrcrBenchmarkRunner>();
 builder.Services.AddSingleton<DebateSessionManager>();
 builder.Services.AddSingleton<ExpertDispatcher>();
 builder.Services.AddSingleton<SpreadingActivationService>();
+builder.Services.AddSingleton<IBackgroundWorkerStatusTracker, BackgroundWorkerStatusTracker>();
 
 // SLM synthesis engine (Ollama-powered map-reduce)
 var ollamaUrl = Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434";

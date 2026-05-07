@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -22,14 +23,17 @@ public sealed class ConsolidationBackgroundService : BackgroundService
     private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
     private readonly LifecycleEngine _lifecycle;
+    private readonly IBackgroundWorkerStatusTracker? _statusTracker;
     private readonly ILogger<ConsolidationBackgroundService>? _logger;
 
     public ConsolidationBackgroundService(
         LifecycleEngine lifecycle,
-        ILogger<ConsolidationBackgroundService>? logger = null)
+        ILogger<ConsolidationBackgroundService>? logger = null,
+        IBackgroundWorkerStatusTracker? statusTracker = null)
     {
         _lifecycle = lifecycle;
         _logger = logger;
+        _statusTracker = statusTracker;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -39,21 +43,25 @@ public sealed class ConsolidationBackgroundService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            string? errorMessage = null;
+            long entriesProcessed = 0;
+            var sw = Stopwatch.StartNew();
             try
             {
                 var result = _lifecycle.RunConsolidationPass("*");
+                sw.Stop();
+                entriesProcessed = result.ProcessedEntries;
                 _logger?.LogInformation(
-                    "Consolidation pass: {Processed} ns processed, {Skipped} skipped, {Entries} entries scanned, {Promoted} STM->LTM, {Archived} LTM->archived.",
-                    result.ProcessedNamespaces,
-                    result.SkippedNamespaces,
-                    result.ProcessedEntries,
-                    result.StmToLtm,
-                    result.LtmToArchived);
+                    "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} promotionsCount={PromotionsCount} archivalsCount={ArchivalsCount}",
+                    "consolidation", "*", sw.ElapsedMilliseconds, entriesProcessed, result.StmToLtm, result.LtmToArchived);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
+                sw.Stop();
+                errorMessage = ex.Message;
                 _logger?.LogError(ex, "Consolidation pass failed; will retry on next interval.");
             }
+            _statusTracker?.RecordCycle("consolidation", DateTime.UtcNow, sw.ElapsedMilliseconds, entriesProcessed, errorMessage);
 
             try { await Task.Delay(Interval, stoppingToken); }
             catch (OperationCanceledException) { return; }

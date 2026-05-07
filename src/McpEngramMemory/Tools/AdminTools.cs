@@ -10,7 +10,7 @@ using ModelContextProtocol.Server;
 namespace McpEngramMemory.Tools;
 
 /// <summary>
-/// MCP tools for inspection: get_memory, cognitive_stats, and purge_debates.
+/// MCP tools for inspection: get_memory, cognitive_stats, purge_debates, and engram_status.
 /// </summary>
 [McpServerToolType]
 public sealed class AdminTools
@@ -19,13 +19,16 @@ public sealed class AdminTools
     private readonly KnowledgeGraph _graph;
     private readonly ClusterManager _clusters;
     private readonly IStorageProvider _storage;
+    private readonly IBackgroundWorkerStatusTracker? _statusTracker;
 
-    public AdminTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, IStorageProvider storage)
+    public AdminTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, IStorageProvider storage,
+        IBackgroundWorkerStatusTracker? statusTracker = null)
     {
         _index = index;
         _graph = graph;
         _clusters = clusters;
         _storage = storage;
+        _statusTracker = statusTracker;
     }
 
     [McpServerTool(Name = "get_memory")]
@@ -68,6 +71,18 @@ public sealed class AdminTools
             stm, ltm, archived,
             clusterCount, edgeCount,
             namespaces);
+    }
+
+    [McpServerTool(Name = "engram_status")]
+    [Description("Check the last-run timestamps, cycle counts, and error counts for every background worker (decay, consolidation, diffusion, accretion). Don't use it to see memory counts or namespace lists; use `cognitive_stats` for that.")]
+    public EngramStatusOutput EngramStatus()
+    {
+        return _statusTracker?.GetSnapshot()
+            ?? new EngramStatusOutput(
+                new EngramWorkerStatus("decay",         null, 0, 0, 0, null),
+                new EngramWorkerStatus("consolidation", null, 0, 0, 0, null),
+                new EngramWorkerStatus("auto_link",     null, 0, 0, 0, null),
+                new EngramWorkerStatus("accretion",     null, 0, 0, 0, null));
     }
 
     [McpServerTool(Name = "purge_debates")]

@@ -73,8 +73,6 @@ public sealed class GraphTools
         return _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
     }
 
-    [McpServerTool(Name = "auto_link_namespace")]
-    [Description("Scan a namespace for high-cosine-similarity entry pairs and add similar_to edges between them. Pairs that already have any edge between them (any relation, either direction) are skipped, so this is safe to re-run. Background sweep runs this every 6 hours by default; this tool is for explicit on-demand triggers.")]
     public AutoLinkResult AutoLinkNamespace(
         [Description("Namespace to scan.")] string ns,
         [Description("Cosine-similarity threshold above which a pair gets a similar_to edge. Default 0.85 (clear semantic neighbors but not duplicates).")] float threshold = 0.85f,

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using McpEngramMemory.Core.Services.Lifecycle;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -23,18 +24,21 @@ public sealed class AutoLinkBackgroundService : BackgroundService
     private readonly AutoLinkScanner _scanner;
     private readonly CognitiveIndex _index;
     private readonly LifecycleEngine _lifecycle;
+    private readonly IBackgroundWorkerStatusTracker? _statusTracker;
     private readonly ILogger<AutoLinkBackgroundService>? _logger;
 
     public AutoLinkBackgroundService(
         AutoLinkScanner scanner,
         CognitiveIndex index,
         LifecycleEngine lifecycle,
-        ILogger<AutoLinkBackgroundService>? logger = null)
+        ILogger<AutoLinkBackgroundService>? logger = null,
+        IBackgroundWorkerStatusTracker? statusTracker = null)
     {
         _scanner = scanner;
         _index = index;
         _lifecycle = lifecycle;
         _logger = logger;
+        _statusTracker = statusTracker;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -44,23 +48,31 @@ public sealed class AutoLinkBackgroundService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            try { ScanAllNamespaces(); }
+            string? errorMessage = null;
+            long totalEntriesProcessed = 0;
+            var swTotal = Stopwatch.StartNew();
+            try { totalEntriesProcessed = ScanAllNamespaces(); }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
+                swTotal.Stop();
+                errorMessage = ex.Message;
                 _logger?.LogError(ex, "Auto-link background pass failed; will retry on next interval.");
             }
+            swTotal.Stop();
+            _statusTracker?.RecordCycle("auto_link", DateTime.UtcNow, swTotal.ElapsedMilliseconds, totalEntriesProcessed, errorMessage);
 
             try { await Task.Delay(Interval, stoppingToken); }
             catch (OperationCanceledException) { return; }
         }
     }
 
-    private void ScanAllNamespaces()
+    private long ScanAllNamespaces()
     {
         var namespaces = _index.GetNamespaces();
         int totalCreated = 0;
         int scannedCount = 0;
         int skippedCount = 0;
+        long totalEntriesProcessed = 0;
 
         foreach (var ns in namespaces)
         {
@@ -78,14 +90,21 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             float threshold = config?.AutoLinkSimilarityThreshold ?? 0.85f;
             int cap = config?.AutoLinkMaxNewEdgesPerScan ?? 1000;
 
+            var sw = Stopwatch.StartNew();
             try
             {
                 var result = _scanner.Scan(ns, threshold, cap);
+                sw.Stop();
                 scannedCount++;
                 totalCreated += result.EdgesCreated;
+                totalEntriesProcessed += result.ScannedEntries;
+                _logger?.LogInformation(
+                    "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} edgesCreated={EdgesCreated}",
+                    "auto_link", ns, sw.ElapsedMilliseconds, result.ScannedEntries, result.EdgesCreated);
             }
             catch (Exception ex)
             {
+                sw.Stop();
                 _logger?.LogWarning(ex, "Auto-link scan failed for ns={Namespace}; continuing.", ns);
             }
         }
@@ -93,5 +112,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
         _logger?.LogInformation(
             "Auto-link sweep: {Total} new similar_to edges across {Scanned} namespaces ({Skipped} skipped).",
             totalCreated, scannedCount, skippedCount);
+
+        return totalEntriesProcessed;
     }
 }
