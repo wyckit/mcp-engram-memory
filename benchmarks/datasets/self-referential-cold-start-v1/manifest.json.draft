@@ -1,0 +1,121 @@
+[
+  {
+    "taskId": "tool-profile-stale-comment",
+    "primingTranscript": "Session: Code review of Program.cs tool profile wiring\nDate: 2026-04-29\n\nDev: We audited the tool profile counts today. The inline comments in\nProgram.cs at the tool profile block (around line 105-108) still say:\n  \"minimal → 16 tools, standard → 35 tools, full → 55 tools\"\nBut those are stale. After adding SpectralRetrievalTools, MemoryDiffusionTools,\nand VisualizationTools in v0.9.0, the real counts are now:\n  minimal  → 16 tools  (CoreMemoryTools + AdminTools + CompositeTools + MultiAgentTools)\n  standard → 41 tools  (adds GraphTools, ClusterTools, LifecycleTools, IntelligenceTools,\n                         MemoryDiffusionTools, SpectralRetrievalTools)\n  full     → 65 tools  (adds AccretionTools, BenchmarkTools, MrcrBenchmarkTools,\n                         DebateTools, MaintenanceTools, ExpertTools, SynthesisTools,\n                         VisualizationTools)\n\nWe did NOT fix the comments yet. This is a known TODO. The README badge and\ndocs/services.md are authoritative; the Program.cs comment block is stale.\nThe MEMORY_TOOL_PROFILE env var still works correctly — only the comment\ncounts are wrong.\n\nDecision: leave the stale comments for now, fix in a dedicated hygiene commit.\nDo not update services.md or README to match the comment — the comment is wrong,\nnot the docs.",
+    "coldPrompt": "You are reviewing a PR that adds a new MCP tool class `SpreadingActivationTools` to the `full` profile only in Program.cs. The author's PR description says: \"This keeps the minimal/standard/full tool counts accurate per the existing Program.cs comments.\"\n\nReview this claim. Are the existing Program.cs comments on tool counts accurate? What are the actual tool counts per profile? If the comments are wrong, what should the PR author do — fix the comments, fix the docs, or both?\n\nRelevant code (excerpt from Program.cs, around line 105):\n  // \"minimal\"  → 16 tools: core CRUD + admin + composite + multi-agent\n  // \"standard\" → 35 tools: minimal + graph, lifecycle, clusters, intelligence\n  // \"full\"     → 55 tools: everything (default for backward compatibility)",
+    "goldRubric": [
+      "Agent identifies that the Program.cs comments (16/35/55) are stale and do not match the actual counts.",
+      "Agent states the correct counts: minimal=16, standard=41, full=65 (citing docs/services.md or README as authoritative).",
+      "Agent recommends fixing the Program.cs comments to match actual counts, NOT updating docs to match the stale comment.",
+      "Agent correctly attributes the discrepancy to v0.9.0 additions (SpectralRetrievalTools, MemoryDiffusionTools, etc.) not reflected in the comment.",
+      "Agent does NOT accept the PR author's premise that the comments are currently accurate."
+    ],
+    "expectedMemoryIds": [
+      "tool-profile-count-discrepancy",
+      "program-cs-tool-profile-wiring"
+    ],
+    "tags": ["convention"]
+  },
+  {
+    "taskId": "reflect-id-generation",
+    "primingTranscript": "Session: Implementing reflect-based session logging for a new CI integration\nDate: 2026-04-22\n\nDev: I just read through CompositeTools.cs — the reflect tool has some\nnon-obvious behaviors we need to document for the CI harness.\n\n1. ID auto-generation: reflect does NOT accept a caller-provided ID.\n   It generates the ID internally as:\n     id = $\"retro-{DateTimeOffset.UtcNow:yyyy-MM-dd}-{topic}\"\n   So if topic=\"lock-debugging\", the stored ID will be something like\n   \"retro-2026-04-22-lock-debugging\". If you call reflect twice on the\n   same day with the same topic, the second call will get a near-duplicate\n   warning and abort (score threshold 0.92 on existing \"lesson\" entries).\n\n2. Lifecycle state: reflect ALWAYS stores as \"ltm\", regardless of the\n   lifecycleState parameter — there is no such parameter on reflect.\n   This is by design: retrospectives are long-lived knowledge. Do NOT\n   try to store a reflect entry as \"stm\".\n\n3. relatedIds: these are linked with \"elaborates\" edge type (not \"similar_to\").\n   Auto-linked semantically-similar entries get \"cross_reference\" edges instead.\n\n4. The duplicate guard: reflect does a category-filtered search (category:\"lesson\")\n   at minScore 0.85, and aborts (status=\"duplicate_warning\") if any existing\n   entry scores >= 0.92. The caller gets the conflicting ID back in the message.\n\nWe need to make sure our CI harness uses a unique topic suffix (e.g. include\na run ID) to avoid duplicate_warning on repeated runs.",
+    "coldPrompt": "You are implementing a CI integration that calls the Engram `reflect` tool at the end of each build to store build lessons. You need to write a helper function that:\n  1. Calls reflect with a consistent topic name (e.g. \"ci-build-outcome\")\n  2. Retrieves the stored memory by its ID to verify it was saved\n  3. Handles the case where a reflection on the same topic already exists today\n\nWrite pseudocode (or real C#) for this helper. Be specific about:\n  - What ID will the stored memory have?\n  - What lifecycle state will it be in?\n  - What happens if you call this twice in the same day with the same topic?\n  - How would you handle that duplicate scenario in CI?",
+    "goldRubric": [
+      "Agent correctly states the ID will be `retro-{today's UTC date}-ci-build-outcome` (auto-generated, not caller-provided).",
+      "Agent correctly states the lifecycle state is always `ltm` (not stm, not configurable via reflect).",
+      "Agent correctly describes duplicate behavior: second call same day same topic returns status=\"duplicate_warning\" with the existing entry's ID.",
+      "Agent provides a concrete CI strategy to avoid duplicate_warning (e.g., unique topic suffix with run ID, or check-before-call).",
+      "Agent does NOT claim that reflect accepts an `id` parameter or a `lifecycleState` parameter."
+    ],
+    "expectedMemoryIds": [
+      "reflect-id-generation-contract",
+      "reflect-duplicate-guard"
+    ],
+    "tags": ["internals"]
+  },
+  {
+    "taskId": "flush-debounce-race",
+    "primingTranscript": "Session: Debugging flaky test teardown — \"Directory not empty\" error\nDate: 2026-04-29\n\nDev: We had a persistent flaky test failure: after Flush(), our tests\ndeleted the temp data directory but got \"DirectoryNotFoundException:\nDirectory not empty\" sporadically. Root cause analysis:\n\nTHE BUG: PersistenceManager.Flush() correctly drains all pending timer\ncallbacks by locking _timerLock, capturing and disposing each timer, then\ncalling WriteX synchronously. BUT — the debounced callback for a namespace\nsave has this flow:\n  1. Lock _timerLock → capture provider → dispose timer → remove from dict\n  2. EXIT lock\n  3. Call WriteNamespace() ← file I/O happens outside the lock\n\nIf step 1-2 happened just BEFORE Flush() locked, Flush() would see the dict\nempty (timer already removed), declare \"nothing pending\", and return.\nMeanwhile, step 3 was still running — the WriteNamespace call was in flight.\nTest teardown then deleted the directory while that write was happening.\n\nTHE FIX: Added _inFlightWrites (int) and _writesIdle (ManualResetEventSlim).\nThe critical constraint: BeginTrackedWrite() (which increments _inFlightWrites\nand resets _writesIdle) MUST be called while still holding _timerLock. If you\ncall it after exiting the lock, you can race Flush() — Flush() could pass\nthrough _timerLock empty, then observe _writesIdle already set, and return\nbefore the increment happens. The fix appended _writesIdle.Wait() at the\nend of Flush() to block until all in-flight writes complete.\n\nThe fix was applied identically to ScheduleSave, ScheduleSaveGlobalEdges,\nScheduleSaveClusters, ScheduleSaveCollapseHistory, and ScheduleSaveDecayConfigs\n— all 5 debounced code paths.",
+    "coldPrompt": "A colleague is adding a new debounced save path to PersistenceManager for a new \"search_index_snapshots\" file. They've written this code:\n\n  public void ScheduleSaveSearchIndex(Func<SearchIndexData> dataProvider)\n  {\n      lock (_timerLock)\n      {\n          _pendingSearchIndexTimer?.Dispose();\n          _pendingSearchIndexProvider = dataProvider;\n          _pendingSearchIndexTimer = new Timer(_ =>\n          {\n              Func<SearchIndexData>? provider;\n              lock (_timerLock)\n              {\n                  provider = _pendingSearchIndexProvider;\n                  _pendingSearchIndexProvider = null;\n                  _pendingSearchIndexTimer?.Dispose();\n                  _pendingSearchIndexTimer = null;\n              }\n              if (provider is not null)\n                  WriteSearchIndex(provider);   // file I/O outside lock\n          }, null, _debounceDelay, Timeout.InfiniteTimeSpan);\n      }\n  }\n\nReview this implementation. Is it correct with respect to Flush()? If not, describe the exact race condition and provide the corrected code.",
+    "goldRubric": [
+      "Agent identifies the race: timer callback exits _timerLock before Flush() enters, so Flush() sees empty pending dict and returns while WriteSearchIndex() is still running.",
+      "Agent states the fix: call BeginTrackedWrite() (increment _inFlightWrites) INSIDE the timer lock, before exiting it.",
+      "Agent provides corrected code: BeginTrackedWrite() inside the lock AND WriteSearchIndex wrapped in RunWriteAndRelease() (try/finally decrement with _writesIdle.Set on zero).",
+      "Agent correctly explains the ordering invariant: the increment must be visible to Flush() before Flush() exits the lock (same lock = mutual exclusion on observation).",
+      "Agent does NOT suggest the simpler but incorrect fix of calling BeginTrackedWrite() after exiting the lock."
+    ],
+    "expectedMemoryIds": [
+      "flush-debounce-race-root-cause",
+      "persistence-manager-debounce-pattern"
+    ],
+    "tags": ["bug-fix"]
+  },
+  {
+    "taskId": "nslock-dispose-ordering",
+    "primingTranscript": "Session: PR #3 review — NsLock Dispose race\nDate: 2026-04-21\n\nReviewer (code-reviewer agent): Found a HIGH severity issue in CognitiveIndex.Dispose().\nThe original code had no _disposed flag at all:\n  public void Dispose()\n  {\n      foreach (var kv in _nsLocks)\n          kv.Value.Dispose();\n      _nsLocks.Clear();\n  }\nA thread that called NsLock(\"ns-a\") and got a RWLS reference back could be\npreempted before calling EnterWriteLock(). If Dispose() ran in that window,\nthe RWLS would be disposed, and EnterWriteLock() would throw\nObjectDisposedException from deep inside the CLR — not from NsLock, where\nwe could handle it.\n\nTHE FIX: Added `private volatile bool _disposed;`. In Dispose():\n  if (_disposed) return;   // idempotent\n  _disposed = true;        // BEFORE tearing down locks — critical ordering\n  foreach (var kv in _nsLocks)\n      kv.Value.Dispose();\n  _nsLocks.Clear();\n\nIn NsLock():\n  if (_disposed)\n      throw new ObjectDisposedException(nameof(CognitiveIndex));\n  return _nsLocks.GetOrAdd(ns, _ => new ReaderWriterLockSlim());\n\nThe volatile keyword is essential: without it, the CPU or JIT might reorder\nthe _disposed write after the loop, eliminating the protection window.\n\nTest Operations_AfterDispose_ThrowObjectDisposedException verifies that\nUpsert, CountInNamespace, Get, Delete, and GetAllInNamespace all throw\nObjectDisposedException after Dispose().\nDispose_ReleasesAllPerNsLocks_NoThrow now calls Dispose() twice (idempotency check).",
+    "coldPrompt": "You are reviewing this proposed Dispose() implementation for a class that manages a ConcurrentDictionary of ReaderWriterLockSlim objects (one per namespace):\n\n  private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _nsLocks = new();\n  private bool _disposed;\n\n  private ReaderWriterLockSlim NsLock(string ns)\n      => _nsLocks.GetOrAdd(ns, _ => new ReaderWriterLockSlim());\n\n  public void Dispose()\n  {\n      foreach (var kv in _nsLocks)\n          kv.Value.Dispose();\n      _nsLocks.Clear();\n      _disposed = true;   // set flag AFTER tearing down locks\n  }\n\nIdentify all correctness issues with this implementation. Then provide the correct version with a brief explanation of each fix.",
+    "goldRubric": [
+      "Agent identifies that `_disposed = true` must be set BEFORE the foreach loop, not after it.",
+      "Agent identifies that `_disposed` must be `volatile` (or use Interlocked/Volatile.Write) to prevent CPU/JIT reordering.",
+      "Agent adds early-return idempotency check (`if (_disposed) return;`) at the start of Dispose().",
+      "Agent adds a `_disposed` check in NsLock() that throws ObjectDisposedException to guard concurrent callers.",
+      "Agent correctly explains the race window: NsLock() caller holds the RWLS reference but has not called Enter*Lock yet when Dispose() tears down the locks."
+    ],
+    "expectedMemoryIds": [
+      "nslock-dispose-race-root-cause",
+      "nslocks-dispose-idempotent-contract"
+    ],
+    "tags": ["bug-fix"]
+  },
+  {
+    "taskId": "diffusion-kernel-rename",
+    "primingTranscript": "Session: Architecture review — memory-diffusion kernel naming\nDate: 2026-04-26\n\nDev: We landed a coordinated rename in commit 64bfdc8. The full mapping:\n  Classes/Records:\n    GraphLaplacianSpine  → MemoryDiffusionKernel\n    LaplacianBasis       → DiffusionBasis\n    LaplacianStats       → DiffusionStats\n    LaplacianTools       → MemoryDiffusionTools  (file deleted, new file created)\n\n  MCP tool names (EXTERNAL API surface):\n    compute_laplacian_basis → compute_diffusion_basis\n    laplacian_stats         → diffusion_stats\n    invalidate_laplacian    → invalidate_diffusion\n\nRATIONALE (from commit message):\n  \"The 'spine' metaphor required readers to know graph spectral theory\n  before they could understand what the class did. The 'memory diffusion\n  kernel' name names the behavior — diffuses signals through the memory\n  graph — and pairs naturally with the cognitive-science framing\n  (spreading activation, heat-kernel propagation across associative networks).\"\n\nLifecycleEngine constructor parameter was also renamed: `spine` → `diffusion`.\n\nThe rename was safe because the Laplacian tools had only shipped in the\nPREVIOUS commit (cd3aa05), so no external consumers had taken a dependency\non the old MCP tool names yet.\n\nWHAT DID NOT CHANGE: the math. DiffusionBasis still stores Eigenvalues,\nEigenvectors, and EdgeCount. PositiveRelations (parent_child, cross_reference,\nsimilar_to, elaborates, depends_on — contradicts excluded) unchanged.",
+    "coldPrompt": "A user filed an issue: \"I configured my MCP client to call `compute_laplacian_basis` but I get 'tool not found'. I'm on v0.9.0. Did this tool get removed?\"\n\nWrite a response that:\n1. Explains what happened and why\n2. Provides the correct tool name they should use\n3. Lists any other tool names that changed in the same rename\n4. Explains the reasoning behind the rename (one sentence)\n5. Notes what did NOT change (i.e., the underlying math/behavior)",
+    "goldRubric": [
+      "Agent correctly identifies that `compute_laplacian_basis` was renamed to `compute_diffusion_basis` (not removed).",
+      "Agent lists all three renamed MCP tools: compute_laplacian_basis→compute_diffusion_basis, laplacian_stats→diffusion_stats, invalidate_laplacian→invalidate_diffusion.",
+      "Agent states the rename rationale: 'spine' metaphor required spectral theory knowledge; 'diffusion kernel' names the behavior.",
+      "Agent correctly states the underlying math (eigenbasis, Laplacian, positive-relation edges, contradicts exclusion) did NOT change.",
+      "Agent does NOT claim the tool was removed or deprecated; makes clear it was a pure rename."
+    ],
+    "expectedMemoryIds": [
+      "diffusion-kernel-rename-mapping",
+      "diffusion-kernel-rename-rationale"
+    ],
+    "tags": ["decision"]
+  },
+  {
+    "taskId": "spectral-auto-mode-heuristic",
+    "primingTranscript": "Session: Debugging spectral recall behavior on short vs. long queries\nDate: 2026-04-27\n\nDev: I traced through InferSpectralMode in CompositeTools.cs. Here's the\nexact decision logic (public static method, no external calls):\n\nINPUTS: query string\nOUTPUTS: SpectralRetrievalMode.Broad or SpectralRetrievalMode.Specific\n\nRULES (applied in order):\n1. Empty/whitespace query → Broad (degenerate case)\n2. Scan for any digit (0-9) → if found, return Specific\n3. Scan for a quote (single ' or double \") that has a matching closing\n   quote later in the string → if found, return Specific\n   NOTE: a lone quote without a closer does NOT trigger this — the code\n   explicitly requires IndexOf(ch, i+1) > i.\n4. Split on whitespace → count words → if word count >= 5, return Specific\n5. Otherwise → return Broad\n\nEXAMPLES:\n  \"memory consolidation\"           → 2 words, no digit, no quote → Broad\n  \"auth flow\"                      → 2 words → Broad\n  \"lock ordering fix in v0.8.1\"    → digit \"0\" found → Specific\n  \"what is the best search method\" → 7 words → Specific\n  \"fix 'the lock bug'\"             → quoted phrase found → Specific\n  \"fix 'unclosed quote\"            → lone quote, no closer → check words (4) → Broad\n\nThis is the ONLY place spectral mode is auto-inferred. If a caller passes\nspectralMode=\"broad\" or \"specific\" explicitly, InferSpectralMode is never called.\nIf spectralMode=\"none\" or unknown string, the spectral step is skipped entirely.",
+    "coldPrompt": "A user reports: \"I'm calling recall with spectralMode='auto' and I'm getting different results than expected. For short queries like 'auth flow' I get cluster-boosted results (good). But for my query 'fix the auth bug' I'm also getting cluster-boosted results — I expected the high-pass filter since it's a more targeted query.\"\n\nExplain exactly why 'fix the auth bug' gets Broad mode. Then explain what the user would need to change in their query to get Specific mode. Be specific about the rules that govern this decision.",
+    "goldRubric": [
+      "Agent correctly states 'fix the auth bug' has 4 words, below the >=5 word threshold, so it gets Broad mode.",
+      "Agent correctly states there are no digits or matched quoted phrases in 'fix the auth bug', so those fast-path rules do not fire.",
+      "Agent correctly identifies at least two ways to get Specific mode: add a 5th word, OR include a digit, OR use a matched quoted phrase.",
+      "Agent correctly explains that Broad mode means cluster-dominance boost (low-pass) and Specific means high-pass cluster-mean subtraction.",
+      "Agent does NOT claim the mode selection involves embeddings, LLM calls, or any external computation."
+    ],
+    "expectedMemoryIds": [
+      "infer-spectral-mode-rules",
+      "spectral-mode-broad-vs-specific-semantics"
+    ],
+    "tags": ["internals"]
+  },
+  {
+    "taskId": "msa-regression-apples-to-oranges",
+    "primingTranscript": "Session: MSA regression test was reporting false regressions for weeks\nDate: 2026-04-22\n\nDev: Root cause identified in LiveAgentOutcomeRegressionTests.cs.\n\nTHE BUG: The test had a hard-coded candidate glob:\n  string pattern = $\"{datasetId}-live-agent-outcome-ollama-qwen2.5-7b.json\";\nBut ALL three baseline files were generated with phi3.5:3.8b. We were measuring:\n  phi3.5 baseline score  vs.  qwen2.5-7b candidate score\nConcrete false regressions observed in benchmarks/2026-04-17/:\n  agent-outcome-v1:      phi3.5 full_engram 0.833 vs qwen2.5 0.767 → \"6.67% regression\"\n  agent-outcome-hard-v1: phi3.5 full_engram 1.000 vs qwen2.5 0.833 → \"16.67% regression\"\n  agent-outcome-repo-v1: phi3.5 full_engram 0.900 vs qwen2.5 0.900 → 0% (lucky match)\n\nTHE FIX (commit 90beee7):\n1. Read the baseline JSON's \"model\" field at test time.\n2. Map ':' → '-' to build the glob: \"phi3.5:3.8b\" → \"phi3.5-3.8b\"\n3. Also Assert.Equal(baselineModel, candidateModel) — apples-to-apples guarantee.\n4. Include baseline model in failure messages for faster triage.\n\nEXPERT PANEL GUIDANCE (engram expert panel, concurrent_dispatch_table_engineer):\n\"Do NOT refresh the baseline to fit current output without a holdout split —\nthat creates sprint-over-sprint illusion of progress.\" We kept the original\nbaselines; we fixed the comparison logic.\n\nThe test is now self-correcting: if someone regenerates baselines with a\ndifferent model in the future, the glob auto-adapts.",
+    "coldPrompt": "You are reviewing a PR that adds a new benchmark dataset `agent-outcome-synthesis-v1` to LiveAgentOutcomeBenchmarkRunner. The author has also added a new baseline file at:\n  benchmarks/baselines/agent-outcome-synthesis-v1-live-agent-outcome-ollama-phi3.5-3.8b.json\n\nThe PR description says: \"I updated LiveAgentOutcomeRegressionTests to add this dataset. I hard-coded the candidate pattern to *-qwen2.5-7b.json since that's what we use for candidate runs.\"\n\nReview this change. What is wrong with hard-coding the candidate pattern? What is the correct approach? What regression has this project had with this exact pattern of error before?",
+    "goldRubric": [
+      "Agent identifies that hard-coding the candidate model creates a cross-model comparison (phi3.5 baseline vs qwen2.5 candidates), producing model-variance noise instead of engine quality signal.",
+      "Agent describes the correct fix: derive the candidate glob from the baseline JSON's `model` field, mapping ':' to '-' for filename construction.",
+      "Agent correctly states this project has had this exact bug before: MSA regression test was comparing phi3.5 baseline vs qwen2.5 candidates, producing false 6.67%-16.67% 'regressions'.",
+      "Agent references or implies the project philosophy: do not refresh baselines to match candidate output; fix the comparison.",
+      "Agent recommends adding an assertion that the candidate model matches the baseline model."
+    ],
+    "expectedMemoryIds": [
+      "msa-regression-apples-to-oranges-bug",
+      "benchmark-baseline-refresh-policy"
+    ],
+    "tags": ["bug-fix"]
+  }
+]

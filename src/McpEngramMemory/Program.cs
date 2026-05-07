@@ -21,6 +21,12 @@ if (args.Length > 0 && args[0] == "mrcr-pilot")
     return await MrcrPilotCommand.RunAsync(args.Skip(1).ToArray());
 }
 
+// Subcommand: `dotnet run -- cold-start ...` runs the cold-start self-referential benchmark (v1.1).
+if (args.Length > 0 && args[0] == "cold-start")
+{
+    return await ColdStartCommand.RunAsync(args.Skip(1).ToArray());
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);

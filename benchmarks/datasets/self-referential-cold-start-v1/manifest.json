@@ -1,0 +1,124 @@
+{
+  "manifestVersion": "1.1",
+  "datasetId": "self-referential-cold-start-v1",
+  "createdUtc": "2026-05-06T00:00:00Z",
+  "tasksDropped": [
+    {
+      "taskId": "tool-profile-stale-comment",
+      "reason": "fact-landscape-unstable: count discrepancies across services.md / Program.cs comments / docs"
+    },
+    {
+      "taskId": "nslock-dispose-ordering",
+      "reason": "100%-baseline-no-headroom: Opus solves volatile-flag-ordering from general .NET knowledge"
+    },
+    {
+      "taskId": "spectral-auto-mode-heuristic",
+      "reason": "100%-baseline-no-headroom: Opus guesses word-count rules cold"
+    },
+    {
+      "taskId": "diffusion-kernel-rename",
+      "reason": "engram-retrieval-pollution: -40pp regression suggests retrieved context confuses agent on simple rename lookup"
+    }
+  ],
+  "tasks": [
+    {
+      "taskId": "reflect-id-generation",
+      "primingTranscript": "Session: Implementing reflect-based session logging for a new CI integration\nDate: 2026-04-22\n\nDev: I just read through CompositeTools.cs — the reflect tool has some\nnon-obvious behaviors we need to document for the CI harness.\n\n1. ID auto-generation: reflect does NOT accept a caller-provided ID.\n   It generates the ID internally as:\n     id = $\"retro-{DateTimeOffset.UtcNow:yyyy-MM-dd}-{topic}\"\n   So if topic=\"lock-debugging\", the stored ID will be something like\n   \"retro-2026-04-22-lock-debugging\". If you call reflect twice on the\n   same day with the same topic, the second call will get a near-duplicate\n   warning and abort (score threshold 0.92 on existing \"lesson\" entries).\n\n2. Lifecycle state: reflect ALWAYS stores as \"ltm\", regardless of the\n   lifecycleState parameter — there is no such parameter on reflect.\n   This is by design: retrospectives are long-lived knowledge. Do NOT\n   try to store a reflect entry as \"stm\".\n\n3. relatedIds: these are linked with \"elaborates\" edge type (not \"similar_to\").\n   Auto-linked semantically-similar entries get \"cross_reference\" edges instead.\n\n4. The duplicate guard: reflect does a category-filtered search (category:\"lesson\")\n   at minScore 0.85, and aborts (status=\"duplicate_warning\") if any existing\n   entry scores >= 0.92. The caller gets the conflicting ID back in the message.\n\nWe need to make sure our CI harness uses a unique topic suffix (e.g. include\na run ID) to avoid duplicate_warning on repeated runs.",
+      "coldPrompt": "You are implementing a CI integration that calls the Engram `reflect` tool at the end of each build to store build lessons. You need to write a helper function that:\n  1. Calls reflect with a consistent topic name (e.g. \"ci-build-outcome\")\n  2. Retrieves the stored memory by its ID to verify it was saved\n  3. Handles the case where a reflection on the same topic already exists today\n\nWrite pseudocode (or real C#) for this helper. Be specific about:\n  - What ID will the stored memory have?\n  - What lifecycle state will it be in?\n  - What happens if you call this twice in the same day with the same topic?\n  - How would you handle that duplicate scenario in CI?",
+      "goldRubric": [
+        "Agent correctly states the ID will be `retro-{today's UTC date}-ci-build-outcome` (auto-generated, not caller-provided).",
+        "Agent correctly states the lifecycle state is always `ltm` (not stm, not configurable via reflect).",
+        "Agent correctly describes duplicate behavior: second call same day same topic returns status=\"duplicate_warning\" with the existing entry's ID.",
+        "Agent provides a concrete CI strategy to avoid duplicate_warning (e.g., unique topic suffix with run ID, or check-before-call).",
+        "Agent does NOT claim that reflect accepts an `id` parameter or a `lifecycleState` parameter."
+      ],
+      "expectedMemoryIds": [
+        "reflect-id-generation-contract",
+        "reflect-duplicate-guard"
+      ],
+      "tags": ["internals"]
+    },
+    {
+      "taskId": "flush-debounce-race",
+      "primingTranscript": "Session: Debugging flaky test teardown — \"Directory not empty\" error\nDate: 2026-04-29\n\nDev: We had a persistent flaky test failure: after Flush(), our tests\ndeleted the temp data directory but got \"DirectoryNotFoundException:\nDirectory not empty\" sporadically. Root cause analysis:\n\nTHE BUG: PersistenceManager.Flush() correctly drains all pending timer\ncallbacks by locking _timerLock, capturing and disposing each timer, then\ncalling WriteX synchronously. BUT — the debounced callback for a namespace\nsave has this flow:\n  1. Lock _timerLock → capture provider → dispose timer → remove from dict\n  2. EXIT lock\n  3. Call WriteNamespace() ← file I/O happens outside the lock\n\nIf step 1-2 happened just BEFORE Flush() locked, Flush() would see the dict\nempty (timer already removed), declare \"nothing pending\", and return.\nMeanwhile, step 3 was still running — the WriteNamespace call was in flight.\nTest teardown then deleted the directory while that write was happening.\n\nTHE FIX: Added _inFlightWrites (int) and _writesIdle (ManualResetEventSlim).\nThe critical constraint: BeginTrackedWrite() (which increments _inFlightWrites\nand resets _writesIdle) MUST be called while still holding _timerLock. If you\ncall it after exiting the lock, you can race Flush() — Flush() could pass\nthrough _timerLock empty, then observe _writesIdle already set, and return\nbefore the increment happens. The fix appended _writesIdle.Wait() at the\nend of Flush() to block until all in-flight writes complete.\n\nThe fix was applied identically to ScheduleSave, ScheduleSaveGlobalEdges,\nScheduleSaveClusters, ScheduleSaveCollapseHistory, and ScheduleSaveDecayConfigs\n— all 5 debounced code paths.",
+      "coldPrompt": "A colleague is adding a new debounced save path to PersistenceManager for a new \"search_index_snapshots\" file. They've written this code:\n\n  public void ScheduleSaveSearchIndex(Func<SearchIndexData> dataProvider)\n  {\n      lock (_timerLock)\n      {\n          _pendingSearchIndexTimer?.Dispose();\n          _pendingSearchIndexProvider = dataProvider;\n          _pendingSearchIndexTimer = new Timer(_ =>\n          {\n              Func<SearchIndexData>? provider;\n              lock (_timerLock)\n              {\n                  provider = _pendingSearchIndexProvider;\n                  _pendingSearchIndexProvider = null;\n                  _pendingSearchIndexTimer?.Dispose();\n                  _pendingSearchIndexTimer = null;\n              }\n              if (provider is not null)\n                  WriteSearchIndex(provider);   // file I/O outside lock\n          }, null, _debounceDelay, Timeout.InfiniteTimeSpan);\n      }\n  }\n\nReview this implementation. Is it correct with respect to Flush()? If not, describe the exact race condition and provide the corrected code.",
+      "goldRubric": [
+        "Agent identifies the race: timer callback exits _timerLock before Flush() enters, so Flush() sees empty pending dict and returns while WriteSearchIndex() is still running.",
+        "Agent states the fix: call BeginTrackedWrite() (increment _inFlightWrites) INSIDE the timer lock, before exiting it.",
+        "Agent provides corrected code: BeginTrackedWrite() inside the lock AND WriteSearchIndex wrapped in RunWriteAndRelease() (try/finally decrement with _writesIdle.Set on zero).",
+        "Agent correctly explains the ordering invariant: the increment must be visible to Flush() before Flush() exits the lock (same lock = mutual exclusion on observation).",
+        "Agent does NOT suggest the simpler but incorrect fix of calling BeginTrackedWrite() after exiting the lock."
+      ],
+      "expectedMemoryIds": [
+        "flush-debounce-race-root-cause",
+        "persistence-manager-debounce-pattern"
+      ],
+      "tags": ["bug-fix"]
+    },
+    {
+      "taskId": "msa-regression-apples-to-oranges",
+      "primingTranscript": "Session: MSA regression test was reporting false regressions for weeks\nDate: 2026-04-22\n\nDev: Root cause identified in LiveAgentOutcomeRegressionTests.cs.\n\nTHE BUG: The test had a hard-coded candidate glob:\n  string pattern = $\"{datasetId}-live-agent-outcome-ollama-qwen2.5-7b.json\";\nBut ALL three baseline files were generated with phi3.5:3.8b. We were measuring:\n  phi3.5 baseline score  vs.  qwen2.5-7b candidate score\nConcrete false regressions observed in benchmarks/2026-04-17/:\n  agent-outcome-v1:      phi3.5 full_engram 0.833 vs qwen2.5 0.767 → \"6.67% regression\"\n  agent-outcome-hard-v1: phi3.5 full_engram 1.000 vs qwen2.5 0.833 → \"16.67% regression\"\n  agent-outcome-repo-v1: phi3.5 full_engram 0.900 vs qwen2.5 0.900 → 0% (lucky match)\n\nTHE FIX (commit 90beee7):\n1. Read the baseline JSON's \"model\" field at test time.\n2. Map ':' → '-' to build the glob: \"phi3.5:3.8b\" → \"phi3.5-3.8b\"\n3. Also Assert.Equal(baselineModel, candidateModel) — apples-to-apples guarantee.\n4. Include baseline model in failure messages for faster triage.\n\nEXPERT PANEL GUIDANCE (engram expert panel, concurrent_dispatch_table_engineer):\n\"Do NOT refresh the baseline to fit current output without a holdout split —\nthat creates sprint-over-sprint illusion of progress.\" We kept the original\nbaselines; we fixed the comparison logic.\n\nThe test is now self-correcting: if someone regenerates baselines with a\ndifferent model in the future, the glob auto-adapts.",
+      "coldPrompt": "You are reviewing a PR that adds a new benchmark dataset `agent-outcome-synthesis-v1` to LiveAgentOutcomeBenchmarkRunner. The author has also added a new baseline file at:\n  benchmarks/baselines/agent-outcome-synthesis-v1-live-agent-outcome-ollama-phi3.5-3.8b.json\n\nThe PR description says: \"I updated LiveAgentOutcomeRegressionTests to add this dataset. I hard-coded the candidate pattern to *-qwen2.5-7b.json since that's what we use for candidate runs.\"\n\nReview this change. What is wrong with hard-coding the candidate pattern? What is the correct approach? What regression has this project had with this exact pattern of error before?",
+      "goldRubric": [
+        "Agent identifies that hard-coding the candidate model creates a cross-model comparison (phi3.5 baseline vs qwen2.5 candidates), producing model-variance noise instead of engine quality signal.",
+        "Agent describes the correct fix: derive the candidate glob from the baseline JSON's `model` field, mapping ':' to '-' for filename construction.",
+        "Agent correctly states this project has had this exact bug before: MSA regression test was comparing phi3.5 baseline vs qwen2.5 candidates, producing false 6.67%-16.67% 'regressions'.",
+        "Agent references or implies the project philosophy: do not refresh baselines to match candidate output; fix the comparison.",
+        "Agent recommends adding an assertion that the candidate model matches the baseline model."
+      ],
+      "expectedMemoryIds": [
+        "msa-regression-apples-to-oranges-bug",
+        "benchmark-baseline-refresh-policy"
+      ],
+      "tags": ["bug-fix"]
+    },
+    {
+      "taskId": "feedback-archived-resurrection-routing",
+      "primingTranscript": "Session: Debugging memory_feedback behavior on archived entries\nDate: 2026-04-30\n\nDev: We traced through LifecycleEngine.ApplyFeedback() to document how\narchived entries respond to positive feedback. This is counterintuitive:\n\nWhen an archived entry receives positive feedback (delta > 0), the\nnew activation energy is computed as:\n  newEnergy = entry.ActivationEnergy + delta\n\nThe state routing is asymmetric:\n  - archived + delta > 0 AND newEnergy >= stmThreshold (default 2.0)\n      → transitions to \"stm\"\n  - archived + delta > 0 AND newEnergy < stmThreshold\n      → transitions to \"ltm\" (NOT stm)\n\nSo an archived entry with ActivationEnergy = -3.0 receiving delta = +1.0:\n  newEnergy = -2.0  which is < 2.0 (stmThreshold)\n  → result: \"ltm\" (not \"stm\")\n\nAnd an archived entry with ActivationEnergy = 0.0 receiving delta = +5.0:\n  newEnergy = 5.0  which is >= 2.0 (stmThreshold)\n  → result: \"stm\"\n\nThis means a weakly-positive feedback on a deeply archived entry DOES NOT\nreturn it to active STM — it lands in LTM instead. Only a strong boost\nthat clears the stmThreshold restores active STM status.\n\nContrast with deep_recall resurrection (LifecycleEngine.DeepRecall), which\nalways promotes directly to \"stm\" when the similarity score >= 0.7 —\nthat's a different code path entirely.\n\nThe stmThreshold default is 2.0f; the archiveThreshold default is -5.0f.\nBoth can be overridden per-namespace via configure_decay.",
+      "coldPrompt": "You are writing a usage guide for the `memory_feedback` tool. A user asks:\n\n\"I have a memory that was archived by the decay cycle. I want to bring it back into active use. If I call memory_feedback on it with delta=+1.0, will it come back to STM so I can find it in normal recall?\"\n\nThe entry's current ActivationEnergy is -4.0. The namespace is using default thresholds.\n\nExplain exactly what will happen. Then explain what delta value the user would need to provide to get the entry back into STM. Show your reasoning.",
+      "goldRubric": [
+        "Agent correctly states that delta=+1.0 gives newEnergy=-3.0, which is below the stmThreshold of 2.0, so the entry transitions to 'ltm' rather than 'stm'.",
+        "Agent correctly states that 'ltm' entries are included in normal recall (unlike 'archived'), so the entry will be findable after a transition to 'ltm'.",
+        "Agent correctly states that to reach 'stm', the user needs a delta large enough to bring newEnergy to at least 2.0, meaning delta >= 6.0 (i.e., -4.0 + 6.0 = 2.0).",
+        "Agent correctly distinguishes the two resurrection paths: memory_feedback routes to ltm or stm based on the stmThreshold; deep_recall resurrection always promotes directly to stm."
+      ],
+      "expectedMemoryIds": [
+        "feedback-archived-resurrection-routing",
+        "lifecycle-threshold-defaults"
+      ],
+      "tags": ["internals"]
+    },
+    {
+      "taskId": "spreading-activation-contradicts-weight",
+      "primingTranscript": "Session: Reviewing spreading activation design — contradicts edge behavior\nDate: 2026-05-01\n\nDev: Audited PhysicsEngine.EdgeTypeWeights and SpreadingActivationService\nto document energy propagation along different edge types.\n\nEdge type weights (from PhysicsEngine.EdgeTypeWeights):\n  depends_on:       0.9\n  parent_child:     0.8\n  elaborates:       0.7\n  cross_reference:  0.6\n  similar_to:       0.5\n  contradicts:      0.3  ← non-zero\n\nIMPORTANT: 'contradicts' edges DO propagate activation energy — weight 0.3,\nnot 0. The design rationale: accessing a memory should pre-warm its\ncontradictions, because the contradiction is contextually relevant to the\nreasoning that used the original memory. The lower weight (0.3 vs 0.9 for\ndepends_on) reflects that contradictions are weaker contextual signals.\n\nPropagation formula (PhysicsEngine.ComputeSpreadingEnergy):\n  boost = baseEnergy × edgeTypeWeight / sqrt(nodeDegree)\n\nThe sqrt(nodeDegree) is fan-out attenuation: a hub node with 100 edges\nspreads less energy per edge than a spoke node with 4 edges.\n\nExample: node A (degree=4) accessed with baseEnergy=1.0, has a 'contradicts'\nedge to node B:\n  boost = 1.0 × 0.3 / sqrt(4) = 0.3 / 2.0 = 0.15\n\nSpreadingActivationService propagates up to MaxPropagationDepth=3 hops,\nstopping when energy drops below MinPropagationThreshold=0.1.\nSo in the example above, B gets 0.15 (above threshold), and B's own\nneighbors get a further recursive spread at 0.15 × 0.5 (RecursiveDecay).",
+      "coldPrompt": "A developer is designing a new edge type 'refutes' for the knowledge graph. They ask:\n\n\"Should I set the edge type weight for 'refutes' to 0.0 in PhysicsEngine.EdgeTypeWeights? My reasoning is that if memory A refutes memory B, accessing A should not pre-warm B since they disagree.\"\n\nExplain whether the existing 'contradicts' edge in the codebase uses weight 0.0 or non-zero. What weight does it use? What is the rationale for that design choice? Show the spreading energy formula and compute an example: if node A (degree=9) with baseEnergy=1.0 has a 'contradicts' edge to node B, what boost does B receive?",
+      "goldRubric": [
+        "Agent correctly states that 'contradicts' edges use weight 0.3, not 0.0.",
+        "Agent correctly states the design rationale: contradictions are contextually relevant to the reasoning that used the original memory, so they should be pre-warmed at a lower weight.",
+        "Agent correctly states the spreading energy formula: boost = baseEnergy × edgeTypeWeight / sqrt(nodeDegree).",
+        "Agent correctly computes the example: 1.0 × 0.3 / sqrt(9) = 0.3 / 3.0 = 0.1."
+      ],
+      "expectedMemoryIds": [
+        "spreading-activation-edge-weights",
+        "contradicts-edge-propagation-rationale"
+      ],
+      "tags": ["decision"]
+    },
+    {
+      "taskId": "spectral-decay-default-on-without-config",
+      "primingTranscript": "Session: Tracing default spectral decay behavior — no stored config case\nDate: 2026-05-02\n\nDev: Read through LifecycleEngine.RunDecayCycle to document what happens\nwhen useStoredConfig=true but the namespace has no stored DecayConfig.\n\nTHE COUNTERINTUITIVE DEFAULT:\nWhen RunDecayCycle is called with useStoredConfig=true and there is NO\nstored config for the namespace:\n  - effectiveDecayRate, reinforcementWeight etc. fall through to the\n    METHOD PARAMETER defaults (decayRate=0.1, etc.) — as expected.\n  - BUT: useSpectral is set to TRUE if _diffusion is not null.\n\nCode path (LifecycleEngine.cs, inside the useStoredConfig block):\n  var config = GetDecayConfig(currentNs); // returns null — no config stored\n  if (config is not null)\n  {\n      // ... applies stored values ...\n      useSpectral = config.UseSpectralDecay && _diffusion is not null;\n  }\n  else\n  {\n      // No stored config — apply defaults.\n      // Spectral diffusion is on by default whenever a kernel is available;\n      // the kernel itself self-bypasses for namespaces that don't qualify,\n      // so this is safe even on tiny / sparsely-linked namespaces.\n      useSpectral = _diffusion is not null;  // ← ON by default if kernel exists\n  }\n\nWHAT THIS MEANS:\n- If you call RunDecayCycle(ns, useStoredConfig: true) on a namespace that\n  has NEVER had configure_decay called, spectral decay is ON (if the\n  MemoryDiffusionKernel was injected into LifecycleEngine).\n- If you call RunDecayCycle(ns, useStoredConfig: false), useSpectral stays\n  false — the method-parameter path never sets it.\n- To explicitly disable spectral decay for a namespace, you must call\n  configure_decay with useSpectralDecay=false to create a stored config.\n\nThe kernel self-bypasses for namespaces below MinimumNodesForSpectral (32)\nor MinimumEdgesForSpectral (8), so the default-on behavior is safe.",
+      "coldPrompt": "A developer notices that decay cycles on their namespace are running slower than expected and suspects spectral diffusion is engaged even though they never explicitly enabled it. They ask:\n\n\"I call run_decay_cycle with useStoredConfig=true on my namespace. I have never called configure_decay on this namespace. Will spectral diffusion be active?\"\n\nExplain what the code does in this exact scenario. Explain why this might be surprising compared to the developer's expectation. Then explain what they would need to do to explicitly disable spectral decay for that namespace.",
+      "goldRubric": [
+        "Agent correctly states that spectral decay IS active when useStoredConfig=true and there is no stored config, provided the MemoryDiffusionKernel is available.",
+        "Agent correctly explains that the 'no stored config' branch sets useSpectral=true (kernel-available check), not false.",
+        "Agent correctly notes the kernel self-bypasses for namespaces below the minimum node/edge thresholds (32 nodes, 8 edges), so small namespaces are unaffected.",
+        "Agent correctly states the fix: call configure_decay with useSpectralDecay=false to create a stored config that explicitly disables spectral decay."
+      ],
+      "expectedMemoryIds": [
+        "spectral-decay-default-on-no-config",
+        "lifecycle-engine-usestored-config-behavior"
+      ],
+      "tags": ["internals"]
+    }
+  ]
+}
