@@ -45,17 +45,25 @@ public class DecayBackgroundServiceTests : IDisposable
         // Start the service
         await service.StartAsync(cts.Token);
 
-        // Wait long enough for at least one cycle with aggressive decay
-        await Task.Delay(200);
+        // Poll for the decay cycle to land — at least one cycle must update
+        // ActivationEnergy off its default (0). Robust to scheduler jitter under
+        // parallel xUnit execution where a fixed-delay-then-assert flakes.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        CognitiveEntry? entry = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            entry = _index.Get("a");
+            if (entry is not null && entry.ActivationEnergy != 0f)
+                break;
+            await Task.Delay(50);
+        }
 
         // Stop the service
         cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
         // Verify that decay ran (entry should have updated activation energy)
-        var entry = _index.Get("a");
         Assert.NotNull(entry);
-        // Activation energy should have been computed (non-zero after a decay cycle)
         Assert.NotEqual(0f, entry!.ActivationEnergy);
     }
 
