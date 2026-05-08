@@ -150,11 +150,11 @@ Set `MEMORY_TOOL_PROFILE` in your MCP config env to control which tools are expo
 
 | Profile | Tools | Includes |
 |---------|-------|---------|
-| `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin, multi-agent |
+| `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin (+ `engram_status`), multi-agent **(default)** |
 | `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
 | `full` | 65 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
 
-`get_graph_snapshot` (graph visualizer) requires `full`. Most daily use works fine on `minimal`.
+`minimal` is the default. `get_graph_snapshot` (graph visualizer) requires `full`. Most daily use works fine on `minimal`.
 
 ## Memory Graph Visualizer
 

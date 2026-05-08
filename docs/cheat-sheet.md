@@ -69,9 +69,9 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 
 | Profile | Tools | What's included |
 |---------|-------|----------------|
-| `minimal` | 16 | Core CRUD, admin, composite tools, multi-agent sharing |
+| `minimal` | 16 | Core CRUD, admin (+ `engram_status`), composite tools, multi-agent sharing **(default)** |
 | `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 65 | Everything: expert routing, debate, synthesis, benchmarks (default) |
+| `full` | 65 | Everything: expert routing, debate, synthesis, benchmarks |
 
-Use `minimal` or `standard` to reduce context window pressure on smaller models.
+`minimal` is the default — most agents perform better with the smaller surface. Set `MEMORY_TOOL_PROFILE=standard` or `=full` to expand.
 

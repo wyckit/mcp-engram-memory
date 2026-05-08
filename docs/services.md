@@ -115,7 +115,7 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16 tools), `standard` (41 tools), `full` (65 tools) |
+| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (16 tools, default), `standard` (41 tools), `full` (65 tools) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
