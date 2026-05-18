@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
@@ -52,7 +53,7 @@ public sealed class CompositeTools
         [Description("Namespace (e.g. project directory name, 'work', 'synthesis').")] string ns,
         [Description("The memory text to store and embed.")] string text,
         [Description("Category: 'decision', 'pattern', 'bug-fix', 'architecture', 'preference', 'lesson', 'reference', 'retrospective'.")] string? category = null,
-        [Description("Optional metadata as key-value pairs.")] Dictionary<string, string>? metadata = null,
+        [Description("Optional metadata as a JSON object. Values may be any JSON type — strings are stored verbatim, numbers/booleans become their literal text, and arrays/objects are serialized to compact JSON so the dictionary storage stays flat.")] Dictionary<string, JsonElement>? metadata = null,
         [Description("Lifecycle state: 'stm' (default) or 'ltm' for stable knowledge.")] string? lifecycleState = null)
     {
         if (string.IsNullOrWhiteSpace(id)) return "Error: id must not be empty.";
@@ -82,7 +83,8 @@ public sealed class CompositeTools
         }
 
         // 3. Store the entry
-        var entry = new CognitiveEntry(id, vector, ns, text, category, metadata, state);
+        var entry = new CognitiveEntry(id, vector, ns, text, category,
+            MetadataNormalizer.Normalize(metadata), state);
         _index.Upsert(entry);
         actions.Add("stored");
 

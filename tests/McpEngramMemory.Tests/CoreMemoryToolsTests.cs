@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -58,13 +59,93 @@ public class CoreMemoryToolsTests : IDisposable
     [Fact]
     public void StoreMemory_WithCategoryAndMetadata()
     {
-        var metadata = new Dictionary<string, string> { ["source"] = "test" };
+        var metadata = Meta(("source", "\"test\""));
         var result = _tools.StoreMemory(id: "m1", ns: "work", text: "text", vector: new[] { 1f, 2f }, category: "meeting-notes", metadata: metadata);
         Assert.Contains("m1", result);
 
         var entry = _index.Get("m1");
         Assert.Equal("meeting-notes", entry!.Category);
         Assert.Equal("test", entry.Metadata["source"]);
+    }
+
+    [Fact]
+    public void StoreMemory_MetadataWithArrayValue_StringifiesToJson()
+    {
+        // Regression for engram-feedback-metadata-array-binding-failure-2026-05-18:
+        // metadata values that are JSON arrays used to fail MCP binding (the parameter
+        // was Dictionary<string,string>). Now the value should be JSON-serialized into
+        // the stored metadata bag instead of crashing.
+        var metadata = Meta(("artifacts", "[\"a\",\"b\"]"));
+        var result = _tools.StoreMemory(id: "arr1", ns: "work", vector: new[] { 1f, 0f }, metadata: metadata);
+        Assert.DoesNotContain("Error", result);
+
+        var entry = _index.Get("arr1");
+        Assert.Equal("[\"a\",\"b\"]", entry!.Metadata["artifacts"]);
+    }
+
+    [Fact]
+    public void StoreMemory_MetadataWithNestedObjectValue_StringifiesToJson()
+    {
+        var metadata = Meta(("config", "{\"depth\":3,\"enabled\":true}"));
+        var result = _tools.StoreMemory(id: "obj1", ns: "work", vector: new[] { 1f, 0f }, metadata: metadata);
+        Assert.DoesNotContain("Error", result);
+
+        var entry = _index.Get("obj1");
+        Assert.Equal("{\"depth\":3,\"enabled\":true}", entry!.Metadata["config"]);
+    }
+
+    [Fact]
+    public void StoreMemory_MetadataWithMixedScalarTypes()
+    {
+        var metadata = Meta(
+            ("name", "\"alpha\""),
+            ("count", "7"),
+            ("active", "true"),
+            ("nothing", "null"));
+        var result = _tools.StoreMemory(id: "mix1", ns: "work", vector: new[] { 1f, 0f }, metadata: metadata);
+        Assert.DoesNotContain("Error", result);
+
+        var entry = _index.Get("mix1");
+        Assert.Equal("alpha", entry!.Metadata["name"]);
+        Assert.Equal("7", entry.Metadata["count"]);
+        Assert.Equal("true", entry.Metadata["active"]);
+        Assert.Equal(string.Empty, entry.Metadata["nothing"]);
+    }
+
+    // ── StoreBatch ──
+
+    [Fact]
+    public void StoreBatch_MetadataWithArrayValue_StringifiesToJson()
+    {
+        var entries = new[]
+        {
+            new BatchEntry
+            {
+                Id = "b1",
+                Text = "first",
+                Metadata = Meta(("tags", "[\"x\",\"y\"]")),
+            },
+            new BatchEntry
+            {
+                Id = "b2",
+                Text = "second",
+                Metadata = Meta(("source", "\"upload\"")),
+            },
+        };
+
+        var result = _tools.StoreBatch(ns: "batch_ns", entries: entries, checkDuplicates: false);
+        Assert.NotNull(result);
+
+        Assert.Equal("[\"x\",\"y\"]", _index.Get("b1")!.Metadata["tags"]);
+        Assert.Equal("upload", _index.Get("b2")!.Metadata["source"]);
+    }
+
+    private static Dictionary<string, JsonElement> Meta(params (string Key, string JsonValue)[] entries)
+    {
+        var dict = new Dictionary<string, JsonElement>(entries.Length);
+        foreach (var (key, jsonValue) in entries)
+            dict[key] = JsonDocument.Parse(jsonValue).RootElement.Clone();
+        return dict;
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Experts;
@@ -228,6 +229,50 @@ public class CompositeToolsTests : IDisposable
         Assert.Equal("Error: text must not be empty.", _tools.Remember("id", "ns", ""));
         Assert.Equal("Error: id must not be empty.", _tools.Remember("   ", "ns", "text"));
     }
+
+    // ── metadata: any JSON value accepted (regression for
+    // engram-feedback-metadata-array-binding-failure-2026-05-18) ──
+
+    [Fact]
+    public void Remember_MetadataWithArrayValue_StoresAsJsonString()
+    {
+        var metadata = new Dictionary<string, JsonElement>
+        {
+            ["artifacts"] = ParseJson("[\"a\",\"b\"]"),
+            ["author"] = ParseJson("\"claude\""),
+        };
+
+        var result = _tools.Remember("meta-array", "myns", "memory with structured metadata", metadata: metadata) as RememberResult;
+
+        Assert.NotNull(result);
+        Assert.Equal("stored", result!.Status);
+
+        var entry = _index.Get("meta-array", "myns");
+        Assert.NotNull(entry);
+        Assert.Equal("[\"a\",\"b\"]", entry!.Metadata["artifacts"]);
+        Assert.Equal("claude", entry.Metadata["author"]);
+    }
+
+    [Fact]
+    public void Remember_MetadataWithNestedObject_StoresAsJsonString()
+    {
+        var metadata = new Dictionary<string, JsonElement>
+        {
+            ["config"] = ParseJson("{\"depth\":3,\"enabled\":true}"),
+        };
+
+        var result = _tools.Remember("meta-object", "myns", "memory with nested-object metadata", metadata: metadata) as RememberResult;
+
+        Assert.NotNull(result);
+        Assert.Equal("stored", result!.Status);
+
+        var entry = _index.Get("meta-object", "myns");
+        Assert.NotNull(entry);
+        Assert.Equal("{\"depth\":3,\"enabled\":true}", entry!.Metadata["config"]);
+    }
+
+    private static JsonElement ParseJson(string json) =>
+        JsonDocument.Parse(json).RootElement.Clone();
 
     [Fact]
     public void Recall_EmptyInputs_ReturnsFriendlyError()

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -47,7 +48,7 @@ public sealed class CoreMemoryTools
         [Description("The original text the vector was derived from.")] string? text = null,
         [Description("The float vector embedding as an array of numbers.")] float[]? vector = null,
         [Description("Category within namespace (e.g. 'meeting-notes').")] string? category = null,
-        [Description("Optional metadata as a JSON object with string keys and values.")] Dictionary<string, string>? metadata = null,
+        [Description("Optional metadata as a JSON object. Values may be any JSON type — strings are stored verbatim, numbers/booleans become their literal text, and arrays/objects are serialized to compact JSON so the dictionary storage stays flat.")] Dictionary<string, JsonElement>? metadata = null,
         [Description("Initial lifecycle state: 'stm' (default), 'ltm', or 'archived'.")] string? lifecycleState = null)
     {
         try
@@ -61,7 +62,8 @@ public sealed class CoreMemoryTools
                 textToEmbed = prefix + text;
             }
             var resolved = ResolveVector(vector, textToEmbed);
-            var entry = new CognitiveEntry(id, resolved, ns, text, category, metadata,
+            var entry = new CognitiveEntry(id, resolved, ns, text, category,
+                MetadataNormalizer.Normalize(metadata),
                 lifecycleState ?? "stm");
             _index.Upsert(entry);
 
@@ -102,7 +104,8 @@ public sealed class CoreMemoryTools
 
             var prefix = BenchmarkRunner.BuildContextualPrefix(ns, e.Category);
             var vector = _embedding.Embed(prefix + e.Text);
-            var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category, e.Metadata,
+            var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category,
+                MetadataNormalizer.Normalize(e.Metadata),
                 e.LifecycleState ?? "stm");
             cognitiveEntries.Add(entry);
         }
@@ -409,7 +412,7 @@ public sealed class BatchEntry
     [System.Text.Json.Serialization.JsonPropertyName("category")]
     public string? Category { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("metadata")]
-    public Dictionary<string, string>? Metadata { get; set; }
+    public Dictionary<string, JsonElement>? Metadata { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("lifecycleState")]
     public string? LifecycleState { get; set; }
 }
