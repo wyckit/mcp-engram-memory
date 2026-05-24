@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Intelligence;
@@ -52,14 +53,23 @@ public class AccretionBackgroundServiceTests : IDisposable
         using var cts = new CancellationTokenSource();
         await service.StartAsync(cts.Token);
 
-        // Wait for at least one scan cycle
-        await Task.Delay(200);
+        // Poll for the first scan cycle to land instead of relying on a fixed delay.
+        // A saturated CI ThreadPool (xunit runs many test classes in parallel) can push
+        // the first scan well past a fixed 200 ms window, leaving pending empty and the
+        // test falsely failing. The healthy path completes in tens of ms, so polling only
+        // relaxes the false-negative bound, not the test's discriminative power.
+        var pending = _scanner.GetPendingCollapses("test");
+        var sw = Stopwatch.StartNew();
+        while (pending.Count == 0 && sw.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            await Task.Delay(25);
+            pending = _scanner.GetPendingCollapses("test");
+        }
 
         cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
         // The scanner should have detected the cluster
-        var pending = _scanner.GetPendingCollapses("test");
         Assert.Single(pending);
         Assert.Equal(4, pending[0].MemberCount);
     }
