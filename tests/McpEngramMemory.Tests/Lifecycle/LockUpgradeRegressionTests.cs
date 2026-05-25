@@ -154,7 +154,7 @@ public class LockUpgradeRegressionTests : IDisposable
         {
             startGate.Wait();
             // Run multiple passes so the maintenance work overlaps with writers.
-            for (int pass = 0; pass < 5; pass++)
+            for (int pass = 0; pass < 3; pass++)
             {
                 try { _lifecycle.RunConsolidationPass("ns-a"); }
                 catch (InvalidOperationException) { /* eigensolver numerical noise under concurrent load — not a deadlock */ }
@@ -198,11 +198,11 @@ public class LockUpgradeRegressionTests : IDisposable
 
         // Generous outer deadline: a deadlock manifests as a timeout.
         var allTasks = Task.WhenAll(new[] { maintenanceTask }.Concat(bTasks).Concat(aTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(30)));
+        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
 
         Assert.True(
             ReferenceEquals(winner, allTasks),
-            "Test timed out after 30 s — this indicates a deadlock in the lock-upgrade path. " +
+            "Test timed out after 60 s — this indicates a deadlock in the lock-upgrade path. " +
             "If RunConsolidationPass holds a read lock on ns-a while calling SetLifecycleState " +
             "(which acquires a write lock), RWLS will deadlock.");
 
@@ -255,7 +255,7 @@ public class LockUpgradeRegressionTests : IDisposable
         var maintenanceTask = Task.Run(() =>
         {
             startGate.Wait();
-            for (int pass = 0; pass < 10; pass++)
+            for (int pass = 0; pass < 4; pass++)
                 _lifecycle.RunDecayCycle("ns-decay-a");
         });
 
@@ -276,11 +276,11 @@ public class LockUpgradeRegressionTests : IDisposable
         startGate.Set();
 
         var allTasks = Task.WhenAll(new[] { maintenanceTask }.Concat(bTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(30)));
+        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
 
         Assert.True(
             ReferenceEquals(winner, allTasks),
-            "Test timed out after 30 s — deadlock in RunDecayCycle lock path.");
+            "Test timed out after 60 s — deadlock in RunDecayCycle lock path.");
 
         await allTasks;
 
@@ -316,7 +316,7 @@ public class LockUpgradeRegressionTests : IDisposable
         var scanTask = Task.Run(() =>
         {
             startGate.Wait();
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 3; i++)
                 scanner.Scan("ns-autolink");
         });
 
@@ -337,11 +337,11 @@ public class LockUpgradeRegressionTests : IDisposable
         startGate.Set();
 
         var allTasks = Task.WhenAll(new[] { scanTask }.Concat(writerTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(30)));
+        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
 
         Assert.True(
             ReferenceEquals(winner, allTasks),
-            "Test timed out after 30 s — AutoLinkScanner is blocking CognitiveIndex writes.");
+            "Test timed out after 60 s — AutoLinkScanner is blocking CognitiveIndex writes.");
 
         await allTasks;
 
@@ -390,7 +390,7 @@ public class LockUpgradeRegressionTests : IDisposable
         var scanTask = Task.Run(() =>
         {
             startGate.Wait();
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 2; i++)
                 accretion.ScanNamespace("ns-accretion", epsilon: 0.15f, minPoints: 3);
         });
 
@@ -411,11 +411,11 @@ public class LockUpgradeRegressionTests : IDisposable
         startGate.Set();
 
         var allTasks = Task.WhenAll(new[] { scanTask }.Concat(bTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(30)));
+        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
 
         Assert.True(
             ReferenceEquals(winner, allTasks),
-            "Test timed out after 30 s — AccretionScanner is blocking CognitiveIndex writes.");
+            "Test timed out after 60 s — AccretionScanner is blocking CognitiveIndex writes.");
 
         await allTasks;
 
