@@ -384,20 +384,39 @@ public class ParallelAgentTests : IDisposable
         _registry.EnsureOwnership(ns, "owner");
         _index.Upsert(MakeEntry("secret", ns, "confidential data about the project"));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var tools = ToolsFor("outsider");
 
-        int errors = 0, successes = 0;
+        // Deterministic phase: prove the permission bit is read LIVE (not cached) by
+        // observing every transition directly. This replaces a previous probabilistic
+        // approach that relied on a concurrent reader happening to *sample* both the
+        // shared and unshared states while a sharer toggled them with sub-microsecond
+        // gaps — under CI ThreadPool starvation the reader could sample only the granted
+        // state and never see a denied read, failing spuriously.
+        var beforeShare = tools.CrossSearch(ns, "confidential data");
+        Assert.True(beforeShare is string s0 && s0.StartsWith("Error: no accessible"),
+            $"Outsider must be denied before any share; got: {beforeShare}");
+
+        _registry.Share(ns, "owner", "outsider", "read");
+        Assert.IsType<CrossSearchResponse>(tools.CrossSearch(ns, "confidential data"));
+
+        _registry.Unshare(ns, "owner", "outsider");
+        var afterUnshare = tools.CrossSearch(ns, "confidential data");
+        Assert.True(afterUnshare is string s1 && s1.StartsWith("Error: no accessible"),
+            $"Outsider must be denied again after unshare; got: {afterUnshare}");
+
+        // Concurrent churn: a reader hammers cross_search while the owner rapidly toggles
+        // sharing. The invariant under test is that every result is internally consistent
+        // at the instant HasAccess evaluates it — a clean denied OR a valid response, never
+        // an exception or a torn read — regardless of interleaving. We deliberately do not
+        // assert how many of each are seen (that is a scheduling-dependent sampling race).
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var reader = Task.Run(() =>
         {
-            var tools = ToolsFor("outsider");
             while (!cts.IsCancellationRequested)
             {
                 var r = tools.CrossSearch(ns, "confidential data");
-                if (r is string s && s.StartsWith("Error: no accessible"))
-                    Interlocked.Increment(ref errors);
-                else if (r is CrossSearchResponse)
-                    Interlocked.Increment(ref successes);
-                else
+                bool denied = r is string s && s.StartsWith("Error: no accessible");
+                if (!denied && r is not CrossSearchResponse)
                     Assert.Fail($"Unexpected cross_search result: {r}");
             }
         });
@@ -415,11 +434,6 @@ public class ParallelAgentTests : IDisposable
         });
 
         await Task.WhenAll(reader, sharer);
-
-        // We should have seen both states — proves the permission bit is actually being
-        // read concurrently, not cached.
-        Assert.True(errors > 0, "Expected at least some denied reads while outsider was not shared");
-        Assert.True(successes > 0, "Expected at least some allowed reads while outsider was shared");
     }
 
     public void Dispose()
