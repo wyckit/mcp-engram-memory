@@ -275,20 +275,24 @@ public class ParallelAgentTests : IDisposable
         _index.EntryUpserted += Handler;
         try
         {
-            // Writer task publishes 3 entries; reader waits on the signal.
-            var writerTask = Task.Run(async () =>
+            // Writer task publishes 3 entries; reader waits on the signal. The upserts run
+            // in one synchronous burst (no inter-write `await` continuation points) so a
+            // saturated CI ThreadPool cannot strand a continuation mid-sequence — once the
+            // single writer Task is scheduled, all three events fire back-to-back.
+            var writerTask = Task.Run(() =>
             {
-                await Task.Delay(25);
                 _index.Upsert(MakeEntry("live-1", ns, "breaking news one"));
-                await Task.Delay(25);
                 _index.Upsert(MakeEntry("live-2", ns, "breaking news two"));
-                await Task.Delay(25);
                 _index.Upsert(MakeEntry("live-3", ns, "breaking news three"));
             });
 
+            // 10 s per-signal slack absorbs CI ThreadPool starvation (xunit runs many test
+            // classes in parallel) where even scheduling the writer Task can spike past 2 s.
+            // The healthy path signals in milliseconds, so this only relaxes the false-
+            // negative bound, not the test's discriminative power.
             for (int i = 0; i < 3; i++)
             {
-                var got = await signal.WaitAsync(TimeSpan.FromSeconds(2));
+                var got = await signal.WaitAsync(TimeSpan.FromSeconds(10));
                 Assert.True(got, $"Reader timed out waiting for live entry {i + 1}");
             }
 

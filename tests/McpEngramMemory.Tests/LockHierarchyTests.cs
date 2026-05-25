@@ -142,23 +142,34 @@ public class LockHierarchyTests : IDisposable
     {
         _index.Upsert(MakeEntry("seed", "reader-ns", "seed entry"));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-
+        // The reader times its OWN 500 ms window from the moment it is actually scheduled,
+        // rather than racing an external wall-clock deadline. On a saturated CI ThreadPool
+        // the reader Task can be delayed well past a fixed external timeout, which previously
+        // left it 0 iterations and a false "looks blocked" failure. A self-timed window
+        // guarantees the reader gets its full measurement period whenever it starts.
         long readerIterations = 0;
+        using var stop = new CancellationTokenSource();
+
         var readerTask = Task.Run(() =>
         {
-            while (!cts.IsCancellationRequested)
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed < TimeSpan.FromMilliseconds(500))
             {
                 var r = _index.Get("seed", "reader-ns");
                 Assert.NotNull(r);
                 Interlocked.Increment(ref readerIterations);
             }
+            stop.Cancel();
         });
 
         var writerTask = Task.Run(() =>
         {
-            for (int i = 0; i < 50 && !cts.IsCancellationRequested; i++)
-                _index.Upsert(MakeEntry($"w-{i:D2}", "writer-ns", $"write {i}"));
+            // Keep an active writer on ns=A for the whole reader window (ids cycle 0..49 so
+            // this is bounded upserts, not unbounded growth) so the reader is genuinely
+            // contending with a live writer the entire time it is measuring.
+            int i = 0;
+            while (!stop.IsCancellationRequested)
+                _index.Upsert(MakeEntry($"w-{i++ % 50:D2}", "writer-ns", $"write {i}"));
         });
 
         await Task.WhenAll(readerTask, writerTask);
