@@ -139,16 +139,24 @@ public class RegressionTests : IDisposable
         var spreading = new SpreadingActivationService(_index, _graph, _clusters);
         var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters);
 
-        // Run StoreSummary and DeleteMemory concurrently — should not deadlock
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // Run StoreSummary and DeleteMemory concurrently — should not deadlock.
         var tasks = new[]
         {
-            Task.Run(() => _clusters.StoreSummary("c1", "summary text", new[] { 0.5f, 0.5f }), cts.Token),
-            Task.Run(() => tools.DeleteMemory("b"), cts.Token)
+            Task.Run(() => _clusters.StoreSummary("c1", "summary text", new[] { 0.5f, 0.5f })),
+            Task.Run(() => tools.DeleteMemory("b"))
         };
 
-        // If this times out, we have a deadlock
-        await Task.WhenAll(tasks);
+        // Deadlock detector: a real lock-ordering deadlock hangs both tasks forever, so we
+        // race completion against a generous timeout. 30 s is far beyond the work here even
+        // on a saturated CI ThreadPool. We deliberately do NOT hand the tasks a cancellation
+        // token on a tight budget — that would let a starved pool cancel them before they run
+        // and throw a false TaskCanceledException, and a CT cannot interrupt a synchronous
+        // deadlock anyway (the very thing this test guards against).
+        var allDone = Task.WhenAll(tasks);
+        var winner = await Task.WhenAny(allDone, Task.Delay(TimeSpan.FromSeconds(30)));
+        Assert.True(ReferenceEquals(winner, allDone),
+            "ConcurrentStoreSummaryAndDelete deadlocked — Task.WhenAll did not complete within 30 s");
+        await allDone; // surface any exception thrown inside the tasks
     }
 
     // Issue 1: ScheduleSave snapshot captured under write lock, no lambda re-entry

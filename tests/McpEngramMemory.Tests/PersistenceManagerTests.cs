@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
@@ -91,10 +92,19 @@ public class PersistenceManagerTests : IDisposable
         };
         persistence.ScheduleSave("test", () => data);
 
-        // Wait for debounce
-        Thread.Sleep(200);
+        // Poll for the debounced write to land instead of a fixed sleep. The 50 ms debounce
+        // timer runs on a background thread; a saturated CI ThreadPool can delay its callback
+        // well past a fixed 200 ms window, leaving the file unwritten and Assert.Single failing
+        // on an empty collection. We still exercise the debounce path (no Flush) — only the
+        // false-negative bound is relaxed; the healthy path lands in tens of ms.
+        NamespaceData loaded = persistence.LoadNamespace("test");
+        var sw = Stopwatch.StartNew();
+        while (loaded.Entries.Count == 0 && sw.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            Thread.Sleep(25);
+            loaded = persistence.LoadNamespace("test");
+        }
 
-        var loaded = persistence.LoadNamespace("test");
         Assert.Single(loaded.Entries);
         persistence.Dispose();
     }
