@@ -62,15 +62,21 @@ Add `ITextGenerator` to the declaration: `public sealed class OllamaClient : IDi
 - Replace the 3 `_ollama.` call sites with `_generator.`; generalize the unavailable-error string (no longer Ollama-specific).
 
 ### `src/McpEngramMemory/Program.cs` (standalone server DI)
-Select backend via `SYNTHESIS_BACKEND` (default `onnx`); register `ITextGenerator` as singleton; build `SynthesisEngine` with it:
+Select backend via `SYNTHESIS_BACKEND` (default `ollama`; ONNX is opt-in); register `ITextGenerator` as singleton; build `SynthesisEngine` with it:
 ```csharp
-var synthesisBackend = (Environment.GetEnvironmentVariable("SYNTHESIS_BACKEND") ?? "onnx").Trim().ToLowerInvariant();
+var synthesisBackend = (Environment.GetEnvironmentVariable("SYNTHESIS_BACKEND") ?? "ollama").Trim().ToLowerInvariant();
+if (synthesisBackend is not ("ollama" or "onnx"))
+{
+    throw new InvalidOperationException("SYNTHESIS_BACKEND must be 'ollama' or 'onnx'.");
+}
+
+var useOnnxSynthesis = synthesisBackend == "onnx";
 var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL")
-    ?? (synthesisBackend == "ollama" ? "qwen2.5:1.5b" : "qwen2.5-1.5b");
+    ?? (useOnnxSynthesis ? "qwen2.5-1.5b" : "qwen2.5:1.5b");
 var synthesisReduceModel = Environment.GetEnvironmentVariable("SYNTHESIS_REDUCE_MODEL") ?? synthesisMapModel;
-builder.Services.AddSingleton<ITextGenerator>(_ => synthesisBackend == "ollama"
-    ? new OllamaClient(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434")
-    : new OnnxGenAiTextGenerator(Environment.GetEnvironmentVariable("SYNTHESIS_ONNX_MODEL_DIR")));
+builder.Services.AddSingleton<ITextGenerator>(_ => useOnnxSynthesis
+    ? new OnnxGenAiTextGenerator(Environment.GetEnvironmentVariable("SYNTHESIS_ONNX_MODEL_DIR"))
+    : new OllamaClient(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434"));
 builder.Services.AddSingleton(sp => new SynthesisEngine(
     sp.GetRequiredService<CognitiveIndex>(), sp.GetRequiredService<ClusterManager>(),
     sp.GetRequiredService<ITextGenerator>(), synthesisMapModel, synthesisReduceModel));
@@ -144,8 +150,8 @@ This packs `McpEngramMemory.Core.1.2.0.nupkg` and pushes it. (The native runtime
 ## 9. Consumer update — `mcp-epividian` (separate repo, gated on this publish)
 
 1. Bump `src/McpEpividian/McpEpividian.csproj`: `<PackageReference Include="McpEngramMemory.Core" Version="0.9.0" />` → **`1.2.0`**.
-2. (Optional, recommended) Mirror the backend-switch DI in `mcp-epividian`'s `Program.cs` — register `ITextGenerator` (default `OnnxGenAiTextGenerator`) and pass it to `SynthesisEngine`. *Until then, the existing legacy ctor keeps working on Ollama.*
-3. Set env on the host: `SYNTHESIS_BACKEND=onnx` (default) and stage a model (`fetch-synthesis-model.ps1`) or set `SYNTHESIS_ONNX_MODEL_DIR`.
+2. (Optional, recommended) Mirror the backend-switch DI in `mcp-epividian`'s `Program.cs` — register `ITextGenerator` and pass it to `SynthesisEngine`. *Until then, the existing legacy ctor keeps working on Ollama.*
+3. To use ONNX on the host, set `SYNTHESIS_BACKEND=onnx` and stage a model (`fetch-synthesis-model.ps1`) or set `SYNTHESIS_ONNX_MODEL_DIR`.
 4. **Verify native flow:** `dotnet publish` mcp-epividian and confirm `onnxruntime-genai` native DLLs are in the output `runtimes/` (they should, transitively).
 5. Rebuild + **restart** the MCP server to expose the change.
 

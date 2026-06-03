@@ -180,7 +180,7 @@ Opus thinks, Sonnet remembers, Haiku explores.
 | Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
 | Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
 | Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate`, `purge_debates` | Multi-perspective analysis with debate tracking |
-| Synthesis | `synthesize_memories` | Map-reduce synthesis via in-process SLM (ONNX Runtime GenAI, Qwen2.5-1.5B by default; Ollama optional via `SYNTHESIS_BACKEND=ollama`) |
+| Synthesis | `synthesize_memories` | Map-reduce synthesis via local SLM (Ollama by default; ONNX Runtime GenAI is opt-in via `SYNTHESIS_BACKEND=onnx`) |
 | Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse`, `trigger_accretion_scan` | DBSCAN cluster detection and two-phase summarization |
 | Admin | `get_memory`, `cognitive_stats`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, and latency metrics |
 | Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |

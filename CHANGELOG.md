@@ -8,8 +8,8 @@ All notable changes to this project will be documented in this file.
 - **In-process synthesis backend (ONNX Runtime GenAI).** `synthesize_memories` can now run a local
   Qwen2.5-Instruct model entirely in-process — no Ollama daemon required — mirroring how
   `OnnxEmbeddingService` already hosts the embedding model. New `ITextGenerator` abstraction with two
-  implementations: `OnnxGenAiTextGenerator` (in-process, default) and `OllamaClient` (now implements
-  the interface). Backend selected via `SYNTHESIS_BACKEND=onnx|ollama` (default `onnx`); model dir via
+  implementations: `OnnxGenAiTextGenerator` (in-process, opt-in) and `OllamaClient` (now implements
+  the interface). Backend selected via `SYNTHESIS_BACKEND=onnx|ollama` (default `ollama`); model dir via
   `SYNTHESIS_ONNX_MODEL_DIR`. Stage a model with `scripts/fetch-synthesis-model.ps1` (defaults to a
   no-Python pre-built download). Missing model degrades gracefully (descriptive error result, no throw).
 - **Default synthesis model = Qwen2.5-1.5B-Instruct.** A 2026-06-03 CPU benchmark (0.5B vs 1.5B) found
