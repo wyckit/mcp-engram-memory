@@ -20,17 +20,31 @@ public sealed class SynthesisEngine
 
     private readonly CognitiveIndex _index;
     private readonly ClusterManager _clusters;
-    private readonly OllamaClient _ollama;
+    private readonly ITextGenerator _generator;
     private readonly string _mapModel;
     private readonly string _reduceModel;
 
+    /// <summary>
+    /// Convenience constructor that uses the Ollama backend (preserves pre-1.2.0 behavior).
+    /// </summary>
     public SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
         string mapModel = "qwen2.5:0.5b", string reduceModel = "qwen2.5:0.5b",
         string? ollamaUrl = null)
+        : this(index, clusters, new OllamaClient(ollamaUrl ?? "http://localhost:11434"), mapModel, reduceModel)
+    {
+    }
+
+    /// <summary>
+    /// Backend-agnostic constructor: inject any <see cref="ITextGenerator"/> — e.g.
+    /// <see cref="OnnxGenAiTextGenerator"/> for fully in-process synthesis with no external daemon.
+    /// </summary>
+    public SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
+        ITextGenerator generator,
+        string mapModel = "qwen2.5:0.5b", string reduceModel = "qwen2.5:0.5b")
     {
         _index = index;
         _clusters = clusters;
-        _ollama = new OllamaClient(ollamaUrl ?? "http://localhost:11434");
+        _generator = generator;
         _mapModel = mapModel;
         _reduceModel = reduceModel;
     }
@@ -43,8 +57,8 @@ public sealed class SynthesisEngine
         string ns, string? query = null, int maxEntries = 200,
         CancellationToken ct = default)
     {
-        // 1. Check Ollama availability
-        bool available = await _ollama.IsAvailableAsync(_mapModel, ct);
+        // 1. Check backend availability (Ollama daemon or in-process ONNX model).
+        bool available = await _generator.IsAvailableAsync(_mapModel, ct);
         if (!available)
         {
             return new SynthesisResult(
@@ -54,8 +68,9 @@ public sealed class SynthesisEngine
                 ChunksProcessed: 0,
                 MapModel: _mapModel,
                 ReduceModel: _reduceModel,
-                Error: $"Ollama not available or model '{_mapModel}' not found. " +
-                       "Ensure Ollama is running (ollama serve) and the model is pulled (ollama pull " + _mapModel + ").");
+                Error: $"Synthesis backend unavailable or model '{_mapModel}' not found. " +
+                       "For Ollama: ensure it is running (ollama serve) and the model is pulled. " +
+                       "For the in-process ONNX backend: stage the model dir or set SYNTHESIS_ONNX_MODEL_DIR.");
         }
 
         // 2. Gather memories
@@ -169,7 +184,7 @@ public sealed class SynthesisEngine
             try
             {
                 var prompt = BuildMapPrompt(chunk, query);
-                var summary = await _ollama.GenerateAsync(_mapModel, prompt, maxTokens: 300, ct: ct);
+                var summary = await _generator.GenerateAsync(_mapModel, prompt, maxTokens: 300, ct: ct);
 
                 if (!string.IsNullOrWhiteSpace(summary))
                     await output.WriteAsync(new MapResult(summary, chunk.Entries.Count, chunk.ClusterLabel), ct);
@@ -190,7 +205,7 @@ public sealed class SynthesisEngine
         CancellationToken ct)
     {
         var prompt = BuildReducePrompt(mapResults, query);
-        return await _ollama.GenerateAsync(_reduceModel, prompt, maxTokens: 500,
+        return await _generator.GenerateAsync(_reduceModel, prompt, maxTokens: 500,
             temperature: 0.1f, ct: ct);
     }
 

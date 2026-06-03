@@ -86,14 +86,21 @@ builder.Services.AddSingleton<ExpertDispatcher>();
 builder.Services.AddSingleton<SpreadingActivationService>();
 builder.Services.AddSingleton<IBackgroundWorkerStatusTracker, BackgroundWorkerStatusTracker>();
 
-// SLM synthesis engine (Ollama-powered map-reduce)
-var ollamaUrl = Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434";
-var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL") ?? "qwen2.5:0.5b";
-var synthesisReduceModel = Environment.GetEnvironmentVariable("SYNTHESIS_REDUCE_MODEL") ?? "qwen2.5:0.5b";
+// SLM synthesis engine — map-reduce over memories. Backend selected by SYNTHESIS_BACKEND:
+//   "onnx" (default) → fully in-process via ONNX Runtime GenAI (no external daemon)
+//   "ollama"          → HTTP to a local Ollama daemon (legacy behavior)
+var synthesisBackend = (Environment.GetEnvironmentVariable("SYNTHESIS_BACKEND") ?? "onnx").Trim().ToLowerInvariant();
+var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL")
+    ?? (synthesisBackend == "ollama" ? "qwen2.5:1.5b" : "qwen2.5-1.5b");
+var synthesisReduceModel = Environment.GetEnvironmentVariable("SYNTHESIS_REDUCE_MODEL") ?? synthesisMapModel;
+builder.Services.AddSingleton<ITextGenerator>(_ => synthesisBackend == "ollama"
+    ? new OllamaClient(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434")
+    : new OnnxGenAiTextGenerator(Environment.GetEnvironmentVariable("SYNTHESIS_ONNX_MODEL_DIR")));
 builder.Services.AddSingleton(sp => new SynthesisEngine(
     sp.GetRequiredService<CognitiveIndex>(),
     sp.GetRequiredService<ClusterManager>(),
-    synthesisMapModel, synthesisReduceModel, ollamaUrl));
+    sp.GetRequiredService<ITextGenerator>(),
+    synthesisMapModel, synthesisReduceModel));
 
 // Agent identity for multi-agent memory sharing (set AGENT_ID env var per agent)
 var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;

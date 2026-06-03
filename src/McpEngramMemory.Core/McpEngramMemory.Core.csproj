@@ -11,7 +11,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Core</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>wyckit</Authors>
     <Company>wyckit</Company>
     <Copyright>Copyright (c) 2026 WyckIt</Copyright>
@@ -39,8 +39,14 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.4" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.4" />
     <PackageReference Include="FastBertTokenizer" Version="0.4.67" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.0" />
-    <PackageReference Include="System.Numerics.Tensors" Version="8.0.0" />
+    <!-- Aligned with Microsoft.ML.OnnxRuntimeGenAI 0.14.1's floor (>= 1.23.0) so both the
+         embedding and synthesis backends share one native onnxruntime. API used by
+         OnnxEmbeddingService (InferenceSession/OrtValue/RunOptions) is unchanged across 1.17→1.23. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.0" />
+    <!-- In-process SLM generation for SynthesisEngine (Qwen2.5-0.5B). CPU package; bring in
+         Microsoft.ML.OnnxRuntimeGenAI.Cuda / .DirectML at the app layer for GPU acceleration. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.14.1" />
+    <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
   </ItemGroup>

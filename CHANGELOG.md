@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **In-process synthesis backend (ONNX Runtime GenAI).** `synthesize_memories` can now run a local
+  Qwen2.5-Instruct model entirely in-process — no Ollama daemon required — mirroring how
+  `OnnxEmbeddingService` already hosts the embedding model. New `ITextGenerator` abstraction with two
+  implementations: `OnnxGenAiTextGenerator` (in-process, default) and `OllamaClient` (now implements
+  the interface). Backend selected via `SYNTHESIS_BACKEND=onnx|ollama` (default `onnx`); model dir via
+  `SYNTHESIS_ONNX_MODEL_DIR`. Stage a model with `scripts/fetch-synthesis-model.ps1` (defaults to a
+  no-Python pre-built download). Missing model degrades gracefully (descriptive error result, no throw).
+- **Default synthesis model = Qwen2.5-1.5B-Instruct.** A 2026-06-03 CPU benchmark (0.5B vs 1.5B) found
+  the 1.5B gives clearly better synthesis quality at essentially the same end-to-end speed — it even
+  finished the full map-reduce *faster* than the 0.5B by generating more concise output. Default model
+  dir is now `LocalSynthesisModel/qwen2.5-1.5b`; the 0.5B remains available as a lighter tier.
+
+### Changed
+- `SynthesisEngine` is now backend-agnostic via constructor injection of `ITextGenerator` (the legacy
+  Ollama-based constructor is retained for compatibility).
+- Bumped `Microsoft.ML.OnnxRuntime` 1.17.0 → 1.23.0 and `System.Numerics.Tensors` 8.0.0 → 9.0.0 to
+  align with the ONNX Runtime GenAI 0.14.1 dependency floor (shared native runtime).
+
 ## [1.1.0] - 2026-05-07
 
 Proof of Memory. v1.1 ships the marketing artifact v1.0 was missing — a reproducible

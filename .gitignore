@@ -433,6 +433,10 @@ FodyWeavers.xsd
 # ONNX model cache (downloaded at build time)
 .cache/
 
+# Staged in-process synthesis model (Qwen2.5-0.5B ONNX GenAI, ~800MB — never commit)
+LocalSynthesisModel/
+**/LocalSynthesisModel/
+
 # Local AI tooling SQLite database
 memory.db
 
