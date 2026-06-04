@@ -83,7 +83,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.1.0
+dotnet add package McpEngramMemory.Core --version 1.2.0
 ```
 
 ### Library Usage
@@ -119,7 +119,7 @@ var results = index.Search(queryVector, "default", k: 5);
 - .NET 8/9/10, C#
 - [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
 - [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67 (WordPiece tokenization)
-- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.17.0 (ONNX model inference)
+- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0 (ONNX model inference)
 - [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 8.0.11 (SQLite storage backend)
 - [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX model (384-dimensional vectors, MIT license, downloaded at build time)
 - Microsoft.Extensions.Hosting 8.0.1

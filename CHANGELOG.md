@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-04
+
 ### Added
 - **In-process synthesis backend (ONNX Runtime GenAI).** `synthesize_memories` can now run a local
   Qwen2.5-Instruct model entirely in-process — no Ollama daemon required — mirroring how

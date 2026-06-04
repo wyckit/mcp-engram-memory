@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="images/banner.svg?v=1.1.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=1.2.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-992%20non--MSA-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1004%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 **Give your AI agent persistent memory that survives across sessions.**
@@ -65,7 +65,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.1.0
+dotnet add package McpEngramMemory.Core --version 1.2.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -134,11 +134,11 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks |
 
 <p align="center">
-  <img src="images/how-it-works.svg?v=1.1.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
+  <img src="images/how-it-works.svg?v=1.2.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
 </p>
 
 <p align="center">
-  <img src="images/retrieval-pipeline.svg?v=1.1.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
+  <img src="images/retrieval-pipeline.svg?v=1.2.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
 </p>
 
 ## AI Assistant Setup
@@ -207,10 +207,10 @@ The core engine is available as a NuGet package for embedding in your own .NET a
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 1.1.0
+dotnet add package McpEngramMemory.Core --version 1.2.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 1.1.0 \
+dotnet add package McpEngramMemory.Core --version 1.2.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -261,7 +261,7 @@ dotnet test    # full suite, including slower MSA benchmark cases
 - .NET 8/9/10, C#
 - [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
 - [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67
-- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.17.0
+- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0
 - [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX (384-dim, MIT license)
 - [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 8.0.11
 - xUnit (tests)
