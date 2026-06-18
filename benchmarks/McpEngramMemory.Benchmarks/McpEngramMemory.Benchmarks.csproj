@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net8.0 only: BenchmarkDotNet picks one TFM to host the runner. The Core
+         library multitargets net8/9/10; benchmarking it on the lowest common TFM
+         keeps the harness simple and reproducible in CI. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet requires Release for trustworthy numbers; this guards
+         against accidental Debug runs. -->
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
+  </ItemGroup>
+
+</Project>

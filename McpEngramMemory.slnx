@@ -6,4 +6,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/McpEngramMemory.Benchmarks/McpEngramMemory.Benchmarks.csproj" />
+  </Folder>
 </Solution>
