@@ -10,7 +10,9 @@ You re-explain, re-decide, re-debug — and the cost compounds across every proj
 
 Engram closes the loop between sessions. The agent recalls relevant history before it
 works, and remembers what it learns when it's done. You don't configure this — it just
-runs.
+runs. It's a local-first cognitive memory kernel, not a store: most agent memory systems
+store context, Engram *evolves* it — decaying trivial chatter, consolidating what matters,
+and archiving logic you've already reversed.
 
 ```
  ┌─────────────┐     recall()      ┌──────────────────┐

@@ -9,11 +9,27 @@
   <img src="https://img.shields.io/badge/tests-1004%20non--live-brightgreen" alt="Tests"/>
 </p>
 
-**Give your AI agent persistent memory that survives across sessions.**
+# The local-first cognitive memory kernel for AI agents
 
-- Recall past decisions and context, by topic or by project
-- Remember new information automatically — no manual saving needed
-- Search across all your projects with one query
+**Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction handling, all running locally with zero external API.
+
+<p align="center">
+  <!--
+    Animated hero GIF of the live memory graph.
+    Generated headlessly from real snapshot data — see tools/graph-gif/ (run
+    `node prep-snapshot.js && node capture.js`). It drives visualization/memory-graph.html
+    in headless Chromium and shows STM (amber) → LTM (blue) clustering during a
+    consolidation cycle plus a pulse-highlight on retrieval. ~900px wide, < 3 MB.
+    Regenerate whenever the visualizer or palette changes.
+  -->
+  <img src="images/memory-graph.gif" alt="Engram memory graph clustering during a consolidation cycle: STM (amber) nodes migrating into LTM (blue) clusters, with pulse-highlight on retrieval" width="900"/>
+</p>
+
+<p align="center"><em>The memory graph consolidating in real time — short-term (amber) memories cluster and promote to long-term (blue) during a sleep cycle.</em></p>
+
+- **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
+- **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
+- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. Zero external API, zero cloud, zero telemetry.
 
 → [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
 
