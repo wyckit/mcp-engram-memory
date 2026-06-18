@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+_Tooling, tests, and docs only — no changes to the published library's public API or behavior._
+
+### Added
+- **Benchmark regression gate (CI).** `scripts/check-benchmark-regression.{sh,ps1}` parse IR-quality and
+  agent-outcome result JSON and assert absolute floors (Recall ≥ 0.20, MRR ≥ 0.20, nDCG ≥ 0.15,
+  outcome ≥ 0.20) plus no regression beyond a 0.02 tolerance against pinned `benchmarks/baselines/`.
+  Wired into `ci.yml` (pinned baselines) and `benchmark.yml` (newest dated artifact, falling back to baselines).
+- **BenchmarkDotNet retrieval-scaling project** (`benchmarks/McpEngramMemory.Benchmarks`): mean latency and
+  per-op allocations for the core retrieval paths (HNSW / BM25 / RRF / graph) at 100 / 10k / 100k entries.
+- **Multi-tenancy data-leak isolation test** asserting a secret in one namespace can never surface for an
+  agent querying only another — across vector, hybrid, and permission-filtered `cross_search`.
+- **Reproducible hero-GIF pipeline** (`tools/graph-gif/`) that renders the README memory-graph animation
+  headlessly from real snapshot data, plus a `decision-evolution` demo walkthrough.
+
+### Changed
+- README repositioned around "the local-first cognitive memory kernel," with an animated memory-graph hero.
+
 ## [1.2.0] - 2026-06-04
 
 ### Added
