@@ -36,6 +36,13 @@ jobs:
           name: test-results
           path: '**/TestResults/*.trx'
 
+      # Benchmark regression gate (T7): assert the pinned baselines still clear
+      # the documented floors (Recall>=0.20, MRR>=0.20, nDCG>=0.15) and have not
+      # silently regressed. Fails the job on any non-zero exit. jq is preinstalled
+      # on GitHub-hosted ubuntu runners.
+      - name: Benchmark regression gate (pinned baselines)
+        run: bash scripts/check-benchmark-regression.sh benchmarks/baselines
+
   pack:
     needs: build-and-test
     runs-on: ubuntu-latest

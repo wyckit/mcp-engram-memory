@@ -26,6 +26,20 @@ jobs:
       - name: Run MSA benchmarks
         run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj --no-build -c Release --filter "Category=MSA" --logger "trx;LogFileName=msa-benchmarks.trx" -f net8.0
 
+      # Benchmark regression gate (T7): compare freshly produced artifacts (or, if
+      # none were emitted this run, the pinned baselines) against the documented
+      # floors (Recall>=0.20, MRR>=0.20, nDCG>=0.15) and against the pinned
+      # baselines with a 0.02 tolerance. Non-zero exit fails the job. jq is
+      # preinstalled on GitHub-hosted ubuntu runners.
+      - name: Benchmark regression gate
+        run: |
+          # Prefer the newest dated artifact folder if this run produced one;
+          # otherwise gate the pinned baselines as a regression sanity check.
+          latest="$(find benchmarks -maxdepth 1 -type d -name '[0-9][0-9][0-9][0-9]-*' | sort | tail -n 1)"
+          target="${latest:-benchmarks/baselines}"
+          echo "Gating benchmark artifacts in: $target"
+          bash scripts/check-benchmark-regression.sh "$target"
+
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()
