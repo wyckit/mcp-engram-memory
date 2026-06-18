@@ -6,7 +6,7 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1004%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1015%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
