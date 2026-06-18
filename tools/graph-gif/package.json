@@ -1,0 +1,16 @@
+{
+  "name": "graph-gif",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Headless capture pipeline for the README memory-graph.gif hero",
+  "type": "commonjs",
+  "scripts": {
+    "prep": "node prep-snapshot.js",
+    "capture": "node capture.js"
+  },
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "playwright": "^1.61.0",
+    "pngjs": "^7.0.0"
+  }
+}
