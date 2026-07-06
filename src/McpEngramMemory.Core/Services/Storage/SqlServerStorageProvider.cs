@@ -21,7 +21,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         Converters = { new FloatArrayBase64Converter() }
     };
 
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private static readonly Regex SchemaNameRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
     private readonly string _connectionString;
@@ -120,7 +120,83 @@ public sealed class SqlServerStorageProvider : IStorageProvider
 
         int currentVersion = GetSchemaVersion(conn);
         if (currentVersion < CurrentSchemaVersion)
-            SetSchemaVersion(conn, currentVersion, CurrentSchemaVersion);
+            RunMigrations(conn, currentVersion);
+    }
+
+    /// <summary>
+    /// Applies all pending forward migrations inside a single transaction, then records the
+    /// new schema version. The whole thing is version-gated (only runs when the stored version
+    /// is behind), so re-constructing the provider against an already-migrated database is a
+    /// no-op — i.e. migration is idempotent. Any failure rolls back atomically, leaving the
+    /// database at its previous version.
+    /// </summary>
+    private void RunMigrations(SqlConnection conn, int fromVersion)
+    {
+        using var transaction = conn.BeginTransaction();
+        try
+        {
+            if (fromVersion < 3)
+                MigrateToV3(conn, transaction);
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = fromVersion == 0
+                    ? $"INSERT INTO {_schemaQuoted}.schema_version (version) VALUES (@v)"
+                    : $"UPDATE {_schemaQuoted}.schema_version SET version = @v";
+                cmd.Parameters.AddWithValue("@v", CurrentSchemaVersion);
+                cmd.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+            _logger?.LogInformation("SQL Server schema migrated from v{From} to v{To} in schema [{Schema}]",
+                fromVersion, CurrentSchemaVersion, _schema);
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// v2→v3: first-class tenant isolation. Adds a <c>tenant_id NVARCHAR(64) NOT NULL DEFAULT ''</c>
+    /// column (existing rows collapse to the legacy empty-string tenant) and re-roots the primary
+    /// key from (ns, id) to (tenant_id, ns, id). Each step is individually guarded so a partial
+    /// re-run is safe; the enclosing transaction makes the whole migration atomic. The reverse of
+    /// this migration is scripted in <c>scripts/migrations/sqlserver_v3_tenant_id.down.sql</c>.
+    /// </summary>
+    private void MigrateToV3(SqlConnection conn, SqlTransaction transaction)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"""
+            -- 1. Add the tenant column, defaulting existing rows to the legacy '' tenant.
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'{_schema}.entries') AND name = 'tenant_id')
+                ALTER TABLE {_schemaQuoted}.entries
+                    ADD tenant_id NVARCHAR(64) NOT NULL
+                        CONSTRAINT DF_engram_entries_tenant DEFAULT('');
+
+            -- 2. Re-root the primary key onto (tenant_id, ns, id).
+            IF EXISTS (SELECT 1 FROM sys.key_constraints
+                       WHERE name = 'PK_engram_entries'
+                         AND parent_object_id = OBJECT_ID(N'{_schema}.entries'))
+                ALTER TABLE {_schemaQuoted}.entries DROP CONSTRAINT PK_engram_entries;
+
+            IF NOT EXISTS (SELECT 1 FROM sys.key_constraints
+                           WHERE name = 'PK_engram_entries'
+                             AND parent_object_id = OBJECT_ID(N'{_schema}.entries'))
+                ALTER TABLE {_schemaQuoted}.entries
+                    ADD CONSTRAINT PK_engram_entries PRIMARY KEY (tenant_id, ns, id);
+
+            -- 3. Tenant-aware covering index for the T2-05 tenant-scoped queries.
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_entries_tenant_ns_state'
+                           AND object_id = OBJECT_ID(N'{_schema}.entries'))
+                CREATE INDEX idx_entries_tenant_ns_state
+                    ON {_schemaQuoted}.entries(tenant_id, ns, lifecycle_state);
+            """;
+        cmd.ExecuteNonQuery();
     }
 
     private int GetSchemaVersion(SqlConnection conn)
@@ -133,18 +209,6 @@ public sealed class SqlServerStorageProvider : IStorageProvider
 
         cmd.CommandText = $"SELECT TOP 1 version FROM {_schemaQuoted}.schema_version";
         return Convert.ToInt32(cmd.ExecuteScalar()!);
-    }
-
-    private void SetSchemaVersion(SqlConnection conn, int fromVersion, int toVersion)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = fromVersion == 0
-            ? $"INSERT INTO {_schemaQuoted}.schema_version (version) VALUES (@v)"
-            : $"UPDATE {_schemaQuoted}.schema_version SET version = @v";
-        cmd.Parameters.AddWithValue("@v", toVersion);
-        cmd.ExecuteNonQuery();
-        _logger?.LogInformation("SQL Server schema initialized at v{To} (was v{From}) in schema [{Schema}]",
-            toVersion, fromVersion, _schema);
     }
 
     private SqlConnection OpenConnection()
@@ -452,6 +516,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     upsertCmd.CommandText = BuildEntryUpsertSql();
                     var idParam = upsertCmd.Parameters.Add("@id", System.Data.SqlDbType.NVarChar, 450);
                     var nsParam = upsertCmd.Parameters.Add("@ns", System.Data.SqlDbType.NVarChar, 450);
+                    var tenantParam = upsertCmd.Parameters.Add("@tenant", System.Data.SqlDbType.NVarChar, 64);
                     var jsonParam = upsertCmd.Parameters.Add("@json", System.Data.SqlDbType.NVarChar, -1);
                     var checksumParam = upsertCmd.Parameters.Add("@checksum", System.Data.SqlDbType.Char, 64);
                     var stateParam = upsertCmd.Parameters.Add("@state", System.Data.SqlDbType.NVarChar, 32);
@@ -461,6 +526,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                         var json = JsonSerializer.Serialize(entry, JsonOptions);
                         idParam.Value = entry.Id;
                         nsParam.Value = ns;
+                        tenantParam.Value = entry.TenantId;
                         jsonParam.Value = json;
                         checksumParam.Value = ComputeChecksum(json);
                         stateParam.Value = entry.LifecycleState;
@@ -610,11 +676,12 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             using var insertCmd = conn.CreateCommand();
             insertCmd.Transaction = transaction;
             insertCmd.CommandText = $"""
-                INSERT INTO {_schemaQuoted}.entries (id, ns, json_data, checksum, lifecycle_state)
-                VALUES (@id, @ns, @json, @checksum, @state)
+                INSERT INTO {_schemaQuoted}.entries (id, ns, tenant_id, json_data, checksum, lifecycle_state)
+                VALUES (@id, @ns, @tenant, @json, @checksum, @state)
                 """;
             var idParam = insertCmd.Parameters.Add("@id", System.Data.SqlDbType.NVarChar, 450);
             var nsParam = insertCmd.Parameters.Add("@ns", System.Data.SqlDbType.NVarChar, 450);
+            var tenantParam = insertCmd.Parameters.Add("@tenant", System.Data.SqlDbType.NVarChar, 64);
             var jsonParam = insertCmd.Parameters.Add("@json", System.Data.SqlDbType.NVarChar, -1);
             var checksumParam = insertCmd.Parameters.Add("@checksum", System.Data.SqlDbType.Char, 64);
             var stateParam = insertCmd.Parameters.Add("@state", System.Data.SqlDbType.NVarChar, 32);
@@ -624,6 +691,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                 var json = JsonSerializer.Serialize(entry, JsonOptions);
                 idParam.Value = entry.Id;
                 nsParam.Value = ns;
+                tenantParam.Value = entry.TenantId;
                 jsonParam.Value = json;
                 checksumParam.Value = ComputeChecksum(json);
                 stateParam.Value = entry.LifecycleState;
@@ -697,13 +765,13 @@ public sealed class SqlServerStorageProvider : IStorageProvider
 
     private string BuildEntryUpsertSql() => $"""
         MERGE {_schemaQuoted}.entries WITH (HOLDLOCK) AS target
-        USING (SELECT @ns AS ns, @id AS id) AS source
-        ON target.ns = source.ns AND target.id = source.id
+        USING (SELECT @tenant AS tenant_id, @ns AS ns, @id AS id) AS source
+        ON target.tenant_id = source.tenant_id AND target.ns = source.ns AND target.id = source.id
         WHEN MATCHED THEN
             UPDATE SET json_data = @json, checksum = @checksum, lifecycle_state = @state
         WHEN NOT MATCHED THEN
-            INSERT (id, ns, json_data, checksum, lifecycle_state)
-            VALUES (@id, @ns, @json, @checksum, @state);
+            INSERT (id, ns, tenant_id, json_data, checksum, lifecycle_state)
+            VALUES (@id, @ns, @tenant, @json, @checksum, @state);
         """;
 
     private string BuildGlobalUpsertSql() => $"""

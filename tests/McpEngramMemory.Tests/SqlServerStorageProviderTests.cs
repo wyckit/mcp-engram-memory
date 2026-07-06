@@ -258,6 +258,199 @@ public class SqlServerStorageProviderTests : IDisposable
         Assert.Empty(_provider.LoadNamespace("doomed").Entries);
     }
 
+    // ── Tenant isolation (decision 3b, Phase 1 / v3 schema) ──
+
+    [Fact]
+    public void TenantId_RoundTripsThroughSaveNamespace()
+    {
+        if (!IsEnabled()) return;
+        var entry = new CognitiveEntry("t1", new[] { 1f, 2f }, "tns", "tenant text", tenantId: "acme");
+        _provider!.SaveNamespaceSync("tns", new NamespaceData { Entries = [entry] });
+
+        var loaded = _provider.LoadNamespace("tns");
+        Assert.Single(loaded.Entries);
+        Assert.Equal("acme", loaded.Entries[0].TenantId);
+    }
+
+    [Fact]
+    public void TenantId_RoundTripsThroughIncrementalUpsert()
+    {
+        if (!IsEnabled()) return;
+        var entry = new CognitiveEntry("t2", new[] { 1f, 2f }, "tns", "tenant text", tenantId: "globex");
+        _provider!.ScheduleUpsertEntry("tns", entry);
+        _provider.Flush();
+
+        var loaded = _provider.LoadNamespace("tns");
+        Assert.Single(loaded.Entries);
+        Assert.Equal("globex", loaded.Entries[0].TenantId);
+    }
+
+    [Fact]
+    public void TenantId_PersistedToColumn()
+    {
+        if (!IsEnabled()) return;
+        var entry = new CognitiveEntry("t3", new[] { 1f }, "tns", "x", tenantId: "initech");
+        _provider!.ScheduleUpsertEntry("tns", entry);
+        _provider.Flush();
+
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT tenant_id FROM [{_schema}].entries WHERE id = 't3'";
+        Assert.Equal("initech", cmd.ExecuteScalar()!.ToString());
+    }
+
+    [Fact]
+    public void LegacyEntry_DefaultsToEmptyTenantColumn()
+    {
+        if (!IsEnabled()) return;
+        var entry = new CognitiveEntry("t4", new[] { 1f }, "tns", "x"); // no tenant
+        _provider!.ScheduleUpsertEntry("tns", entry);
+        _provider.Flush();
+
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT tenant_id FROM [{_schema}].entries WHERE id = 't4'";
+        Assert.Equal(string.Empty, cmd.ExecuteScalar()!.ToString());
+    }
+
+    [Fact]
+    public void SameNsId_DifferentTenants_CoexistUnderNewPrimaryKey()
+    {
+        if (!IsEnabled()) return;
+        // Same (ns, id) but two different tenants — only possible because the PK is now
+        // (tenant_id, ns, id) and the incremental MERGE keys on the full tenant-rooted key.
+        // NOTE: the in-memory pending-upsert map is still keyed by id (tenant-aware batching
+        // is Phase 2 / T2-05), so the two tenants are flushed separately here to exercise the
+        // storage-level coexistence this task delivers.
+        _provider!.ScheduleUpsertEntry("shared",
+            new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-a copy", tenantId: "A"));
+        _provider.Flush();
+        _provider.ScheduleUpsertEntry("shared",
+            new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-b copy", tenantId: "B"));
+        _provider.Flush();
+
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM [{_schema}].entries WHERE ns='shared' AND id='dup'";
+        Assert.Equal(2, Convert.ToInt32(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void SchemaVersion_IsV3_AfterInitialization()
+    {
+        if (!IsEnabled()) return;
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT TOP 1 version FROM [{_schema}].schema_version";
+        Assert.Equal(3, Convert.ToInt32(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void Migration_IsIdempotent_OnReconstruction()
+    {
+        if (!IsEnabled()) return;
+        // Seed via the first provider (already migrated to v3 in the ctor).
+        _provider!.SaveNamespaceSync("idem",
+            new NamespaceData { Entries = [new CognitiveEntry("i1", new[] { 1f }, "idem", "v", tenantId: "z")] });
+
+        // Re-opening the same schema must be a no-op migration (version already 3) and must not throw.
+        using var provider2 = new SqlServerStorageProvider(_connectionString!, schema: _schema, debounceMs: 10);
+        using var provider3 = new SqlServerStorageProvider(_connectionString!, schema: _schema, debounceMs: 10);
+
+        var loaded = provider3.LoadNamespace("idem");
+        Assert.Single(loaded.Entries);
+        Assert.Equal("z", loaded.Entries[0].TenantId);
+
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM [{_schema}].schema_version";
+        Assert.Equal(1, Convert.ToInt32(cmd.ExecuteScalar())); // exactly one version row
+        cmd.CommandText = $"SELECT TOP 1 version FROM [{_schema}].schema_version";
+        Assert.Equal(3, Convert.ToInt32(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void Migration_PrimaryKeyIsTenantRooted()
+    {
+        if (!IsEnabled()) return;
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT c.name
+            FROM sys.key_constraints kc
+            JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE kc.name = 'PK_engram_entries'
+              AND kc.parent_object_id = OBJECT_ID(N'{_schema}.entries')
+            ORDER BY ic.key_ordinal
+            """;
+        var pkCols = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) pkCols.Add(reader.GetString(0));
+        Assert.Equal(new[] { "tenant_id", "ns", "id" }, pkCols);
+    }
+
+    [Fact]
+    public void Migration_IsReversible_ThenReMigratable()
+    {
+        if (!IsEnabled()) return;
+        // Seed a legacy-tenant row so the reverse (which requires all tenant_id='') is valid.
+        _provider!.SaveNamespaceSync("rev",
+            new NamespaceData { Entries = [new CognitiveEntry("r1", new[] { 1f }, "rev", "legacy")] });
+
+        // --- Apply the reverse (v3 -> v2), mirroring scripts/migrations/sqlserver_v3_tenant_id.down.sql ---
+        using (var conn = new SqlConnection(_connectionString))
+        {
+            conn.Open();
+            using var down = conn.CreateCommand();
+            down.CommandText = $"""
+                IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_entries_tenant_ns_state'
+                           AND object_id=OBJECT_ID(N'{_schema}.entries'))
+                    DROP INDEX idx_entries_tenant_ns_state ON [{_schema}].entries;
+                IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name='PK_engram_entries'
+                           AND parent_object_id=OBJECT_ID(N'{_schema}.entries'))
+                    ALTER TABLE [{_schema}].entries DROP CONSTRAINT PK_engram_entries;
+                IF EXISTS (SELECT 1 FROM sys.default_constraints WHERE name='DF_engram_entries_tenant'
+                           AND parent_object_id=OBJECT_ID(N'{_schema}.entries'))
+                    ALTER TABLE [{_schema}].entries DROP CONSTRAINT DF_engram_entries_tenant;
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID(N'{_schema}.entries') AND name='tenant_id')
+                    ALTER TABLE [{_schema}].entries DROP COLUMN tenant_id;
+                ALTER TABLE [{_schema}].entries ADD CONSTRAINT PK_engram_entries PRIMARY KEY (ns, id);
+                UPDATE [{_schema}].schema_version SET version = 2;
+                """;
+            down.ExecuteNonQuery();
+
+            // Verify we are back at v2 shape: no tenant_id column, version 2.
+            using var check = conn.CreateCommand();
+            check.CommandText = $"SELECT COUNT(*) FROM sys.columns WHERE object_id=OBJECT_ID(N'{_schema}.entries') AND name='tenant_id'";
+            Assert.Equal(0, Convert.ToInt32(check.ExecuteScalar()));
+            check.CommandText = $"SELECT TOP 1 version FROM [{_schema}].schema_version";
+            Assert.Equal(2, Convert.ToInt32(check.ExecuteScalar()));
+        }
+
+        // Legacy data still readable at v2.
+        Assert.Single(_provider.LoadNamespace("rev").Entries);
+
+        // --- Re-migrate forward by constructing a new provider (ctor runs RunMigrations v2 -> v3) ---
+        using var remigrated = new SqlServerStorageProvider(_connectionString!, schema: _schema, debounceMs: 10);
+        using (var conn = new SqlConnection(_connectionString))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.columns WHERE object_id=OBJECT_ID(N'{_schema}.entries') AND name='tenant_id'";
+            Assert.Equal(1, Convert.ToInt32(cmd.ExecuteScalar())); // tenant_id back
+            cmd.CommandText = $"SELECT TOP 1 version FROM [{_schema}].schema_version";
+            Assert.Equal(3, Convert.ToInt32(cmd.ExecuteScalar()));
+        }
+        Assert.Single(remigrated.LoadNamespace("rev").Entries); // data preserved through the round-trip
+    }
+
     [Fact]
     public void InvalidSchemaName_Throws()
     {
