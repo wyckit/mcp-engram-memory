@@ -12,7 +12,7 @@
 | `NamespaceStore` | `Services` | Namespace-partitioned storage with `ConcurrentDictionary`, per-namespace load locks (double-check pattern), lazy loading from disk, and BM25 indexing |
 | `VectorSearchEngine` | `Retrieval` | Stateless k-NN search with HNSW ANN candidate generation (≥200 entries) or two-stage Int8 screening (≥30 entries) → FP32 exact reranking |
 | `HnswIndex` | `Retrieval` | Hierarchical Navigable Small World graph for O(log N) approximate nearest neighbor search with soft deletion, compacting rebuild, and topology-only snapshot serialization for cold-start persistence |
-| `HybridSearchEngine` | `Retrieval` | Adaptive RRF fusion with confidence-gated k parameter. Two modes: parallel RRF for small namespaces (<50 entries), cascade mode for large namespaces (BM25 boosts vector results up to 15% instead of introducing new candidates). Auto-escalation to hybrid when vector-only confidence is low |
+| `HybridSearchEngine` | `Retrieval` | Adaptive RRF fusion with confidence-gated k parameter. Very high vector confidence (>=0.85 with enough hits) skips BM25 fusion; high confidence (>=0.80) suppresses BM25 influence; low confidence (<0.50) amplifies BM25 rescue. Two modes: parallel RRF for small namespaces (<100 entries), cascade mode for large namespaces (BM25 boosts vector results up to 15% and can inject semantically gated BM25-only candidates). Auto-escalation to hybrid when vector-only confidence is low |
 | `BM25Index` | `Retrieval` | In-memory keyword search with TF-IDF scoring, Porter stemming for morphological normalization, and compound word tokenization (hyphen splitting + joining) |
 | `SynonymExpander` | `Retrieval` | Query-time domain synonym expansion (98 mappings) bridging colloquial and technical vocabulary across security, ML, systems, networking, data/storage, and general CS domains |
 | `DocumentEnricher` | `Retrieval` | Store-time keyword enrichment using reverse synonym mapping (47 entries). Auto-generates searchable keyword aliases so BM25 indexes both entry text and colloquial equivalents |
@@ -59,6 +59,10 @@
 | `DiffusionKernelWarmupService` | 30 minutes (after 5s startup delay) | Pre-computes the diffusion basis for all qualifying namespaces, so the first decay/consolidation/retrieval call after startup doesn't pay the eigendecomposition cost on the foreground path |
 | `AutoLinkBackgroundService` | 6 hours (after 15-min startup delay) | Sweeps all non-system namespaces, runs `AutoLinkScanner`, adds `similar_to` edges between high-similarity pairs. Per-namespace opt-out via `DecayConfig.EnableAutoLink` |
 | `ConsolidationBackgroundService` | 24 hours (after 10-min startup delay) | Runs `LifecycleEngine.RunConsolidationPass` across every namespace. Topology-driven STM→LTM promotion and LTM→archived archival without LLM involvement |
+
+### Graph Growth Controls
+
+Auto-link growth is bounded by namespace policy rather than a global edge-pruning worker. `DecayConfig.EnableAutoLink` can disable the background linker, `AutoLinkSimilarityThreshold` defaults to 0.85, and `AutoLinkMaxNewEdgesPerScan` defaults to 1000 new edges per sweep. The scanner also skips pairs that already have any relation in either direction, so it does not duplicate manual links with redundant `similar_to` edges.
 
 ### Models
 

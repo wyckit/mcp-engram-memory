@@ -273,7 +273,7 @@ public sealed class BenchmarkTools
     }
 
     [McpServerTool(Name = "get_metrics")]
-    [Description("Get operational metrics: P50/P95/P99 latency, throughput, and call counts per operation type.")]
+    [Description("Get operational metrics: P50/P95/P99 latency, throughput, and call counts per operation type. Event-style counters appear as zero-duration metric rows where Count is the useful value.")]
     public IReadOnlyList<MetricsSummary> GetMetrics(
         [Description("Operation type to filter (e.g. 'search', 'store'). Leave empty for all.")] string? operationType = null)
     {

@@ -1,4 +1,5 @@
 using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services.Evaluation;
 
 namespace McpEngramMemory.Core.Services.Retrieval;
 
@@ -16,6 +17,12 @@ public sealed class HybridSearchEngine
     private const float LowConfidenceThreshold = 0.50f;
     private const int CascadeThreshold = 100;
     private const float Bm25SemanticGate = 0.30f;
+    private readonly MetricsCollector? _metrics;
+
+    public HybridSearchEngine(MetricsCollector? metrics = null)
+    {
+        _metrics = metrics;
+    }
 
     /// <summary>
     /// Execute a hybrid search combining vector and BM25 results via RRF.
@@ -54,6 +61,7 @@ public sealed class HybridSearchEngine
         if (vectorResults.Count >= k &&
             vectorResults[0].Score >= HighConfidenceThreshold)
         {
+            _metrics?.Increment("hybrid.early_exit");
             var highConf = vectorResults.Take(rerank ? k * 2 : k).ToList();
             if (rerank && highConf.Count > 0)
                 highConf = reranker.Rerank(queryText, highConf).Take(k).ToList();
@@ -80,6 +88,7 @@ public sealed class HybridSearchEngine
         // This prevents BM25 noise while still allowing keyword rescue when HNSW misses.
         if (entryCount >= CascadeThreshold)
         {
+            _metrics?.Increment("hybrid.cascade");
             var vectorIds = vectorResults.Select(r => r.Id).ToHashSet();
 
             // Search BM25 for both overlap and new candidates.
@@ -135,9 +144,12 @@ public sealed class HybridSearchEngine
                             entry.LifecycleState, entry.ActivationEnergy,
                             entry.Category, entry.Metadata,
                             entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
+                        _metrics?.Increment("hybrid.bm25_injected_candidate");
                         injected++;
                     }
                 }
+                if (injected > 0)
+                    _metrics?.Increment("hybrid.bm25_injection");
             }
 
             boosted.Sort((a, b) => b.Score.CompareTo(a.Score));
@@ -149,6 +161,13 @@ public sealed class HybridSearchEngine
 
             return boosted;
         }
+
+        if (adaptiveRrfK >= 120 && vectorResults.Count > 0)
+            _metrics?.Increment("hybrid.adaptive.suppress");
+        else if (adaptiveRrfK <= 30 && vectorResults.Count > 0)
+            _metrics?.Increment("hybrid.adaptive.rescue");
+        else
+            _metrics?.Increment("hybrid.adaptive.standard");
 
         // Build set of vector result IDs (used for both eligibility tracking and semantic gate)
         var vectorIdSet = vectorResults.Select(r => r.Id).ToHashSet();

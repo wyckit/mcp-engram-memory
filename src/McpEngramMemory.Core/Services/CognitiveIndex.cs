@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
@@ -40,7 +41,7 @@ public sealed class CognitiveIndex : IDisposable
     private readonly BM25Index _bm25 = new();
     private readonly TokenReranker _reranker = new();
     private readonly VectorSearchEngine _vectorSearch = new();
-    private readonly HybridSearchEngine _hybridSearch = new();
+    private readonly HybridSearchEngine _hybridSearch;
     private readonly DuplicateDetector _duplicateDetector = new();
     private readonly SynonymExpander _synonymExpander = new();
     private readonly DocumentEnricher _documentEnricher = new();
@@ -61,10 +62,11 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public event EventHandler<(string Namespace, string Id)>? EntryDeleted;
 
-    public CognitiveIndex(IStorageProvider persistence, MemoryLimitsConfig? limits = null)
+    public CognitiveIndex(IStorageProvider persistence, MemoryLimitsConfig? limits = null, MetricsCollector? metrics = null)
     {
         _store = new NamespaceStore(persistence, _bm25);
         _limits = limits ?? new MemoryLimitsConfig();
+        _hybridSearch = new HybridSearchEngine(metrics);
     }
 
     /// <summary>

@@ -56,6 +56,13 @@ self-bypasses for namespaces below the qualification threshold
 (<32 nodes or <8 positive-relation edges) — every consumer falls back
 gracefully to its non-spectral path.
 
+The spectral machinery follows standard graph signal processing practice:
+build a normalized graph Laplacian, project signals into its eigenbasis,
+and apply heat-kernel-style filters such as `exp(-tL)` or
+`exp(-lambda^alpha * t)`. Engram uses that same primitive for decay debt
+diffusion, sleep-style consolidation, and retrieval re-ranking instead of
+maintaining separate graph math per subsystem.
+
 `AutoLinkScanner` runs in parallel (every 6 hours) and densifies the
 graph from embedding similarity, so the diffusion kernel and
 consolidation operate on richer topology without the LLM having to
@@ -70,14 +77,14 @@ Query → Synonym Expansion → Vector Search ──┐
               │                              ├─→ BM25 Semantic Gate ──→ Adaptive RRF Fusion ──→ Auto-PRF ──→ Category Boost ──→ MMR Diversity ──→ Results
               └──→ BM25 Search ──────────────┘         │                       │
                    (Porter stemming)          Filters BM25 via         Cascade mode
-                                              cosine similarity       (≥50 entries: BM25
-                                                                       boosts vector only)
+                                              cosine similarity       (>=100 entries: BM25
+                                                                       boosts + gated rescue)
 ```
 
 1. **Synonym Expansion**: Query terms are expanded using 98 domain synonym mappings (e.g., "maintenance" → accretion/decay/collapse, "encrypt" → TLS/cipher/cryptography)
 2. **Dual-Path Search**: Vector cosine similarity (with HNSW for large namespaces) runs in parallel with BM25 keyword search (with Porter stemming and compound tokenization)
-3. **BM25 Semantic Gate**: BM25 candidates are gated through semantic similarity before RRF fusion, eliminating noise from keyword-only matches that are semantically irrelevant
-4. **Adaptive RRF Fusion**: Confidence-gated Reciprocal Rank Fusion — high vector confidence (>0.70) suppresses BM25 noise, low confidence (<0.50) amplifies BM25 rescue. For namespaces ≥50 entries, cascade mode uses BM25 as a precision booster (up to 15%) instead of introducing new candidates
+3. **BM25 Semantic Gate**: BM25 candidates are gated through semantic similarity (cosine >=0.30 when the vector path is credible) before RRF fusion, eliminating noise from keyword-only matches that are semantically irrelevant
+4. **Adaptive RRF Fusion**: Confidence-gated Reciprocal Rank Fusion - high vector confidence (>=0.80) raises `rrfK` to suppress BM25 noise, low confidence (<0.50) lowers `rrfK` to amplify BM25 rescue, and very high confidence (>=0.85 with enough vector hits) skips BM25 fusion entirely. For namespaces >=100 entries, cascade mode uses BM25 as a precision booster (up to 15%) and can inject semantically gated BM25-only candidates for keyword rescue
 5. **Auto-PRF**: When top result score is low (<0.015 RRF), Pseudo-Relevance Feedback extracts key terms from initial results and re-searches. Only used if PRF improves the top score
 6. **Category Boost**: 8% score boost when query tokens overlap with entry categories, improving disambiguation at scale
 7. **Cluster-Aware MMR Diversity** (v0.6.0): When `diversity: true`, applies Maximal Marginal Relevance with cluster and category penalties to spread results across sub-topics. Uses 3× candidate pool expansion. Configurable lambda (0.0 = pure diversity, 1.0 = pure relevance, default 0.5)

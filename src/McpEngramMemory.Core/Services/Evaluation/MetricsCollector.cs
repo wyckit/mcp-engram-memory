@@ -26,6 +26,11 @@ public sealed class MetricsCollector
             queue.TryDequeue(out _);
     }
 
+    public void Increment(string operationType)
+    {
+        Record(operationType, 0);
+    }
+
     public MetricsSummary GetSummary(string operationType)
     {
         if (!_samples.TryGetValue(operationType, out var queue) || queue.IsEmpty)

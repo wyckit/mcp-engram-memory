@@ -44,6 +44,19 @@ public class MetricsCollectorTests
     }
 
     [Fact]
+    public void Increment_RecordsZeroDurationCounter()
+    {
+        var collector = new MetricsCollector();
+        collector.Increment("hybrid.early_exit");
+        collector.Increment("hybrid.early_exit");
+
+        var summary = collector.GetSummary("hybrid.early_exit");
+
+        Assert.Equal(2, summary.Count);
+        Assert.Equal(0, summary.MeanMs);
+    }
+
+    [Fact]
     public void Reset_ClearsSpecificType()
     {
         var collector = new MetricsCollector();
