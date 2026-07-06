@@ -12,6 +12,15 @@ public sealed record SearchRequest
     /// <summary>Namespace to search within.</summary>
     public required string Namespace { get; init; }
 
+    /// <summary>
+    /// Tenant isolation key. Defaults to <c>""</c> (the legacy single-tenant partition) so every
+    /// existing no-tenant caller searches exactly the legacy data as before. When set, the search
+    /// is scoped strictly to that tenant's <c>(tenant, ns)</c> partition — candidate generation
+    /// (vector + BM25) never crosses tenants, while RRF fusion and reranking are unchanged.
+    /// See <c>docs/tenant-isolation-design.md</c>.
+    /// </summary>
+    public string TenantId { get; init; } = "";
+
     /// <summary>Original query text (required for hybrid search and reranking).</summary>
     public string? QueryText { get; init; }
 

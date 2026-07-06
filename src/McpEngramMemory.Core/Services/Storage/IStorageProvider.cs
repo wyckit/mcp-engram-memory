@@ -22,6 +22,18 @@ public interface IStorageProvider : IDisposable
     /// <summary>Schedule a debounced delete of a single entry. Only called when SupportsIncrementalWrites is true.</summary>
     void ScheduleDeleteEntry(string ns, string entryId);
 
+    /// <summary>
+    /// Schedule a debounced tenant-scoped delete of a single entry, targeting the
+    /// <c>(tenant_id, ns, id)</c> row so a delete in one tenant can never remove another tenant's
+    /// row that shares <c>(ns, id)</c>. The default implementation ignores the tenant and delegates
+    /// to <see cref="ScheduleDeleteEntry(string, string)"/> — correct for single-tenant backends
+    /// (all rows live in the legacy <c>""</c> tenant). Tenant-partitioned providers (SQL Server)
+    /// override this to include the tenant predicate. Additive: existing implementers inherit the
+    /// default and need no changes.
+    /// </summary>
+    void ScheduleDeleteEntry(string ns, string entryId, string tenantId)
+        => ScheduleDeleteEntry(ns, entryId);
+
     List<GraphEdge> LoadGlobalEdges();
     void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider);
 

@@ -35,7 +35,10 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
     private readonly Dictionary<string, Dictionary<string, CognitiveEntry>> _pendingEntryUpserts = new();
-    private readonly Dictionary<string, HashSet<string>> _pendingEntryDeletes = new();
+    // ns -> (entryId -> tenantId). Carries the tenant per pending delete so the flushed
+    // DELETE targets the full (tenant_id, ns, id) key and never removes a co-keyed row in
+    // another tenant. Legacy (no-tenant) deletes carry tenantId "".
+    private readonly Dictionary<string, Dictionary<string, string>> _pendingEntryDeletes = new();
     private readonly Dictionary<string, Timer> _incrementalTimers = new();
 
     private Timer? _pendingEdgeTimer;
@@ -431,6 +434,9 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     }
 
     public void ScheduleDeleteEntry(string ns, string entryId)
+        => ScheduleDeleteEntry(ns, entryId, "");
+
+    public void ScheduleDeleteEntry(string ns, string entryId, string tenantId)
     {
         lock (_timerLock)
         {
@@ -441,7 +447,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                 deletes = new();
                 _pendingEntryDeletes[ns] = deletes;
             }
-            deletes.Add(entryId);
+            deletes[entryId] = tenantId ?? "";
 
             if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
                 upserts.Remove(entryId);
@@ -459,7 +465,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         selfRef = new Timer(_ =>
         {
             Dictionary<string, CognitiveEntry>? upserts = null;
-            HashSet<string>? deletes = null;
+            Dictionary<string, string>? deletes = null;
 
             lock (_timerLock)
             {
@@ -483,7 +489,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     }
 
     private void WriteIncrementalChanges(string ns,
-        Dictionary<string, CognitiveEntry>? upserts, HashSet<string>? deletes)
+        Dictionary<string, CognitiveEntry>? upserts, Dictionary<string, string>? deletes)
     {
         if ((upserts is null || upserts.Count == 0) && (deletes is null || deletes.Count == 0))
             return;
@@ -498,12 +504,16 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                 {
                     using var deleteCmd = conn.CreateCommand();
                     deleteCmd.Transaction = transaction;
-                    deleteCmd.CommandText = $"DELETE FROM {_schemaQuoted}.entries WHERE ns = @ns AND id = @id";
+                    // Delete on the full tenant-rooted key so a delete in one tenant can never
+                    // remove another tenant's row that shares (ns, id) under the v3 PK.
+                    deleteCmd.CommandText = $"DELETE FROM {_schemaQuoted}.entries WHERE tenant_id = @tenant AND ns = @ns AND id = @id";
+                    var delTenantParam = deleteCmd.Parameters.Add("@tenant", System.Data.SqlDbType.NVarChar, 64);
                     var delNsParam = deleteCmd.Parameters.Add("@ns", System.Data.SqlDbType.NVarChar, 450);
                     var delIdParam = deleteCmd.Parameters.Add("@id", System.Data.SqlDbType.NVarChar, 450);
                     delNsParam.Value = ns;
-                    foreach (var id in deletes)
+                    foreach (var (id, tenant) in deletes)
                     {
+                        delTenantParam.Value = tenant ?? "";
                         delIdParam.Value = id;
                         deleteCmd.ExecuteNonQuery();
                     }
@@ -789,7 +799,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     public void Flush()
     {
         List<(string Ns, Func<NamespaceData> Provider)> pendingNs;
-        List<(string Ns, Dictionary<string, CognitiveEntry>? Upserts, HashSet<string>? Deletes)> pendingIncremental;
+        List<(string Ns, Dictionary<string, CognitiveEntry>? Upserts, Dictionary<string, string>? Deletes)> pendingIncremental;
         Func<List<GraphEdge>>? edgeProvider;
         Func<List<SemanticCluster>>? clusterProvider;
         Func<List<CollapseRecord>>? collapseHistoryProvider;
@@ -811,7 +821,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             foreach (var ns in incrementalNs)
             {
                 Dictionary<string, CognitiveEntry>? upserts = null;
-                HashSet<string>? deletes = null;
+                Dictionary<string, string>? deletes = null;
 
                 if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
                 {
