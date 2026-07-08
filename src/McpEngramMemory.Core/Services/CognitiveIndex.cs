@@ -166,12 +166,16 @@ public sealed class CognitiveIndex : IDisposable
             ? VectorQuantizer.Quantize(entry.Vector)
             : null;
 
-        var nsLock = NsLock(entry.Ns);
+        // Partition by (tenant, ns). For the legacy tenant ("") the partition key is exactly the
+        // namespace, so this locks/keys identically to the pre-tenant path.
+        var nskey = new NsKey(entry.TenantId, entry.Ns);
+        string pk = NamespaceStore.PartitionKey(nskey);
+        var nsLock = NsLock(pk);
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(entry.Ns);
-            var nsEntries = _store.GetOrCreateNamespace(entry.Ns);
+            var nsEntries = _store.GetOrCreateNamespace(nskey);
 
             // Enforce memory limits (skip for updates to existing entries)
             if (!nsEntries.ContainsKey(entry.Id))
@@ -185,9 +189,9 @@ public sealed class CognitiveIndex : IDisposable
             }
 
             nsEntries[entry.Id] = (entry, norm, quantized);
-            _store.TrackEntry(entry.Id, entry.Ns);
+            _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
             _store.IndexBM25(entry);
-            _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
+            _store.AddToHnsw(nskey, entry.Id, entry.Vector);
             _store.ScheduleEntryUpsert(entry.Ns, entry);
         }
         finally { nsLock.ExitWriteLock(); }
@@ -219,16 +223,20 @@ public sealed class CognitiveIndex : IDisposable
         // duration of their sub-batch; ns A and ns B never block each other.
         var totalLimitHit = false;
         var accepted = new List<CognitiveEntry>(prepared.Count);
-        foreach (var nsGroup in prepared.GroupBy(p => p.Entry.Ns))
+        // Group by (tenant, ns) so each partition takes one write lock. For the legacy tenant this
+        // is identical to grouping by namespace.
+        foreach (var nsGroup in prepared.GroupBy(p => new NsKey(p.Entry.TenantId, p.Entry.Ns)))
         {
             if (totalLimitHit) break;
 
-            var nsLock = NsLock(nsGroup.Key);
+            var nskey = nsGroup.Key;
+            string pk = NamespaceStore.PartitionKey(nskey);
+            var nsLock = NsLock(pk);
             nsLock.EnterWriteLock();
             try
             {
-                _store.EnsureLoaded(nsGroup.Key);
-                var nsEntries = _store.GetOrCreateNamespace(nsGroup.Key);
+                _store.EnsureLoaded(nskey.Ns);
+                var nsEntries = _store.GetOrCreateNamespace(nskey);
 
                 foreach (var (entry, norm, quantized) in nsGroup)
                 {
@@ -244,9 +252,9 @@ public sealed class CognitiveIndex : IDisposable
                     }
 
                     nsEntries[entry.Id] = (entry, norm, quantized);
-                    _store.TrackEntry(entry.Id, entry.Ns);
+                    _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
                     _store.IndexBM25(entry);
-                    _store.AddToHnsw(entry.Ns, entry.Id, entry.Vector);
+                    _store.AddToHnsw(nskey, entry.Id, entry.Vector);
                     _store.ScheduleEntryUpsert(entry.Ns, entry);
                     accepted.Add(entry);
                 }
@@ -283,15 +291,22 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Get an entry by ID within a specific namespace. Per-namespace read lock.</summary>
-    public CognitiveEntry? Get(string id, string ns)
+    /// <summary>
+    /// Get an entry by ID within a specific namespace and tenant. Per-partition read lock.
+    /// The optional <paramref name="tenantId"/> defaults to the legacy tenant (""), so existing
+    /// two-argument callers resolve exactly within the legacy partition as before. An id that
+    /// exists only under a different tenant returns null — cross-tenant id-probing is impossible.
+    /// </summary>
+    public CognitiveEntry? Get(string id, string ns, string tenantId = "")
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        string pk = NamespaceStore.PartitionKey(key);
+        var nsLock = NsLock(pk);
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
                 return tuple.Entry;
             return null;
@@ -299,13 +314,19 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Delete an entry by ID, searching all namespaces. Resolves id→ns lock-free then takes that ns's write lock.</summary>
+    /// <summary>
+    /// Delete an entry by ID, searching all namespaces within the LEGACY tenant. Resolves id→ns
+    /// lock-free then takes that ns's write lock. Only ever reaches legacy-tenant entries — a global
+    /// id-delete can never remove another tenant's entry. Use <see cref="Delete(string, string, string)"/>
+    /// for tenant-scoped deletes.
+    /// </summary>
     public bool Delete(string id)
     {
         if (!_store.TryResolveOrLoad(id, out var ns))
             return false;
 
         string? deletedFromNs = null;
+        // Legacy tenant: partition key == ns.
         var nsLock = NsLock(ns);
         nsLock.EnterWriteLock();
         try
@@ -316,7 +337,44 @@ public sealed class CognitiveIndex : IDisposable
                 _store.UntrackEntry(id);
                 _store.RemoveBM25(id, ns);
                 _store.RemoveFromHnsw(ns, id);
-                _store.ScheduleEntryDelete(ns, id);
+                _store.ScheduleEntryDelete(ns, id, string.Empty);
+                deletedFromNs = ns;
+            }
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        if (deletedFromNs is not null)
+        {
+            EntryDeleted?.Invoke(this, (deletedFromNs, id));
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Delete an entry scoped to a specific (tenant, ns) partition. Returns false when the entry is
+    /// not present in exactly that partition — including when the id exists only under a different
+    /// tenant or a different namespace. The default tenant ("") targets the legacy partition.
+    /// </summary>
+    public bool Delete(string id, string ns, string tenantId = "")
+    {
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        string pk = NamespaceStore.PartitionKey(key);
+
+        string? deletedFromNs = null;
+        var nsLock = NsLock(pk);
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is not null && nsEntries.TryRemove(id, out _))
+            {
+                if (key.Tenant.Length == 0)
+                    _store.UntrackEntry(id);
+                _store.RemoveBM25(id, pk);
+                _store.RemoveFromHnsw(pk, id);
+                _store.ScheduleEntryDelete(ns, id, key.Tenant);
                 deletedFromNs = ns;
             }
         }
@@ -340,20 +398,32 @@ public sealed class CognitiveIndex : IDisposable
         if (request.K <= 0)
             throw new ArgumentOutOfRangeException(nameof(request), "K must be positive.");
 
+        // Scope the entire search to the (tenant, ns) partition. For the legacy tenant ("") the
+        // partition key is the namespace, so candidate generation, BM25 lookup and getEntry behave
+        // exactly as before. Tenant candidate sets never mix, so RRF/rerank run unchanged on an
+        // already-isolated pool.
+        var nskey = new NsKey(NormalizeTenant(request.TenantId), request.Namespace);
+        string pk = NamespaceStore.PartitionKey(nskey);
+
         IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot;
         HnswIndex? hnswIndex;
-        var nsLock = NsLock(request.Namespace);
+        var nsLock = NsLock(pk);
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(request.Namespace);
-            var nsEntries = _store.GetNamespace(request.Namespace);
+            var nsEntries = _store.GetNamespace(nskey);
             if (nsEntries is null || nsEntries.Count == 0)
                 return Array.Empty<CognitiveSearchResult>();
             snapshot = nsEntries.Values.ToList();
-            hnswIndex = _store.GetHnswIndex(request.Namespace);
+            hnswIndex = _store.GetHnswIndex(pk);
         }
         finally { nsLock.ExitReadLock(); }
+
+        // Tenant-scoped entry resolver for BM25-only ("keyword rescue") candidates. Ignores the
+        // namespace argument supplied by the search engine and resolves strictly within this
+        // partition, so hybrid search can never surface another tenant's entry.
+        Func<string, string, CognitiveEntry?> getEntry = (eid, _) => Get(eid, request.Namespace, nskey.Tenant);
 
         // When diversity is active, fetch more candidates so MMR has a broader pool
         int diversityMultiplier = request.Diversity ? 3 : 1;
@@ -372,9 +442,9 @@ public sealed class CognitiveIndex : IDisposable
                 request.Category, request.IncludeStates, false, hnswIndex);
             int hybridK = request.K * diversityMultiplier;
             var hybridResults = _hybridSearch.HybridSearch(
-                vectorResults, expandedQueryText, request.Namespace, hybridK,
+                vectorResults, expandedQueryText, pk, hybridK,
                 request.IncludeStates, request.Category,
-                request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
+                request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
 
             // Auto-PRF: if top hybrid result is low confidence, expand query with
             // terms from initial results and re-search for improved recall
@@ -386,9 +456,9 @@ public sealed class CognitiveIndex : IDisposable
                 if (prfQuery != expandedQueryText)
                 {
                     var prfResults = _hybridSearch.HybridSearch(
-                        vectorResults, prfQuery, request.Namespace, hybridK,
+                        vectorResults, prfQuery, pk, hybridK,
                         request.IncludeStates, request.Category,
-                        request.Rerank, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count);
+                        request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
                     // Use PRF results if they improve top score
                     if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
                         return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, snapshot);
@@ -419,9 +489,9 @@ public sealed class CognitiveIndex : IDisposable
                 request.Category, request.IncludeStates, false, hnswIndex);
             var expandedQueryText = _synonymExpander.Expand(request.QueryText);
             var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
-                broadVectorResults, expandedQueryText, request.Namespace, request.K * diversityMultiplier,
+                broadVectorResults, expandedQueryText, pk, request.K * diversityMultiplier,
                 request.IncludeStates, request.Category,
-                false, request.RrfK, _bm25, _reranker, Get, request.Query, snapshot.Count), request.QueryText);
+                false, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count), request.QueryText);
             return ApplyDiversity(escalatedResults, request, snapshot);
         }
 
@@ -438,15 +508,20 @@ public sealed class CognitiveIndex : IDisposable
             Category = category, IncludeStates = includeStates, SummaryFirst = summaryFirst
         });
 
-    /// <summary>Hybrid search combining vector + BM25 via Reciprocal Rank Fusion.</summary>
+    /// <summary>
+    /// Hybrid search combining vector + BM25 via Reciprocal Rank Fusion. The optional
+    /// <paramref name="tenantId"/> scopes the search to a tenant partition (default "" = legacy
+    /// tenant, i.e. identical to the pre-tenant behavior). RRF fusion parameters are unchanged.
+    /// </summary>
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
         float[] query, string queryText, string ns, int k = 5, float minScore = 0f,
         string? category = null, HashSet<string>? includeStates = null,
-        bool rerank = false, int rrfK = 60)
+        bool rerank = false, int rrfK = 60, string tenantId = "")
         => Search(new SearchRequest
         {
             Query = query, QueryText = queryText, Namespace = ns, K = k, MinScore = minScore,
-            Category = category, IncludeStates = includeStates, Hybrid = true, Rerank = rerank, RrfK = rrfK
+            Category = category, IncludeStates = includeStates, Hybrid = true, Rerank = rerank,
+            RrfK = rrfK, TenantId = tenantId
         });
 
     /// <summary>Apply token-level reranking to existing search results.</summary>
@@ -474,7 +549,7 @@ public sealed class CognitiveIndex : IDisposable
         int k = 5, float minScore = 0f, string? category = null,
         HashSet<string>? includeStates = null, bool hybrid = false,
         bool rerank = false, int rrfK = 60, bool summaryFirst = false,
-        bool diversity = false, float diversityLambda = 0.5f)
+        bool diversity = false, float diversityLambda = 0.5f, string tenantId = "")
     {
         if (namespaces.Count == 0)
             return Array.Empty<Models.CrossSearchResult>();
@@ -504,15 +579,23 @@ public sealed class CognitiveIndex : IDisposable
                     SummaryFirst = summaryFirst,
                     Diversity = true,
                     DiversityLambda = diversityLambda,
+                    TenantId = tenantId,
                 });
             }
             else if (hybrid && queryText is not null)
             {
-                nsResults = HybridSearch(query, queryText, ns, k, minScore, category, includeStates, rerank, rrfK);
+                nsResults = HybridSearch(query, queryText, ns, k, minScore, category, includeStates, rerank, rrfK, tenantId);
             }
             else
             {
-                nsResults = Search(query, ns, k, minScore, category, includeStates, summaryFirst);
+                // Route through the request path so the tenant scope is applied; for the legacy
+                // tenant this constructs exactly the same request as Search(query, ns, ...).
+                nsResults = Search(new SearchRequest
+                {
+                    Query = query, Namespace = ns, K = k, MinScore = minScore,
+                    Category = category, IncludeStates = includeStates,
+                    SummaryFirst = summaryFirst, TenantId = tenantId
+                });
             }
 
             // Assign RRF scores based on rank within this namespace
@@ -822,7 +905,7 @@ public sealed class CognitiveIndex : IDisposable
             // BM25 and HNSW cleanup is handled in bulk by RemoveNamespace below — no per-entry
             // removal needed here.
             foreach (var id in nsEntries.Keys.ToList())
-                _store.ScheduleEntryDelete(ns, id);
+                _store.ScheduleEntryDelete(ns, id, string.Empty);
 
             // Removes namespace from _namespaces, _idToNamespace, _loadedNamespaces, BM25,
             // _hnswIndices, and deletes the persisted HNSW snapshot in one O(1) bulk step.
@@ -841,7 +924,7 @@ public sealed class CognitiveIndex : IDisposable
     {
         _store.LoadAll();
         return _store.AllNamespaces
-            .SelectMany(kv => kv.Value.Values.Select(t => t.Entry))
+            .SelectMany(d => d.Values.Select(t => t.Entry))
             .ToList();
     }
 
@@ -854,7 +937,7 @@ public sealed class CognitiveIndex : IDisposable
         if (ns is null || ns == "*")
         {
             _store.LoadAll();
-            var entries = _store.AllNamespaces.SelectMany(kv => kv.Value.Values.Select(t => t.Entry));
+            var entries = _store.AllNamespaces.SelectMany(d => d.Values.Select(t => t.Entry));
             return CountStates(entries);
         }
         else
@@ -965,6 +1048,14 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     // ── Internal Helpers ──
+
+    /// <summary>
+    /// Normalize a caller-supplied tenant id to match how <see cref="CognitiveEntry"/> stores it:
+    /// null/whitespace collapses to the legacy tenant (""), otherwise it is trimmed. This keeps a
+    /// tenant-scoped lookup keyed identically to the entry it is trying to find.
+    /// </summary>
+    private static string NormalizeTenant(string? tenantId)
+        => string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     /// <summary>Apply a small score boost when query terms overlap with entry categories.</summary>
     private static IReadOnlyList<CognitiveSearchResult> ApplyCategoryBoost(

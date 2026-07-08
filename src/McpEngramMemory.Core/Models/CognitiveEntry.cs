@@ -20,6 +20,15 @@ public sealed class CognitiveEntry
     [JsonPropertyName("ns")]
     public string Ns { get; }
 
+    /// <summary>
+    /// Optional tenant isolation key. Defaults to <c>""</c> (empty string) which denotes the
+    /// legacy single-tenant partition — fully backward-compatible for existing consumers that
+    /// never supply a tenant. When set, the entry is scoped to that tenant in the storage layer.
+    /// Max length 64. See <c>docs/tenant-isolation-design.md</c>.
+    /// </summary>
+    [JsonPropertyName("tenantId")]
+    public string TenantId { get; }
+
     [JsonPropertyName("category")]
     public string? Category { get; set; }
 
@@ -64,7 +73,8 @@ public sealed class CognitiveEntry
         string? category = null,
         Dictionary<string, string>? metadata = null,
         string lifecycleState = "stm",
-        string? keywords = null)
+        string? keywords = null,
+        string? tenantId = null)
     {
         if (string.IsNullOrWhiteSpace(id))
             throw new ArgumentException("Id must not be empty.", nameof(id));
@@ -76,6 +86,7 @@ public sealed class CognitiveEntry
         Id = id;
         Vector = (float[])vector.Clone();
         Ns = ns;
+        TenantId = NormalizeTenant(tenantId);
         Text = text;
         Category = category;
         Metadata = metadata is not null ? new Dictionary<string, string>(metadata) : new();
@@ -102,11 +113,13 @@ public sealed class CognitiveEntry
         float activationEnergy,
         bool isSummaryNode,
         string? sourceClusterId,
-        string? keywords = null)
+        string? keywords = null,
+        string? tenantId = null)
     {
         Id = id;
         Vector = vector;
         Ns = ns;
+        TenantId = NormalizeTenant(tenantId);
         Text = text;
         Category = category;
         Metadata = metadata ?? new();
@@ -118,5 +131,25 @@ public sealed class CognitiveEntry
         IsSummaryNode = isSummaryNode;
         SourceClusterId = sourceClusterId;
         Keywords = keywords;
+    }
+
+    /// <summary>Maximum length of a tenant identifier (matches the storage column width).</summary>
+    public const int MaxTenantIdLength = 64;
+
+    /// <summary>
+    /// Normalizes a tenant identifier: null/whitespace collapses to the legacy empty-string
+    /// tenant, otherwise the value is trimmed. Throws when the value exceeds
+    /// <see cref="MaxTenantIdLength"/> so tenant keys never silently truncate.
+    /// </summary>
+    private static string NormalizeTenant(string? tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            return string.Empty;
+
+        var trimmed = tenantId.Trim();
+        if (trimmed.Length > MaxTenantIdLength)
+            throw new ArgumentException(
+                $"TenantId must be at most {MaxTenantIdLength} characters.", nameof(tenantId));
+        return trimmed;
     }
 }

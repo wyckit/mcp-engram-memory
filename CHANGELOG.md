@@ -4,9 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-_Tooling, tests, and docs only — no changes to the published library's public API or behavior._
+_Adds first-class **tenant isolation** to the storage layer (backward-compatible; SQL Server performs a one-time automatic schema migration on first startup — see **Migration** below). Remaining items are tooling, tests, and docs only._
 
 ### Added
+- **First-class tenant isolation (storage layer).** New optional `CognitiveEntry.TenantId` (defaults to `""` — the legacy single-tenant partition; max 64 chars) threaded through `NamespaceStore`, `CognitiveIndex`, and the search paths, so entries that share `(ns, id)` are isolated per tenant. Global `Get(id)`/`Delete(id)` are restricted to the legacy `""` tenant, so a caller in one tenant cannot probe or remove another tenant's rows by id. **Backward-compatible by construction:** `TenantId` is a *trailing optional* constructor argument and the new `IStorageProvider.ScheduleDeleteEntry(ns, id, tenantId)` is a *default interface method* — existing consumers and custom `IStorageProvider` implementations recompile unchanged, and pre-existing serialized entries load as the `""` tenant. SQLite keeps the tenant in the JSON payload (no schema change).
 - **Benchmark regression gate (CI).** `scripts/check-benchmark-regression.{sh,ps1}` parse IR-quality and
   agent-outcome result JSON and assert absolute floors (Recall ≥ 0.20, MRR ≥ 0.20, nDCG ≥ 0.15,
   outcome ≥ 0.20) plus no regression beyond a 0.02 tolerance against pinned `benchmarks/baselines/`.
@@ -20,6 +21,13 @@ _Tooling, tests, and docs only — no changes to the published library's public 
 
 ### Changed
 - README repositioned around "the local-first cognitive memory kernel," with an animated memory-graph hero.
+
+### Migration
+- **SQL Server — one-time automatic v2→v3 schema migration on first startup.** `SqlServerStorageProvider` (now `CurrentSchemaVersion = 3`) adds `entries.tenant_id NVARCHAR(64) NOT NULL DEFAULT ''` (existing rows become the legacy `""` tenant — **no data loss**), re-roots the primary key `(ns, id) → (tenant_id, ns, id)`, and adds a tenant-scoped covering index — all in a single idempotent transaction. Nothing to do for a normal upgrade: download, rebuild, run.
+  - **Requires `ALTER` permission** on the `entries` table. A DML-only runtime login must instead run `scripts/migrations/sqlserver_v3_tenant_id.up.sql` out-of-band.
+  - For a **large `entries` table**, prefer running that script in a maintenance window — the PK re-root rebuilds the clustered index and briefly locks the table.
+  - **Reversible** via `scripts/migrations/sqlserver_v3_tenant_id.down.sql`. Run the down script *before* downgrading the application (the older binary expects the `(ns, id)` PK).
+- **SQLite / fresh installs — no action.** SQLite stores the tenant in the JSON payload; a new database is created at v3 directly.
 
 ## [1.2.0] - 2026-06-04
 

@@ -20,12 +20,24 @@ public sealed class BM25Index
     private const float K1 = 1.2f;
     private const float B = 0.75f;
 
-    /// <summary>Index or re-index an entry's text.</summary>
-    public void Index(CognitiveEntry entry)
+    /// <summary>
+    /// Index or re-index an entry's text under its namespace partition (<c>entry.Ns</c>).
+    /// This is the legacy, single-tenant entry point — identical to the tenant-aware overload
+    /// with the partition key set to <c>entry.Ns</c>.
+    /// </summary>
+    public void Index(CognitiveEntry entry) => Index(entry, entry.Ns);
+
+    /// <summary>
+    /// Index or re-index an entry's text under an explicit partition key. The partition key is the
+    /// tenant-composed namespace key so a tenant's keyword postings never mix with another tenant's.
+    /// For the legacy tenant the partition key equals <c>entry.Ns</c>, making this byte-for-byte
+    /// equivalent to <see cref="Index(CognitiveEntry)"/>.
+    /// </summary>
+    public void Index(CognitiveEntry entry, string partitionKey)
     {
         if (string.IsNullOrWhiteSpace(entry.Text) && string.IsNullOrWhiteSpace(entry.Keywords)) return;
 
-        var nsIndex = GetOrCreateNamespace(entry.Ns);
+        var nsIndex = GetOrCreateNamespace(partitionKey);
         // Index both text and keywords for document enrichment
         var indexableText = entry.Text ?? "";
         if (!string.IsNullOrWhiteSpace(entry.Keywords))
@@ -33,7 +45,7 @@ public sealed class BM25Index
         var tokens = Tokenize(indexableText);
 
         // Remove old posting if exists
-        Remove(entry.Id, entry.Ns);
+        Remove(entry.Id, partitionKey);
 
         nsIndex.DocLengths[entry.Id] = tokens.Length;
         nsIndex.TotalDocLength += tokens.Length;
@@ -142,12 +154,16 @@ public sealed class BM25Index
     /// <summary>Check if a namespace has been indexed.</summary>
     public bool HasNamespace(string ns) => _namespaces.ContainsKey(ns);
 
-    /// <summary>Rebuild BM25 index for a namespace from entries.</summary>
-    public void RebuildNamespace(string ns, IEnumerable<CognitiveEntry> entries)
+    /// <summary>
+    /// Rebuild the BM25 index for a partition from its entries. The <paramref name="partitionKey"/>
+    /// is the tenant-composed namespace key (equal to the namespace for the legacy tenant), and all
+    /// supplied entries are indexed under it.
+    /// </summary>
+    public void RebuildNamespace(string partitionKey, IEnumerable<CognitiveEntry> entries)
     {
-        ClearNamespace(ns);
+        ClearNamespace(partitionKey);
         foreach (var entry in entries)
-            Index(entry);
+            Index(entry, partitionKey);
     }
 
     private NamespaceIndex GetOrCreateNamespace(string ns)
