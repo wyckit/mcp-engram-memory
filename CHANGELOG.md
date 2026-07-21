@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-21
+
 _Adds first-class **tenant isolation** to the storage layer (backward-compatible; SQL Server performs a one-time automatic schema migration on first startup — see **Migration** below). Remaining items are tooling, tests, and docs only._
 
 ### Added
