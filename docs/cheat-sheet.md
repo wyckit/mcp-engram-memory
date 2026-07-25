@@ -69,7 +69,7 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 
 | Profile | Tools | What's included |
 |---------|-------|----------------|
-| `minimal` | 16 | Core CRUD, admin (+ `engram_status`), composite tools, multi-agent sharing **(default)** |
+| `minimal` | 17 | Core CRUD, admin (+ `engram_status`), composite tools, multi-agent sharing **(default)** |
 | `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
 | `full` | 65 | Everything: expert routing, debate, synthesis, benchmarks |
 

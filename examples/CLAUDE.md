@@ -4,6 +4,8 @@ You have access to a persistent engram memory system via the `engram-memory` MCP
 
 ## Model Routing
 
+Engram experts are persona-backed memory namespaces, not independently running models. `dispatch_task` and `consult_expert_panel` retrieve evidence; the host agent performs synthesis. The provider-neutral work tiers and escalation rules are defined in the [model-routing guide](https://github.com/wyckit/mcp-engram-memory/blob/main/docs/model-routing.md).
+
 Route sub-agents by purpose to maximize your subscription:
 
 | Tier | Model | What runs here |
@@ -17,6 +19,7 @@ Route sub-agents by purpose to maximize your subscription:
 - When spawning an Agent for codebase exploration, file searches, or general research → `model: "haiku"`
 - `consult_expert_panel` and `create_expert` may stay in the main Opus thread when they require multi-step orchestration or judgment about persona design
 - When in doubt, default to Haiku for read-only tasks, Sonnet for memory tasks
+- Do not spawn one live agent per Engram expert unless the work is independently parallelizable
 
 ## Recall: Search Before You Work
 
@@ -150,7 +153,7 @@ Set `MEMORY_TOOL_PROFILE` in your MCP config env to control which tools are expo
 
 | Profile | Tools | Includes |
 |---------|-------|---------|
-| `minimal` | 16 | Core CRUD, composite (remember/recall/reflect), admin (+ `engram_status`), multi-agent **(default)** |
+| `minimal` | 17 | Core CRUD, composite (remember/recall/reflect), admin (+ `engram_status`), multi-agent **(default)** |
 | `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
 | `full` | 65 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
 

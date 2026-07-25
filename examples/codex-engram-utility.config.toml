@@ -1,0 +1,3 @@
+# Mechanical lookup, repository exploration, and other bounded utility work.
+model = "gpt-5.4-mini"
+model_reasoning_effort = "low"

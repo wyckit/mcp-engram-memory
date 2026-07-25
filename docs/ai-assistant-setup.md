@@ -128,6 +128,17 @@ Confirm each file you create and show me the final contents.
 
 **Quick start**: Copy [`examples/AGENTS.md`](../examples/AGENTS.md) to your project root.
 
+For explicit model/reasoning routing, also install the example profiles from `examples/` into `$CODEX_HOME` (normally `~/.codex`), removing the leading `codex-` from each destination filename:
+
+| Example source | `$CODEX_HOME` destination | Purpose |
+|----------------|---------------------------|---------|
+| `codex-engram-expert.config.toml` | `engram-expert.config.toml` | `gpt-5.6-sol`, high reasoning for expert synthesis |
+| `codex-engram-expert-deep.config.toml` | `engram-expert-deep.config.toml` | `gpt-5.6-sol`, xhigh reasoning for exceptional adjudication |
+| `codex-engram-memory.config.toml` | `engram-memory.config.toml` | `gpt-5.4-mini`, medium reasoning for routing and extraction |
+| `codex-engram-utility.config.toml` | `engram-utility.config.toml` | `gpt-5.4-mini`, low reasoning for mechanical work |
+
+Run them with `codex -p engram-expert`, `codex -p engram-expert-deep`, `codex -p engram-memory`, or `codex -p engram-utility`. See [Model and Reasoning Routing](model-routing.md) for the execution boundary between Engram experts and host agents.
+
 **Or** open Codex CLI in your project directory and paste:
 
 ```
@@ -137,7 +148,9 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
    codex mcp add engram-memory -- dotnet run --project /path/to/mcp-engram-memory/src/McpEngramMemory
 
 2. Create AGENTS.md in the project root with vector memory instructions
-   following the Recall / Store / Expert Routing pattern.
+   following the Recall / Store / Expert Routing pattern and the model/reasoning
+   tiers in docs/model-routing.md. Engram experts retrieve namespaced evidence;
+   the Codex host model performs synthesis.
 
 Confirm each file you create and show me the final contents.
 ```

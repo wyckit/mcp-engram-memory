@@ -123,15 +123,15 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 
 | Profile | Tools | What's included |
 |---------|-------|-----------------|
-| `minimal` | 16 | Core CRUD + composite + admin + multi-agent — recommended starting point |
+| `minimal` | 17 | Core CRUD + composite + admin + multi-agent — recommended starting point **(default)** |
 | `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 65 | Everything including expert routing, debate, synthesis, benchmarks (default) |
+| `full` | 65 | Everything including expert routing, debate, synthesis, benchmarks |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 65 (profiles: 16 / 41 / 65) |
+| MCP tools | 65 (profiles: 17 / 41 / 65) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
@@ -158,6 +158,8 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 </p>
 
 ## AI Assistant Setup
+
+Model execution belongs to the host harness, not the Engram server: expert profiles route to persona-backed memory namespaces, while the host model reasons over the retrieved evidence. See [Model and Reasoning Routing](docs/model-routing.md) for canonical task tiers, the current Codex model mapping, reasoning escalation rules, and ready-to-use profiles.
 
 Copy the reference harness for your tool — each includes recall/store/routing patterns:
 
@@ -208,7 +210,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `full` | Tool profile: `minimal` (16), `standard` (41), `full` (65) |
+| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17), `standard` (41), `full` (65) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |

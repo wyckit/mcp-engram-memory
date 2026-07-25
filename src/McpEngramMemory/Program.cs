@@ -122,7 +122,7 @@ builder.Services.AddHostedService<ConsolidationBackgroundService>();
 builder.Services.AddHostedService<AutoLinkBackgroundService>();
 
 // Tool profile (default: "minimal", set MEMORY_TOOL_PROFILE=standard or full to expand):
-//   "minimal"  → 16 tools: core memory ops + composite + multi-agent + admin (recommended for most agents)
+//   "minimal"  → 17 tools: core memory ops + composite + multi-agent + admin (recommended for most agents)
 //   "standard" → graph, lifecycle, clusters, intelligence, diffusion, spectral
 //   "full"     → adds benchmarks, debate, expert routing, synthesis, visualization, maintenance
 var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "minimal";
