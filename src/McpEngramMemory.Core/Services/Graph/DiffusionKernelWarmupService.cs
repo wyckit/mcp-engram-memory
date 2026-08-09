@@ -62,19 +62,31 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
         var namespaces = _index.GetNamespaces();
         int warmed = 0;
         int bypassed = 0;
+        int failed = 0;
         var sw = Stopwatch.StartNew();
         foreach (var ns in namespaces)
         {
             // Skip system / internal namespaces — anything starting with underscore.
             if (ns.StartsWith('_')) continue;
 
-            var basis = _kernel.GetBasis(ns);
-            if (basis is not null) warmed++;
-            else bypassed++;
+            // Per-namespace fault isolation: one failing basis computation must
+            // not abort warmup for every later namespace. The kernel negative-caches
+            // the failure per graph revision, so subsequent sweeps rethrow cheaply.
+            try
+            {
+                var basis = _kernel.GetBasis(ns);
+                if (basis is not null) warmed++;
+                else bypassed++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                _logger?.LogWarning(ex, "Diffusion warmup failed for ns={Namespace}; continuing.", ns);
+            }
         }
         sw.Stop();
         _logger?.LogInformation(
-            "Diffusion warmup: {Warmed} of {Total} namespaces hold a basis ({Bypassed} bypassed as too-small/sparse) in {Ms}ms.",
-            warmed, namespaces.Count, bypassed, sw.ElapsedMilliseconds);
+            "Diffusion warmup: {Warmed} of {Total} namespaces hold a basis ({Bypassed} bypassed as too-small/sparse, {Failed} failed) in {Ms}ms.",
+            warmed, namespaces.Count, bypassed, failed, sw.ElapsedMilliseconds);
     }
 }

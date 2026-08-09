@@ -57,18 +57,24 @@ public class SpectralRetrievalRerankerTests : IDisposable
     }
 
     /// <summary>
-    /// Broad mode (low-pass) should boost members of a cluster where any one
-    /// member scored well, surfacing them ahead of an isolated entry that
-    /// scored only slightly higher individually.
+    /// Broad mode (low-pass) should spread a scoring cluster member's signal
+    /// through its cluster, surfacing cluster mates the upstream pipeline never
+    /// returned. Isolated entries are their own connected component (Laplacian
+    /// eigenvalue 0), so every spectral filter is identity on them: their score
+    /// passes through EXACTLY unchanged — a low-pass contraction can neither
+    /// damp an isolated entry nor lift a cluster member above a higher-scoring
+    /// isolated one. (The previous version of this test asserted the opposite
+    /// ordering; that only held because isolated entries' scores were wrongly
+    /// attenuated by the pre-deflation basis — the latent isolated-node bug.)
     /// </summary>
     [Fact]
     public void BroadModeBoostsClusterMembers()
     {
         const string ns = "broad";
-        SeedClusterPlusIsolated(ns, clusterSize: 16, isolatedCount: 16);
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 16);
 
         // One cluster member scores high; an isolated entry scores slightly
-        // higher individually. Without spectral, the isolated entry wins.
+        // higher individually.
         var input = new List<(string Id, float Score)>
         {
             ("iso_0", 0.95f),
@@ -78,20 +84,26 @@ public class SpectralRetrievalRerankerTests : IDisposable
         var noneResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.None, topK: 5);
         var broadResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, topK: 5);
 
-        // Without spectral: isolated wins.
+        // Without spectral: isolated wins on raw score.
         Assert.Equal("iso_0", noneResult[0].Id);
 
-        // With broad: at least one cluster member outranks the isolated entry —
-        // the cluster's diffused score lifts its members above the singleton.
-        bool clusterMemberFirst = broadResult.Count > 0 && broadResult[0].Id.StartsWith("c_");
-        Assert.True(clusterMemberFirst,
-            $"Broad mode should surface cluster members first; got top result {broadResult[0].Id}.");
+        // With broad: the isolated entry still wins — and at EXACTLY its input
+        // score (identity pass-through for a deflated singleton component).
+        Assert.Equal("iso_0", broadResult[0].Id);
+        Assert.Equal(0.95f, broadResult[0].Score);
 
-        // Multiple cluster members should appear in the top results since
-        // the diffused signal spreads c_0's score through the cluster.
+        // Multiple cluster members should appear in the top results since the
+        // diffused signal spreads c_0's score through the cluster — the rescue
+        // behavior Broad mode exists for.
         int clusterCount = broadResult.Count(r => r.Id.StartsWith("c_"));
         Assert.True(clusterCount >= 2,
             $"Broad mode should surface multiple cluster members; got {clusterCount}.");
+
+        // And the diffusion is a contraction: no smoothed score may exceed the
+        // maximum input score.
+        foreach (var r in broadResult)
+            Assert.True(r.Score <= 0.95f + 1e-3f,
+                $"Low-pass diffusion must not exceed the max input score; {r.Id} got {r.Score}.");
     }
 
     /// <summary>
@@ -102,7 +114,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
     public void SpecificModePreservesOutliers()
     {
         const string ns = "specific";
-        SeedClusterPlusIsolated(ns, clusterSize: 16, isolatedCount: 16);
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 16);
 
         // c_0 scores high (it's the actual answer); cluster mean is 0 (no
         // others matched). Isolated iso_0 also scores high.
@@ -166,7 +178,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
     public void TopKCapHonored()
     {
         const string ns = "capped";
-        SeedClusterPlusIsolated(ns, clusterSize: 16, isolatedCount: 16);
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 16);
 
         var input = new List<(string Id, float Score)>
         {

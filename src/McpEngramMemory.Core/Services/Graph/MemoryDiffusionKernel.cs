@@ -28,9 +28,19 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///    weight matrix W stays non-negative and the Laplacian L = I - D^(-1/2) W D^(-1/2)
 ///    stays positive semi-definite (heat kernel exp(-tL) remains a contraction).
 /// 3. Symmetrize: W[i,j] = max(w(i->j), w(j->i)).
-/// 4. Find the top-K largest eigenpairs (lambda_M, u) of M = D^(-1/2) W D^(-1/2)
-///    via <see cref="RandomizedEigensolver.SolveTopK"/>; convert to the smallest
-///    eigenpairs of L via lambda_L = 1 - lambda_M and sort ascending.
+/// 4. Structurally deflate isolated nodes: entries with no positive-relation
+///    edges are excluded from the eigenproblem entirely (they would contribute
+///    exactly-zero rows/columns to M, making it exactly rank-deficient — the
+///    regime where randomized subspace iteration breaks down). Each isolated
+///    node is its own connected component with Laplacian eigenvalue 0, so every
+///    spectral filter treats it as identity (exp(-t·0) = 1); the filter's
+///    out-of-basis pass-through in <see cref="ApplySpectralFilter"/> implements
+///    exactly that. If the remaining linked core is smaller than
+///    <see cref="MinimumNodesForSpectral"/>, the kernel bypasses entirely.
+/// 5. Find the top-K largest eigenpairs (lambda_M, u) of M = D^(-1/2) W D^(-1/2)
+///    over the linked subgraph via <see cref="RandomizedEigensolver.SolveTopK"/>;
+///    convert to the smallest eigenpairs of L via lambda_L = 1 - lambda_M and
+///    sort ascending.
 ///
 /// Cache invalidation is revision-based: each cached basis records the
 /// <see cref="KnowledgeGraph.Revision"/> at the time of computation; any subsequent
@@ -39,7 +49,7 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// under a per-namespace lock — concurrent calls for the same namespace serialize,
 /// but different namespaces compute independently.
 /// </summary>
-public sealed class MemoryDiffusionKernel
+public class MemoryDiffusionKernel
 {
     /// <summary>Edge relations that contribute positive weight to the Laplacian.</summary>
     public static readonly IReadOnlySet<string> PositiveRelations = new HashSet<string>
@@ -69,6 +79,17 @@ public sealed class MemoryDiffusionKernel
     private readonly ConcurrentDictionary<string, DiffusionBasis> _cache = new();
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
+    /// <summary>
+    /// Negative cache: namespaces whose basis computation threw, keyed by the
+    /// <see cref="KnowledgeGraph.Revision"/> at failure time. The eigensolver RNG
+    /// is seeded from <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is
+    /// deterministic per (namespace, revision) — re-running the expensive
+    /// eigensolve before the graph changes would repay the full cost for a
+    /// guaranteed-identical failure. Instead <see cref="GetBasis"/> rethrows a
+    /// cheap exception until the revision moves, which re-arms exactly one retry.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (long Revision, string Message)> _failedRevisions = new();
+
     public MemoryDiffusionKernel(
         CognitiveIndex index,
         KnowledgeGraph graph,
@@ -86,6 +107,13 @@ public sealed class MemoryDiffusionKernel
     /// small or sparsely linked to qualify (see <see cref="MinimumNodesForSpectral"/>
     /// and <see cref="MinimumEdgesForSpectral"/>) — callers should fall back to
     /// non-spectral behavior in that case.
+    ///
+    /// Failure handling: if computation throws, the failure is negative-cached
+    /// per graph revision and cheaply rethrown until the graph changes, keeping
+    /// the failure visible to callers every cycle without repaying the
+    /// eigensolve for a deterministic re-failure. Rethrowing (rather than
+    /// returning <c>null</c>) is deliberate — <c>null</c> would be
+    /// indistinguishable from a legitimate too-small-namespace bypass.
     /// </summary>
     public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK)
     {
@@ -100,6 +128,9 @@ public sealed class MemoryDiffusionKernel
             return cached;
         }
 
+        if (_failedRevisions.TryGetValue(ns, out var failed) && failed.Revision == currentRev)
+            throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
+
         var nsLock = _nsLocks.GetOrAdd(ns, _ => new object());
         lock (nsLock)
         {
@@ -111,7 +142,24 @@ public sealed class MemoryDiffusionKernel
                 return cached;
             }
 
-            var built = ComputeBasis(ns, topK, currentRev);
+            if (_failedRevisions.TryGetValue(ns, out failed) && failed.Revision == currentRev)
+                throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
+
+            DiffusionBasis? built;
+            try
+            {
+                built = ComputeBasis(ns, topK, currentRev);
+            }
+            catch (Exception ex)
+            {
+                _failedRevisions[ns] = (currentRev, ex.Message);
+                _logger?.LogWarning(ex,
+                    "Diffusion basis computation failed for ns={Namespace} at revision {Revision}; caching failure until the graph changes.",
+                    ns, currentRev);
+                throw;
+            }
+
+            _failedRevisions.TryRemove(ns, out _);
             if (built is not null)
                 _cache[ns] = built;
             else
@@ -120,10 +168,15 @@ public sealed class MemoryDiffusionKernel
         }
     }
 
+    private static string FailureMessage(string ns, long rev, string inner) =>
+        $"Diffusion basis computation for namespace '{ns}' previously failed at graph revision {rev} and the graph has not changed since: {inner}";
+
     /// <summary>
     /// Apply a per-mode spectral filter to a per-entry signal — the kernel's
     /// primary verb. Entries not present in the cached basis pass through
-    /// unchanged (e.g., entries added after basis computation, on a
+    /// unchanged (e.g., isolated entries deflated out of the eigenproblem — for
+    /// which identity is the exact filter value, since a singleton component has
+    /// lambda_L = 0 — or entries added after basis computation, on a
     /// stale-but-not-yet-rebuilt basis).
     ///
     /// Mechanism: project signal into the basis (sigma_hat[k] = sum_i U[i,k] · signal[i]),
@@ -186,12 +239,21 @@ public sealed class MemoryDiffusionKernel
             stale);
     }
 
-    /// <summary>Drop the cached basis for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
-    public void Invalidate(string ns) => _cache.TryRemove(ns, out _);
+    /// <summary>Drop the cached basis (and any negative-cached failure) for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
+    public void Invalidate(string ns)
+    {
+        _cache.TryRemove(ns, out _);
+        _failedRevisions.TryRemove(ns, out _);
+    }
 
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision)
+    /// <summary>
+    /// Build the eigenbasis for <paramref name="ns"/>, or <c>null</c> when the
+    /// namespace doesn't qualify. Virtual purely as a test seam so fault-isolation
+    /// tests can inject deterministic failures — not intended as an extension point.
+    /// </summary>
+    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision)
     {
         var entries = _index.GetAllInNamespace(ns);
         if (entries.Count < MinimumNodesForSpectral)
@@ -232,14 +294,68 @@ public sealed class MemoryDiffusionKernel
             return null;
         }
 
-        // CSR-style adjacency for fast matVec.
-        int n = entryIds.Length;
+        // ── Structural deflation of isolated nodes ────────────────────────────
+        // Entries with no positive-relation edges contribute exactly-zero
+        // rows/columns to M = D^(-1/2) W D^(-1/2), making the operator exactly
+        // rank-deficient — the regime where the randomized eigensolver's panel
+        // collapses and orthonormality cannot be maintained in float32.
+        // Mathematically, each isolated node is its own connected component with
+        // Laplacian eigenvalue 0, so every spectral filter is identity on it
+        // (exp(-t·0) = 1). We therefore exclude isolated nodes from the
+        // eigenproblem and let ApplySpectralFilter's out-of-basis pass-through
+        // handle them — exact and numerically safe.
+        var nonIsolated = new bool[entryIds.Length];
+        foreach (var ((lo, hi), _) in weights)
+        {
+            nonIsolated[lo] = true;
+            nonIsolated[hi] = true;
+        }
+        int compactCount = 0;
+        for (int i = 0; i < nonIsolated.Length; i++)
+            if (nonIsolated[i]) compactCount++;
+        int isolatedCount = entryIds.Length - compactCount;
+
+        if (compactCount < MinimumNodesForSpectral)
+        {
+            _logger?.LogDebug(
+                "Diffusion kernel bypass for ns={Namespace}: {Count} linked nodes < {Min} minimum ({Total} total, {Isolated} isolated).",
+                ns, compactCount, MinimumNodesForSpectral, entryIds.Length, isolatedCount);
+            return null;
+        }
+
+        // Compact index map over non-isolated nodes only, preserving relative
+        // (ordinal) order so basis construction stays deterministic.
+        var compactOf = new int[entryIds.Length];
+        var basisEntryIds = new string[compactCount];
+        int next = 0;
+        for (int i = 0; i < entryIds.Length; i++)
+        {
+            if (nonIsolated[i])
+            {
+                compactOf[i] = next;
+                basisEntryIds[next] = entryIds[i];
+                next++;
+            }
+            else
+            {
+                compactOf[i] = -1;
+            }
+        }
+
+        // Remap edge weights into compact index space. Order preservation keeps
+        // lo < hi invariant intact after remapping.
+        var compactWeights = new Dictionary<(int Lo, int Hi), float>(weights.Count);
+        foreach (var ((lo, hi), w) in weights)
+            compactWeights[(compactOf[lo], compactOf[hi])] = w;
+
+        // CSR-style adjacency for fast matVec, at compact (linked-only) dimension.
+        int n = compactCount;
         var rowStart = new int[n + 1];
         var colIdx = new int[edgeCount * 2];
         var vals = new float[edgeCount * 2];
 
         var degree = new float[n];
-        foreach (var ((lo, hi), w) in weights)
+        foreach (var ((lo, hi), w) in compactWeights)
         {
             degree[lo] += w;
             degree[hi] += w;
@@ -247,7 +363,7 @@ public sealed class MemoryDiffusionKernel
 
         // Bucket edges by row to fill CSR. First count, then fill.
         var rowCount = new int[n];
-        foreach (var ((lo, hi), _) in weights)
+        foreach (var ((lo, hi), _) in compactWeights)
         {
             rowCount[lo]++;
             rowCount[hi]++;
@@ -258,16 +374,23 @@ public sealed class MemoryDiffusionKernel
 
         var fillCursor = new int[n];
         Array.Copy(rowStart, fillCursor, n);
-        foreach (var ((lo, hi), w) in weights)
+        foreach (var ((lo, hi), w) in compactWeights)
         {
             colIdx[fillCursor[lo]] = hi; vals[fillCursor[lo]] = w; fillCursor[lo]++;
             colIdx[fillCursor[hi]] = lo; vals[fillCursor[hi]] = w; fillCursor[hi]++;
         }
 
-        // Inverse sqrt degree, used in M = D^(-1/2) W D^(-1/2).
+        // Inverse sqrt degree, used in M = D^(-1/2) W D^(-1/2). Isolated nodes
+        // were deflated above, so every remaining node has at least one
+        // positive-weight edge and degree > 0 by construction — the 0 sentinel
+        // (and the exactly-zero rows it produced) can no longer occur.
         var invSqrtDeg = new float[n];
         for (int i = 0; i < n; i++)
-            invSqrtDeg[i] = degree[i] > 0f ? 1f / MathF.Sqrt(degree[i]) : 0f;
+        {
+            System.Diagnostics.Debug.Assert(degree[i] > 0f,
+                "Deflation invariant violated: linked node with zero degree.");
+            invSqrtDeg[i] = 1f / MathF.Sqrt(degree[i]);
+        }
 
         // (M x)[i] = invSqrtDeg[i] * sum over neighbors j: w_ij * invSqrtDeg[j] * x[j]
         void MatVec(ReadOnlySpan<float> x, Span<float> y)
@@ -317,9 +440,9 @@ public sealed class MemoryDiffusionKernel
         }
 
         _logger?.LogInformation(
-            "Diffusion kernel: built basis for ns={Namespace} (n={Nodes}, edges={Edges}, k={TopK}) in {Ms}ms.",
-            ns, n, edgeCount, lEigs.Length, sw.ElapsedMilliseconds);
+            "Diffusion kernel: built basis for ns={Namespace} (n={Nodes} linked of {Total} total, {Isolated} isolated deflated, edges={Edges}, k={TopK}) in {Ms}ms.",
+            ns, n, entryIds.Length, isolatedCount, edgeCount, lEigs.Length, sw.ElapsedMilliseconds);
 
-        return new DiffusionBasis(ns, entryIds, lEigs, lVecs, edgeCount, graphRevision);
+        return new DiffusionBasis(ns, basisEntryIds, lEigs, lVecs, edgeCount, graphRevision);
     }
 }

@@ -56,6 +56,9 @@ public sealed class DecayBackgroundService : BackgroundService
                 _logger.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} statesChanged={StatesChanged}",
                     "decay", "*", sw.ElapsedMilliseconds, entriesProcessed, stateChanges);
+                errorMessage = LifecyclePartialFailure.DescribeDecay(result);
+                if (errorMessage is not null)
+                    _logger.LogWarning("Decay cycle completed with partial failures: {Message}", errorMessage);
             }
             catch (Exception ex)
             {
