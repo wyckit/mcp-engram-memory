@@ -73,6 +73,22 @@ Use `compare_live_agent_outcome_artifacts` to diff two live benchmark artifacts 
 
 Use `check_for_regression` to perform automated regression testing in CI. It compares a candidate artifact against a pinned baseline and returns a failure status if `full_engram` metrics drop below configurable thresholds.
 
+### Statistical drift gate
+
+The CI regression gate (`scripts/check-benchmark-regression.sh` / `.ps1`) delegates to a C# statistical gate whenever `dotnet` and a Release build of `McpEngramMemory` are available:
+
+```
+dotnet src/McpEngramMemory/bin/Release/net8.0/McpEngramMemory.dll regression-gate [PATH] \
+    [--baseline-dir DIR] [--tolerance N] [--alpha N] [--mde N] \
+    [--recall-floor N] [--mrr-floor N] [--ndcg-floor N] [--outcome-floor N] [--recurse]
+```
+
+**Decision rule:** absolute floors are unchanged and always enforced. When both the candidate and the pinned baseline carry pairable per-query vectors (`queryScores[]` for flat IR artifacts; `taskScores[]`/`taskResults[]` for agent-outcome artifacts, keyed by query/task id), the flat 0.02 drift check is replaced: a metric fails only when the one-sided paired t-test over per-query deltas is significant under Holm-Bonferroni correction across the run's dataset×metric family (`--alpha`, default 0.05) **and** the mean drop exceeds the minimum detectable effect (`--mde`, default 0.02). This stops single-query quantization flips (e.g. one flipped query out of 18, mean drop 0.056, p≈0.166) from failing the build while still catching uniform collapses (zero-variance drops have p=0).
+
+**Legacy fallback (per comparison):** when the baseline has no per-query vectors, the query/task-id sets differ between candidate and baseline, or fewer than 2 pairs exist, that comparison falls back to the legacy point comparison (`value < baseline − tolerance`) and the gate emits a loud warning. A fallback warning means the pinned baseline should be regenerated from a full artifact — every artifact the runners now emit carries `queryScores`/`taskScores`. If neither `dotnet` nor the built dll is found, the whole script falls back to the original bash/awk (or PowerShell) logic with the same warning.
+
+The 3 pinned agent-outcome baselines under `benchmarks/baselines/` already carry per-task vectors (n=5/4/3 tasks), so they engage the statistical path as-is — though at those sample sizes the test is deliberately underpowered and the floors remain the effective guard. Note that the per-task `passed` booleans gate PassRate through the same paired t-test (a documented approximation; McNemar would be canonical).
+
 On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-hard-v1` (expanded with 3-hop graph chains and synonym gaps), reaching a high pass rate under `full_engram` while simpler memory policies (transcript replay, vector) failed to bridge the multi-memory links.
 
 ## Latest Results (2026-04-17)
