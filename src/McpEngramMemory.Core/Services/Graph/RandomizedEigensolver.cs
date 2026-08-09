@@ -211,7 +211,13 @@ public static class RandomizedEigensolver
     /// the cost — cheap at the dimensions the spine works at.
     ///
     /// Degenerate (nearly-zero) columns are replaced with a unit vector along an unused axis
-    /// so the result is always full-rank.
+    /// so the result is always full-rank. The axis fallback is rank-revealing: a
+    /// replacement axis that lies (numerically) inside the span of the prior columns —
+    /// which happens whenever the input panel is exactly rank-deficient, e.g. an operator
+    /// with exactly-zero rows from isolated graph nodes — leaves only float32 cancellation
+    /// noise after orthogonalization. Such axes must be rejected and the walk continued,
+    /// not normalized from noise into a garbage direction; see the acceptance threshold
+    /// in <see cref="DoMGSPass"/>.
     /// </summary>
     private static void OrthonormalizeColumnsInPlace(float[,] A, int n, int m)
     {
@@ -248,10 +254,50 @@ public static class RandomizedEigensolver
 
     private static void DoMGSPass(float[,] A, int n, int m)
     {
+        // Absolute floor for the degenerate-column test: catches exactly-zero
+        // columns (e.g. M·e_i = 0 for an isolated coordinate) regardless of scale.
         const float Eps = 1e-10f;
+
+        // Rank-revealing RELATIVE threshold for the original column's
+        // is-it-degenerate test. When the panel is exactly rank-deficient (an
+        // operator with exactly-zero rows confines Y = M·Q to an r-dimensional
+        // subspace with r < m), column r's residual after orthogonalization
+        // against columns 0..r-1 is not exactly zero but pure float32
+        // cancellation noise, ~sqrt(j)·eps_f32 ≈ 1e-6 relative to the column's
+        // pre-orthogonalization norm. That is far above the absolute Eps floor,
+        // so an absolute-only test normalizes the noise into a garbage direction
+        // with ~1e6x error amplification (observed: |<col 0, col r>| up to 0.997).
+        // Testing the residual against RankRevealTol x the column's original norm
+        // flags such columns as numerically inside the span and routes them to
+        // the axis-replacement fallback instead. 1e-4 sits ~1e2 above the float32
+        // cancellation-noise floor and well below any genuinely new direction's
+        // residual; a genuine direction rejected this close to the noise floor
+        // would carry O(1e-3) relative error anyway, so replacing it loses nothing.
+        const float RankRevealTol = 1e-4f;
+
+        // Rank-revealing acceptance threshold for REPLACEMENT axes. A replacement
+        // axis e_i can lie (numerically) inside the span of the previously
+        // orthonormalized columns; its orthogonalized residual is then pure
+        // float32 cancellation noise (~1e-7 x column scale). Accepting that
+        // residual against Eps = 1e-10 — four orders of magnitude below the noise
+        // floor — normalizes noise with ~1e7x error amplification into a garbage
+        // direction whose inner products with earlier columns are O(0.05-0.5),
+        // which no subsequent MGS pass can repair. Such axes must be REJECTED and
+        // the walk continued. Termination is guaranteed: for j orthonormal
+        // columns in R^n, sum over all axes i of ||proj_span(e_i)||^2 = j, so at
+        // least one axis has residual norm^2 >= (n - j) / n; with j < m <= n the
+        // loop over all n axes must find an axis with residual
+        // >= sqrt((n - j) / n) >= sqrt(1 / n), and 1e-3 is safely below that for
+        // any n <= 1e6 while sitting ~1e4 above float32 cancellation noise.
+        const float AxisAcceptTol = 1e-3f;
+
         int axisFallback = 0;
         for (int j = 0; j < m; j++)
         {
+            float normBefore = 0f;
+            for (int i = 0; i < n; i++) normBefore += A[i, j] * A[i, j];
+            normBefore = MathF.Sqrt(normBefore);
+
             for (int k = 0; k < j; k++)
             {
                 float dot = 0f;
@@ -263,7 +309,7 @@ public static class RandomizedEigensolver
             for (int i = 0; i < n; i++) norm += A[i, j] * A[i, j];
             norm = MathF.Sqrt(norm);
 
-            if (norm < Eps)
+            if (norm < MathF.Max(Eps, RankRevealTol * normBefore))
             {
                 while (axisFallback < n)
                 {
@@ -278,9 +324,12 @@ public static class RandomizedEigensolver
                     norm = 0f;
                     for (int i = 0; i < n; i++) norm += A[i, j] * A[i, j];
                     norm = MathF.Sqrt(norm);
-                    if (norm >= Eps) break;
+                    if (norm >= AxisAcceptTol) break; // axis genuinely outside the span — accept
+                    // else: axis lies (numerically) inside the span; skip it and keep walking
                 }
-                if (norm < Eps) throw new InvalidOperationException("Column rank deficient beyond fallback recovery.");
+                if (norm < AxisAcceptTol)
+                    throw new InvalidOperationException(
+                        $"Column rank deficient beyond fallback recovery (column j={j}, n={n}, m={m}, axes tried={axisFallback}).");
             }
 
             float inv = 1f / norm;
