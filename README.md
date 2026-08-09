@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="images/banner.svg?v=1.2.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=1.3.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1015%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1118%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
@@ -81,7 +81,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.2.0
+dotnet add package McpEngramMemory.Core --version 1.3.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -124,21 +124,21 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Profile | Tools | What's included |
 |---------|-------|-----------------|
 | `minimal` | 17 | Core CRUD + composite + admin + multi-agent — recommended starting point **(default)** |
-| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 65 | Everything including expert routing, debate, synthesis, benchmarks |
+| `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 62 | Everything including expert routing, debate, synthesis, benchmarks |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 65 (profiles: 17 / 41 / 65) |
+| MCP tools | 62 (profiles: 17 / 39 / 62) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 865 non-MSA net8 tests across 49 files |
+| Tests | 1118 tests per target framework (net8/9/10) across 83 files |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
@@ -184,25 +184,26 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (65)
+## MCP Tools (62)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
 | Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
 | Composite | `remember`, `recall` (with `spectralMode`), `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, context assembly, and graph-aware spectral re-ranking on `recall` (default `auto`) |
-| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph`, `auto_link_namespace` | Directed graph with 7 relation types, multi-hop BFS, and similarity-based auto-link densification |
+| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS; similarity-based auto-link densification runs as a 6-hour background sweep |
 | Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
-| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `decay_cycle`, `run_consolidation`, `configure_decay` | State transitions (STM/LTM/archived), spectral decay diffusion, and topology-driven sleep consolidation |
+| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `configure_decay` | State transitions (STM/LTM/archived) and per-namespace decay configuration; spectral decay diffusion and sleep consolidation run automatically as background services |
 | Memory Diffusion | `compute_diffusion_basis`, `diffusion_stats`, `invalidate_diffusion`, `spectral_recall` | Graph-Laplacian eigenbasis primitive shared by decay, consolidation, and retrieval; standalone graph-aware retrieval |
 | Intelligence | `detect_duplicates`, `find_contradictions`, `merge_memories`, `uncollapse_cluster`, `list_collapse_history` | Dedup, contradiction detection, merge, collapse reversal |
 | Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
 | Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
 | Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate`, `purge_debates` | Multi-perspective analysis with debate tracking |
 | Synthesis | `synthesize_memories` | Map-reduce synthesis via local SLM (Ollama by default; ONNX Runtime GenAI is opt-in via `SYNTHESIS_BACKEND=onnx`) |
-| Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse`, `trigger_accretion_scan` | DBSCAN cluster detection and two-phase summarization |
-| Admin | `get_memory`, `cognitive_stats`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, and latency metrics |
+| Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse` | DBSCAN cluster detection and two-phase summarization (the density scan runs as a 30-min background sweep) |
+| Admin | `get_memory`, `cognitive_stats`, `engram_status`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, background-worker health, and latency metrics |
 | Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
-| Benchmarks | `run_benchmark`, `run_agent_outcome_benchmark`, `run_live_agent_outcome_benchmark`, `compare_live_agent_outcome_artifacts` | IR quality validation, proxy memory-condition comparison, live-model memory A/B benchmarking, and artifact-to-artifact diff reporting |
+| Benchmarks | `run_benchmark`, `run_agent_outcome_benchmark`, `run_live_agent_outcome_benchmark`, `compare_live_agent_outcome_artifacts`, `check_for_regression`, `run_mrcr_benchmark`, `compare_mrcr_artifacts` | IR quality validation, proxy and live memory-condition benchmarking, artifact diffing, CI regression gating, and MRCR v2 long-context A/B |
+| Visualization | `get_graph_snapshot` | Memory-graph JSON snapshot (nodes, typed edges, clusters) for the built-in D3 viewer (`visualization/memory-graph.html`) |
 
 Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
@@ -210,7 +211,7 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17), `standard` (41), `full` (65) |
+| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17), `standard` (39), `full` (62) |
 | `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
@@ -221,14 +222,16 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 ## NuGet / GitHub Packages
 
+> **Availability note:** v1.3.0 is tagged in this repository; publication to nuget.org is pending (latest published `McpEngramMemory.Core` there is 1.2.0). If `--version 1.3.0` does not resolve yet, pin version `1.2.0` instead. The `McpEngramMemory` server itself is run from source or Docker, not installed from nuget.org.
+
 The core engine is available as a NuGet package for embedding in your own .NET applications:
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 1.2.0
+dotnet add package McpEngramMemory.Core --version 1.3.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 1.2.0 \
+dotnet add package McpEngramMemory.Core --version 1.3.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -255,7 +258,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 65 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 62 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |

@@ -63,7 +63,7 @@ src/
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (49 files; 865 current non-MSA net8 passes)
+  McpEngramMemory.Tests/        # xUnit tests (78 files; 1085 non-live passes per TFM)
 .github/
   workflows/
     ci.yml                      # Build + test on push/PR (excludes MSA)
@@ -83,7 +83,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.2.0
+dotnet add package McpEngramMemory.Core --version 1.3.0
 ```
 
 ### Library Usage

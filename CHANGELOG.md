@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Statistical benchmark regression gate.** The regression gate now records per-query score vectors in
+  benchmark artifacts and compares candidate vs. baseline with a paired statistical test, so a run fails
+  only when the drop is statistically distinguishable from seed noise, rather than on a fixed 0.02
+  absolute-delta tolerance (absolute floors retained). The gate runs as a C# `regression-gate` command;
+  `scripts/check-benchmark-regression.{sh,ps1}` delegate to it and fall back to the legacy fixed-tolerance
+  path (with a loud warning) when the C# gate or per-query scores are unavailable.
+
+### Fixed
+- **Lifecycle background passes: per-namespace fault isolation.** An exception while processing one
+  namespace during a decay or consolidation cycle no longer aborts the rest of the cycle — the failing
+  namespace is logged, skipped, and reported in the cycle summary. A failure inside the spectral
+  (diffusion-kernel) path now falls back to the non-spectral computation for that namespace instead of
+  failing it outright.
+- **Spectral basis failures on sparsely-linked namespaces (root cause).** `MemoryDiffusionKernel` now
+  structurally deflates isolated (edge-less) entries out of the eigenproblem; they pass through spectral
+  filters as exact identity — the correct treatment for a singleton graph component (`λ_L = 0`). This
+  eliminates the deterministic `InvalidOperationException` ("… expected 0.") basis failures on namespaces
+  whose linked core is smaller than the eigensolver's sketch width (the panel became exactly rank-deficient
+  and Gram-Schmidt's axis-replacement fallback normalized float32 cancellation noise into corrupt columns),
+  and fixes a latent bug where isolated entries' decay debt and retrieval scores were wrongly attenuated —
+  or zeroed in large namespaces — instead of passing through unchanged. `RandomizedEigensolver`'s
+  degenerate-column detection and axis-replacement fallback are now rank-revealing (relative residual test
+  plus a float32-safe axis acceptance threshold), so exactly rank-deficient operators from any caller can
+  no longer produce non-orthonormal bases. Behavioral note: namespaces whose *linked* core is below the
+  spectral minimum (32 nodes) now bypass spectral processing even when total entry count qualifies —
+  decay falls back to pointwise and consolidation skips them, rather than computing a corrupt basis.
+
+### Changed
+- **Docs, version, and security-posture alignment.** Corrected the measured tool surface everywhere
+  (62 tools; profiles `minimal` 17 / `standard` 39 / `full` 62 — docs previously said 65/41), test counts
+  (1118 per target framework across 83 files, including the tests added this cycle), and stale tool tables (removed the four background-only
+  tools dropped in v1.1; added `engram_status`, `get_graph_snapshot`, `check_for_regression`,
+  `run_mrcr_benchmark`, `compare_mrcr_artifacts`). Bumped the server csproj to 1.3.0 to match Core.
+  SECURITY.md now supports the 1.3.x line and documents memory poisoning (OWASP ASI06), the `AGENT_ID`
+  trust model, and known dependency advisories.
+
 ## [1.3.0] - 2026-07-21
 
 _Adds first-class **tenant isolation** to the storage layer (backward-compatible; SQL Server performs a one-time automatic schema migration on first startup — see **Migration** below). Remaining items are tooling, tests, and docs only._

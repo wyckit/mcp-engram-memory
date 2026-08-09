@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-Engram Memory exposes 65 MCP tools across three profiles (default
+Engram Memory exposes 62 MCP tools across three profiles (default
 `minimal` shows 17). You don't need most of them on day one. This page
 lists the 10 tools that cover the typical workflow — from first memory
 to multi-agent setups — in the order you'll naturally encounter them.
@@ -82,11 +82,11 @@ contexts. Set `hierarchical: true` to walk the root → branch → leaf tree.
 | Check who you are / what you can see | `whoami` |
 | Auto-route to the right domain | `dispatch_task` |
 
-## The other 55 tools
+## The other 52 tools
 
 - **Graph** — `link_memories`, `unlink_memories`, `get_neighbors`,
   `traverse_graph` for explicit relation management.
-- **Lifecycle** — `promote_memory`, `decay_cycle`, `configure_decay`,
+- **Lifecycle** — `promote_memory`, `memory_feedback`, `configure_decay`,
   `deep_recall` for manual STM→LTM→archived control.
 - **Clusters** — `create_cluster`, `get_cluster`, `list_clusters`,
   `collapse_cluster` for hierarchical summarization.
