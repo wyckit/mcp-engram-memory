@@ -13,6 +13,19 @@ All notable changes to this project will be documented in this file.
   path (with a loud warning) when the C# gate or per-query scores are unavailable.
 
 ### Fixed
+- **`reflect` failed whenever `relatedIds` was not a JSON array of strings.** The parameter was typed
+  `string[]?`, so a caller passing a single id or a comma-separated list (the shape `cross_search`
+  already uses for its namespace list) failed MCP model binding *before* the tool body ran. The only
+  thing the caller saw was the SDK's generic `An error occurred invoking 'reflect'.` — it named neither
+  the parameter nor the shape it wanted, which made the failure look like a payload-size or server
+  problem. `relatedIds` now binds as `JsonElement?` and is normalized at the tool boundary by
+  `StringListNormalizer`, accepting a JSON array of ids, a comma-separated string, or a single id;
+  blanks and nulls are dropped and a genuinely unusable shape (an object, a nested array) returns
+  `Error: relatedIds must be a JSON array of ids, a comma-separated string, or a single id — got a
+  JSON object.` instead of the generic invocation error. Same bug family as the metadata array-binding
+  fix, and `StringListNormalizer` is the list-shaped companion to `MetadataNormalizer`. Note that
+  `relatedIds` no longer advertises `type: array` in the generated input schema (a tolerant parameter
+  type can't); the accepted shapes are stated in the parameter description instead.
 - **Lifecycle background passes: per-namespace fault isolation.** An exception while processing one
   namespace during a decay or consolidation cycle no longer aborts the rest of the cycle — the failing
   namespace is logged, skipped, and reported in the cycle summary. A failure inside the spectral
@@ -35,7 +48,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Docs, version, and security-posture alignment.** Corrected the measured tool surface everywhere
   (62 tools; profiles `minimal` 17 / `standard` 39 / `full` 62 — docs previously said 65/41), test counts
-  (1118 per target framework across 83 files, including the tests added this cycle), and stale tool tables (removed the four background-only
+  (1154 per target framework across 85 files, including the tests added this cycle), and stale tool tables (removed the four background-only
   tools dropped in v1.1; added `engram_status`, `get_graph_snapshot`, `check_for_regression`,
   `run_mrcr_benchmark`, `compare_mrcr_artifacts`). Bumped the server csproj to 1.3.0 to match Core.
   SECURITY.md now supports the 1.3.x line and documents memory poisoning (OWASP ASI06), the `AGENT_ID`

@@ -233,11 +233,13 @@ public sealed class CompositeTools
         [Description("The lesson or reflection text. Be specific about what happened and what was learned.")] string text,
         [Description("Namespace (project directory name).")] string ns,
         [Description("Brief topic identifier for the reflection (e.g. 'architecture-decomposition', 'dll-lock-debugging').")] string topic,
-        [Description("IDs of specific memories this reflection relates to (auto-linked).")] string[]? relatedIds = null)
+        [Description("IDs of specific memories this reflection relates to (auto-linked). Accepts a JSON array of ids, a comma-separated string, or a single id.")] JsonElement? relatedIds = null)
     {
         if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
         if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
         if (string.IsNullOrWhiteSpace(topic)) return "Error: topic must not be empty.";
+        if (!StringListNormalizer.TryNormalize(relatedIds, nameof(relatedIds), out var relatedIdList, out var relatedIdsError))
+            return $"Error: {relatedIdsError}";
 
         using var timer = _metrics.StartTimer("reflect");
         var actions = new List<string>();
@@ -269,9 +271,9 @@ public sealed class CompositeTools
         actions.Add("stored as ltm lesson");
 
         // 4. Auto-link to explicitly referenced memories
-        if (relatedIds is { Length: > 0 })
+        if (relatedIdList is { Length: > 0 })
         {
-            foreach (var relatedId in relatedIds)
+            foreach (var relatedId in relatedIdList)
             {
                 if (_index.Get(relatedId) is not null)
                 {
@@ -288,7 +290,7 @@ public sealed class CompositeTools
         {
             if (r.Id == id) continue;
             if (r.IsSummaryNode) continue;
-            if (relatedIds is not null && relatedIds.Contains(r.Id)) continue;
+            if (relatedIdList is not null && relatedIdList.Contains(r.Id)) continue;
             if (r.Score < 0.7f) continue;
 
             _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference"));

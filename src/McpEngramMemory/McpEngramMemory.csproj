@@ -31,6 +31,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Tool-boundary normalizers are internal; the test project covers them directly. -->
+    <InternalsVisibleTo Include="McpEngramMemory.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="ModelContextProtocol" Version="1.0.0" />
   </ItemGroup>

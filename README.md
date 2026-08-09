@@ -6,7 +6,7 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1118%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1154%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
@@ -138,7 +138,7 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 1118 tests per target framework (net8/9/10) across 83 files |
+| Tests | 1154 tests per target framework (net8/9/10) across 85 files |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
