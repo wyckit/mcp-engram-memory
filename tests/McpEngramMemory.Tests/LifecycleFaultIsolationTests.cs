@@ -135,7 +135,13 @@ public class LifecycleFaultIsolationTests : IDisposable
 
         // Poll for at least one completed cycle — robust to scheduler jitter
         // under parallel xUnit execution where a fixed-delay-then-assert flakes.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        //
+        // The deadline is deliberately generous: the loop breaks the instant a
+        // cycle lands, so a long deadline costs nothing on a healthy run and only
+        // extends the genuinely-broken case. A 5s deadline failed on a 2-core CI
+        // runner where thread-pool contention from parallel test classes (ONNX
+        // model loads) starved the 50ms timer for the whole window.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         EngramWorkerStatus? decay = null;
         while (DateTime.UtcNow < deadline)
         {
