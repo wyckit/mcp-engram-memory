@@ -14,8 +14,11 @@ namespace McpEngramMemory.Core.Services.Lifecycle;
 ///
 /// Tuning. Default cadence is 24 hours, with a 10-minute startup delay so the
 /// embedding warmup, accretion scan, and diffusion-kernel warmup all settle first.
-/// Skipping is the failure mode of choice — a transient kernel-build error or a
-/// missing namespace just gets logged and tried again next day.
+/// Skipping is the failure mode of choice — per-namespace isolation lives in
+/// <see cref="LifecycleEngine.RunConsolidationPass"/>, which skips a failing
+/// namespace whole (recorded in <c>FailedNamespaces</c>) and tries again next
+/// day; this service surfaces those partial failures via
+/// <see cref="LifecyclePartialFailure.DescribeConsolidation"/>.
 /// </summary>
 public sealed class ConsolidationBackgroundService : BackgroundService
 {
@@ -54,6 +57,9 @@ public sealed class ConsolidationBackgroundService : BackgroundService
                 _logger?.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} promotionsCount={PromotionsCount} archivalsCount={ArchivalsCount}",
                     "consolidation", "*", sw.ElapsedMilliseconds, entriesProcessed, result.StmToLtm, result.LtmToArchived);
+                errorMessage = LifecyclePartialFailure.DescribeConsolidation(result);
+                if (errorMessage is not null)
+                    _logger?.LogWarning("Consolidation pass completed with partial failures: {Message}", errorMessage);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {

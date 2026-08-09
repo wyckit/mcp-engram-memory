@@ -41,8 +41,10 @@ public class SpectralDecayTests : IDisposable
     /// since they form their own connected component (the heat kernel preserves
     /// the constant mode within each component).
     ///
-    /// Setup: 16-node densely-connected cluster + 16 isolated nodes. Backdate
-    /// ONE cluster node so it carries the only nonzero debt. Then:
+    /// Setup: 32-node densely-connected cluster + 16 isolated nodes (the linked
+    /// core must reach MinimumNodesForSpectral on its own: isolated nodes are
+    /// structurally deflated out of the eigenproblem and no longer count).
+    /// Backdate ONE cluster node so it carries the only nonzero debt. Then:
     ///
     /// - With spectral OFF: only the backdated node loses activation; others stay near zero.
     /// - With spectral ON: the backdated node retains MORE activation (its debt diffused
@@ -53,7 +55,7 @@ public class SpectralDecayTests : IDisposable
     public void SpectralDecayDiffusesDebtThroughCluster()
     {
         const string ns = "spectral_test";
-        const int clusterSize = 16;
+        const int clusterSize = 32;
         const int isolatedCount = 16;
         SeedTestGraph(ns, clusterSize, isolatedCount);
 

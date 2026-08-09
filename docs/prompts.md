@@ -69,7 +69,7 @@ This exercises the full tool suite: expert management, memory maintenance, paral
 | "Search memory for X" | Direct recall | `search_memory` |
 | "What do experts think about X" | Multi-perspective analysis | `consult_expert_panel`, `map_debate_graph`, `resolve_debate` |
 | "Route this question to the right expert" | Semantic routing | `dispatch_task`, `create_expert` |
-| "Clean up / prune memories in X namespace" | Memory maintenance | `detect_duplicates`, `merge_memories`, `trigger_accretion_scan` |
+| "Clean up / prune memories in X namespace" | Memory maintenance | `detect_duplicates`, `merge_memories`, `get_pending_collapses` |
 | "Store what we just learned" | Knowledge capture | `store_memory`, `link_memories`, `promote_memory` |
 | "Run benchmarks and compare to baseline" | Quality validation | `run_benchmark`, `get_metrics` |
 | "Deep search including archived" | Full recall | `deep_recall` |

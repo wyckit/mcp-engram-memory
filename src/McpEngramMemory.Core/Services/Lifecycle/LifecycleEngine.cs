@@ -1,6 +1,7 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace McpEngramMemory.Core.Services.Lifecycle;
 
@@ -12,6 +13,7 @@ public sealed class LifecycleEngine
     private readonly CognitiveIndex _index;
     private readonly IStorageProvider? _persistence;
     private readonly MemoryDiffusionKernel? _diffusion;
+    private readonly ILogger<LifecycleEngine>? _logger;
     private readonly Dictionary<string, DecayConfig> _decayConfigs = new();
     private readonly object _configLock = new();
     private bool _configsLoaded;
@@ -19,11 +21,13 @@ public sealed class LifecycleEngine
     public LifecycleEngine(
         CognitiveIndex index,
         IStorageProvider? persistence = null,
-        MemoryDiffusionKernel? diffusion = null)
+        MemoryDiffusionKernel? diffusion = null,
+        ILogger<LifecycleEngine>? logger = null)
     {
         _index = index;
         _persistence = persistence;
         _diffusion = diffusion;
+        _logger = logger;
     }
 
     /// <summary>Set or update a per-namespace decay configuration.</summary>
@@ -90,106 +94,131 @@ public sealed class LifecycleEngine
 
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
+        var spectralFallbackNamespaces = new List<string>();
+        var failedNamespaces = new List<string>();
         int processedCount = 0;
 
         foreach (var currentNs in allNamespaces)
         {
-            // Resolve effective parameters: stored config if requested, else method params
-            float effectiveDecayRate = decayRate;
-            float effectiveReinforcement = reinforcementWeight;
-            float effectiveStmThreshold = stmThreshold;
-            float effectiveArchiveThreshold = archiveThreshold;
-            float stmMultiplier = 3.0f;
-            float ltmMultiplier = 1.0f;
-            float archivedMultiplier = 0.1f;
-            bool useSpectral = false;
-            float subdiffusiveExponent = 1.0f;
-
-            if (useStoredConfig)
+            try
             {
-                var config = GetDecayConfig(currentNs);
-                if (config is not null)
+                // Resolve effective parameters: stored config if requested, else method params
+                float effectiveDecayRate = decayRate;
+                float effectiveReinforcement = reinforcementWeight;
+                float effectiveStmThreshold = stmThreshold;
+                float effectiveArchiveThreshold = archiveThreshold;
+                float stmMultiplier = 3.0f;
+                float ltmMultiplier = 1.0f;
+                float archivedMultiplier = 0.1f;
+                bool useSpectral = false;
+                float subdiffusiveExponent = 1.0f;
+
+                if (useStoredConfig)
                 {
-                    effectiveDecayRate = config.DecayRate;
-                    effectiveReinforcement = config.ReinforcementWeight;
-                    effectiveStmThreshold = config.StmThreshold;
-                    effectiveArchiveThreshold = config.ArchiveThreshold;
-                    stmMultiplier = config.StmDecayMultiplier;
-                    ltmMultiplier = config.LtmDecayMultiplier;
-                    archivedMultiplier = config.ArchivedDecayMultiplier;
-                    useSpectral = config.UseSpectralDecay && _diffusion is not null;
-                    subdiffusiveExponent = config.SubdiffusiveExponent;
-                }
-                else
-                {
-                    // No stored config — apply defaults. Spectral diffusion is on
-                    // by default whenever a kernel is available; the kernel itself
-                    // self-bypasses for namespaces that don't qualify, so this is
-                    // safe even on tiny / sparsely-linked namespaces.
-                    useSpectral = _diffusion is not null;
-                }
-            }
-
-            // GetAllInNamespace returns a snapshot list — safe to iterate
-            var entries = _index.GetAllInNamespace(currentNs);
-            var nonSummary = new List<CognitiveEntry>(entries.Count);
-            foreach (var e in entries)
-                if (!e.IsSummaryNode) nonSummary.Add(e);
-
-            // Pass 1: compute per-entry "decay debt" — the amount the entry would
-            // lose pointwise. We diffuse this debt (not the activation itself, which
-            // is the input/source field, not the dissipative field) when spectral
-            // mode is on.
-            var debt = new Dictionary<string, float>(nonSummary.Count);
-            var now = DateTimeOffset.UtcNow;
-            foreach (var entry in nonSummary)
-            {
-                var hoursSinceAccess = (float)(now - entry.LastAccessedAt).TotalHours;
-                float stateMultiplier = entry.LifecycleState switch
-                {
-                    "stm" => stmMultiplier,
-                    "ltm" => ltmMultiplier,
-                    "archived" => archivedMultiplier,
-                    _ => 1.0f
-                };
-                debt[entry.Id] = hoursSinceAccess * effectiveDecayRate * stateMultiplier;
-            }
-
-            // Optional pass 1.5: diffuse debt through the graph heat kernel. The
-            // filter exp(-lambda^alpha) with t=1 means "one unit of diffusion per
-            // decay cycle"; the magnitude of debt is already scaled by decayRate
-            // and hours-since-access on the way in, so the spectral step here
-            // controls only the *shape* (which entries share their forgetting
-            // pressure with their neighbors). Falls back silently to pointwise
-            // debt if the kernel declines (namespace too small, no qualifying edges).
-            IReadOnlyDictionary<string, float> appliedDebt = debt;
-            if (useSpectral)
-            {
-                appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
-                    lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)));
-            }
-
-            // Pass 2: apply debt and resolve state transitions.
-            foreach (var entry in nonSummary)
-            {
-                processedCount++;
-                float entryDebt = appliedDebt.TryGetValue(entry.Id, out var d) ? d : 0f;
-                float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - entryDebt;
-
-                string? newState = null;
-                switch (entry.LifecycleState)
-                {
-                    case "stm" when newActivationEnergy < effectiveStmThreshold:
-                        newState = "ltm";
-                        stmToLtmIds.Add(entry.Id);
-                        break;
-                    case "ltm" when newActivationEnergy < effectiveArchiveThreshold:
-                        newState = "archived";
-                        ltmToArchivedIds.Add(entry.Id);
-                        break;
+                    var config = GetDecayConfig(currentNs);
+                    if (config is not null)
+                    {
+                        effectiveDecayRate = config.DecayRate;
+                        effectiveReinforcement = config.ReinforcementWeight;
+                        effectiveStmThreshold = config.StmThreshold;
+                        effectiveArchiveThreshold = config.ArchiveThreshold;
+                        stmMultiplier = config.StmDecayMultiplier;
+                        ltmMultiplier = config.LtmDecayMultiplier;
+                        archivedMultiplier = config.ArchivedDecayMultiplier;
+                        useSpectral = config.UseSpectralDecay && _diffusion is not null;
+                        subdiffusiveExponent = config.SubdiffusiveExponent;
+                    }
+                    else
+                    {
+                        // No stored config — apply defaults. Spectral diffusion is on
+                        // by default whenever a kernel is available; the kernel itself
+                        // self-bypasses for namespaces that don't qualify, so this is
+                        // safe even on tiny / sparsely-linked namespaces.
+                        useSpectral = _diffusion is not null;
+                    }
                 }
 
-                _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState);
+                // GetAllInNamespace returns a snapshot list — safe to iterate
+                var entries = _index.GetAllInNamespace(currentNs);
+                var nonSummary = new List<CognitiveEntry>(entries.Count);
+                foreach (var e in entries)
+                    if (!e.IsSummaryNode) nonSummary.Add(e);
+
+                // Pass 1: compute per-entry "decay debt" — the amount the entry would
+                // lose pointwise. We diffuse this debt (not the activation itself, which
+                // is the input/source field, not the dissipative field) when spectral
+                // mode is on.
+                var debt = new Dictionary<string, float>(nonSummary.Count);
+                var now = DateTimeOffset.UtcNow;
+                foreach (var entry in nonSummary)
+                {
+                    var hoursSinceAccess = (float)(now - entry.LastAccessedAt).TotalHours;
+                    float stateMultiplier = entry.LifecycleState switch
+                    {
+                        "stm" => stmMultiplier,
+                        "ltm" => ltmMultiplier,
+                        "archived" => archivedMultiplier,
+                        _ => 1.0f
+                    };
+                    debt[entry.Id] = hoursSinceAccess * effectiveDecayRate * stateMultiplier;
+                }
+
+                // Optional pass 1.5: diffuse debt through the graph heat kernel. The
+                // filter exp(-lambda^alpha) with t=1 means "one unit of diffusion per
+                // decay cycle"; the magnitude of debt is already scaled by decayRate
+                // and hours-since-access on the way in, so the spectral step here
+                // controls only the *shape* (which entries share their forgetting
+                // pressure with their neighbors). Falls back silently to pointwise
+                // debt if the kernel declines (namespace too small, no qualifying edges),
+                // and falls back *loudly* (recorded in SpectralFallbackNamespaces) if
+                // the kernel throws — the failing namespace still gets full
+                // non-spectral pointwise decay below.
+                IReadOnlyDictionary<string, float> appliedDebt = debt;
+                if (useSpectral)
+                {
+                    try
+                    {
+                        appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
+                            lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)));
+                    }
+                    catch (Exception ex)
+                    {
+                        spectralFallbackNamespaces.Add(currentNs);
+                        _logger?.LogWarning(ex,
+                            "Spectral decay filter failed for ns={Namespace}; applying non-spectral pointwise decay.",
+                            currentNs);
+                    }
+                }
+
+                // Pass 2: apply debt and resolve state transitions.
+                foreach (var entry in nonSummary)
+                {
+                    processedCount++;
+                    float entryDebt = appliedDebt.TryGetValue(entry.Id, out var d) ? d : 0f;
+                    float newActivationEnergy = (entry.AccessCount * effectiveReinforcement) - entryDebt;
+
+                    string? newState = null;
+                    switch (entry.LifecycleState)
+                    {
+                        case "stm" when newActivationEnergy < effectiveStmThreshold:
+                            newState = "ltm";
+                            stmToLtmIds.Add(entry.Id);
+                            break;
+                        case "ltm" when newActivationEnergy < effectiveArchiveThreshold:
+                            newState = "archived";
+                            ltmToArchivedIds.Add(entry.Id);
+                            break;
+                    }
+
+                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Per-namespace fault isolation: one failing namespace must not
+                // abort the decay cycle for every other namespace.
+                failedNamespaces.Add(currentNs);
+                _logger?.LogWarning(ex, "Decay cycle failed for ns={Namespace}; skipping and continuing.", currentNs);
             }
         }
 
@@ -198,7 +227,10 @@ public sealed class LifecycleEngine
             stmToLtmIds.Count,
             ltmToArchivedIds.Count,
             stmToLtmIds,
-            ltmToArchivedIds);
+            ltmToArchivedIds,
+            allNamespaces.Count,
+            spectralFallbackNamespaces,
+            failedNamespaces);
     }
 
     /// <summary>
@@ -232,6 +264,7 @@ public sealed class LifecycleEngine
     {
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
+        var failedNamespaces = new List<string>();
         int processedNamespaces = 0;
         int skippedNamespaces = 0;
         int processedEntries = 0;
@@ -241,7 +274,7 @@ public sealed class LifecycleEngine
             // Without a kernel injected, consolidation has no graph diffusion to
             // run; report a single skip so callers can distinguish "no kernel" from
             // "no qualifying namespaces."
-            return new ConsolidationResult(0, 1, 0, 0, 0, stmToLtmIds, ltmToArchivedIds);
+            return new ConsolidationResult(0, 1, 0, 0, 0, stmToLtmIds, ltmToArchivedIds, Array.Empty<string>());
         }
 
         var allNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
@@ -255,64 +288,78 @@ public sealed class LifecycleEngine
                 continue;
             }
 
-            var config = GetDecayConfig(currentNs) ?? new DecayConfig(currentNs);
-            if (!config.EnableConsolidation)
+            try
             {
-                skippedNamespaces++;
-                continue;
-            }
-
-            var entries = _index.GetAllInNamespace(currentNs);
-            var nonSummary = new List<CognitiveEntry>(entries.Count);
-            foreach (var e in entries)
-                if (!e.IsSummaryNode) nonSummary.Add(e);
-            if (nonSummary.Count == 0)
-            {
-                skippedNamespaces++;
-                continue;
-            }
-
-            // Snapshot current activation field. The kernel handles namespaces
-            // that don't qualify by returning the signal unchanged; we detect
-            // that case explicitly to skip rather than make essentially-no-op
-            // threshold decisions on raw activation (which would duplicate the
-            // existing decay cycle's role).
-            var basis = _diffusion.GetBasis(currentNs);
-            if (basis is null)
-            {
-                skippedNamespaces++;
-                continue;
-            }
-
-            var activation = new Dictionary<string, float>(nonSummary.Count);
-            foreach (var entry in nonSummary)
-                activation[entry.Id] = entry.ActivationEnergy;
-
-            // Long-time heat kernel diffusion: exp(-t * lambda).
-            float t = config.ConsolidationDiffusionTime;
-            var smoothed = _diffusion.ApplySpectralFilter(currentNs, activation,
-                lambda => MathF.Exp(-lambda * t));
-
-            // Apply topology-driven transitions.
-            foreach (var entry in nonSummary)
-            {
-                if (!smoothed.TryGetValue(entry.Id, out var smoothAE)) continue;
-                processedEntries++;
-
-                switch (entry.LifecycleState)
+                var config = GetDecayConfig(currentNs) ?? new DecayConfig(currentNs);
+                if (!config.EnableConsolidation)
                 {
-                    case "stm" when smoothAE >= config.ConsolidationPromotionThreshold:
-                        if (_index.SetLifecycleState(entry.Id, "ltm"))
-                            stmToLtmIds.Add(entry.Id);
-                        break;
-                    case "ltm" when smoothAE < config.ConsolidationArchiveThreshold:
-                        if (_index.SetLifecycleState(entry.Id, "archived"))
-                            ltmToArchivedIds.Add(entry.Id);
-                        break;
+                    skippedNamespaces++;
+                    continue;
                 }
-            }
 
-            processedNamespaces++;
+                var entries = _index.GetAllInNamespace(currentNs);
+                var nonSummary = new List<CognitiveEntry>(entries.Count);
+                foreach (var e in entries)
+                    if (!e.IsSummaryNode) nonSummary.Add(e);
+                if (nonSummary.Count == 0)
+                {
+                    skippedNamespaces++;
+                    continue;
+                }
+
+                // Snapshot current activation field. The kernel handles namespaces
+                // that don't qualify by returning the signal unchanged; we detect
+                // that case explicitly to skip rather than make essentially-no-op
+                // threshold decisions on raw activation (which would duplicate the
+                // existing decay cycle's role).
+                var basis = _diffusion.GetBasis(currentNs);
+                if (basis is null)
+                {
+                    skippedNamespaces++;
+                    continue;
+                }
+
+                var activation = new Dictionary<string, float>(nonSummary.Count);
+                foreach (var entry in nonSummary)
+                    activation[entry.Id] = entry.ActivationEnergy;
+
+                // Long-time heat kernel diffusion: exp(-t * lambda).
+                float t = config.ConsolidationDiffusionTime;
+                var smoothed = _diffusion.ApplySpectralFilter(currentNs, activation,
+                    lambda => MathF.Exp(-lambda * t));
+
+                // Apply topology-driven transitions.
+                foreach (var entry in nonSummary)
+                {
+                    if (!smoothed.TryGetValue(entry.Id, out var smoothAE)) continue;
+                    processedEntries++;
+
+                    switch (entry.LifecycleState)
+                    {
+                        case "stm" when smoothAE >= config.ConsolidationPromotionThreshold:
+                            if (_index.SetLifecycleState(entry.Id, "ltm"))
+                                stmToLtmIds.Add(entry.Id);
+                            break;
+                        case "ltm" when smoothAE < config.ConsolidationArchiveThreshold:
+                            if (_index.SetLifecycleState(entry.Id, "archived"))
+                                ltmToArchivedIds.Add(entry.Id);
+                            break;
+                    }
+                }
+
+                processedNamespaces++;
+            }
+            catch (Exception ex)
+            {
+                // Per-namespace fault isolation: skip the failing namespace whole
+                // and keep consolidating the rest. There is deliberately NO
+                // non-spectral fallback here — consolidation's entire mechanism IS
+                // the spectral smoothing (A_smooth = exp(-tL) A); thresholding on
+                // raw activation instead would just duplicate the decay cycle's
+                // role (see the skip rationale above the GetBasis call).
+                failedNamespaces.Add(currentNs);
+                _logger?.LogWarning(ex, "Consolidation failed for ns={Namespace}; skipping and continuing.", currentNs);
+            }
         }
 
         return new ConsolidationResult(
@@ -322,7 +369,8 @@ public sealed class LifecycleEngine
             stmToLtmIds.Count,
             ltmToArchivedIds.Count,
             stmToLtmIds,
-            ltmToArchivedIds);
+            ltmToArchivedIds,
+            failedNamespaces);
     }
 
     /// <summary>Promote (or demote) an entry to a specific lifecycle state.</summary>

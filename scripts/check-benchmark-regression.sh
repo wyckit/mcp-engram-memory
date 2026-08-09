@@ -19,19 +19,20 @@
 # Prints a pass/fail table and exits non-zero on ANY regression, so a CI step
 # can run it and let the non-zero exit fail the job.
 #
+# When `dotnet` and a Release build of McpEngramMemory are available, this script
+# delegates to the C# statistical gate (`regression-gate` subcommand), which
+# replaces the flat drift check with a Holm-Bonferroni-corrected one-sided paired
+# t-test over per-query deltas (alpha 0.05, MDE 0.02). The pure-bash/awk logic
+# below is kept as an explicit LEGACY fallback for jq-only environments.
+#
 # Usage:
 #   scripts/check-benchmark-regression.sh [PATH] [--baseline-dir DIR]
-#       [--tolerance N] [--recall-floor N] [--mrr-floor N]
+#       [--tolerance N] [--alpha N] [--mde N] [--recall-floor N] [--mrr-floor N]
 #       [--ndcg-floor N] [--outcome-floor N] [--recurse]
 #
 #   PATH is a result .json file or a directory of them. Defaults to the newest
 #   dated folder under benchmarks/.
 set -euo pipefail
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq is required but not installed." >&2
-  exit 2
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -39,6 +40,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PATH_ARG=""
 BASELINE_DIR="$REPO_ROOT/benchmarks/baselines"
 TOLERANCE="0.02"
+ALPHA="0.05"
+MDE="0.02"
 RECALL_FLOOR="0.20"
 MRR_FLOOR="0.20"
 NDCG_FLOOR="0.15"
@@ -49,6 +52,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --baseline-dir) BASELINE_DIR="$2"; shift 2 ;;
     --tolerance) TOLERANCE="$2"; shift 2 ;;
+    --alpha) ALPHA="$2"; shift 2 ;;
+    --mde) MDE="$2"; shift 2 ;;
     --recall-floor) RECALL_FLOOR="$2"; shift 2 ;;
     --mrr-floor) MRR_FLOOR="$2"; shift 2 ;;
     --ndcg-floor) NDCG_FLOOR="$2"; shift 2 ;;
@@ -72,6 +77,28 @@ fi
 
 if [[ ! -e "$PATH_ARG" ]]; then
   echo "ERROR: path not found: $PATH_ARG" >&2
+  exit 2
+fi
+
+# Delegate to the C# statistical gate (paired t-test + Holm-Bonferroni) when the
+# Release build is available. `dotnet <dll>` (exec, not `dotnet run`) avoids any
+# MSBuild invocation; both CI workflows build Release before this script runs.
+DLL="$(ls "$REPO_ROOT"/src/McpEngramMemory/bin/Release/net*/McpEngramMemory.dll 2>/dev/null | sort | tail -n 1)"
+if command -v dotnet >/dev/null 2>&1 && [[ -n "$DLL" ]]; then
+  GATE_ARGS=("$PATH_ARG" --baseline-dir "$BASELINE_DIR" --tolerance "$TOLERANCE" \
+             --alpha "$ALPHA" --mde "$MDE" \
+             --recall-floor "$RECALL_FLOOR" --mrr-floor "$MRR_FLOOR" \
+             --ndcg-floor "$NDCG_FLOOR" --outcome-floor "$OUTCOME_FLOOR")
+  [[ "$RECURSE" == "1" ]] && GATE_ARGS+=(--recurse)
+  exec dotnet "$DLL" regression-gate "${GATE_ARGS[@]}"
+fi
+
+echo "WARN: statistical regression gate unavailable (dotnet or built McpEngramMemory.dll not found)." >&2
+echo "WARN: falling back to LEGACY point-estimate comparison — a single flipped query on an 18-query dataset can fail this gate; build with \`dotnet build -c Release\` to enable the paired t-test gate." >&2
+
+# jq is only required by the legacy fallback path below.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required for the legacy fallback but not installed." >&2
   exit 2
 fi
 

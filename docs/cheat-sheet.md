@@ -58,7 +58,7 @@ Think of it this way: **namespaces = folders, memories = documents, search = sma
 ## Lifecycle
 
 ```
-STM (new) → promote_memory → LTM (stable) → decay_cycle → Archived → deep_recall resurrects
+STM (new) → promote_memory → LTM (stable) → background decay → Archived → deep_recall resurrects
 ```
 
 Promote a memory to LTM when you've recalled it in 2+ sessions or it captures a stable pattern.
@@ -70,8 +70,8 @@ Set `MEMORY_TOOL_PROFILE` env var to control how many tools are exposed to the A
 | Profile | Tools | What's included |
 |---------|-------|----------------|
 | `minimal` | 17 | Core CRUD, admin (+ `engram_status`), composite tools, multi-agent sharing **(default)** |
-| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 65 | Everything: expert routing, debate, synthesis, benchmarks |
+| `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 62 | Everything: expert routing, debate, synthesis, benchmarks |
 
 `minimal` is the default — most agents perform better with the smaller surface. Set `MEMORY_TOOL_PROFILE=standard` or `=full` to expand.
 

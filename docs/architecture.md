@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph MCP["MCP Server (stdio)"]
-        Tools["17 Tool Classes<br/>65 MCP Tools"]
+        Tools["18 Tool Classes<br/>62 MCP Tools"]
     end
 
     Tools --> CI["CognitiveIndex<br/><i>Thin facade: CRUD, locking, limits</i>"]

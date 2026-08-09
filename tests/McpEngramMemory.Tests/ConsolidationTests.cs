@@ -36,15 +36,18 @@ public class ConsolidationTests : IDisposable
     /// <summary>
     /// Sleep consolidation should promote STM entries that have cluster support to
     /// LTM, even if their individual access count is modest. Setup: a tight cluster
-    /// of 16 STM entries where collectively the cluster has high activation; plus a
-    /// pool of isolated STM entries. After consolidation, cluster STM entries
-    /// transition to LTM; isolated STM entries stay STM.
+    /// of 32 STM entries (the linked core must reach MinimumNodesForSpectral on its
+    /// own — isolated nodes are structurally deflated out of the eigenproblem and
+    /// no longer count toward qualification) where collectively the cluster has high
+    /// activation; plus a pool of isolated STM entries. After consolidation, cluster
+    /// STM entries transition to LTM; isolated STM entries stay STM (their smoothed
+    /// activation is their own — identity pass-through for deflated entries).
     /// </summary>
     [Fact]
     public void ClusterSupportPromotesStmToLtm()
     {
         const string ns = "promote_test";
-        const int clusterSize = 16;
+        const int clusterSize = 32;
         const int isolatedCount = 16;
         SeedTestGraph(ns, clusterSize, isolatedCount, "stm");
 

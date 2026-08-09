@@ -86,19 +86,28 @@ public sealed record ClusterSummaryInfo(
     [property: JsonPropertyName("hasSummary")] bool HasSummary);
 
 /// <summary>
-/// Result of decay_cycle tool.
+/// Result of decay_cycle tool. <see cref="SpectralFallbackNamespaces"/> and
+/// <see cref="FailedNamespaces"/> report per-namespace partial failures for
+/// telemetry: fallback namespaces still received full non-spectral pointwise
+/// decay; failed namespaces were skipped entirely for this cycle.
 /// </summary>
 public sealed record DecayCycleResult(
     [property: JsonPropertyName("processedCount")] int ProcessedCount,
     [property: JsonPropertyName("stmToLtm")] int StmToLtm,
     [property: JsonPropertyName("ltmToArchived")] int LtmToArchived,
     [property: JsonPropertyName("stmToLtmIds")] IReadOnlyList<string> StmToLtmIds,
-    [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds);
+    [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds,
+    [property: JsonPropertyName("totalNamespaces")] int TotalNamespaces = 0,
+    [property: JsonPropertyName("spectralFallbackNamespaces")] IReadOnlyList<string>? SpectralFallbackNamespaces = null,
+    [property: JsonPropertyName("failedNamespaces")] IReadOnlyList<string>? FailedNamespaces = null);
 
 /// <summary>
 /// Result of a sleep-consolidation pass. Reports namespaces processed, lifecycle
 /// transitions driven by topology (cluster support / cluster decay), and any
 /// namespaces skipped because they didn't qualify for the diffusion kernel.
+/// <see cref="FailedNamespaces"/> reports namespaces whose pass threw and was
+/// skipped, for partial-failure telemetry (the total namespace count is derivable
+/// as ProcessedNamespaces + SkippedNamespaces + FailedNamespaces.Count).
 /// </summary>
 public sealed record ConsolidationResult(
     [property: JsonPropertyName("processedNamespaces")] int ProcessedNamespaces,
@@ -107,7 +116,8 @@ public sealed record ConsolidationResult(
     [property: JsonPropertyName("stmToLtm")] int StmToLtm,
     [property: JsonPropertyName("ltmToArchived")] int LtmToArchived,
     [property: JsonPropertyName("stmToLtmIds")] IReadOnlyList<string> StmToLtmIds,
-    [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds);
+    [property: JsonPropertyName("ltmToArchivedIds")] IReadOnlyList<string> LtmToArchivedIds,
+    [property: JsonPropertyName("failedNamespaces")] IReadOnlyList<string>? FailedNamespaces = null);
 
 /// <summary>
 /// Result of an auto-link scan: a periodic background pass that adds

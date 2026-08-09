@@ -9,7 +9,7 @@ INGEST → ENRICH → INDEX → RETRIEVE → REINFORCE → DECAY → SUMMARIZE/C
    │        │                │           │           │              │
    └── store_memory          │    memory_feedback    │    collapse_cluster
        (embed + upsert)      │    (agent feedback)   │    (DBSCAN → summary)
-                │             └── search_memory       └── decay_cycle
+                │             └── search_memory       └── background decay
           DocumentEnricher        (hybrid pipeline)   (activation energy)
           (auto-keywords)
 ```

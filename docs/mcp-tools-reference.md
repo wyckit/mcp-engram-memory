@@ -1,6 +1,6 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (65 tools)
+# MCP Tools Reference (62 tools)
 
 ### Core Memory (4 tools)
 
@@ -21,7 +21,7 @@
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
 | `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 
-### Knowledge Graph (5 tools)
+### Knowledge Graph (4 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -29,9 +29,10 @@
 | `unlink_memories` | Remove edges between entries, optionally filtered by relation type. |
 | `get_neighbors` | Get directly connected entries with edges. Supports direction filtering (outgoing/incoming/both). |
 | `traverse_graph` | Multi-hop BFS traversal with configurable depth (max 5), relation filter, minimum weight, and max results. |
-| `auto_link_namespace` | Scan a namespace for high-cosine-similarity entry pairs and add `similar_to` edges between them. Skips pairs that already have any edge between them. Background sweep runs every 6 hours by default; this tool is for explicit on-demand triggers. |
 
 Supported relation types: `parent_child`, `cross_reference`, `similar_to`, `contradicts`, `elaborates`, `depends_on`, `custom`.
+
+Similarity-based auto-linking runs automatically every 6 hours via `AutoLinkBackgroundService` — inspect with `engram_status`.
 
 ### Semantic Clustering (5 tools)
 
@@ -43,35 +44,37 @@ Supported relation types: `parent_child`, `cross_reference`, `similar_to`, `cont
 | `get_cluster` | Retrieve full cluster details including members and summary info. |
 | `list_clusters` | List all clusters in a namespace with summary status. |
 
-### Lifecycle Management (6 tools)
+### Lifecycle Management (4 tools)
 
 | Tool | Description |
 |------|-------------|
 | `promote_memory` | Manually transition a memory between lifecycle states (`stm`, `ltm`, `archived`). |
 | `memory_feedback` | Provide agent feedback on a memory's usefulness. Positive feedback boosts activation energy and records an access; negative feedback suppresses it. Triggers state transitions when thresholds are crossed. Closes the agent reinforcement loop. |
 | `deep_recall` | Search across ALL lifecycle states. Auto-resurrects high-scoring archived entries above the resurrection threshold. |
-| `decay_cycle` | Trigger activation energy recomputation and state transitions for a namespace. When the namespace qualifies for the memory-diffusion kernel (≥32 nodes, ≥8 positive-relation edges) and `useSpectralDecay` is enabled (default), per-entry decay debt is diffused through the heat kernel before being applied — tightly-linked clusters share forgetting pressure. |
-| `run_consolidation` | Sleep-consolidation pass: long-time graph diffusion of the activation field, then drive lifecycle transitions on the smoothed (cluster-aware) values. Promotes STM entries with cluster support to LTM; archives LTM entries whose cluster has decayed. Topology-driven, complementing the access-count-driven `decay_cycle`. Runs automatically every 24 hours via `ConsolidationBackgroundService`. |
-| `configure_decay` | Set per-namespace decay parameters: `decayRate`, `reinforcementWeight`, `stmThreshold`, `archiveThreshold`, plus the new spectral / consolidation / auto-link knobs (`useSpectralDecay`, `subdiffusiveExponent`, `enableConsolidation`, `consolidationDiffusionTime`, `consolidationPromotionThreshold`, `consolidationArchiveThreshold`, `enableAutoLink`, `autoLinkSimilarityThreshold`, `autoLinkMaxNewEdgesPerScan`). Used by background services and `decay_cycle` with `useStoredConfig=true`. |
+| `configure_decay` | Set per-namespace decay parameters: `decayRate`, `reinforcementWeight`, `stmThreshold`, `archiveThreshold`, plus the new spectral / consolidation / auto-link knobs (`useSpectralDecay`, `subdiffusiveExponent`, `enableConsolidation`, `consolidationDiffusionTime`, `consolidationPromotionThreshold`, `consolidationArchiveThreshold`, `enableAutoLink`, `autoLinkSimilarityThreshold`, `autoLinkMaxNewEdgesPerScan`). Used by the decay and consolidation background services. |
 
 Activation energy formula: `(accessCount × reinforcementWeight) - (hoursSinceLastAccess × decayRate × stateMultiplier)`. When spectral decay is on and the namespace qualifies, the second term (decay debt) is filtered through `exp(-λ^α · t)` over the graph Laplacian eigenbasis before being applied per-entry, so cluster mates share forgetting pressure.
 
-### Admin (3 tools)
+Decay and consolidation run automatically (`DecayBackgroundService` every 15 minutes, `ConsolidationBackgroundService` every 24 hours); the underlying methods remain in `McpEngramMemory.Core` for library use.
+
+### Admin (4 tools)
 
 | Tool | Description |
 |------|-------------|
 | `get_memory` | Retrieve full cognitive context for an entry (lifecycle, edges, clusters). Does not count as an access. |
 | `cognitive_stats` | System overview: entry counts by state, cluster count, edge count, namespace list, and HNSW index status. |
+| `engram_status` | Check the last-run timestamps, cycle counts, and error counts for every background worker (decay, consolidation, auto-link, accretion). Don't use it to see memory counts or namespace lists; use `cognitive_stats` for that. |
 | `purge_debates` | Delete stale `active-debate-*` namespaces older than a configurable age (default: 24 hours). Supports dry-run mode. |
 
-### Accretion (4 tools)
+### Accretion (3 tools)
 
 | Tool | Description |
 |------|-------------|
 | `get_pending_collapses` | List dense LTM clusters detected by the background scanner that are awaiting LLM summarization. |
 | `collapse_cluster` | Execute a pending collapse: store a summary entry, archive the source members, and create a cluster. |
 | `dismiss_collapse` | Dismiss a detected collapse and exclude its members from future scans. |
-| `trigger_accretion_scan` | Manually run a DBSCAN density scan on LTM entries in a namespace. |
+
+The DBSCAN density scan runs automatically every 30 minutes via `AccretionBackgroundService`.
 
 `collapse_cluster` reliability behavior:
 - If collapse steps complete successfully, the pending collapse is removed and a reversal record is persisted to disk.
@@ -104,7 +107,7 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 |------|-------------|
 | `synthesize_memories` | Map-reduce synthesis over a set of memories using a local SLM via Ollama. Produces dense reasoning summaries without expanding the LLM context window. Useful for large memory sets where individual recall would exceed context limits. |
 
-### Benchmarking & Observability (6 tools)
+### Benchmarking & Observability (7 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -112,10 +115,18 @@ Debate workflow: `consult_expert_panel` (gather perspectives) → `map_debate_gr
 | `run_agent_outcome_benchmark` | Run a task-style proxy benchmark across four memory conditions: `no_memory`, `transcript_replay`, `vector_memory`, and `full_engram`. Available datasets: `agent-outcome-v1`, `agent-outcome-repo-v1`, `agent-outcome-hard-v1`. Reports task success, required-evidence coverage, conflict rate, and latency, and writes a JSON artifact under `benchmarks/YYYY-MM-DD` by default. |
 | `run_live_agent_outcome_benchmark` | Run a real generation model across the same four memory conditions with structured JSON answers and cited memory IDs. Current live provider support starts with `ollama`. Writes a JSON artifact under `benchmarks/YYYY-MM-DD/{datasetId}-live-agent-outcome-{provider}-{model}.json`. |
 | `compare_live_agent_outcome_artifacts` | Compare two live benchmark JSON artifacts from `run_live_agent_outcome_benchmark`. Reports condition-level deltas plus per-task improvements and regressions for the same dataset so repeated model runs are easy to diff. |
+| `check_for_regression` | Compare two agent-outcome artifacts for CI: returns an error status if the `full_engram` pass rate or success score regresses beyond the allowed threshold against the baseline artifact. |
 | `get_metrics` | Get operational metrics: latency percentiles (P50/P95/P99), throughput, and counts for search, store, and other operations. Event-style counters such as hybrid retrieval branch decisions appear as zero-duration metric rows where `Count` is the useful value. |
 | `reset_metrics` | Reset collected operational metrics. Optionally filter by operation type. |
 
 Seventeen benchmark datasets: six core datasets (default, paraphrase, multihop, scale, realworld, compound), seven stress-test datasets (ambiguity, distractor, specificity, scale extended, contamination, cluster-summary), and four v0.6.0 datasets (disambiguation — dense-domain diversity across 4 clusters, physics — physics engine domain retrieval tested in 4 modes). All use a 0–3 relevance grade scale (3 = highly relevant). A 56-combination regression baseline (17 datasets × 4 modes) enforces minimum thresholds: Recall@K >= 0.20, MRR >= 0.20, nDCG@K >= 0.15.
+
+### MRCR Long-Context Benchmark (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `run_mrcr_benchmark` | Run the MRCR v2 (8-needle) long-context A/B benchmark: `full_context` stuffs the whole conversation into the prompt; `engram_retrieval` ingests each turn into a scratch namespace and feeds only top-K hybrid-search snippets. Scored by mean cosine similarity via the local ONNX embedding model; drives generation through the Claude Code CLI (`claude -p`) by default. |
+| `compare_mrcr_artifacts` | Compare two MRCR artifacts from `run_mrcr_benchmark`: per-arm similarity and pass-rate deltas plus the change in prompt-token reduction ratio. |
 
 ### Maintenance (2 tools)
 
@@ -160,3 +171,9 @@ Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Na
 | `invalidate_diffusion` | Drop the cached diffusion basis for a namespace. Useful after manual graph surgery or if you suspect drift. The next read recomputes lazily. |
 
 The diffusion kernel holds the top-K eigenbasis of the normalized Laplacian `L = I - D^(-1/2) W D^(-1/2)` built from positive-relation edges only (`parent_child`, `cross_reference`, `similar_to`, `elaborates`, `depends_on`; `contradicts` excluded so `L` stays positive semi-definite). Same primitive serves three subsystems: spectral decay (debt diffusion), sleep consolidation (long-time heat-kernel propagation), and spectral retrieval (low-pass / high-pass relevance re-ranking).
+
+### Visualization (1 tool)
+
+| Tool | Description |
+|------|-------------|
+| `get_graph_snapshot` | Export the memory graph as a JSON snapshot for visualization: all nodes (cognitive entries), typed edges, and cluster groupings. Save the JSON and open `visualization/memory-graph.html` to view (STM=amber, LTM=blue, archived=gray; clusters as labeled convex hulls). |

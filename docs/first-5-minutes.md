@@ -71,7 +71,7 @@ builds on top of this.
 
 ## What's Next?
 
-_These tools are available in the `standard` and `full` profiles (set `MEMORY_TOOL_PROFILE=standard` in your MCP config)._
+_`reflect`, `cross_search`, and multi-agent sharing are in the default `minimal` profile; `dispatch_task` requires `MEMORY_TOOL_PROFILE=full`._
 
 - **`reflect`** — at the end of a work session, call `reflect` with a short
   retrospective. It auto-stores as LTM (long-term memory), auto-links to

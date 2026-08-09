@@ -39,7 +39,15 @@
 
 .PARAMETER Tolerance
     Allowed downward drift from a pinned baseline before it counts as a
-    regression. Default 0.02.
+    regression (legacy fallback path). Default 0.02.
+
+.PARAMETER Alpha
+    Family-wise significance level for the C# statistical gate's
+    Holm-Bonferroni-corrected paired t-test. Default 0.05.
+
+.PARAMETER Mde
+    Minimum detectable effect for the C# statistical gate: mean drop required
+    to fail even when statistically significant. Default 0.02.
 
 .PARAMETER RecallFloor / MrrFloor / NdcgFloor / OutcomeFloor
     Absolute minimum metric values. Defaults match docs/benchmarks.md.
@@ -58,6 +66,8 @@ param(
     [string]$Path,
     [string]$BaselineDir,
     [double]$Tolerance = 0.02,
+    [double]$Alpha = 0.05,
+    [double]$Mde = 0.02,
     [double]$RecallFloor = 0.20,
     [double]$MrrFloor = 0.20,
     [double]$NdcgFloor = 0.15,
@@ -94,6 +104,36 @@ if (-not (Test-Path -LiteralPath $Path)) {
     Write-Error "Path not found: $Path"
     exit 2
 }
+
+# --- Delegate to the C# statistical gate when a Release build is available --
+# The `regression-gate` subcommand replaces the flat drift check with a
+# Holm-Bonferroni-corrected one-sided paired t-test over per-query deltas.
+# The pure-PowerShell logic below stays as an explicit LEGACY fallback.
+$inv = [System.Globalization.CultureInfo]::InvariantCulture
+$dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
+$dll = Get-ChildItem -Path (Join-Path $RepoRoot 'src/McpEngramMemory/bin/Release') -Filter 'McpEngramMemory.dll' -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Directory.Name -like 'net*' } |
+    Sort-Object LastWriteTime |
+    Select-Object -Last 1
+if ($dotnetCmd -and $dll) {
+    $gateArgs = @(
+        $Path,
+        '--baseline-dir', $BaselineDir,
+        '--tolerance', $Tolerance.ToString($inv),
+        '--alpha', $Alpha.ToString($inv),
+        '--mde', $Mde.ToString($inv),
+        '--recall-floor', $RecallFloor.ToString($inv),
+        '--mrr-floor', $MrrFloor.ToString($inv),
+        '--ndcg-floor', $NdcgFloor.ToString($inv),
+        '--outcome-floor', $OutcomeFloor.ToString($inv)
+    )
+    if ($Recurse) { $gateArgs += '--recurse' }
+    & dotnet $dll.FullName regression-gate @gateArgs
+    exit $LASTEXITCODE
+}
+
+Write-Warning "statistical regression gate unavailable (dotnet or built McpEngramMemory.dll not found)."
+Write-Warning "falling back to LEGACY point-estimate comparison - a single flipped query on an 18-query dataset can fail this gate; build with 'dotnet build -c Release' to enable the paired t-test gate."
 
 # --- Collect candidate artifact files -------------------------------------
 $item = Get-Item -LiteralPath $Path
