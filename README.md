@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="images/banner.svg?v=1.3.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=1.4.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1118%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1154%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
@@ -81,7 +81,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.3.0
+dotnet add package McpEngramMemory.Core --version 1.4.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -138,7 +138,7 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 1118 tests per target framework (net8/9/10) across 83 files |
+| Tests | 1154 tests per target framework (net8/9/10) across 85 files |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
@@ -198,7 +198,7 @@ Opus thinks, Sonnet remembers, Haiku explores.
 | Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
 | Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
 | Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate`, `purge_debates` | Multi-perspective analysis with debate tracking |
-| Synthesis | `synthesize_memories` | Map-reduce synthesis via local SLM (Ollama by default; ONNX Runtime GenAI is opt-in via `SYNTHESIS_BACKEND=onnx`) |
+| Synthesis | `synthesize_memories` | Map-reduce synthesis via a local SLM served by Ollama. For fully in-process generation, embed `McpEngramMemory.Core` and add the optional [`McpEngramMemory.Synthesis.Onnx`](#optional-in-process-synthesis) package |
 | Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse` | DBSCAN cluster detection and two-phase summarization (the density scan runs as a 30-min background sweep) |
 | Admin | `get_memory`, `cognitive_stats`, `engram_status`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, background-worker health, and latency metrics |
 | Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
@@ -222,18 +222,50 @@ Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
 ## NuGet / GitHub Packages
 
-> **Availability note:** v1.3.0 is tagged in this repository; publication to nuget.org is pending (latest published `McpEngramMemory.Core` there is 1.2.0). If `--version 1.3.0` does not resolve yet, pin version `1.2.0` instead. The `McpEngramMemory` server itself is run from source or Docker, not installed from nuget.org.
+The server ships as a `dotnet` global tool, and the core engine as a library you can embed in your
+own .NET applications.
 
-The core engine is available as a NuGet package for embedding in your own .NET applications:
+**Server (global tool)**
+
+```bash
+dotnet tool install --global McpEngramMemory --version 1.4.0
+engram-memory
+```
+
+**Core engine (library)**
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 1.3.0
+dotnet add package McpEngramMemory.Core --version 1.4.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 1.3.0 \
+dotnet add package McpEngramMemory.Core --version 1.4.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
+
+#### Optional: in-process synthesis
+
+`synthesize_memories` generates through an `ITextGenerator`. The server ships one implementation —
+`OllamaClient`, talking to a local Ollama daemon. If you want generation fully in-process with no
+daemon, add the optional ONNX backend when embedding the library:
+
+```bash
+dotnet add package McpEngramMemory.Synthesis.Onnx --version 1.4.0
+```
+
+```csharp
+using McpEngramMemory.Core.Services.Synthesis;
+
+ITextGenerator generator = new OnnxGenAiTextGenerator(modelDir); // stage a model first
+```
+
+It lives in its own package because ONNX Runtime GenAI ships native binaries for every platform it
+supports — roughly 500 MB. Keeping it separate means neither the `McpEngramMemory` tool nor a plain
+`McpEngramMemory.Core` install pays that cost. Stage a model with
+`scripts/fetch-synthesis-model.ps1`.
+
+> The `McpEngramMemory` **server** does not support `SYNTHESIS_BACKEND=onnx`; it fails at startup
+> with a pointer to this package. In-process synthesis is for hosts embedding the Core library.
 
 ```csharp
 using McpEngramMemory.Core.Services;

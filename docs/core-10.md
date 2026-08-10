@@ -29,7 +29,8 @@ auto-route via the expert dispatcher.
 Auto-stores as LTM, auto-links to explicitly-mentioned ids plus any
 semantically-similar entries, surfaces past reflections on the same
 topic. Call at the end of every meaningful work session.
-→ Takes: `text`, `ns`, `topic`, optional `relatedIds`
+→ Takes: `text`, `ns`, `topic`, optional `relatedIds` (a JSON array of ids, a
+comma-separated string, or a single id — all three are accepted)
 
 ### When you need precision — low-level tools
 

@@ -180,7 +180,7 @@ public class CompositeToolsTests : IDisposable
         var result = _tools.Reflect(
             "This reflection references the related entry",
             "myns", "linking-test",
-            relatedIds: new[] { "related1" }) as ReflectResult;
+            relatedIds: JsonSerializer.SerializeToElement(new[] { "related1" })) as ReflectResult;
 
         Assert.NotNull(result);
         Assert.Contains(result!.Actions, a => a.Contains("related1"));

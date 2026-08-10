@@ -47,7 +47,8 @@ src/
         ExpertDispatcher.cs     #   Semantic routing to expert namespaces
         DebateSessionManager.cs #   Debate session state + alias mapping
       Synthesis/
-        SynthesisEngine.cs      #   Map-reduce synthesis via Ollama SLM
+        SynthesisEngine.cs      #   Map-reduce synthesis over an ITextGenerator
+        ITextGenerator.cs       #   Backend seam (Ollama in-box, ONNX opt-in)
         OllamaClient.cs         #   Local Ollama HTTP client
       SpreadingActivationService.cs #   Collins & Loftus graph-coupled activation
       Evaluation/
@@ -83,7 +84,7 @@ benchmarks/
 The core engine is available as a NuGet package for use in your own .NET applications.
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.3.0
+dotnet add package McpEngramMemory.Core --version 1.4.0
 ```
 
 ### Library Usage

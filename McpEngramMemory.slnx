@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/McpEngramMemory/McpEngramMemory.csproj" />
     <Project Path="src/McpEngramMemory.Core/McpEngramMemory.Core.csproj" />
+    <Project Path="src/McpEngramMemory.Synthesis.Onnx/McpEngramMemory.Synthesis.Onnx.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj" />

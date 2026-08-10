@@ -12,7 +12,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory</PackageId>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Authors>wyckit</Authors>
     <Company>wyckit</Company>
     <Copyright>Copyright (c) 2026 WyckIt</Copyright>
@@ -23,11 +23,42 @@
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\images\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!--
+    Drop native runtimes for platforms this server cannot run on.
+
+    Microsoft.ML.OnnxRuntime ships natives for every RID it supports, including iOS
+    xcframeworks, Android .aars, Mac Catalyst, and browser-wasm. A `dotnet` global tool is
+    RID-agnostic ("any"), so PackAsTool bundles all of them — but this is a console stdio
+    process on .NET 8, which cannot execute on any of those four platforms. They were ~81 MB
+    of a package that has a 250 MB ceiling on nuget.org.
+
+    Every desktop and server RID is deliberately kept, including linux-musl-* (Alpine
+    containers) and the minor architectures, which cost ~2 MB each.
+
+    If ONNX Runtime ever gains a platform that belongs here, this list is the thing to update.
+  -->
+  <Target Name="TrimNonDesktopNativeRuntimes" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_NonDesktopRuntimeFiles Include="@(ResolvedFileToPublish)"
+                               Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\](ios|android|maccatalyst-[^/\\]+|browser[^/\\]*)[/\\]'))" />
+      <ResolvedFileToPublish Remove="@(_NonDesktopRuntimeFiles)" />
+    </ItemGroup>
+    <Message Importance="high"
+             Text="TrimNonDesktopNativeRuntimes: excluded @(_NonDesktopRuntimeFiles->Count()) native file(s) for ios/android/maccatalyst/browser." />
+  </Target>
+
+  <ItemGroup>
+    <!-- Tool-boundary normalizers are internal; the test project covers them directly. -->
+    <InternalsVisibleTo Include="McpEngramMemory.Tests" />
   </ItemGroup>
 
   <ItemGroup>

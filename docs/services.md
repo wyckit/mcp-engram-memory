@@ -45,7 +45,7 @@
 | `SqlServerStorageProvider` | `Storage` | Microsoft SQL Server-backed `IStorageProvider`. Configurable schema (default `dbo`), `MERGE`-based upserts, transactional writes, incremental per-entry persistence, HNSW snapshots stored as `hnsw_{ns}` keys |
 | `DiversityReranker` | `Retrieval` | Cluster-aware Maximal Marginal Relevance (MMR) reranking — spreads results across sub-topics using cluster and category penalties. Activated via `diversity: true` on search. Configurable lambda trade-off (0.0 = pure diversity, 1.0 = pure relevance, default 0.5) |
 | `SpreadingActivationService` | `Services` | Collins & Loftus spreading activation model for graph-coupled energy transfer with depth-3 recursive propagation and cluster-based pre-warming |
-| `SynthesisEngine` | `Synthesis` | Map-reduce synthesis via Ollama for dense reasoning over large memory sets without expanding context windows. Paired with `OllamaClient` for local SLM inference |
+| `SynthesisEngine` | `Synthesis` | Map-reduce synthesis for dense reasoning over large memory sets without expanding context windows. Generates through the `ITextGenerator` seam — `OllamaClient` in the box, or `OnnxGenAiTextGenerator` from the optional `McpEngramMemory.Synthesis.Onnx` package for fully in-process generation |
 | `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer. Fully concurrent inference with per-call ArrayPool scratch buffers (no semaphore bottleneck) |
 | `HashEmbeddingService` | `Services` | Deterministic hash-based embeddings for testing/CI (no model dependency) |
 

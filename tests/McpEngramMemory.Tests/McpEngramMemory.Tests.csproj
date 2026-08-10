@@ -23,6 +23,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\McpEngramMemory\McpEngramMemory.csproj" />
     <ProjectReference Include="..\..\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
+    <!-- Optional synthesis backend, referenced here so the live ONNX synthesis tests
+         (LiveSynthesisInferenceTests, ModelSpeedComparisonTests) still build and run.
+         The server deliberately does NOT reference it — see Program.cs. -->
+    <ProjectReference Include="..\..\src\McpEngramMemory.Synthesis.Onnx\McpEngramMemory.Synthesis.Onnx.csproj" />
   </ItemGroup>
 
   <ItemGroup>

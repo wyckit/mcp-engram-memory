@@ -4,7 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-09
+
+_Fixes a silent decay/consolidation outage caused by a numerical failure in the spectral basis, replaces the benchmark regression gate's fixed tolerance with a statistical test, and corrects a tool-surface documentation drift that had accumulated since v0.9.0. **Minor rather than patch** because two result records gained parameters — source-compatible, but binary-breaking for anything compiled against 1.2.0 (see **Compatibility**)._
+
+### Compatibility
+
+- **In-process ONNX synthesis moved to a new optional package, `McpEngramMemory.Synthesis.Onnx`.**
+  `OnnxGenAiTextGenerator` keeps its `McpEngramMemory.Core.Services.Synthesis` namespace, so library
+  code compiles unchanged after adding the package reference. The motivation is size:
+  `Microsoft.ML.OnnxRuntimeGenAI` ships native binaries for every RID it supports (~500 MB), and it
+  was a dependency of `McpEngramMemory.Core` — so *every* consumer paid for it, whether or not they
+  used the non-default ONNX synthesis backend. `Core` no longer references it at all.
+- **The server no longer accepts `SYNTHESIS_BACKEND=onnx`.** It now fails at startup with a message
+  naming the replacement package rather than silently falling back to Ollama. This applies equally to
+  builds from source, the Docker image, and the published tool — the alternative, a conditional
+  reference that kept the backend in source builds only, would have made the published tool behave
+  differently from the repo it was built from. `SYNTHESIS_BACKEND=ollama` (the default) is unchanged.
+- **Binary-breaking for `McpEngramMemory.Core` consumers.** `DecayCycleResult` gained three trailing
+  optional positional parameters (`TotalNamespaces`, `SpectralFallbackNamespaces`,
+  `FailedNamespaces`) and `ConsolidationResult` gained one (`FailedNamespaces`), so partial failures
+  can be reported rather than collapsed into a single error string. Source-compatible — code
+  recompiles unchanged — but assemblies compiled against 1.2.0 must be rebuilt.
+- **First nuget.org release of the `McpEngramMemory` server package**, installable as a `dotnet`
+  global tool (`engram-memory`). Previously it was published only to GitHub Packages.
+- **Behavioral:** a namespace whose *linked* (edge-bearing) entry count is below the spectral
+  minimum of 32 now bypasses spectral processing even when its total entry count qualifies. Decay
+  falls back to pointwise and consolidation skips it, rather than computing a basis from a
+  rank-deficient operator.
+
 ### Added
+- **`McpEngramMemory.Synthesis.Onnx` package** — the in-process ONNX Runtime GenAI text-generation
+  backend, split out of `Core` (see **Compatibility**). Install it only if you want synthesis to run
+  without an Ollama daemon.
+- **Package icons.** All three packages now ship an embedded `PackageIcon` derived from the project's
+  neural emblem.
 - **Statistical benchmark regression gate.** The regression gate now records per-query score vectors in
   benchmark artifacts and compares candidate vs. baseline with a paired statistical test, so a run fails
   only when the drop is statistically distinguishable from seed noise, rather than on a fixed 0.02
@@ -13,6 +47,19 @@ All notable changes to this project will be documented in this file.
   path (with a loud warning) when the C# gate or per-query scores are unavailable.
 
 ### Fixed
+- **`reflect` failed whenever `relatedIds` was not a JSON array of strings.** The parameter was typed
+  `string[]?`, so a caller passing a single id or a comma-separated list (the shape `cross_search`
+  already uses for its namespace list) failed MCP model binding *before* the tool body ran. The only
+  thing the caller saw was the SDK's generic `An error occurred invoking 'reflect'.` — it named neither
+  the parameter nor the shape it wanted, which made the failure look like a payload-size or server
+  problem. `relatedIds` now binds as `JsonElement?` and is normalized at the tool boundary by
+  `StringListNormalizer`, accepting a JSON array of ids, a comma-separated string, or a single id;
+  blanks and nulls are dropped and a genuinely unusable shape (an object, a nested array) returns
+  `Error: relatedIds must be a JSON array of ids, a comma-separated string, or a single id — got a
+  JSON object.` instead of the generic invocation error. Same bug family as the metadata array-binding
+  fix, and `StringListNormalizer` is the list-shaped companion to `MetadataNormalizer`. Note that
+  `relatedIds` no longer advertises `type: array` in the generated input schema (a tolerant parameter
+  type can't); the accepted shapes are stated in the parameter description instead.
 - **Lifecycle background passes: per-namespace fault isolation.** An exception while processing one
   namespace during a decay or consolidation cycle no longer aborts the rest of the cycle — the failing
   namespace is logged, skipped, and reported in the cycle summary. A failure inside the spectral
@@ -35,7 +82,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Docs, version, and security-posture alignment.** Corrected the measured tool surface everywhere
   (62 tools; profiles `minimal` 17 / `standard` 39 / `full` 62 — docs previously said 65/41), test counts
-  (1118 per target framework across 83 files, including the tests added this cycle), and stale tool tables (removed the four background-only
+  (1154 per target framework across 85 files, including the tests added this cycle), and stale tool tables (removed the four background-only
   tools dropped in v1.1; added `engram_status`, `get_graph_snapshot`, `check_for_regression`,
   `run_mrcr_benchmark`, `compare_mrcr_artifacts`). Bumped the server csproj to 1.3.0 to match Core.
   SECURITY.md now supports the 1.3.x line and documents memory poisoning (OWASP ASI06), the `AGENT_ID`

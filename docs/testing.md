@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-83 test files. A full non-live run passes 1118 tests per target framework (net8.0, net9.0, net10.0).
+85 test files. A full non-live run passes 1154 tests per target framework (net8.0, net9.0, net10.0).
 
 _The per-file table below is a snapshot and drifts between releases; the headline count above is authoritative (measured at v1.3.0)._
 
