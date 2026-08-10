@@ -94,20 +94,30 @@ builder.Services.AddSingleton<IBackgroundWorkerStatusTracker, BackgroundWorkerSt
 
 // SLM synthesis engine — map-reduce over memories. Backend selected by SYNTHESIS_BACKEND:
 //   "ollama" (default) → HTTP to a local Ollama daemon (legacy behavior)
-//   "onnx"             → fully in-process via ONNX Runtime GenAI (no external daemon)
+//   "onnx"             → moved to the optional McpEngramMemory.Synthesis.Onnx package (see below)
 var synthesisBackend = (Environment.GetEnvironmentVariable("SYNTHESIS_BACKEND") ?? "ollama").Trim().ToLowerInvariant();
-if (synthesisBackend is not ("ollama" or "onnx"))
+if (synthesisBackend == "onnx")
 {
-    throw new InvalidOperationException("SYNTHESIS_BACKEND must be 'ollama' or 'onnx'.");
+    // In-process ONNX synthesis lives in the optional McpEngramMemory.Synthesis.Onnx package.
+    // The server does not reference it: ONNX Runtime GenAI ships native binaries for every RID
+    // (~500 MB), which would put this tool package over nuget.org's 250 MB ceiling and impose
+    // that download on every user of a backend that is not the default. Fail loudly rather than
+    // silently falling back to Ollama, which would look like the setting had been honoured.
+    throw new InvalidOperationException(
+        "SYNTHESIS_BACKEND=onnx is not available in the McpEngramMemory server. In-process ONNX " +
+        "synthesis ships as the separate McpEngramMemory.Synthesis.Onnx package, for hosts that " +
+        "embed McpEngramMemory.Core and register OnnxGenAiTextGenerator as their ITextGenerator. " +
+        "Unset SYNTHESIS_BACKEND (or set it to 'ollama') to run the server against a local Ollama daemon.");
+}
+if (synthesisBackend != "ollama")
+{
+    throw new InvalidOperationException("SYNTHESIS_BACKEND must be 'ollama'.");
 }
 
-var useOnnxSynthesis = synthesisBackend == "onnx";
-var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL")
-    ?? (useOnnxSynthesis ? "qwen2.5-1.5b" : "qwen2.5:1.5b");
+var synthesisMapModel = Environment.GetEnvironmentVariable("SYNTHESIS_MAP_MODEL") ?? "qwen2.5:1.5b";
 var synthesisReduceModel = Environment.GetEnvironmentVariable("SYNTHESIS_REDUCE_MODEL") ?? synthesisMapModel;
-builder.Services.AddSingleton<ITextGenerator>(_ => useOnnxSynthesis
-    ? new OnnxGenAiTextGenerator(Environment.GetEnvironmentVariable("SYNTHESIS_ONNX_MODEL_DIR"))
-    : new OllamaClient(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434"));
+builder.Services.AddSingleton<ITextGenerator>(_ =>
+    new OllamaClient(Environment.GetEnvironmentVariable("OLLAMA_URL") ?? "http://localhost:11434"));
 builder.Services.AddSingleton(sp => new SynthesisEngine(
     sp.GetRequiredService<CognitiveIndex>(),
     sp.GetRequiredService<ClusterManager>(),

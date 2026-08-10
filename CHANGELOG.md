@@ -4,7 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-09
+
+_Fixes a silent decay/consolidation outage caused by a numerical failure in the spectral basis, replaces the benchmark regression gate's fixed tolerance with a statistical test, and corrects a tool-surface documentation drift that had accumulated since v0.9.0. **Minor rather than patch** because two result records gained parameters — source-compatible, but binary-breaking for anything compiled against 1.2.0 (see **Compatibility**)._
+
+### Compatibility
+
+- **In-process ONNX synthesis moved to a new optional package, `McpEngramMemory.Synthesis.Onnx`.**
+  `OnnxGenAiTextGenerator` keeps its `McpEngramMemory.Core.Services.Synthesis` namespace, so library
+  code compiles unchanged after adding the package reference. The motivation is size:
+  `Microsoft.ML.OnnxRuntimeGenAI` ships native binaries for every RID it supports (~500 MB), and it
+  was a dependency of `McpEngramMemory.Core` — so *every* consumer paid for it, whether or not they
+  used the non-default ONNX synthesis backend. `Core` no longer references it at all.
+- **The server no longer accepts `SYNTHESIS_BACKEND=onnx`.** It now fails at startup with a message
+  naming the replacement package rather than silently falling back to Ollama. This applies equally to
+  builds from source, the Docker image, and the published tool — the alternative, a conditional
+  reference that kept the backend in source builds only, would have made the published tool behave
+  differently from the repo it was built from. `SYNTHESIS_BACKEND=ollama` (the default) is unchanged.
+- **Binary-breaking for `McpEngramMemory.Core` consumers.** `DecayCycleResult` gained three trailing
+  optional positional parameters (`TotalNamespaces`, `SpectralFallbackNamespaces`,
+  `FailedNamespaces`) and `ConsolidationResult` gained one (`FailedNamespaces`), so partial failures
+  can be reported rather than collapsed into a single error string. Source-compatible — code
+  recompiles unchanged — but assemblies compiled against 1.2.0 must be rebuilt.
+- **First nuget.org release of the `McpEngramMemory` server package**, installable as a `dotnet`
+  global tool (`engram-memory`). Previously it was published only to GitHub Packages.
+- **Behavioral:** a namespace whose *linked* (edge-bearing) entry count is below the spectral
+  minimum of 32 now bypasses spectral processing even when its total entry count qualifies. Decay
+  falls back to pointwise and consolidation skips it, rather than computing a basis from a
+  rank-deficient operator.
+
 ### Added
+- **`McpEngramMemory.Synthesis.Onnx` package** — the in-process ONNX Runtime GenAI text-generation
+  backend, split out of `Core` (see **Compatibility**). Install it only if you want synthesis to run
+  without an Ollama daemon.
+- **Package icons.** All three packages now ship an embedded `PackageIcon` derived from the project's
+  neural emblem.
 - **Statistical benchmark regression gate.** The regression gate now records per-query score vectors in
   benchmark artifacts and compares candidate vs. baseline with a paired statistical test, so a run fails
   only when the drop is statistically distinguishable from seed noise, rather than on a fixed 0.02
