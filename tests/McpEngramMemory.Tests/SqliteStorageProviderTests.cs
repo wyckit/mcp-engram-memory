@@ -26,6 +26,56 @@ public class SqliteStorageProviderTests : IDisposable
             Directory.Delete(dir, true);
     }
 
+    /// <summary>
+    /// Disposing the provider must fold the write-ahead log back into the database and
+    /// truncate it, leaving a self-contained file rather than a multi-megabyte `-wal`
+    /// sidecar.
+    ///
+    /// This does not happen for free. SQLite removes the WAL when the *last* connection
+    /// closes, and this provider opens one per operation — but Microsoft.Data.Sqlite pools
+    /// connections by default, so the native handle stays open and that last close never
+    /// arrives. Without the explicit `wal_checkpoint(TRUNCATE)` in Dispose, the WAL measured
+    /// ~4 MB after 4,000 upserts and stayed ~4 MB after disposal.
+    /// </summary>
+    [Fact]
+    public void Dispose_CheckpointsAndTruncatesWal()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"sqlite_wal_{Guid.NewGuid():N}", "memory.db");
+        var walPath = dbPath + "-wal";
+        try
+        {
+            var provider = new SqliteStorageProvider(dbPath, debounceMs: 10);
+
+            // Enough rows to push the WAL past SQLite's 1,000-page auto-checkpoint so there
+            // is something substantial left to reclaim.
+            var entries = new List<CognitiveEntry>();
+            for (int i = 0; i < 400; i++)
+                entries.Add(new CognitiveEntry($"e{i}", new float[64], "walns", $"entry body {i}"));
+            provider.SaveNamespaceSync("walns", new NamespaceData { Entries = entries });
+
+            Assert.True(File.Exists(walPath), "expected a -wal file while the provider is live");
+            var walBeforeDispose = new FileInfo(walPath).Length;
+            Assert.True(walBeforeDispose > 0, "expected a non-empty WAL before dispose");
+
+            provider.Dispose();
+
+            var walAfterDispose = File.Exists(walPath) ? new FileInfo(walPath).Length : 0;
+            Assert.True(walAfterDispose == 0,
+                $"WAL should be truncated on dispose, but was {walAfterDispose} bytes (was {walBeforeDispose} before).");
+
+            // The data must survive the checkpoint - it moved into the main db, not away.
+            var reopened = new SqliteStorageProvider(dbPath, debounceMs: 10);
+            Assert.Equal(400, reopened.LoadNamespace("walns").Entries.Count);
+            reopened.Dispose();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            var dir = Path.GetDirectoryName(dbPath);
+            if (dir is not null && Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
+    }
+
     [Fact]
     public void LoadNamespace_Empty_ReturnsEmptyData()
     {

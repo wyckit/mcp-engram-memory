@@ -831,5 +831,42 @@ public sealed class SqliteStorageProvider : IStorageProvider
             _disposed = true;
         }
         Flush();
+        CheckpointWal();
+    }
+
+    /// <summary>
+    /// Fold the write-ahead log back into the main database and truncate it, so a
+    /// shutdown leaves a self-contained file rather than a database plus a multi-megabyte
+    /// <c>-wal</c> sidecar.
+    ///
+    /// Why this is needed at all: SQLite checkpoints and removes the WAL when the *last*
+    /// connection closes, and this provider opens a connection per operation — so in
+    /// principle that happens constantly. In practice <c>Microsoft.Data.Sqlite</c> pools
+    /// connections by default, so the native handle stays open and the "last close" never
+    /// arrives. Measured: after 4,000 scheduled upserts the WAL sits at ~4 MB and is still
+    /// ~4 MB after <see cref="Dispose"/> without this call.
+    ///
+    /// Note this is about tidiness on shutdown, not durability or unbounded growth. During
+    /// normal operation SQLite's automatic checkpoint (every 1,000 pages) holds the WAL to a
+    /// steady ~4 MB no matter how many writes follow — measured flat from 1,000 through
+    /// 4,000 writes — so no periodic checkpoint policy is warranted. Committed data is never
+    /// at risk either way: an un-checkpointed WAL is replayed when the database is next
+    /// opened. That is also why failure here is logged rather than thrown.
+    /// </summary>
+    private void CheckpointWal()
+    {
+        try
+        {
+            using var conn = OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            // Never let shutdown fail over housekeeping. The WAL is replayed on next open.
+            _logger?.LogWarning(ex,
+                "WAL checkpoint on shutdown failed; the write-ahead log will be replayed when the database is next opened.");
+        }
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -20,6 +21,52 @@ public class MultiAgentToolsTests : IDisposable
     {
         public int Dimensions => 2;
         public float[] Embed(string text) => [0.5f, 0.5f];
+    }
+
+    /// <summary>Serializes a value the way an MCP client would send it over the wire.</summary>
+    private static JsonElement Wire<T>(T value) => JsonSerializer.SerializeToElement(value);
+
+    /// <summary>
+    /// `cross_search` names its namespace list `namespaces` (plural, because it is a list),
+    /// while every other tool takes a single `ns`. Both names are correct and the pair is
+    /// inconsistent, so callers reach for `ns` from habit. Renaming would break every
+    /// existing caller of a published tool, so `ns` is accepted as an alias instead — and
+    /// the value may be an array, a comma-separated string, or a single namespace.
+    /// </summary>
+    [Fact]
+    public void CrossSearch_AcceptsNsAliasAndAnyListShape()
+    {
+        _index.Upsert(new CognitiveEntry("a1", [0.5f, 0.5f], "alpha", "shared topic text"));
+        _index.Upsert(new CognitiveEntry("b1", [0.5f, 0.5f], "beta", "shared topic text"));
+
+        var viaNamespaces = _tools.CrossSearch(Wire("alpha,beta"), "shared topic") as CrossSearchResponse;
+        var viaNsAlias    = _tools.CrossSearch(null, "shared topic", ns: Wire("alpha,beta")) as CrossSearchResponse;
+        var viaArray      = _tools.CrossSearch(Wire(new[] { "alpha", "beta" }), "shared topic") as CrossSearchResponse;
+        var viaSingle     = _tools.CrossSearch(Wire("alpha"), "shared topic") as CrossSearchResponse;
+
+        Assert.NotNull(viaNamespaces);
+        Assert.NotNull(viaNsAlias);
+        Assert.NotNull(viaArray);
+        Assert.NotNull(viaSingle);
+
+        // All three list shapes must resolve to the same two namespaces.
+        Assert.Equal(viaNamespaces!.Results.Count, viaNsAlias!.Results.Count);
+        Assert.Equal(viaNamespaces.Results.Count, viaArray!.Results.Count);
+        Assert.True(viaSingle!.Results.Count <= viaNamespaces.Results.Count);
+    }
+
+    [Fact]
+    public void CrossSearch_RejectsBothNamespacesAndNs()
+    {
+        var result = _tools.CrossSearch(Wire("alpha"), "q", ns: Wire("beta"));
+        Assert.Contains("not both", Assert.IsType<string>(result));
+    }
+
+    [Fact]
+    public void CrossSearch_RejectsUnusableShape()
+    {
+        var result = _tools.CrossSearch(Wire(new { bad = "shape" }), "q");
+        Assert.Contains("namespaces must be", Assert.IsType<string>(result));
     }
 
     private readonly StubEmbeddingService _embedding;

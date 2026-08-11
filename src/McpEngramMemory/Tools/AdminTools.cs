@@ -15,6 +15,12 @@ namespace McpEngramMemory.Tools;
 [McpServerToolType]
 public sealed class AdminTools
 {
+    /// <summary>Default cap on the namespace list returned by cognitive_stats.</summary>
+    private const int DefaultNamespaceLimit = 100;
+
+    /// <summary>Default cap on the per-namespace detail returned by purge_debates.</summary>
+    private const int DefaultDetailLimit = 25;
+
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly ClusterManager _clusters;
@@ -57,20 +63,29 @@ public sealed class AdminTools
     }
 
     [McpServerTool(Name = "cognitive_stats")]
-    [Description("Check how many memories exist across lifecycle states (STM/LTM/archived), plus cluster and edge counts and the full namespace list. Don't use it to check background worker health; use `engram_status` for that.")]
+    [Description("Check how many memories exist across lifecycle states (STM/LTM/archived), plus cluster and edge counts and the namespace list. The namespace list is capped — raise namespaceLimit or pass 0 for all. Don't use it to check background worker health; use `engram_status` for that.")]
     public LifecycleStats CognitiveStats(
-        [Description("Namespace ('*' for all, default).")] string ns = "*")
+        [Description("Namespace ('*' for all, default).")] string ns = "*",
+        [Description("Maximum namespaces to list (default: 100). Use 0 for no cap. Counts are always exact regardless of this limit.")] int namespaceLimit = DefaultNamespaceLimit)
     {
         var (stm, ltm, archived) = _index.GetStateCounts(ns);
         var namespaces = _index.GetNamespaces();
         var edgeCount = _graph.EdgeCount;
         var clusterCount = _clusters.ClusterCount;
 
+        // A store with hundreds of namespaces returns a list that dominates the caller's
+        // context window for no benefit — the counts are what the tool is usually asked for.
+        // Cap the list, but never the counts, and say plainly that it was capped.
+        var totalNamespaces = namespaces.Count;
+        var listed = namespaceLimit > 0 && totalNamespaces > namespaceLimit
+            ? namespaces.Take(namespaceLimit).Append($"… +{totalNamespaces - namespaceLimit} more (pass namespaceLimit=0 to list all)").ToList()
+            : namespaces;
+
         return new LifecycleStats(
             stm + ltm + archived,
             stm, ltm, archived,
             clusterCount, edgeCount,
-            namespaces);
+            listed);
     }
 
     [McpServerTool(Name = "engram_status")]
@@ -89,7 +104,8 @@ public sealed class AdminTools
     [Description("Clean up stale debate namespaces older than maxAgeHours. Deletes entries, edges, and cluster memberships. Defaults to dry-run mode.")]
     public async Task<object> PurgeDebates(
         [Description("Maximum age in hours before a debate namespace is considered stale (default: 24).")] int maxAgeHours = 24,
-        [Description("If true, only list what would be purged without deleting (default: true).")] bool dryRun = true)
+        [Description("If true, only list what would be purged without deleting (default: true).")] bool dryRun = true,
+        [Description("Maximum namespaces to detail in the response (default: 25). Use 0 for all. Totals are always exact regardless of this limit.")] int detailLimit = DefaultDetailLimit)
     {
         var namespaces = _index.GetNamespaces();
         var debateNamespaces = namespaces
@@ -142,9 +158,17 @@ public sealed class AdminTools
             }
             else
             {
-                // Dry run: count edges that would be removed
+                // Dry run: count the DISTINCT edges that would be removed. Summing
+                // GetEdgesForEntry over every entry double-counts any edge whose endpoints
+                // both live in this namespace — which is most of them, since debate
+                // namespaces are internally linked. That made the dry run report roughly
+                // twice the edges the real purge removes, on the one operation whose whole
+                // job is to let you check before deleting.
+                var distinct = new HashSet<(string, string, string)>();
                 foreach (var entry in entries)
-                    edgesRemoved += _graph.GetEdgesForEntry(entry.Id).Count;
+                    foreach (var edge in _graph.GetEdgesForEntry(entry.Id))
+                        distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
+                edgesRemoved = distinct.Count;
             }
 
             totalEntriesRemoved += entryCount;
@@ -152,8 +176,15 @@ public sealed class AdminTools
             purged.Add(new PurgedNamespaceInfo(debateNs, entryCount, edgesRemoved, newestEntry.CreatedAt));
         }
 
+        // A real purge can span hundreds of namespaces; returning every one in full detail
+        // buries the totals that actually drive the go/no-go decision. Cap the detail,
+        // never the totals.
+        var detail = detailLimit > 0 && purged.Count > detailLimit
+            ? purged.Take(detailLimit).ToList()
+            : purged;
+
         return new PurgeDebatesResult(
-            purged.Count, totalEntriesRemoved, totalEdgesRemoved, dryRun, purged);
+            purged.Count, totalEntriesRemoved, totalEdgesRemoved, dryRun, detail);
     }
 }
 
