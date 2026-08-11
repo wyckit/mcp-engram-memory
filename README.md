@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="images/banner.svg?v=1.4.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=1.5.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1154%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-1155%20non--live-brightgreen" alt="Tests"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
@@ -83,7 +83,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.4.0
+dotnet add package McpEngramMemory.Core --version 1.5.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -140,7 +140,7 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 1154 tests per target framework (net8/9/10) across 85 files |
+| Tests | 1155 tests per target framework (net8/9/10) across 88 files |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
@@ -230,7 +230,7 @@ own .NET applications.
 **Server (global tool)**
 
 ```bash
-dotnet tool install --global McpEngramMemory --version 1.4.0
+dotnet tool install --global McpEngramMemory --version 1.5.0
 engram-memory
 ```
 
@@ -238,10 +238,10 @@ engram-memory
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 1.4.0
+dotnet add package McpEngramMemory.Core --version 1.5.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 1.4.0 \
+dotnet add package McpEngramMemory.Core --version 1.5.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -252,7 +252,7 @@ dotnet add package McpEngramMemory.Core --version 1.4.0 \
 daemon, add the optional ONNX backend when embedding the library:
 
 ```bash
-dotnet add package McpEngramMemory.Synthesis.Onnx --version 1.4.0
+dotnet add package McpEngramMemory.Synthesis.Onnx --version 1.5.0
 ```
 
 ```csharp
