@@ -53,9 +53,23 @@ public class SqliteStorageProviderTests : IDisposable
                 entries.Add(new CognitiveEntry($"e{i}", new float[64], "walns", $"entry body {i}"));
             provider.SaveNamespaceSync("walns", new NamespaceData { Entries = entries });
 
-            Assert.True(File.Exists(walPath), "expected a -wal file while the provider is live");
-            var walBeforeDispose = new FileInfo(walPath).Length;
-            Assert.True(walBeforeDispose > 0, "expected a non-empty WAL before dispose");
+            // Hold an explicit connection open for the duration. Without it this precondition
+            // is a race: the provider opens a connection per operation, so whether a -wal file
+            // still exists at this instant depends on when the pool happens to release the
+            // last handle. It survived locally and on net8.0 and lost the race on another
+            // target framework in CI. An open connection makes "the WAL exists" deterministic,
+            // which is what gives the post-dispose assertion its meaning — without a WAL to
+            // reclaim, that assertion would pass whether or not the checkpoint ran.
+            using (var pin = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                pin.Open();
+
+                Assert.True(File.Exists(walPath), "expected a -wal file while a connection is open");
+                var walWhilePinned = new FileInfo(walPath).Length;
+                Assert.True(walWhilePinned > 0, "expected a non-empty WAL while a connection is open");
+            }
+
+            var walBeforeDispose = File.Exists(walPath) ? new FileInfo(walPath).Length : 0;
 
             provider.Dispose();
 
