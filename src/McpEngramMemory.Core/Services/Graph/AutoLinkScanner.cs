@@ -30,6 +30,22 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// </summary>
 public sealed class AutoLinkScanner
 {
+    /// <summary>
+    /// Upper bound on entries fed to the pairwise duplicate scan in one pass.
+    ///
+    /// The scan is quadratic in the candidate count, and it runs automatically on every
+    /// namespace every six hours, so an unbounded namespace turns a routine sweep into a
+    /// steadily growing CPU cost with no backpressure. Measured on 384-dim vectors:
+    /// ~0.4s at 2,000 entries, ~1.1s at 4,200, ~2.6s at 8,000 — quadratic from there, so
+    /// tens of thousands of entries in one namespace reach minutes per sweep.
+    ///
+    /// 10,000 sits well above any namespace this is expected to meet while capping a single
+    /// pass at a few seconds. Truncation is reported in the result and logged, never silent:
+    /// a scan that quietly examined half the namespace looks identical to one that found
+    /// nothing, which is the worse failure.
+    /// </summary>
+    public const int DefaultMaxScanEntries = 10_000;
+
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly DuplicateDetector _duplicateDetector;
@@ -54,7 +70,8 @@ public sealed class AutoLinkScanner
     /// <param name="ns">Namespace to scan.</param>
     /// <param name="threshold">Optional override for the similarity threshold; defaults to the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>.</param>
     /// <param name="maxNewEdges">Optional override for the per-scan edge cap.</param>
-    public AutoLinkResult Scan(string ns, float? threshold = null, int? maxNewEdges = null)
+    public AutoLinkResult Scan(string ns, float? threshold = null, int? maxNewEdges = null,
+        int maxScanEntries = DefaultMaxScanEntries)
     {
         var entries = _index.GetAllInNamespace(ns);
         var nonSummary = new List<CognitiveEntry>(entries.Count);
@@ -63,6 +80,17 @@ public sealed class AutoLinkScanner
 
         if (nonSummary.Count < 2)
             return new AutoLinkResult(ns, nonSummary.Count, 0, 0, 0, false);
+
+        int notScanned = 0;
+        if (maxScanEntries > 0 && nonSummary.Count > maxScanEntries)
+        {
+            notScanned = nonSummary.Count - maxScanEntries;
+            _logger?.LogWarning(
+                "Auto-link scan for ns={Namespace} bounded to {Max} of {Total} entries; {Skipped} not examined this pass. " +
+                "The pairwise stage is quadratic; raise maxScanEntries to scan more at higher cost.",
+                ns, maxScanEntries, nonSummary.Count, notScanned);
+            nonSummary.RemoveRange(maxScanEntries, notScanned);
+        }
 
         // Build the (entry, norm, quantized) triples DuplicateDetector expects.
         // Quantized vectors are reserved for archived entries elsewhere; we don't
@@ -75,7 +103,7 @@ public sealed class AutoLinkScanner
             candidates.Add((entry, norm, null));
         }
         if (candidates.Count < 2)
-            return new AutoLinkResult(ns, candidates.Count, 0, 0, 0, false);
+            return new AutoLinkResult(ns, candidates.Count, 0, 0, 0, false, notScanned);
 
         float effectiveThreshold = threshold ?? 0.85f;
         int effectiveCap = maxNewEdges ?? 1000;
@@ -118,7 +146,7 @@ public sealed class AutoLinkScanner
                 ns, created, skippedExisting, pairs.Count, hitCap ? " (hit cap)" : "");
         }
 
-        return new AutoLinkResult(ns, candidates.Count, pairs.Count, created, skippedExisting, hitCap);
+        return new AutoLinkResult(ns, candidates.Count, pairs.Count, created, skippedExisting, hitCap, notScanned);
     }
 
     private bool HasAnyEdgeBetween(string a, string b)

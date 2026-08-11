@@ -2,6 +2,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace McpEngramMemory.Core.Services.Intelligence;
 
@@ -11,7 +12,21 @@ namespace McpEngramMemory.Core.Services.Intelligence;
 /// </summary>
 public sealed class AccretionScanner
 {
+    /// <summary>
+    /// Upper bound on LTM entries fed to DBSCAN in one pass.
+    ///
+    /// RangeQuery is a brute-force scan per point with no spatial index, so the pass is
+    /// quadratic in the candidate count — and it runs automatically on every namespace every
+    /// 30 minutes. Measured on 384-dim vectors: ~0.35s at 2,000 entries, ~2.1s at 4,200,
+    /// ~5.3s at 8,000 for the dense-blob case the epsilon threshold is tuned to find.
+    ///
+    /// Truncation is logged and reported in the result rather than applied silently: a scan
+    /// that quietly examined a subset is indistinguishable from one that found nothing.
+    /// </summary>
+    public const int DefaultMaxScanEntries = 10_000;
+
     private readonly CognitiveIndex _index;
+    private readonly ILogger<AccretionScanner>? _logger;
     private readonly IStorageProvider? _persistence;
     private readonly Dictionary<string, PendingCollapse> _pendingCollapses = new();
     private readonly Dictionary<string, CollapseRecord> _collapseHistory = new();
@@ -19,10 +34,12 @@ public sealed class AccretionScanner
     private readonly ReaderWriterLockSlim _lock = new();
     private bool _historyLoaded;
 
-    public AccretionScanner(CognitiveIndex index, IStorageProvider? persistence = null)
+    public AccretionScanner(CognitiveIndex index, IStorageProvider? persistence = null,
+        ILogger<AccretionScanner>? logger = null)
     {
         _index = index;
         _persistence = persistence;
+        _logger = logger;
     }
 
     /// <summary>
@@ -33,7 +50,8 @@ public sealed class AccretionScanner
     public AccretionScanResult ScanNamespace(
         string ns, float epsilon = 0.15f, int minPoints = 3,
         bool autoSummarize = false, ClusterManager? clusters = null,
-        IEmbeddingService? embedding = null)
+        IEmbeddingService? embedding = null,
+        int maxScanEntries = DefaultMaxScanEntries)
     {
         // Get all LTM entries in the namespace (outside _lock — uses _index's own lock)
         var allEntries = _index.GetAllInNamespace(ns);
@@ -49,6 +67,19 @@ public sealed class AccretionScanner
             candidates = ltmEntries.Where(e => !_dismissedEntryIds.Contains(e.Id)).ToList();
         }
         finally { _lock.ExitReadLock(); }
+
+        // DBSCAN's RangeQuery is a brute-force scan per point, so the pass is quadratic in
+        // the candidate count and runs automatically on every namespace every 30 minutes.
+        // Bound it, and report what was left out rather than quietly scanning a subset.
+        int notScanned = 0;
+        if (maxScanEntries > 0 && candidates.Count > maxScanEntries)
+        {
+            notScanned = candidates.Count - maxScanEntries;
+            _logger?.LogWarning(
+                "Accretion scan for ns={Namespace} bounded to {Max} of {Total} LTM entries; {Skipped} not examined this pass.",
+                ns, maxScanEntries, candidates.Count, notScanned);
+            candidates.RemoveRange(maxScanEntries, notScanned);
+        }
 
         // Run DBSCAN (pure computation, no locks needed)
         var detectedClusters = Dbscan(candidates, epsilon, minPoints);
@@ -109,7 +140,7 @@ public sealed class AccretionScanner
             }
         }
 
-        return new AccretionScanResult(candidates.Count, detectedClusters.Count, newCollapses, autoSummaries);
+        return new AccretionScanResult(candidates.Count, detectedClusters.Count, newCollapses, autoSummaries, notScanned);
     }
 
     /// <summary>
