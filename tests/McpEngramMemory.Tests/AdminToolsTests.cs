@@ -4,6 +4,7 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 
 namespace McpEngramMemory.Tests;
 
@@ -54,7 +55,7 @@ public class AdminToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
         _clusters = new ClusterManager(_index, _persistence);
-        _tools = new AdminTools(_index, _graph, _clusters, new StubStorageProvider());
+        _tools = new AdminTools(_index, _graph, _clusters, new StubStorageProvider(), new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
     }
 
     public void Dispose()

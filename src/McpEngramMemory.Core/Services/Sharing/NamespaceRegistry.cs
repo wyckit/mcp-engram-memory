@@ -164,7 +164,30 @@ public sealed class NamespaceRegistry
     }
 
     /// <summary>
-    /// Register namespace ownership (called implicitly on first write).
+    /// Claim ownership of <paramref name="ns"/> for <paramref name="agentId"/> on write, if it is
+    /// not already owned. This is the call that makes the whole ACL model functional: until it
+    /// runs, no namespace has a permission record, and <see cref="HasAccess"/> treats every
+    /// unregistered namespace as open — so every access check everywhere returns true.
+    ///
+    /// Deliberately a no-op for the default agent. Servers that never set <c>AGENT_ID</c> run as
+    /// the default identity, which <see cref="HasAccess"/> short-circuits to full access anyway;
+    /// registering ownership for it would create records that do nothing now but would lock the
+    /// operator out of their own data the moment they later set an <c>AGENT_ID</c>. Access control
+    /// therefore activates only once agents are actually given distinct identities.
+    ///
+    /// First identified writer wins. In a multi-agent setup upgrading from a build without this
+    /// call, a pre-existing namespace stays open until some identified agent writes to it, at
+    /// which point that agent claims it and others need an explicit share.
+    /// </summary>
+    public void ClaimOwnershipOnWrite(string ns, string agentId)
+    {
+        if (agentId == AgentIdentity.DefaultAgentId) return;
+        EnsureOwnership(ns, agentId);
+    }
+
+    /// <summary>
+    /// Register namespace ownership. Prefer <see cref="ClaimOwnershipOnWrite"/> from write paths —
+    /// it encodes the default-agent policy that keeps single-identity servers unaffected.
     /// Uses double-checked locking so the registered-path is lock-free; concurrent callers that
     /// race to register the same namespace are serialized per-namespace and only the first write
     /// wins (subsequent callers become no-ops).

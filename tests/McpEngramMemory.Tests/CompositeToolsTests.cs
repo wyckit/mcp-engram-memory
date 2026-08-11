@@ -9,6 +9,7 @@ using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 
 namespace McpEngramMemory.Tests;
 
@@ -38,7 +39,7 @@ public class CompositeToolsTests : IDisposable
         _metrics = new MetricsCollector();
         _diffusion = new MemoryDiffusionKernel(_index, _graph);
         _spectral = new SpectralRetrievalReranker(_diffusion);
-        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral);
+        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral, new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
     }
 
     // ── remember tests ──

@@ -9,6 +9,7 @@ using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 using ModelContextProtocol;
 
 namespace McpEngramMemory.Tests;
@@ -43,7 +44,7 @@ public class ReflectRelatedIdsBindingTests : IDisposable
         var dispatcher = new ExpertDispatcher(_index, _embedding);
         var metrics = new MetricsCollector();
         var spectral = new SpectralRetrievalReranker(new MemoryDiffusionKernel(_index, _graph));
-        _tools = new CompositeTools(_index, _embedding, _graph, lifecycle, dispatcher, metrics, spectral);
+        _tools = new CompositeTools(_index, _embedding, _graph, lifecycle, dispatcher, metrics, spectral, new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
     }
 
     /// <summary>The JSON the MCP client puts on the wire for relatedIds, one row per shape.</summary>

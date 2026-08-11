@@ -8,6 +8,7 @@ using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
+using McpEngramMemory.Core.Services.Sharing;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -31,11 +32,14 @@ public sealed class CompositeTools
     private readonly ExpertDispatcher _dispatcher;
     private readonly MetricsCollector _metrics;
     private readonly SpectralRetrievalReranker _spectral;
+    private readonly NamespaceRegistry _registry;
+    private readonly AgentIdentity _agent;
 
     public CompositeTools(
         CognitiveIndex index, IEmbeddingService embedding, KnowledgeGraph graph,
         LifecycleEngine lifecycle, ExpertDispatcher dispatcher, MetricsCollector metrics,
-        SpectralRetrievalReranker spectral)
+        SpectralRetrievalReranker spectral,
+        NamespaceRegistry registry, AgentIdentity agent)
     {
         _index = index;
         _embedding = embedding;
@@ -44,7 +48,14 @@ public sealed class CompositeTools
         _dispatcher = dispatcher;
         _metrics = metrics;
         _spectral = spectral;
+        _registry = registry;
+        _agent = agent;
     }
+
+    private bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
+    private bool CanWrite(string ns) => _registry.HasAccess(_agent.AgentId, ns, "write");
+    private static string WriteDenied(string ns) =>
+        $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
 
     [McpServerTool(Name = "remember")]
     [Description("Save a new memory with automatic duplicate detection and graph linking — the default way to store anything. Don't use `store_memory` directly unless you need to supply a raw embedding vector or skip duplicate checking.")]
@@ -59,6 +70,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(id)) return "Error: id must not be empty.";
         if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
         if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
+        if (!CanWrite(ns)) return WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("remember");
         var state = lifecycleState ?? "stm";
@@ -86,6 +98,7 @@ public sealed class CompositeTools
         var entry = new CognitiveEntry(id, vector, ns, text, category,
             MetadataNormalizer.Normalize(metadata), state);
         _index.Upsert(entry);
+        _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
         actions.Add("stored");
 
         // 4. Find related memories and auto-link (use pre-store search results + fresh search)
@@ -149,6 +162,10 @@ public sealed class CompositeTools
         {
 
         // Strategy 1: If namespace provided, search directly with optional hybrid + graph expansion
+        if (ns is not null && !CanRead(ns))
+            return new RecallResult("direct", ns, new List<CognitiveSearchResult>(),
+                $"No accessible memories in namespace '{ns}'.");
+
         if (ns is not null)
         {
             var states = new HashSet<string> { "stm", "ltm" };
@@ -211,7 +228,9 @@ public sealed class CompositeTools
 
         // Strategy 3: No expert match — search all known namespaces
         var allResults = new List<CognitiveSearchResult>();
-        var namespaces = _index.GetNamespaces();
+        // The broadcast path searches the entire store, so without a filter it is the widest
+        // possible read: one call returns hits from every namespace regardless of ownership.
+        var namespaces = _index.GetNamespaces().Where(CanRead).ToList();
         foreach (var searchNs in namespaces)
         {
             if (searchNs.StartsWith("_system") || searchNs.StartsWith("active-debate")) continue;
@@ -240,6 +259,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(topic)) return "Error: topic must not be empty.";
         if (!StringListNormalizer.TryNormalize(relatedIds, nameof(relatedIds), out var relatedIdList, out var relatedIdsError))
             return $"Error: {relatedIdsError}";
+        if (!CanWrite(ns)) return WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("reflect");
         var actions = new List<string>();
@@ -268,6 +288,7 @@ public sealed class CompositeTools
             new Dictionary<string, string> { ["topic"] = topic },
             lifecycleState: "ltm");
         _index.Upsert(entry);
+        _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
         actions.Add("stored as ltm lesson");
 
         // 4. Auto-link to explicitly referenced memories

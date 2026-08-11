@@ -7,6 +7,7 @@ using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
+using McpEngramMemory.Core.Services.Sharing;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -25,10 +26,13 @@ public sealed class CoreMemoryTools
     private readonly QueryExpander _queryExpander;
     private readonly SpreadingActivationService _spreading;
     private readonly ClusterManager _clusters;
+    private readonly NamespaceRegistry _registry;
+    private readonly AgentIdentity _agent;
 
     public CoreMemoryTools(CognitiveIndex index, PhysicsEngine physics, IEmbeddingService embedding,
         MetricsCollector metrics, KnowledgeGraph graph, QueryExpander queryExpander,
-        SpreadingActivationService spreading, ClusterManager clusters)
+        SpreadingActivationService spreading, ClusterManager clusters,
+        NamespaceRegistry registry, AgentIdentity agent)
     {
         _index = index;
         _physics = physics;
@@ -38,7 +42,42 @@ public sealed class CoreMemoryTools
         _queryExpander = queryExpander;
         _spreading = spreading;
         _clusters = clusters;
+        _registry = registry;
+        _agent = agent;
     }
+
+    // ── namespace access control ──────────────────────────────────────────────
+    // Every data-touching tool below routes through these. Before this existed,
+    // NamespaceRegistry.HasAccess was called in exactly one place in the whole server
+    // (cross_search), so share_namespace/unshare_namespace protected nothing.
+
+    private bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
+
+    private bool CanWrite(string ns) => _registry.HasAccess(_agent.AgentId, ns, "write");
+
+    /// <summary>
+    /// Denial message for a read. Deliberately shaped like "not found" rather than "denied":
+    /// a distinct denial reply would confirm the namespace exists, turning every read into an
+    /// existence oracle for namespaces the caller cannot see.
+    /// </summary>
+    private static string ReadDenied(string ns) => $"No accessible memories in namespace '{ns}'.";
+
+    /// <summary>
+    /// Access check for an entry reached by id rather than by namespace. The graph and cluster
+    /// DTOs (<c>CognitiveEntryInfo</c>, <c>CognitiveSearchResult</c>) carry no namespace field,
+    /// which is very likely why expansion silently crossed namespaces for so long - the
+    /// namespace simply is not visible at the call site. Costs one index lookup per expanded
+    /// candidate, which is bounded by the result count.
+    /// </summary>
+    private bool CanReadEntryById(string entryId)
+    {
+        var entry = _index.Get(entryId);
+        return entry is not null && CanRead(entry.Ns);
+    }
+
+    private static string WriteDenied(string ns) =>
+        $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
+
 
     [McpServerTool(Name = "store_memory")]
     [Description("Save a memory when you need to supply a pre-computed embedding vector or control lifecycle state exactly. Don't use this by default; use `remember` instead — it auto-embeds, blocks duplicates, and links related entries without extra steps.")]
@@ -51,6 +90,8 @@ public sealed class CoreMemoryTools
         [Description("Optional metadata as a JSON object. Values may be any JSON type — strings are stored verbatim, numbers/booleans become their literal text, and arrays/objects are serialized to compact JSON so the dictionary storage stays flat.")] Dictionary<string, JsonElement>? metadata = null,
         [Description("Initial lifecycle state: 'stm' (default), 'ltm', or 'archived'.")] string? lifecycleState = null)
     {
+        if (!CanWrite(ns)) return WriteDenied(ns);
+
         try
         {
             using var _ = _metrics.StartTimer("store");
@@ -66,6 +107,7 @@ public sealed class CoreMemoryTools
                 MetadataNormalizer.Normalize(metadata),
                 lifecycleState ?? "stm");
             _index.Upsert(entry);
+            _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
 
             // Check for near-duplicates against just this entry (O(N) instead of O(N²))
             var duplicates = _index.FindDuplicatesForEntry(ns, id, threshold: 0.95f);
@@ -92,6 +134,7 @@ public sealed class CoreMemoryTools
     {
         if (entries is null || entries.Length == 0)
             return new { status = "error", message = "No entries provided." };
+        if (!CanWrite(ns)) return new { status = "error", message = WriteDenied(ns) };
 
         using var timer = _metrics.StartTimer("store_batch");
 
@@ -124,6 +167,7 @@ public sealed class CoreMemoryTools
 
         // Batch upsert with single lock
         int stored = _index.UpsertBatch(cognitiveEntries);
+        _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
 
         // Optional duplicate check
         var warnings = new List<string>();
@@ -171,6 +215,8 @@ public sealed class CoreMemoryTools
         [Description("When true, apply cluster-aware MMR diversity reranking to spread results across different sub-topics instead of clustering around one.")] bool diversity = false,
         [Description("Diversity trade-off [0.0-1.0]. 1.0=pure relevance, 0.0=pure diversity (default: 0.5).")] float diversityLambda = 0.5f)
     {
+        if (!CanRead(ns)) return ReadDenied(ns);
+
         using var timer = _metrics.StartTimer("search");
 
         float[] resolved;
@@ -271,6 +317,10 @@ public sealed class CoreMemoryTools
                 foreach (var neighbor in neighbors.Neighbors)
                 {
                     if (existingIds.Contains(neighbor.Entry.Id)) continue;
+                    // Graph edges are global and carry no namespace, so a neighbour can live
+                    // anywhere - including a namespace this caller may not read. Expansion
+                    // must not become a side channel around the namespace check above.
+                    if (!CanReadEntryById(neighbor.Entry.Id)) continue;
                     if (!states.Contains(neighbor.Entry.LifecycleState)) continue;
                     if (category is not null && neighbor.Entry.Category != category) continue;
 
@@ -295,7 +345,10 @@ public sealed class CoreMemoryTools
                     if (clusterInfo is null) continue;
 
                     // Include cluster summary node at high priority
-                    if (clusterInfo.SummaryEntry is not null && existingIds.Add(clusterInfo.SummaryEntry.Id))
+                    // Clusters are global too, and membership can span namespaces.
+                    if (clusterInfo.SummaryEntry is not null
+                        && CanReadEntryById(clusterInfo.SummaryEntry.Id)
+                        && existingIds.Add(clusterInfo.SummaryEntry.Id))
                     {
                         graphExpanded.Add(new CognitiveSearchResult(
                             clusterInfo.SummaryEntry.Id, clusterInfo.SummaryEntry.Text,
@@ -308,6 +361,7 @@ public sealed class CoreMemoryTools
                     // Include top cluster members
                     foreach (var member in clusterInfo.Members.Take(3))
                     {
+                        if (!CanReadEntryById(member.Id)) continue;
                         if (!existingIds.Add(member.Id)) continue;
                         if (!states.Contains(member.LifecycleState)) continue;
 
@@ -386,13 +440,23 @@ public sealed class CoreMemoryTools
     public string DeleteMemory(
         [Description("The identifier of the entry to delete.")] string id)
     {
-        // Cascade: remove graph edges (safe even if entry doesn't exist)
-        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
+        // Resolve first, so the entry's namespace - and therefore whether this caller may
+        // touch it - is known before anything is destroyed. Previously the edge and cluster
+        // cascade ran unconditionally, ahead of the existence check: a caller could strip an
+        // entry's graph edges and cluster memberships without any right to the entry, and
+        // even for ids that did not exist.
+        var existing = _index.Get(id);
+        if (existing is null)
+            return $"Entry '{id}' not found.";
 
-        // Cascade: remove from clusters
+        // Same reply as a genuine miss - a distinct denial would confirm the id exists.
+        if (!CanWrite(existing.Ns))
+            return $"Entry '{id}' not found.";
+
+        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
         _clusters.RemoveEntryFromAllClusters(id);
 
-        // Remove the entry itself — check return value to avoid TOCTOU
+        // Check the return value to avoid TOCTOU against a concurrent delete.
         if (!_index.Delete(id))
             return $"Entry '{id}' not found.";
 

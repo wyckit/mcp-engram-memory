@@ -9,6 +9,7 @@ using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 // OnnxEmbeddingService lives directly under Core.Services (already imported above).
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 using Xunit.Abstractions;
 
 namespace McpEngramMemory.Tests;
@@ -54,7 +55,7 @@ public class SpectralRetrievalBenchmark : IDisposable
         _metrics = new MetricsCollector();
         _diffusion = new MemoryDiffusionKernel(_index, _graph);
         _spectral = new SpectralRetrievalReranker(_diffusion);
-        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral);
+        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral, new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
     }
 
     public void Dispose()

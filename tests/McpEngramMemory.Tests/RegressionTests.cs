@@ -8,6 +8,7 @@ using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 
 namespace McpEngramMemory.Tests;
 
@@ -137,7 +138,7 @@ public class RegressionTests : IDisposable
         _clusters.CreateCluster("c1", "test", new[] { "a", "b" });
 
         var spreading = new SpreadingActivationService(_index, _graph, _clusters);
-        var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters);
+        var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters, new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
 
         // Run StoreSummary and DeleteMemory concurrently — should not deadlock.
         var tasks = new[]

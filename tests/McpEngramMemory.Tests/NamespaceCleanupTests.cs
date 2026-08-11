@@ -4,12 +4,19 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 using Microsoft.Data.Sqlite;
 
 namespace McpEngramMemory.Tests;
 
 public class NamespaceCleanupTests : IDisposable
 {
+    private sealed class CleanupStubEmbedding : IEmbeddingService
+    {
+        public int Dimensions => 2;
+        public float[] Embed(string text) => [0.5f, 0.5f];
+    }
+
     private readonly string _testDataPath;
     private readonly PersistenceManager _persistence;
     private readonly CognitiveIndex _index;
@@ -124,7 +131,7 @@ public class NamespaceCleanupTests : IDisposable
             "debate entry", oldTime);
         _index.Upsert(entry);
 
-        var tool = new AdminTools(_index, _graph, _clusters, _persistence);
+        var tool = new AdminTools(_index, _graph, _clusters, _persistence, new NamespaceRegistry(_index, new CleanupStubEmbedding()), AgentIdentity.Default);
         var result = await tool.PurgeDebates(maxAgeHours: 24, dryRun: true);
 
         var purgeResult = Assert.IsType<PurgeDebatesResult>(result);
@@ -142,7 +149,7 @@ public class NamespaceCleanupTests : IDisposable
             "debate entry", oldTime);
         _index.Upsert(entry);
 
-        var tool = new AdminTools(_index, _graph, _clusters, _persistence);
+        var tool = new AdminTools(_index, _graph, _clusters, _persistence, new NamespaceRegistry(_index, new CleanupStubEmbedding()), AgentIdentity.Default);
         var result = await tool.PurgeDebates(maxAgeHours: 24, dryRun: false);
 
         var purgeResult = Assert.IsType<PurgeDebatesResult>(result);
@@ -159,7 +166,7 @@ public class NamespaceCleanupTests : IDisposable
             "debate entry"); // CreatedAt defaults to UtcNow
         _index.Upsert(entry);
 
-        var tool = new AdminTools(_index, _graph, _clusters, _persistence);
+        var tool = new AdminTools(_index, _graph, _clusters, _persistence, new NamespaceRegistry(_index, new CleanupStubEmbedding()), AgentIdentity.Default);
         var result = await tool.PurgeDebates(maxAgeHours: 24, dryRun: false);
 
         var purgeResult = Assert.IsType<PurgeDebatesResult>(result);
@@ -176,7 +183,7 @@ public class NamespaceCleanupTests : IDisposable
         _index.Upsert(MakeEntryWithTimestamp("e2", new[] { 0f, 1f }, "active-debate-old",
             "debate entry", oldTime));
 
-        var tool = new AdminTools(_index, _graph, _clusters, _persistence);
+        var tool = new AdminTools(_index, _graph, _clusters, _persistence, new NamespaceRegistry(_index, new CleanupStubEmbedding()), AgentIdentity.Default);
         var result = await tool.PurgeDebates(maxAgeHours: 24, dryRun: false);
 
         var purgeResult = Assert.IsType<PurgeDebatesResult>(result);

@@ -7,6 +7,7 @@ using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
+using McpEngramMemory.Core.Services.Sharing;
 
 namespace McpEngramMemory.Tests;
 
@@ -86,7 +87,7 @@ public class CoreMemoryToolsTests : IDisposable
         _graph = new KnowledgeGraph(_persistence, _index);
         _clusters = new ClusterManager(_index, _persistence);
         var spreading = new SpreadingActivationService(_index, _graph, _clusters);
-        _tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters);
+        _tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters, new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
     }
 
     public void Dispose()

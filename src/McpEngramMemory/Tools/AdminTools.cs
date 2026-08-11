@@ -4,6 +4,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using ModelContextProtocol.Server;
 
@@ -26,16 +27,23 @@ public sealed class AdminTools
     private readonly ClusterManager _clusters;
     private readonly IStorageProvider _storage;
     private readonly IBackgroundWorkerStatusTracker? _statusTracker;
+    private readonly NamespaceRegistry _registry;
+    private readonly AgentIdentity _agent;
 
     public AdminTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, IStorageProvider storage,
+        NamespaceRegistry registry, AgentIdentity agent,
         IBackgroundWorkerStatusTracker? statusTracker = null)
     {
         _index = index;
         _graph = graph;
         _clusters = clusters;
         _storage = storage;
+        _registry = registry;
+        _agent = agent;
         _statusTracker = statusTracker;
     }
+
+    private bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
 
     [McpServerTool(Name = "get_memory")]
     [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
@@ -44,6 +52,12 @@ public sealed class AdminTools
     {
         var entry = _index.Get(id);
         if (entry is null)
+            return $"Entry '{id}' not found.";
+
+        // get_memory resolves by id across every namespace, so without this it hands back the
+        // full text and metadata of any entry whose id a caller can guess or has seen in a
+        // graph edge. Same reply as a genuine miss - a distinct denial would confirm the id.
+        if (!CanRead(entry.Ns))
             return $"Entry '{id}' not found.";
 
         var edges = _graph.GetEdgesForEntry(id);
@@ -69,7 +83,10 @@ public sealed class AdminTools
         [Description("Maximum namespaces to list (default: 100). Use 0 for no cap. Counts are always exact regardless of this limit.")] int namespaceLimit = DefaultNamespaceLimit)
     {
         var (stm, ltm, archived) = _index.GetStateCounts(ns);
-        var namespaces = _index.GetNamespaces();
+        // Namespace names alone can be sensitive (project or client names) and are a stepping
+        // stone to targeting other tools by name, so list only what this caller may read.
+        // Counts stay store-wide: they are aggregates and disclose nothing specific.
+        var namespaces = _index.GetNamespaces().Where(CanRead).ToList();
         var edgeCount = _graph.EdgeCount;
         var clusterCount = _clusters.ClusterCount;
 
