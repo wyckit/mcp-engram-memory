@@ -9,7 +9,7 @@ namespace McpEngramMemory.Core.Services.Synthesis;
 /// Lightweight Ollama API client for local SLM inference.
 /// Communicates with the Ollama REST API at localhost:11434.
 /// Implements <see cref="ITextGenerator"/> so it can be used interchangeably with the
-/// in-process <see cref="OnnxGenAiTextGenerator"/> backend.
+/// in-process <c>OnnxGenAiTextGenerator</c> (McpEngramMemory.Synthesis.Onnx) backend.
 /// </summary>
 public sealed class OllamaClient : IDisposable, ITextGenerator
 {

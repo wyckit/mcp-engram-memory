@@ -48,7 +48,22 @@
     <!-- In-process SLM generation for SynthesisEngine (Qwen2.5-0.5B). CPU package; bring in
          Microsoft.ML.OnnxRuntimeGenAI.Cuda / .DirectML at the app layer for GPU acceleration. -->
     <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.29" />
+    <!--
+      Direct reference solely to lift the native SQLite bundle out of GHSA-2m69-gcr7-jv3q
+      (CVE-2025-6965), which affects SQLitePCLRaw.lib.e_sqlite3 <= 2.1.11 — a numeric
+      truncation in bundled SQLite before 3.50.2 that can corrupt memory.
+
+      Upgrading Microsoft.Data.Sqlite does not fix this on its own: 8.0.29 still pulls
+      2.1.6 transitively and even 9.0.18 pulls only 2.1.10, both inside the affected
+      range. Naming the bundle directly overrides the transitive pin. Stays on the 2.1.x
+      ABI line, so Microsoft.Data.Sqlite.Core's `SQLitePCLRaw.core >= 2.1.6` requirement
+      is satisfied unchanged.
+
+      Remove this once Microsoft.Data.Sqlite ships a servicing release that pulls
+      2.1.12 or later by itself.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
   </ItemGroup>
 

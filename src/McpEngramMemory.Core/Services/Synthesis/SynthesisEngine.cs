@@ -36,7 +36,7 @@ public sealed class SynthesisEngine
 
     /// <summary>
     /// Backend-agnostic constructor: inject any <see cref="ITextGenerator"/> — e.g.
-    /// <see cref="OnnxGenAiTextGenerator"/> for fully in-process synthesis with no external daemon.
+    /// <c>OnnxGenAiTextGenerator</c> (McpEngramMemory.Synthesis.Onnx) for fully in-process synthesis with no external daemon.
     /// </summary>
     public SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
         ITextGenerator generator,

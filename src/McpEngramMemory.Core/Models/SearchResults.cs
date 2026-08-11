@@ -131,12 +131,6 @@ public sealed record AutoLinkResult(
     [property: JsonPropertyName("edgesCreated")] int EdgesCreated,
     [property: JsonPropertyName("edgesSkippedExisting")] int EdgesSkippedExisting,
     [property: JsonPropertyName("hitMaxEdgeCap")] bool HitMaxEdgeCap,
-    /// <summary>
-    /// Entries beyond the scan bound that were not examined this pass, or 0. The pairwise
-    /// stage is quadratic, so an unbounded namespace eventually makes a routine background
-    /// sweep expensive; the bound keeps that predictable. Reported rather than applied
-    /// silently — a truncated scan that looks complete is worse than a slow one.
-    /// </summary>
     [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0);
 
 /// <summary>
@@ -211,7 +205,6 @@ public sealed record AccretionScanResult(
     [property: JsonPropertyName("clustersDetected")] int ClustersDetected,
     [property: JsonPropertyName("newCollapses")] IReadOnlyList<PendingCollapseInfo> NewCollapses,
     [property: JsonPropertyName("autoSummaries")] IReadOnlyList<AutoSummaryInfo>? AutoSummaries = null,
-    /// <summary>Entries beyond the scan bound that DBSCAN did not consider this pass, or 0.</summary>
     [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0);
 
 /// <summary>

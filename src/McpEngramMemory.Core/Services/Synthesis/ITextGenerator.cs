@@ -6,7 +6,7 @@ namespace McpEngramMemory.Core.Services.Synthesis;
 /// Implementations:
 /// <list type="bullet">
 ///   <item><see cref="OllamaClient"/> — HTTP to a local Ollama daemon (external dependency).</item>
-///   <item><see cref="OnnxGenAiTextGenerator"/> — fully in-process via ONNX Runtime GenAI (no daemon).</item>
+///   <item><c>OnnxGenAiTextGenerator</c> (McpEngramMemory.Synthesis.Onnx) — fully in-process via ONNX Runtime GenAI (no daemon).</item>
 /// </list>
 /// </summary>
 public interface ITextGenerator : IDisposable

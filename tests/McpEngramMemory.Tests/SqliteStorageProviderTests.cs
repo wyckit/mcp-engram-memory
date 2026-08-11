@@ -46,6 +46,20 @@ public class SqliteStorageProviderTests : IDisposable
         {
             var provider = new SqliteStorageProvider(dbPath, debounceMs: 10);
 
+            // Order matters. The pin connection is opened BEFORE the writes, not after.
+            //
+            // SQLite removes the WAL when the last connection closes, and this provider opens
+            // one per operation — so with no other connection held, whether a -wal file still
+            // exists after the writes depends on pool timing. Opening the pin afterwards does
+            // not help either: if the WAL was already reclaimed, merely connecting does not
+            // recreate it, which is how this failed a second time. Holding a connection open
+            // across the writes means the WAL cannot be removed at all.
+            //
+            // That determinism is what gives the post-dispose assertion meaning: with no WAL
+            // to reclaim, it would pass whether or not the checkpoint ever ran.
+            using var pin = new SqliteConnection($"Data Source={dbPath}");
+            pin.Open();
+
             // Enough rows to push the WAL past SQLite's 1,000-page auto-checkpoint so there
             // is something substantial left to reclaim.
             var entries = new List<CognitiveEntry>();
@@ -53,23 +67,13 @@ public class SqliteStorageProviderTests : IDisposable
                 entries.Add(new CognitiveEntry($"e{i}", new float[64], "walns", $"entry body {i}"));
             provider.SaveNamespaceSync("walns", new NamespaceData { Entries = entries });
 
-            // Hold an explicit connection open for the duration. Without it this precondition
-            // is a race: the provider opens a connection per operation, so whether a -wal file
-            // still exists at this instant depends on when the pool happens to release the
-            // last handle. It survived locally and on net8.0 and lost the race on another
-            // target framework in CI. An open connection makes "the WAL exists" deterministic,
-            // which is what gives the post-dispose assertion its meaning — without a WAL to
-            // reclaim, that assertion would pass whether or not the checkpoint ran.
-            using (var pin = new SqliteConnection($"Data Source={dbPath}"))
-            {
-                pin.Open();
+            Assert.True(File.Exists(walPath), "expected a -wal file while a connection is held open");
+            var walBeforeDispose = new FileInfo(walPath).Length;
+            Assert.True(walBeforeDispose > 0, "expected a non-empty WAL before dispose");
 
-                Assert.True(File.Exists(walPath), "expected a -wal file while a connection is open");
-                var walWhilePinned = new FileInfo(walPath).Length;
-                Assert.True(walWhilePinned > 0, "expected a non-empty WAL while a connection is open");
-            }
-
-            var walBeforeDispose = File.Exists(walPath) ? new FileInfo(walPath).Length : 0;
+            // Release the pin so the checkpoint can truncate: wal_checkpoint(TRUNCATE) needs
+            // no other readers.
+            pin.Close();
 
             provider.Dispose();
 

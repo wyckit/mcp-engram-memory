@@ -70,6 +70,7 @@ public sealed class AutoLinkScanner
     /// <param name="ns">Namespace to scan.</param>
     /// <param name="threshold">Optional override for the similarity threshold; defaults to the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>.</param>
     /// <param name="maxNewEdges">Optional override for the per-scan edge cap.</param>
+    /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
     public AutoLinkResult Scan(string ns, float? threshold = null, int? maxNewEdges = null,
         int maxScanEntries = DefaultMaxScanEntries)
     {

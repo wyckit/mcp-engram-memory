@@ -3,12 +3,12 @@
 ## Supported versions
 
 Security fixes are provided for the latest minor release on the current major
-version line — currently the `v1.3.x` line.
+version line — currently the `v1.5.x` line.
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.3.x    | :white_check_mark: |
-| < 1.3    | :x:                |
+| 1.5.x    | :white_check_mark: |
+| < 1.5    | :x:                |
 
 ## Reporting a vulnerability
 
@@ -104,10 +104,11 @@ Two consequences worth stating plainly:
   readable and writable by everyone until an identified agent writes to them
   and claims them. Upgrading does not retroactively protect existing data.
 
-Enforcement currently covers the tools in the default `minimal` profile.
-Extending it to the `standard` and `full` profiles is in progress; until that
-lands, enabling those profiles widens the surface beyond what these checks
-cover.
+Enforcement covers the default `minimal` profile and the namespace-scoped tools in
+the `standard` and `full` profiles. Two paths are not yet covered:
+`ExpertDispatcher`'s hierarchical routing, which resolves context inside a Core
+service rather than the tool layer, and the benchmark tools' file-path and
+executable parameters, which are not namespace-scoped.
 
 > **Prior versions.** Through v1.4.0 the ACL model did not function at all. The
 > permission check was reached from exactly one tool, nothing ever registered
@@ -118,15 +119,18 @@ cover.
 
 ## Known dependency advisories
 
-- **GHSA-2m69-gcr7-jv3q / CVE-2025-6965 — `SQLitePCLRaw.lib.e_sqlite3` 2.1.6**
-  (transitive via `Microsoft.Data.Sqlite` 8.0.11,
-  `McpEngramMemory.Core.csproj` line 50). Documented **accepted risk**: no
-  patched release exists (all versions ≤ 2.1.11 ship an affected e_sqlite3
-  build), and the vulnerable path is not reachable — exploiting it requires
-  attacker-controlled SQL, and the server has zero string-interpolated SQL
-  reachable by agent content: `SqliteStorageProvider` interpolates nothing at
-  all; `SqlServerStorageProvider` interpolates only an operator-configured
-  schema name validated against `^[A-Za-z_][A-Za-z0-9_]*$`
-  (`src/McpEngramMemory.Core/Services/Storage/SqlServerStorageProvider.cs`,
-  line 25); all values are parameterized. Will be picked up via a
-  `Microsoft.Data.Sqlite` bump when a fixed SQLitePCLRaw ships.
+- **GHSA-2m69-gcr7-jv3q / CVE-2025-6965 — resolved in 1.5.0.**
+  `SQLitePCLRaw` is now pinned to 2.1.12, which is outside the advisory's affected
+  range (`<= 2.1.11`). Earlier releases shipped 2.1.6 transitively and documented
+  this as accepted risk on the grounds that no patched release existed; 2.1.12 has
+  since shipped, so that reasoning is obsolete.
+
+  Upgrading `Microsoft.Data.Sqlite` does not fix it on its own — 8.0.29 still pulls
+  2.1.6 and 9.0.18 pulls only 2.1.10, both affected — so `McpEngramMemory.Core`
+  names `SQLitePCLRaw.bundle_e_sqlite3` directly to override the transitive pin.
+
+  For the record, the original reachability argument still holds and is worth
+  keeping: exploiting the flaw requires attacker-controlled SQL, and this server
+  has none. `SqliteStorageProvider` builds no SQL by interpolation at all;
+  `SqlServerStorageProvider` interpolates only an operator-configured schema name
+  validated against `^[A-Za-z_][A-Za-z0-9_]*$`, and every value is parameterized.

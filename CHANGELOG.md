@@ -34,6 +34,15 @@ _Minor rather than patch: two result records gained trailing parameters, and nam
   and embed the namespace name in their id, so the snapshot disclosed the name of every
   private namespace in the store.
 
+- **GHSA-2m69-gcr7-jv3q / CVE-2025-6965 is resolved, not merely documented.**
+  `SQLitePCLRaw` is pinned to 2.1.12, outside the advisory's affected range
+  (`<= 2.1.11`). Previous releases shipped 2.1.6 and recorded this as accepted risk
+  because no patched version existed at the time; one has since shipped. Upgrading
+  `Microsoft.Data.Sqlite` alone does not fix it — 8.0.29 still resolves 2.1.6 and
+  9.0.18 resolves 2.1.10 — so `Core` names the bundle directly to override the
+  transitive pin. `Microsoft.Data.Sqlite` also moves 8.0.11 → 8.0.29 on the same
+  servicing line. The build now emits **zero warnings**.
+
 - **Model downloads are checksum-verified.** The embedding model and vocab are fetched from
   Hugging Face at build time and packed into the published packages, previously with no
   integrity check of any kind — a tampered download on a release build would have shipped to
