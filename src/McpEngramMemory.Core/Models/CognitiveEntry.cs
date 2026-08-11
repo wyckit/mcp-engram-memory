@@ -82,6 +82,9 @@ public sealed class CognitiveEntry
             throw new ArgumentException("Vector must not be null or empty.", nameof(vector));
         if (string.IsNullOrWhiteSpace(ns))
             throw new ArgumentException("Namespace must not be empty.", nameof(ns));
+        if (ns.Length > MaxNamespaceLength)
+            throw new ArgumentException(
+                $"Namespace must be at most {MaxNamespaceLength} characters (got {ns.Length}).", nameof(ns));
 
         Id = id;
         Vector = (float[])vector.Clone();
@@ -134,6 +137,23 @@ public sealed class CognitiveEntry
     }
 
     /// <summary>Maximum length of a tenant identifier (matches the storage column width).</summary>
+    /// <summary>
+    /// Maximum namespace length, enforced on ingest only.
+    ///
+    /// The JSON storage backend maps a namespace to a filename, so an over-long name produces
+    /// a path the OS rejects. That write happens on a debounced background timer, long after
+    /// the tool call returned success, and the resulting IOException is only logged — so the
+    /// entry, and every later write to that namespace, was silently never persisted and lost
+    /// on restart. Rejecting at ingest turns silent data loss into an immediate, actionable
+    /// error. 128 leaves ample room for the data directory within a conventional path budget
+    /// while being far longer than any real namespace name.
+    ///
+    /// Deliberately NOT enforced in the JSON constructor: validation belongs on the way in,
+    /// not on the way out, so tightening this limit can never make already-stored data
+    /// unloadable.
+    /// </summary>
+    public const int MaxNamespaceLength = 128;
+
     public const int MaxTenantIdLength = 64;
 
     /// <summary>

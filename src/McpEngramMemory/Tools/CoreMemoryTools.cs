@@ -95,19 +95,28 @@ public sealed class CoreMemoryTools
 
         using var timer = _metrics.StartTimer("store_batch");
 
-        // Embed all entries
+        // Embed all entries. Entry construction validates id/vector/namespace, so a bad
+        // argument surfaces as a clean tool error rather than an unhandled exception — the
+        // other store paths already do this, and this one was the exception.
         var cognitiveEntries = new List<CognitiveEntry>(entries.Length);
-        foreach (var e in entries)
+        try
         {
-            if (string.IsNullOrWhiteSpace(e.Id) || string.IsNullOrWhiteSpace(e.Text))
-                continue;
+            foreach (var e in entries)
+            {
+                if (string.IsNullOrWhiteSpace(e.Id) || string.IsNullOrWhiteSpace(e.Text))
+                    continue;
 
-            var prefix = BenchmarkRunner.BuildContextualPrefix(ns, e.Category);
-            var vector = _embedding.Embed(prefix + e.Text);
-            var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category,
-                MetadataNormalizer.Normalize(e.Metadata),
-                e.LifecycleState ?? "stm");
-            cognitiveEntries.Add(entry);
+                var prefix = BenchmarkRunner.BuildContextualPrefix(ns, e.Category);
+                var vector = _embedding.Embed(prefix + e.Text);
+                var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category,
+                    MetadataNormalizer.Normalize(e.Metadata),
+                    e.LifecycleState ?? "stm");
+                cognitiveEntries.Add(entry);
+            }
+        }
+        catch (ArgumentException ex)
+        {
+            return new { status = "error", message = ex.Message };
         }
 
         if (cognitiveEntries.Count == 0)
@@ -393,7 +402,19 @@ public sealed class CoreMemoryTools
     private float[] ResolveVector(float[]? vector, string? text)
     {
         if (vector is not null && vector.Length > 0)
+        {
+            // A caller-supplied vector must match the embedding model's dimensionality.
+            // Without this check a mismatched length reaches VectorMath.Dot, whose loop is
+            // bound by the query length while it indexes the stored vector — so the first
+            // candidate comparison throws IndexOutOfRangeException from deep inside the
+            // search path, far from the parameter that caused it.
+            if (vector.Length != _embedding.Dimensions)
+                throw new ArgumentException(
+                    $"Vector must have exactly {_embedding.Dimensions} dimensions to match the embedding model (got {vector.Length}).",
+                    nameof(vector));
+
             return vector;
+        }
 
         if (!string.IsNullOrWhiteSpace(text))
             return _embedding.Embed(text);

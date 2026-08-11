@@ -19,6 +19,59 @@ public class CoreMemoryToolsTests : IDisposable
     private readonly ClusterManager _clusters;
     private readonly CoreMemoryTools _tools;
 
+    /// <summary>
+    /// A caller-supplied vector whose length differs from the embedding model's used to reach
+    /// VectorMath.Dot, whose loop is bound by the query length while it indexes the stored
+    /// vector — throwing IndexOutOfRangeException from deep inside the search path rather
+    /// than reporting the bad parameter.
+    /// </summary>
+    [Fact]
+    public void SearchMemory_RejectsWrongDimensionVector()
+    {
+        _tools.StoreMemory("e1", "dimns", "hello");
+
+        var result = _tools.SearchMemory(ns: "dimns", vector: new[] { 1f, 2f, 3f, 4f, 5f });
+
+        var message = Assert.IsType<string>(result);
+        Assert.Contains("2 dimensions", message);
+        Assert.Contains("got 5", message);
+    }
+
+    [Fact]
+    public void StoreMemory_RejectsWrongDimensionVector()
+    {
+        var result = _tools.StoreMemory("e-dim", "dimns", "text", vector: new[] { 1f, 2f, 3f });
+        Assert.Contains("2 dimensions", result);
+    }
+
+    /// <summary>
+    /// The JSON backend maps a namespace to a filename, so an over-long name produced a path
+    /// the OS rejected. That write happens on a debounced timer after the tool already
+    /// returned success, and the IOException was only logged — the entry and every later
+    /// write to that namespace were silently lost. Reject at ingest instead.
+    /// </summary>
+    [Fact]
+    public void StoreMemory_RejectsOverlongNamespace()
+    {
+        var tooLong = new string('n', CognitiveEntry.MaxNamespaceLength + 1);
+
+        var result = _tools.StoreMemory("e-ns", tooLong, "text");
+
+        Assert.Contains("at most", result);
+        Assert.Empty(_index.GetAllInNamespace(tooLong));
+    }
+
+    [Fact]
+    public void StoreMemory_AcceptsNamespaceAtTheLimit()
+    {
+        var atLimit = new string('n', CognitiveEntry.MaxNamespaceLength);
+
+        var result = _tools.StoreMemory("e-ns-ok", atLimit, "text");
+
+        Assert.Contains("Stored entry", result);
+        Assert.Single(_index.GetAllInNamespace(atLimit));
+    }
+
     private sealed class StubEmbeddingService : IEmbeddingService
     {
         public int Dimensions => 2;
