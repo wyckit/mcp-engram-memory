@@ -20,19 +20,22 @@ public sealed class DebateTools
     private readonly IEmbeddingService _embedding;
     private readonly DebateSessionManager _sessions;
     private readonly MetricsCollector _metrics;
+    private readonly NamespaceAccess _access;
 
     public DebateTools(
         CognitiveIndex index,
         KnowledgeGraph graph,
         IEmbeddingService embedding,
         DebateSessionManager sessions,
-        MetricsCollector metrics)
+        MetricsCollector metrics,
+        NamespaceAccess access)
     {
         _index = index;
         _graph = graph;
         _embedding = embedding;
         _sessions = sessions;
         _metrics = metrics;
+        _access = access;
     }
 
     [McpServerTool(Name = "consult_expert_panel")]
@@ -71,14 +74,20 @@ public sealed class DebateTools
 
         foreach (var expertNs in experts)
         {
-            IReadOnlyList<CognitiveSearchResult> results;
-            try
+            // Expert namespaces are supplied by the caller directly, so this is a normal
+            // namespace read - a namespace the caller can't read yields no context, same as
+            // a namespace with nothing in it, and falls through to the cold-start path below.
+            IReadOnlyList<CognitiveSearchResult> results = Array.Empty<CognitiveSearchResult>();
+            if (_access.CanRead(expertNs))
             {
-                results = _index.Search(queryVector, expertNs, perExpertK, minScore, includeStates: states);
-            }
-            catch (Exception ex)
-            {
-                return $"Error searching expert '{expertNs}': {ex.Message}";
+                try
+                {
+                    results = _index.Search(queryVector, expertNs, perExpertK, minScore, includeStates: states);
+                }
+                catch (Exception ex)
+                {
+                    return $"Error searching expert '{expertNs}': {ex.Message}";
+                }
             }
 
             bool hadContext = results.Count > 0;
@@ -193,6 +202,8 @@ public sealed class DebateTools
             return "Error: consensusSummary must not be empty.";
         if (string.IsNullOrWhiteSpace(targetNamespace))
             return "Error: targetNamespace must not be empty.";
+        if (!_access.CanWrite(targetNamespace))
+            return NamespaceAccess.WriteDenied(targetNamespace);
 
         // Resolve winning node atomically (also validates session exists)
         var winningEntryId = _sessions.ResolveAlias(sessionId, winningNode);
@@ -216,6 +227,7 @@ public sealed class DebateTools
             },
             lifecycleState: "ltm");
         _index.Upsert(consensusEntry);
+        _access.ClaimOnWrite(targetNamespace);
 
         // 2. Link winning node to consensus (parent_child)
         var parentEdge = new GraphEdge(winningEntryId, consensusId, "parent_child", 1.0f,

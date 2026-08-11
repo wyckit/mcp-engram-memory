@@ -16,12 +16,14 @@ public sealed class VisualizationTools
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly ClusterManager _clusters;
+    private readonly NamespaceAccess _access;
 
-    public VisualizationTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters)
+    public VisualizationTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, NamespaceAccess access)
     {
         _index = index;
         _graph = graph;
         _clusters = clusters;
+        _access = access;
     }
 
     [McpServerTool(Name = "get_graph_snapshot")]
@@ -39,7 +41,19 @@ public sealed class VisualizationTools
         bool includeArchived = false)
     {
         // ── Nodes ────────────────────────────────────────────────────────────
-        var allEntries = ns == "*" ? _index.GetAll() : _index.GetAllInNamespace(ns);
+        // This exports the whole graph, so an unreadable single ns or a namespace this
+        // caller can't see inside "*" must vanish entirely - same shape as an empty store,
+        // not a distinct denial that would confirm the namespace exists.
+        // System namespaces are excluded outright, not merely access-checked. HasAccess
+        // deliberately treats any '_'-prefixed namespace as always readable, and
+        // NamespaceRegistry stores one permission record per namespace in _system_sharing
+        // with the namespace name embedded in the record's id ("perm_<ns>"). Exporting them
+        // therefore hands back the name of every private namespace in the store - the exact
+        // disclosure the namespace filtering below is meant to prevent. They are internal
+        // bookkeeping and have no place in a memory-graph visualisation regardless.
+        var allEntries = (ns == "*" ? _index.GetAll() : _index.GetAllInNamespace(ns))
+            .Where(e => !e.Ns.StartsWith('_'))
+            .Where(e => _access.CanRead(e.Ns));
 
         var nodes = allEntries
             .Where(e => includeArchived || e.LifecycleState != "archived")
@@ -66,9 +80,10 @@ public sealed class VisualizationTools
             .ToList();
 
         // ── Clusters ─────────────────────────────────────────────────────────
-        var namespaces = ns == "*"
-            ? (IReadOnlyList<string>)_index.GetNamespaces()
-            : [ns];
+        // Also drives Stats.Namespaces below - filtering here keeps namespace names
+        // themselves from leaking through either surface.
+        IEnumerable<string> candidateNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
+        var namespaces = candidateNamespaces.Where(n => !n.StartsWith('_')).Where(_access.CanRead).ToList();
 
         var clusters = new List<GraphSnapshotCluster>();
         foreach (var nsName in namespaces)

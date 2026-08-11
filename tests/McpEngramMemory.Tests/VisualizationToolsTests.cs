@@ -31,7 +31,8 @@ public class VisualizationToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
         _clusters = new ClusterManager(_index, _persistence);
-        _tools = new VisualizationTools(_index, _graph, _clusters);
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new StubEmbedding()), AgentIdentity.Default);
+        _tools = new VisualizationTools(_index, _graph, _clusters, access);
     }
 
     public void Dispose()

@@ -17,13 +17,16 @@ public sealed class AccretionTools
     private readonly ClusterManager _clusters;
     private readonly LifecycleEngine _lifecycle;
     private readonly IEmbeddingService _embedding;
+    private readonly NamespaceAccess _access;
 
-    public AccretionTools(AccretionScanner scanner, ClusterManager clusters, LifecycleEngine lifecycle, IEmbeddingService embedding)
+    public AccretionTools(AccretionScanner scanner, ClusterManager clusters, LifecycleEngine lifecycle,
+        IEmbeddingService embedding, NamespaceAccess access)
     {
         _scanner = scanner;
         _clusters = clusters;
         _lifecycle = lifecycle;
         _embedding = embedding;
+        _access = access;
     }
 
     [McpServerTool(Name = "get_pending_collapses")]
@@ -31,6 +34,7 @@ public sealed class AccretionTools
     public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(
         [Description("Namespace to check for pending collapses.")] string ns)
     {
+        if (!_access.CanRead(ns)) return Array.Empty<PendingCollapseInfo>();
         return _scanner.GetPendingCollapses(ns);
     }
 
@@ -41,11 +45,20 @@ public sealed class AccretionTools
         [Description("LLM-generated summary text for the cluster.")] string summaryText,
         [Description("Embedding vector of the summary text.")] float[]? summaryVector = null)
     {
+        // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
+        // "exists but you can't touch it".
+        var ns = _scanner.GetPendingCollapseNs(collapseId);
+        if (ns is null || !_access.CanWrite(ns))
+            return $"Error: Collapse '{collapseId}' not found.";
+
         var resolved = summaryVector is not null && summaryVector.Length > 0
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        return _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, _lifecycle);
+        var result = _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, _lifecycle);
+        if (!result.StartsWith("Error:"))
+            _access.ClaimOnWrite(ns);
+        return result;
     }
 
     [McpServerTool(Name = "dismiss_collapse")]
@@ -53,6 +66,10 @@ public sealed class AccretionTools
     public string DismissCollapse(
         [Description("The pending collapse ID to dismiss.")] string collapseId)
     {
+        var ns = _scanner.GetPendingCollapseNs(collapseId);
+        if (ns is null || !_access.CanWrite(ns))
+            return $"Error: Collapse '{collapseId}' not found.";
+
         return _scanner.DismissCollapse(collapseId);
     }
 

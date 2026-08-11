@@ -1,5 +1,7 @@
+using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Intelligence;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Core.Services.Synthesis;
 using McpEngramMemory.Tools;
@@ -28,7 +30,8 @@ public class SynthesisToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _clusters = new ClusterManager(_index, _persistence);
         _synthesis = new SynthesisEngine(_index, _clusters);
-        _tools = new SynthesisTools(_synthesis);
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
+        _tools = new SynthesisTools(_synthesis, access);
     }
 
     public void Dispose()

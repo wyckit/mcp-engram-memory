@@ -1,6 +1,7 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Lifecycle;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -26,7 +27,8 @@ public class LifecycleToolsTests : IDisposable
         _persistence = new PersistenceManager(_testDataPath, debounceMs: 50);
         _index = new CognitiveIndex(_persistence);
         _lifecycle = new LifecycleEngine(_index);
-        _tools = new LifecycleTools(_lifecycle, new StubEmbeddingService());
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
+        _tools = new LifecycleTools(_lifecycle, new StubEmbeddingService(), _index, access);
     }
 
     public void Dispose()

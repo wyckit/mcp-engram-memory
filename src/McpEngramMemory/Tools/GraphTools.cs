@@ -14,11 +14,29 @@ public sealed class GraphTools
 {
     private readonly KnowledgeGraph _graph;
     private readonly AutoLinkScanner _autoLink;
+    private readonly CognitiveIndex _index;
+    private readonly NamespaceAccess _access;
 
-    public GraphTools(KnowledgeGraph graph, AutoLinkScanner autoLink)
+    public GraphTools(KnowledgeGraph graph, AutoLinkScanner autoLink, CognitiveIndex index, NamespaceAccess access)
     {
         _graph = graph;
         _autoLink = autoLink;
+        _index = index;
+        _access = access;
+    }
+
+    /// <summary>
+    /// Access check for an edge endpoint reached by id. Graph edges carry no namespace of
+    /// their own, so the only way to know whether a caller may touch one is to resolve the
+    /// entry at each end and check its namespace. Same reply shape as a genuine miss - a
+    /// distinct denial would confirm the id exists in a namespace the caller cannot see.
+    /// </summary>
+    private string? DenyIfCannotWrite(string id)
+    {
+        var entry = _index.Get(id);
+        if (entry is null || !_access.CanWrite(entry.Ns))
+            return $"Error: Entry '{id}' not found.";
+        return null;
     }
 
     [McpServerTool(Name = "link_memories")]
@@ -33,7 +51,7 @@ public sealed class GraphTools
         try
         {
             var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata);
-            return _graph.AddEdge(edge);
+            return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.AddEdge(edge);
         }
         catch (ArgumentException ex)
         {
@@ -48,7 +66,7 @@ public sealed class GraphTools
         [Description("Edge destination entry ID.")] string targetId,
         [Description("Specific relation to remove (null = all).")] string? relation = null)
     {
-        return _graph.RemoveEdges(sourceId, targetId, relation);
+        return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.RemoveEdges(sourceId, targetId, relation);
     }
 
     [McpServerTool(Name = "get_neighbors")]
@@ -58,7 +76,14 @@ public sealed class GraphTools
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
-        return _graph.GetNeighbors(id, relation, direction);
+        var result = _graph.GetNeighbors(id, relation, direction);
+
+        // Edges are global and carry no namespace, so a neighbor can live anywhere -
+        // including a namespace this caller may not read. Filter, don't deny: the id the
+        // caller passed in is already known to them, so only the resolved neighbors need
+        // to be hidden.
+        var visible = result.Neighbors.Where(n => _access.CanRead(n.Entry.Namespace)).ToList();
+        return new GetNeighborsResult(result.Id, visible);
     }
 
     [McpServerTool(Name = "traverse_graph")]
@@ -70,7 +95,18 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
-        return _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
+        var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
+
+        // The start entry itself is included in Entries, so it must be filtered too -
+        // otherwise a caller could learn the text of an unreadable entry just by naming it
+        // as the traversal root. Drop any edge whose endpoint fell out of the visible set.
+        var visibleEntries = result.Entries.Where(e => _access.CanRead(e.Namespace)).ToList();
+        var visibleIds = visibleEntries.Select(e => e.Id).ToHashSet();
+        var visibleEdges = result.Edges
+            .Where(e => visibleIds.Contains(e.SourceId) && visibleIds.Contains(e.TargetId))
+            .ToList();
+
+        return new TraversalResult(result.StartId, visibleEntries, visibleEdges);
     }
 
     public AutoLinkResult AutoLinkNamespace(

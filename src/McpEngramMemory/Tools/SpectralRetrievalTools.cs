@@ -17,15 +17,18 @@ public sealed class SpectralRetrievalTools
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
     private readonly SpectralRetrievalReranker _reranker;
+    private readonly NamespaceAccess _access;
 
     public SpectralRetrievalTools(
         CognitiveIndex index,
         IEmbeddingService embedding,
-        SpectralRetrievalReranker reranker)
+        SpectralRetrievalReranker reranker,
+        NamespaceAccess access)
     {
         _index = index;
         _embedding = embedding;
         _reranker = reranker;
+        _access = access;
     }
 
     [McpServerTool(Name = "spectral_recall")]
@@ -39,6 +42,8 @@ public sealed class SpectralRetrievalTools
         [Description("Heat-kernel diffusion time t. Larger = stronger smoothing toward cluster means. Default 1.0.")] float diffusionTime = 1.0f,
         [Description("Candidate-pool multiplier on top-K. Default 5; larger pools give the reranker more material but cost more.")] int candidateMultiplier = 5)
     {
+        if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
+
         var parsedMode = ParseMode(mode);
         if (k <= 0) k = 10;
         if (candidateMultiplier <= 0) candidateMultiplier = 5;

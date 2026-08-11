@@ -3,6 +3,7 @@ using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Lifecycle;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -34,7 +35,8 @@ public class IntelligenceToolsTests : IDisposable
         _clusters = new ClusterManager(_index, _persistence);
         _lifecycle = new LifecycleEngine(_index);
         _scanner = new AccretionScanner(_index);
-        _tools = new IntelligenceTools(_index, _graph, new StubEmbeddingService(), _scanner, _clusters, _lifecycle);
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
+        _tools = new IntelligenceTools(_index, _graph, new StubEmbeddingService(), _scanner, _clusters, _lifecycle, access);
     }
 
     public void Dispose()

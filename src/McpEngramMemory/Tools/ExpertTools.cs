@@ -20,17 +20,20 @@ public sealed class ExpertTools
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
     private readonly MetricsCollector _metrics;
+    private readonly NamespaceAccess _access;
 
     public ExpertTools(
         ExpertDispatcher dispatcher,
         CognitiveIndex index,
         IEmbeddingService embedding,
-        MetricsCollector metrics)
+        MetricsCollector metrics,
+        NamespaceAccess access)
     {
         _dispatcher = dispatcher;
         _index = index;
         _embedding = embedding;
         _metrics = metrics;
+        _access = access;
     }
 
     [McpServerTool(Name = "dispatch_task")]
@@ -74,8 +77,12 @@ public sealed class ExpertTools
         var bestExpert = experts[0];
         _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
-        var context = _index.Search(
-            queryVector, bestExpert.TargetNamespace, k: autoSearchK);
+        // Expert namespaces are picked by the router, not chosen by the caller, but the
+        // context returned here is entry text - it must not cross an unreadable namespace
+        // just because routing happened to land there.
+        var context = _access.CanRead(bestExpert.TargetNamespace)
+            ? _index.Search(queryVector, bestExpert.TargetNamespace, k: autoSearchK)
+            : Array.Empty<CognitiveSearchResult>();
 
         return new DispatchRoutedResult("routed", bestExpert, experts, context);
 

@@ -16,12 +16,14 @@ public sealed class MaintenanceTools
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
     private readonly MetricsCollector _metrics;
+    private readonly NamespaceAccess _access;
 
-    public MaintenanceTools(CognitiveIndex index, IEmbeddingService embedding, MetricsCollector metrics)
+    public MaintenanceTools(CognitiveIndex index, IEmbeddingService embedding, MetricsCollector metrics, NamespaceAccess access)
     {
         _index = index;
         _embedding = embedding;
         _metrics = metrics;
+        _access = access;
     }
 
     [McpServerTool(Name = "rebuild_embeddings")]
@@ -31,9 +33,12 @@ public sealed class MaintenanceTools
     {
         using var timer = _metrics.StartTimer("rebuild_embeddings");
 
-        var namespaces = ns == "*"
-            ? _index.GetNamespaces()
-            : new[] { ns };
+        // "*" spans every namespace in the store - only rewrite vectors in the ones this
+        // caller may write to. A single explicit ns that fails the check simply rebuilds
+        // nothing, same shape as "namespace has no entries".
+        var namespaces = (ns == "*" ? _index.GetNamespaces() : new[] { ns })
+            .Where(_access.CanWrite)
+            .ToList();
 
         var results = new List<RebuildNamespaceResult>();
         int totalUpdated = 0, totalSkipped = 0;
@@ -44,6 +49,7 @@ public sealed class MaintenanceTools
             results.Add(new RebuildNamespaceResult(namespaceName, updated, skipped));
             totalUpdated += updated;
             totalSkipped += skipped;
+            if (updated > 0) _access.ClaimOnWrite(namespaceName);
         }
 
         return new RebuildEmbeddingsResult(
@@ -55,9 +61,9 @@ public sealed class MaintenanceTools
     public object CompressionStats(
         [Description("Namespace to inspect ('*' for all, default: '*').")] string ns = "*")
     {
-        var namespaces = ns == "*"
-            ? _index.GetNamespaces()
-            : new[] { ns };
+        var namespaces = (ns == "*" ? _index.GetNamespaces() : new[] { ns })
+            .Where(_access.CanRead)
+            .ToList();
 
         var nsStats = new List<NamespaceCompressionStats>();
         int totalEntries = 0, totalQuantized = 0;

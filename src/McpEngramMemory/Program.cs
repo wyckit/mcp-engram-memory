@@ -128,6 +128,7 @@ builder.Services.AddSingleton(sp => new SynthesisEngine(
 var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;
 builder.Services.AddSingleton(new AgentIdentity(agentId));
 builder.Services.AddSingleton<NamespaceRegistry>();
+builder.Services.AddSingleton<NamespaceAccess>();
 builder.Services.AddSingleton<OnnxEmbeddingService>();
 builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxEmbeddingService>());
 builder.Services.AddHostedService<EmbeddingWarmupService>();

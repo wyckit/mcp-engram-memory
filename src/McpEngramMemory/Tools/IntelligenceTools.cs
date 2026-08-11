@@ -21,10 +21,12 @@ public sealed class IntelligenceTools
     private readonly AccretionScanner _scanner;
     private readonly ClusterManager _clusters;
     private readonly LifecycleEngine _lifecycle;
+    private readonly NamespaceAccess _access;
 
     public IntelligenceTools(
         CognitiveIndex index, KnowledgeGraph graph, IEmbeddingService embedding,
-        AccretionScanner scanner, ClusterManager clusters, LifecycleEngine lifecycle)
+        AccretionScanner scanner, ClusterManager clusters, LifecycleEngine lifecycle,
+        NamespaceAccess access)
     {
         _index = index;
         _graph = graph;
@@ -32,6 +34,7 @@ public sealed class IntelligenceTools
         _scanner = scanner;
         _clusters = clusters;
         _lifecycle = lifecycle;
+        _access = access;
     }
 
     [McpServerTool(Name = "detect_duplicates")]
@@ -44,6 +47,8 @@ public sealed class IntelligenceTools
     {
         if (threshold < 0f || threshold > 1f)
             return "Error: Threshold must be between 0 and 1.";
+        if (!_access.CanRead(ns))
+            return new DuplicateDetectionResult(0, Array.Empty<DuplicatePair>(), threshold);
 
         var states = includeStates is not null
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
@@ -75,6 +80,9 @@ public sealed class IntelligenceTools
         [Description("Optional topic text to focus contradiction search.")] string? topic = null,
         [Description("Cosine similarity threshold for potential contradiction detection (default: 0.8).")] float similarityThreshold = 0.8f)
     {
+        if (!_access.CanRead(ns))
+            return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
+
         // Part 1: Get explicit contradiction edges from the knowledge graph
         var graphContradictions = _graph.GetContradictions(ns);
         var contradictions = new List<ContradictionInfo>();
@@ -158,7 +166,16 @@ public sealed class IntelligenceTools
     public string UncollapseCluster(
         [Description("The collapse ID to reverse.")] string collapseId)
     {
-        return _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        // Resolve the collapse's namespace before touching anything - same reply shape as a
+        // genuine miss for both "doesn't exist" and "exists but you can't touch it".
+        var ns = _scanner.GetCollapseRecordNs(collapseId);
+        if (ns is null || !_access.CanWrite(ns))
+            return $"Error: No collapse record found for '{collapseId}'.";
+
+        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        if (!result.StartsWith("Error:"))
+            _access.ClaimOnWrite(ns);
+        return result;
     }
 
     [McpServerTool(Name = "list_collapse_history")]
@@ -166,6 +183,7 @@ public sealed class IntelligenceTools
     public IReadOnlyList<CollapseRecord> ListCollapseHistory(
         [Description("Namespace to list collapse history for.")] string ns)
     {
+        if (!_access.CanRead(ns)) return Array.Empty<CollapseRecord>();
         return _scanner.GetCollapseHistory(ns);
     }
 
@@ -176,6 +194,8 @@ public sealed class IntelligenceTools
         [Description("ID of the duplicate entry to archive.")] string archiveId,
         [Description("Namespace containing both entries.")] string ns)
     {
+        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+
         var keepEntry = _index.Get(keepId, ns);
         if (keepEntry is null)
             return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
@@ -203,6 +223,7 @@ public sealed class IntelligenceTools
             keepEntry.AccessCount + archiveEntry.AccessCount,
             keepEntry.ActivationEnergy, keepEntry.IsSummaryNode, keepEntry.SourceClusterId);
         _index.Upsert(updated);
+        _access.ClaimOnWrite(ns);
 
         // Transfer graph edges from archived entry to kept entry
         int edgesTransferred = _graph.TransferEdges(archiveId, keepId);

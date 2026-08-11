@@ -3,6 +3,7 @@ using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -25,7 +26,8 @@ public class DebateToolsTests : IDisposable
         _graph = new KnowledgeGraph(_persistence, _index);
         _sessions = new DebateSessionManager();
         var embedding = new HashEmbeddingService(dimensions: 4);
-        _tools = new DebateTools(_index, _graph, embedding, _sessions, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, embedding), AgentIdentity.Default);
+        _tools = new DebateTools(_index, _graph, embedding, _sessions, new MetricsCollector(), access);
     }
 
     public void Dispose()

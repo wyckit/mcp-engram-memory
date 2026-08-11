@@ -4,6 +4,7 @@ using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Lifecycle;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -25,7 +26,8 @@ public class ExpertToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _embedding = new HashEmbeddingService(dimensions: 384);
         _dispatcher = new ExpertDispatcher(_index, _embedding);
-        _tools = new ExpertTools(_dispatcher, _index, _embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
+        _tools = new ExpertTools(_dispatcher, _index, _embedding, new MetricsCollector(), access);
     }
 
     public void Dispose()

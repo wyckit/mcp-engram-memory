@@ -14,11 +14,15 @@ public sealed class LifecycleTools
 {
     private readonly LifecycleEngine _lifecycle;
     private readonly IEmbeddingService _embedding;
+    private readonly CognitiveIndex _index;
+    private readonly NamespaceAccess _access;
 
-    public LifecycleTools(LifecycleEngine lifecycle, IEmbeddingService embedding)
+    public LifecycleTools(LifecycleEngine lifecycle, IEmbeddingService embedding, CognitiveIndex index, NamespaceAccess access)
     {
         _lifecycle = lifecycle;
         _embedding = embedding;
+        _index = index;
+        _access = access;
     }
 
     [McpServerTool(Name = "promote_memory")]
@@ -27,7 +31,16 @@ public sealed class LifecycleTools
         [Description("Entry ID.")] string id,
         [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
     {
-        return _lifecycle.PromoteMemory(id, targetState);
+        // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
+        // "exists but you can't touch it" - a distinct denial would confirm the id exists.
+        var existing = _index.Get(id);
+        if (existing is null || !_access.CanWrite(existing.Ns))
+            return $"Error: Entry '{id}' not found.";
+
+        var result = _lifecycle.PromoteMemory(id, targetState);
+        if (!result.StartsWith("Error:"))
+            _access.ClaimOnWrite(existing.Ns);
+        return result;
     }
 
     [McpServerTool(Name = "deep_recall")]
@@ -42,6 +55,10 @@ public sealed class LifecycleTools
         [Description("Use hybrid BM25+vector search for better keyword recall (default: false).")] bool hybrid = false,
         [Description("Apply token-level reranking to improve precision (default: false).")] bool rerank = false)
     {
+        // deep_recall returns entry text, so this is the one that matters most in this
+        // class - deny like an empty result rather than a distinct "denied" reply.
+        if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
+
         float[] resolved;
         try
         {
@@ -63,9 +80,15 @@ public sealed class LifecycleTools
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
         [Description("Optional namespace for threshold config lookup.")] string? ns = null)
     {
+        var existing = _index.Get(id);
+        if (existing is null || !_access.CanWrite(existing.Ns))
+            return $"Error: Entry '{id}' not found.";
+
         var result = _lifecycle.ApplyFeedback(id, delta, ns);
         if (result is null)
             return $"Error: Entry '{id}' not found.";
+
+        _access.ClaimOnWrite(existing.Ns);
         return result;
     }
 
@@ -98,6 +121,8 @@ public sealed class LifecycleTools
     {
         if (string.IsNullOrWhiteSpace(ns))
             return "Error: Namespace must not be empty.";
+        if (!_access.CanWrite(ns))
+            return NamespaceAccess.WriteDenied(ns);
 
         var config = _lifecycle.SetDecayConfig(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
             useSpectralDecay, subdiffusiveExponent);

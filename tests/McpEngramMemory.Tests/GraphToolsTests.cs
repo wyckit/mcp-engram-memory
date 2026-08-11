@@ -2,6 +2,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -22,7 +23,8 @@ public class GraphToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
         var autoLink = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
-        _tools = new GraphTools(_graph, autoLink);
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new HashEmbeddingService(dimensions: 2)), AgentIdentity.Default);
+        _tools = new GraphTools(_graph, autoLink, _index, access);
 
         // Seed entries
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", "entry a"));

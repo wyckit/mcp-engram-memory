@@ -13,10 +13,12 @@ namespace McpEngramMemory.Tools;
 public sealed class SynthesisTools
 {
     private readonly SynthesisEngine _synthesis;
+    private readonly NamespaceAccess _access;
 
-    public SynthesisTools(SynthesisEngine synthesis)
+    public SynthesisTools(SynthesisEngine synthesis, NamespaceAccess access)
     {
         _synthesis = synthesis;
+        _access = access;
     }
 
     [McpServerTool(Name = "synthesize_memories")]
@@ -30,6 +32,12 @@ public sealed class SynthesisTools
         [Description("Maximum number of memories to include in synthesis (default: 200).")] int maxEntries = 200,
         CancellationToken cancellationToken = default)
     {
+        // Synthesis reads entry text and feeds it to a model, so a denied read must be
+        // indistinguishable from an empty namespace - reuse the same "empty" status the
+        // engine itself returns when a namespace genuinely has nothing to synthesize.
+        if (!_access.CanRead(ns))
+            return new SynthesisResult("empty", null, 0, 0, "", "");
+
         var result = await _synthesis.SynthesizeNamespaceAsync(ns, query, maxEntries, cancellationToken);
         return result;
     }

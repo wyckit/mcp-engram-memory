@@ -86,6 +86,36 @@ accidents, not malice. Real isolation between mutually untrusted agents means
 separate server processes with separate data directories or per-tenant
 database files — process boundaries are the security boundary.
 
+### What the ACLs actually do
+
+Ownership is claimed by the first write from an agent that has an `AGENT_ID`
+set. Once a namespace is owned, other identified agents are refused reads and
+writes unless the owner shares it.
+
+Two consequences worth stating plainly:
+
+- **Servers that never set `AGENT_ID` are unaffected.** They run as the default
+  identity, which has unrestricted access and never claims ownership of
+  anything. This is the single-user case and the common deployment. Claiming
+  ownership for the default identity would lock an operator out of their own
+  data the moment they later set an `AGENT_ID`.
+- **A namespace with no owner is open.** Namespaces created before this
+  behaviour existed, or by a server running without an `AGENT_ID`, stay
+  readable and writable by everyone until an identified agent writes to them
+  and claims them. Upgrading does not retroactively protect existing data.
+
+Enforcement currently covers the tools in the default `minimal` profile.
+Extending it to the `standard` and `full` profiles is in progress; until that
+lands, enabling those profiles widens the surface beyond what these checks
+cover.
+
+> **Prior versions.** Through v1.4.0 the ACL model did not function at all. The
+> permission check was reached from exactly one tool, nothing ever registered
+> namespace ownership, and an unregistered namespace was treated as open — so
+> every check passed. `share_namespace` recorded a grant that nothing consulted.
+> If you relied on it before this release, assume the data was readable by any
+> agent connected to that server.
+
 ## Known dependency advisories
 
 - **GHSA-2m69-gcr7-jv3q / CVE-2025-6965 — `SQLitePCLRaw.lib.e_sqlite3` 2.1.6**

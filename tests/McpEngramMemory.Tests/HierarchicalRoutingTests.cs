@@ -2,6 +2,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -326,7 +327,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         // Build tree
         tools.CreateExpert("eng_root", "Software engineering domain", level: "root");
@@ -349,7 +351,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         string persona = "A frontend developer specializing in React components.";
         tools.CreateExpert("react_dev", persona);
@@ -370,7 +373,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         string persona = "A Go backend developer.";
         tools.CreateExpert("go_dev", persona);
@@ -391,7 +395,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         var result = tools.CreateExpert("science", "Science and research domain", level: "root");
         var typed = Assert.IsType<CreateExpertResult>(result);
@@ -413,7 +418,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         tools.CreateExpert("eng_root", "Engineering domain", level: "root");
         tools.CreateExpert("go_dev", "A Go developer", level: "leaf", parentNodeId: "eng_root");
@@ -530,7 +536,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         string desc = "Backend development with databases and APIs";
         tools.CreateExpert("engineering", desc, level: "root");
@@ -559,7 +566,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         tools.CreateExpert("engineering", "Software engineering", level: "root");
 
@@ -585,7 +593,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         // No tree exists — should return unclassified placement
         var result = tools.CreateExpert("solo_expert", "A standalone expert.");
@@ -610,7 +619,8 @@ public class HierarchicalRoutingTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService(dimensions: 384);
         var dispatcher = new ExpertDispatcher(index, embedding);
-        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector());
+        var access = new NamespaceAccess(new NamespaceRegistry(index, embedding), AgentIdentity.Default);
+        var tools = new ExpertTools(dispatcher, index, embedding, new MetricsCollector(), access);
 
         tools.CreateExpert("eng", "Engineering", level: "root");
 

@@ -1,6 +1,7 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Intelligence;
+using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 
@@ -26,7 +27,8 @@ public class ClusterToolsTests : IDisposable
         _persistence = new PersistenceManager(_testDataPath, debounceMs: 50);
         _index = new CognitiveIndex(_persistence);
         _clusters = new ClusterManager(_index, _persistence);
-        _tools = new ClusterTools(_clusters, new StubEmbeddingService());
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
+        _tools = new ClusterTools(_clusters, new StubEmbeddingService(), access);
 
         // Seed entries
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", "entry a"));

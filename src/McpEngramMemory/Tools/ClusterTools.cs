@@ -15,11 +15,13 @@ public sealed class ClusterTools
 {
     private readonly ClusterManager _clusters;
     private readonly IEmbeddingService _embedding;
+    private readonly NamespaceAccess _access;
 
-    public ClusterTools(ClusterManager clusters, IEmbeddingService embedding)
+    public ClusterTools(ClusterManager clusters, IEmbeddingService embedding, NamespaceAccess access)
     {
         _clusters = clusters;
         _embedding = embedding;
+        _access = access;
     }
 
     [McpServerTool(Name = "create_cluster")]
@@ -30,6 +32,8 @@ public sealed class ClusterTools
         [Description("Comma-separated initial member entry IDs.")] string memberIds,
         [Description("Human-readable cluster name.")] string? label = null)
     {
+        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+
         try
         {
             var ids = memberIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -49,6 +53,13 @@ public sealed class ClusterTools
         [Description("Comma-separated entry IDs to remove.")] string? removeMemberIds = null,
         [Description("New label.")] string? label = null)
     {
+        // Cluster ownership isn't known until the cluster itself is resolved. Same reply
+        // shape as a genuine miss - a distinct denial would confirm the cluster exists in a
+        // namespace this caller cannot see.
+        var clusterNs = _clusters.GetCluster(clusterId)?.Namespace;
+        if (clusterNs is null || !_access.CanWrite(clusterNs))
+            return $"Error: Cluster '{clusterId}' not found.";
+
         var addIds = addMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var removeIds = removeMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         return _clusters.UpdateCluster(clusterId, addIds, removeIds, label);
@@ -61,12 +72,19 @@ public sealed class ClusterTools
         [Description("Generated summary text.")] string summaryText,
         [Description("Embedding of the summary.")] float[]? summaryVector = null)
     {
+        var clusterNs = _clusters.GetCluster(clusterId)?.Namespace;
+        if (clusterNs is null || !_access.CanWrite(clusterNs))
+            return $"Error: Cluster '{clusterId}' not found.";
+
         var resolved = summaryVector is not null && summaryVector.Length > 0
             ? summaryVector
             : _embedding.Embed(summaryText);
 
         var result = _clusters.StoreSummary(clusterId, summaryText, resolved);
-        return result.StartsWith("Error:") ? result : $"Stored summary entry '{result}'.";
+        if (result.StartsWith("Error:")) return result;
+
+        _access.ClaimOnWrite(clusterNs);
+        return $"Stored summary entry '{result}'.";
     }
 
     [McpServerTool(Name = "get_cluster")]
@@ -75,7 +93,13 @@ public sealed class ClusterTools
         [Description("Cluster ID.")] string clusterId)
     {
         var result = _clusters.GetCluster(clusterId);
-        return result is not null ? result : $"Cluster '{clusterId}' not found.";
+        if (result is null || !_access.CanRead(result.Namespace))
+            return $"Cluster '{clusterId}' not found.";
+
+        // Clusters are global structures; individual members can live outside the
+        // cluster's own namespace if they were added by id, so filter them independently.
+        var visibleMembers = result.Members.Where(m => _access.CanRead(m.Namespace)).ToList();
+        return result with { Members = visibleMembers };
     }
 
     [McpServerTool(Name = "list_clusters")]
@@ -83,6 +107,7 @@ public sealed class ClusterTools
     public IReadOnlyList<ClusterSummaryInfo> ListClusters(
         [Description("Namespace.")] string ns)
     {
+        if (!_access.CanRead(ns)) return Array.Empty<ClusterSummaryInfo>();
         return _clusters.ListClusters(ns);
     }
 }

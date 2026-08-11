@@ -14,10 +14,12 @@ namespace McpEngramMemory.Tools;
 public sealed class MemoryDiffusionTools
 {
     private readonly MemoryDiffusionKernel _kernel;
+    private readonly NamespaceAccess _access;
 
-    public MemoryDiffusionTools(MemoryDiffusionKernel kernel)
+    public MemoryDiffusionTools(MemoryDiffusionKernel kernel, NamespaceAccess access)
     {
         _kernel = kernel;
+        _access = access;
     }
 
     [McpServerTool(Name = "compute_diffusion_basis")]
@@ -27,6 +29,10 @@ public sealed class MemoryDiffusionTools
         [Description("Number of eigenpairs to retain (default 96). Higher = finer multi-scale resolution at higher compute cost.")] int topK = MemoryDiffusionKernel.DefaultTopK,
         [Description("Drop any cached basis and recompute from scratch.")] bool force = false)
     {
+        // Nullable return already models "nothing here" (below spectral threshold), so a
+        // denied write reuses that same shape rather than a distinct error.
+        if (!_access.CanWrite(ns)) return null;
+
         if (force) _kernel.Invalidate(ns);
         _ = _kernel.GetBasis(ns, topK);
         return _kernel.GetStats(ns);
@@ -35,13 +41,16 @@ public sealed class MemoryDiffusionTools
     [McpServerTool(Name = "diffusion_stats")]
     [Description("Diagnostics for the cached diffusion basis of a namespace, without forcing recomputation if absent.")]
     public DiffusionStats? DiffusionStats(
-        [Description("Namespace to inspect.")] string ns) => _kernel.GetStats(ns);
+        [Description("Namespace to inspect.")] string ns) =>
+        _access.CanRead(ns) ? _kernel.GetStats(ns) : null;
 
     [McpServerTool(Name = "invalidate_diffusion")]
     [Description("Drop the cached diffusion basis for a namespace. Use after manual graph surgery or if you suspect drift.")]
     public string InvalidateDiffusion(
         [Description("Namespace to invalidate.")] string ns)
     {
+        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+
         _kernel.Invalidate(ns);
         return $"Invalidated diffusion basis for namespace '{ns}'.";
     }

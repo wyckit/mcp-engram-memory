@@ -29,7 +29,7 @@
 
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
 - **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
-- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. Zero external API, zero cloud, zero telemetry.
+- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
 
 → [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
 
@@ -45,7 +45,9 @@ irm https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.ps1 | 
 curl -fsSL https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.sh | bash
 ```
 
-> First run downloads a ~5.7 MB embedding model (bge-micro-v2) — subsequent starts are instant.
+> The embedding model (bge-micro-v2) ships inside the package — it is fetched from Hugging Face at
+> build time, checksum-verified, and bundled, so installing the tool needs no model download and the
+> server makes no network call to start.
 
 <details>
 <summary>Other install options (manual clone · Docker · NuGet)</summary>

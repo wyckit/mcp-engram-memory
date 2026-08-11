@@ -112,6 +112,37 @@ public sealed class AccretionScanner
         return new AccretionScanResult(candidates.Count, detectedClusters.Count, newCollapses, autoSummaries);
     }
 
+    /// <summary>
+    /// Resolve the namespace of a pending collapse by id, without resolving its members.
+    /// Used by callers that need to namespace-gate a collapse before acting on it.
+    /// </summary>
+    public string? GetPendingCollapseNs(string collapseId)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            return _pendingCollapses.TryGetValue(collapseId, out var collapse) && !collapse.Dismissed
+                ? collapse.Ns
+                : null;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Resolve the namespace of a recorded collapse by id, without resolving its members.
+    /// Used by callers that need to namespace-gate a collapse reversal before acting on it.
+    /// </summary>
+    public string? GetCollapseRecordNs(string collapseId)
+    {
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            EnsureHistoryLoaded();
+            return _collapseHistory.TryGetValue(collapseId, out var record) ? record.Ns : null;
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+    }
+
     /// <summary>Get all pending (non-dismissed) collapses for a namespace.</summary>
     public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(string ns)
     {
