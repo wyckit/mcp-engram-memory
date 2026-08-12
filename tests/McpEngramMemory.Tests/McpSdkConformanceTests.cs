@@ -1,4 +1,10 @@
 using System.Reflection;
+using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services;
+using McpEngramMemory.Core.Services.Evaluation;
+using McpEngramMemory.Core.Services.Experts;
+using McpEngramMemory.Core.Services.Sharing;
+using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
@@ -56,6 +62,46 @@ public class McpSdkConformanceTests
         Assert.Equal(
             ["get_context_block", "recall", "reflect", "remember"],
             tools.Select(tool => tool.ProtocolTool.Name).Order().ToArray());
+    }
+
+    [Fact]
+    public void Full_profile_host_registration_activates_namespace_guarded_tools()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"mcp-full-profile-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var persistence = new PersistenceManager(root, debounceMs: 50);
+            using var index = new CognitiveIndex(persistence);
+            var embedding = new HashEmbeddingService();
+            var services = new ServiceCollection();
+            services.AddSingleton(index);
+            services.AddSingleton<IEmbeddingService>(embedding);
+            services.AddSingleton<ExpertDispatcher>();
+            services.AddSingleton<MetricsCollector>();
+            services.AddSingleton<NamespaceRegistry>();
+            services.AddSingleton<IPrincipalContext>(PrincipalContext.LegacyUnisolated);
+            services.AddSingleton(AgentIdentity.Default);
+
+            // Mirror Program.cs: both principal representations are registered, so the guard must
+            // be constructed explicitly instead of leaving the container to choose an overload.
+            services.AddSingleton(sp => new NamespaceAccess(
+                sp.GetRequiredService<NamespaceRegistry>(),
+                sp.GetRequiredService<IPrincipalContext>()));
+            services.AddMcpServer().WithTools<ExpertTools>();
+
+            using var provider = services.BuildServiceProvider();
+            var guardedTool = ActivatorUtilities.CreateInstance<ExpertTools>(provider);
+            var domainTree = Assert.IsType<DomainTreeResult>(guardedTool.GetDomainTree());
+
+            Assert.Empty(domainTree.Roots);
+            Assert.Equal(0, domainTree.TotalNodes);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
