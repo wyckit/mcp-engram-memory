@@ -37,7 +37,7 @@ public sealed class IntelligenceTools
         _access = access;
     }
 
-    [McpServerTool(Name = "detect_duplicates")]
+    [McpServerTool(Name = "detect_duplicates", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Scan a namespace for near-duplicate entries by pairwise cosine similarity. Use before bulk imports or periodic cleanup to find redundant memories.")]
     public object DetectDuplicates(
         [Description("Namespace to scan.")] string ns,
@@ -45,6 +45,8 @@ public sealed class IntelligenceTools
         [Description("Filter by category.")] string? category = null,
         [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new DuplicateDetectionResult(0, Array.Empty<DuplicatePair>(), threshold);
         if (threshold < 0f || threshold > 1f)
             return "Error: Threshold must be between 0 and 1.";
         if (!_access.CanRead(ns))
@@ -73,13 +75,15 @@ public sealed class IntelligenceTools
         return new DuplicateDetectionResult(scannedCount, pairs, threshold);
     }
 
-    [McpServerTool(Name = "find_contradictions")]
+    [McpServerTool(Name = "find_contradictions", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Surface conflicting memories: explicit 'contradicts' graph edges plus high-similarity pairs that may disagree. Use when information seems inconsistent.")]
     public object FindContradictions(
         [Description("Namespace to search.")] string ns,
         [Description("Optional topic text to focus contradiction search.")] string? topic = null,
         [Description("Cosine similarity threshold for potential contradiction detection (default: 0.8).")] float similarityThreshold = 0.8f)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
         if (!_access.CanRead(ns))
             return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
 
@@ -161,11 +165,13 @@ public sealed class IntelligenceTools
         return new ContradictionResult(contradictions, graphCount, highSimCount);
     }
 
-    [McpServerTool(Name = "uncollapse_cluster")]
+    [McpServerTool(Name = "uncollapse_cluster", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Reverse an accretion collapse: restore archived members, delete the summary entry, and clean up the cluster.")]
     public string UncollapseCluster(
         [Description("The collapse ID to reverse.")] string collapseId)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         // Resolve the collapse's namespace before touching anything - same reply shape as a
         // genuine miss for both "doesn't exist" and "exists but you can't touch it".
         var ns = _scanner.GetCollapseRecordNs(collapseId);
@@ -178,22 +184,26 @@ public sealed class IntelligenceTools
         return result;
     }
 
-    [McpServerTool(Name = "list_collapse_history")]
+    [McpServerTool(Name = "list_collapse_history", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("List all reversible collapse records for a namespace.")]
     public IReadOnlyList<CollapseRecord> ListCollapseHistory(
         [Description("Namespace to list collapse history for.")] string ns)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return Array.Empty<CollapseRecord>();
         if (!_access.CanRead(ns)) return Array.Empty<CollapseRecord>();
         return _scanner.GetCollapseHistory(ns);
     }
 
-    [McpServerTool(Name = "merge_memories")]
+    [McpServerTool(Name = "merge_memories", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Merge two duplicate entries into one. Keeps first entry's vector, combines metadata/access counts, transfers edges and clusters, archives the second. Use after detect_duplicates.")]
     public string MergeMemories(
         [Description("ID of the entry to keep.")] string keepId,
         [Description("ID of the duplicate entry to archive.")] string archiveId,
         [Description("Namespace containing both entries.")] string ns)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
         var keepEntry = _index.Get(keepId, ns);

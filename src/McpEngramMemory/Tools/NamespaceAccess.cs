@@ -1,5 +1,6 @@
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Sharing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace McpEngramMemory.Tools;
 
@@ -18,27 +19,49 @@ namespace McpEngramMemory.Tools;
 public sealed class NamespaceAccess
 {
     private readonly NamespaceRegistry _registry;
-    private readonly AgentIdentity _agent;
+    private readonly IPrincipalContext _principal;
 
-    public NamespaceAccess(NamespaceRegistry registry, AgentIdentity agent)
+    [ActivatorUtilitiesConstructor]
+    public NamespaceAccess(NamespaceRegistry registry, IPrincipalContext principal)
     {
         _registry = registry;
-        _agent = agent;
+        _principal = principal;
     }
 
+    /// <summary>Compatibility constructor for in-process hosts compiled against the v1 API.</summary>
+    public NamespaceAccess(NamespaceRegistry registry, AgentIdentity agent)
+        : this(registry, new PrincipalContext(string.Empty, agent.AgentId)) { }
+
     /// <summary>The identity these checks are made against.</summary>
-    public string AgentId => _agent.AgentId;
+    public string AgentId => _principal.AgentId;
 
-    public bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
+    /// <summary>The host-bound tenant partition. Empty means the legacy partition.</summary>
+    public string TenantId => _principal.TenantId;
 
-    public bool CanWrite(string ns) => _registry.HasAccess(_agent.AgentId, ns, "write");
+    public bool IsLegacyUnisolated => _principal.IsLegacyUnisolated;
+
+    /// <summary>
+    /// True when the caller is in a tenant partition whose graph, cluster, lifecycle, and
+    /// synthesis structures have not yet been migrated from legacy bare-id storage.
+    /// </summary>
+    public bool RequiresTenantQualifiedStructures => _principal.TenantId.Length > 0;
+
+    public const string TenantStructureUnavailable =
+        "Error: this operation requires tenant-qualified graph/lifecycle structures that are not enabled yet.";
+
+    public bool CanRead(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+
+    public bool CanWrite(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
 
     /// <summary>
     /// Claim ownership of a namespace on write. A no-op for the default agent, so servers
     /// that never set <c>AGENT_ID</c> create no records and are entirely unaffected — see
     /// <see cref="NamespaceRegistry.ClaimOwnershipOnWrite"/> for why that matters.
     /// </summary>
-    public void ClaimOnWrite(string ns) => _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
+    public void ClaimOnWrite(string ns) =>
+        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
 
     /// <summary>Reply for a denied read. Indistinguishable from "there is nothing here".</summary>
     public static string ReadDenied(string ns) => $"No accessible memories in namespace '{ns}'.";

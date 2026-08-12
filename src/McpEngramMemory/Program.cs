@@ -1,6 +1,11 @@
 using McpEngramMemory;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
+using McpEngramMemory.Core.Models.Constitution;
+using McpEngramMemory.Core.Services.Constitution;
+using McpEngramMemory.Core.Services.Governance.Persistence;
+using McpEngramMemory.Core.Services.Governance;
+using McpEngramMemory.Core.Services.Provenance;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
@@ -124,11 +129,36 @@ builder.Services.AddSingleton(sp => new SynthesisEngine(
     sp.GetRequiredService<ITextGenerator>(),
     synthesisMapModel, synthesisReduceModel));
 
-// Agent identity for multi-agent memory sharing (set AGENT_ID env var per agent)
+// Host-bound principal bootstrap. Environment variables preserve the stdio host's
+// historical configuration shape, but they are deployment inputs, not authentication:
+// a transport host with real auth should supply its own request-scoped IPrincipalContext.
+// Empty tenant + default agent is the explicit legacy-unisolated compatibility mode.
+var tenantId = Environment.GetEnvironmentVariable("MEMORY_TENANT_ID") ?? string.Empty;
 var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;
+if (!string.IsNullOrWhiteSpace(tenantId) && agentId == AgentIdentity.DefaultAgentId)
+{
+    throw new InvalidOperationException(
+        "A non-empty MEMORY_TENANT_ID requires an explicit authenticated principal binding; " +
+        "set AGENT_ID for cooperative stdio deployments or replace IPrincipalContext in an authenticated host.");
+}
+var principalContext = new PrincipalContext(tenantId, agentId);
+var governancePath = Environment.GetEnvironmentVariable("MEMORY_GOVERNANCE_PATH")
+    ?? Path.Combine(AppContext.BaseDirectory, "data", "governance");
+builder.Services.AddSingleton<IPrincipalContext>(principalContext);
 builder.Services.AddSingleton(new AgentIdentity(agentId));
 builder.Services.AddSingleton<NamespaceRegistry>();
 builder.Services.AddSingleton<NamespaceAccess>();
+builder.Services.AddSingleton<IConstitutionProvider, InMemoryConstitutionProvider>();
+builder.Services.AddSingleton(new FileConstitutionVersionStore(governancePath));
+builder.Services.AddSingleton(new FileKnowledgeAssetStore(governancePath));
+builder.Services.AddSingleton<IGovernedKnowledgeStore>(new FileGovernedKnowledgeStore(governancePath));
+builder.Services.AddSingleton(new FileConstitutionDecisionStore(governancePath));
+builder.Services.AddSingleton<IProvenanceStore>(new FileProvenanceStore(governancePath));
+builder.Services.AddSingleton<IConstitutionAuditStore>(new FileConstitutionAuditStore(governancePath));
+builder.Services.AddSingleton<IConstitutionRule, AuditEnvelopeConstitutionRule>();
+builder.Services.AddSingleton<IConstitutionEvaluator>(sp =>
+    new DeterministicConstitutionEvaluator(sp.GetServices<IConstitutionRule>()));
+builder.Services.AddSingleton<ConstitutionKernel>();
 builder.Services.AddSingleton<OnnxEmbeddingService>();
 builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxEmbeddingService>());
 builder.Services.AddHostedService<EmbeddingWarmupService>();
@@ -146,7 +176,9 @@ var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToL
 
 var mcpBuilder = builder.Services
     .AddMcpServer()
-    .WithStdioServerTransport();
+    .WithStdioServerTransport()
+    .WithRequestFilters(filters =>
+        filters.AddCallToolFilter(ConstitutionMcpFilter.Create));
 
 // Minimal: core memory operations + admin + composite tier-1 tools
 mcpBuilder
@@ -175,6 +207,7 @@ if (toolProfile is "full")
         .WithTools<DebateTools>()
         .WithTools<MaintenanceTools>()
         .WithTools<ExpertTools>()
+        .WithTools<GovernedLearningTools>()
         .WithTools<SynthesisTools>()
         .WithTools<VisualizationTools>();
 }

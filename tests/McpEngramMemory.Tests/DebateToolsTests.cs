@@ -16,6 +16,8 @@ public class DebateToolsTests : IDisposable
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly DebateSessionManager _sessions;
+    private readonly HashEmbeddingService _embedding;
+    private readonly NamespaceRegistry _registry;
     private readonly DebateTools _tools;
 
     public DebateToolsTests()
@@ -25,9 +27,9 @@ public class DebateToolsTests : IDisposable
         _index = new CognitiveIndex(_persistence);
         _graph = new KnowledgeGraph(_persistence, _index);
         _sessions = new DebateSessionManager();
-        var embedding = new HashEmbeddingService(dimensions: 4);
-        var access = new NamespaceAccess(new NamespaceRegistry(_index, embedding), AgentIdentity.Default);
-        _tools = new DebateTools(_index, _graph, embedding, _sessions, new MetricsCollector(), access);
+        _embedding = new HashEmbeddingService(dimensions: 4);
+        _registry = new NamespaceRegistry(_index, _embedding);
+        _tools = CreateTools(AgentIdentity.DefaultAgentId);
     }
 
     public void Dispose()
@@ -37,6 +39,12 @@ public class DebateToolsTests : IDisposable
         _persistence.Dispose();
         if (Directory.Exists(_testDataPath))
             Directory.Delete(_testDataPath, true);
+    }
+
+    private DebateTools CreateTools(string agentId)
+    {
+        var access = new NamespaceAccess(_registry, new AgentIdentity(agentId));
+        return new DebateTools(_index, _graph, _embedding, _sessions, new MetricsCollector(), access);
     }
 
     // ── consult_expert_panel ──
@@ -224,6 +232,30 @@ public class DebateToolsTests : IDisposable
         Assert.Contains(graphResult.EdgeDetails, d => d.Contains("not found"));
     }
 
+    [Fact]
+    public void MapDebateGraph_OtherAgentCannotDiscoverOrMutateOwnedSession()
+    {
+        var alice = CreateTools("alice");
+        var bob = CreateTools("bob");
+        var panel = Assert.IsType<ConsultPanelResult>(alice.ConsultExpertPanel(
+            "Compare approaches", ["expert-a", "expert-b"], "alice-map-session"));
+        var debateNs = DebateSessionManager.GetDebateNamespace("alice-map-session");
+
+        Assert.False(_registry.HasAccess("bob", debateNs, "write"));
+        int before = _graph.EdgeCount;
+        var denied = bob.MapDebateGraph("alice-map-session",
+            [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias, "contradicts", 0.9f)]);
+
+        var message = Assert.IsType<string>(denied);
+        Assert.Contains("not found", message);
+        Assert.Equal(before, _graph.EdgeCount);
+        Assert.True(_sessions.HasSession("alice-map-session"));
+
+        var allowed = alice.MapDebateGraph("alice-map-session",
+            [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias, "contradicts", 0.9f)]);
+        Assert.Equal(1, Assert.IsType<MapDebateGraphResult>(allowed).EdgesCreated);
+    }
+
     // ── resolve_debate ──
 
     [Fact]
@@ -300,6 +332,31 @@ public class DebateToolsTests : IDisposable
         var result = _tools.ResolveDebate("empty-ns", 1, "consensus text", "");
         Assert.IsType<string>(result);
         Assert.Contains("Error", (string)result);
+    }
+
+    [Fact]
+    public void ResolveDebate_OtherAgentCannotDiscoverResolveOrRemoveOwnedSession()
+    {
+        var alice = CreateTools("alice");
+        var bob = CreateTools("bob");
+        var panel = Assert.IsType<ConsultPanelResult>(alice.ConsultExpertPanel(
+            "Choose an approach", ["expert-a"], "alice-resolve-session"));
+        int winningNode = panel.Perspectives[0].NodeAlias;
+
+        var denied = bob.ResolveDebate(
+            "alice-resolve-session", winningNode, "Bob's consensus", "bob-decisions");
+
+        var message = Assert.IsType<string>(denied);
+        Assert.Contains("not found", message);
+        Assert.Null(_index.Get("consensus-alice-resolve-session", "bob-decisions"));
+        Assert.True(_sessions.HasSession("alice-resolve-session"));
+        Assert.All(_sessions.GetAllEntryIds("alice-resolve-session"), id =>
+            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace)?.LifecycleState));
+
+        var allowed = alice.ResolveDebate(
+            "alice-resolve-session", winningNode, "Alice's consensus", "alice-decisions");
+        Assert.IsType<ResolveDebateResult>(allowed);
+        Assert.False(_sessions.HasSession("alice-resolve-session"));
     }
 
     // ── Full Pipeline Integration ──

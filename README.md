@@ -6,7 +6,7 @@
   <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-512BD4" alt=".NET"/></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
-  <img src="https://img.shields.io/badge/tests-1155%20non--live-brightgreen" alt="Tests"/>
+  <img src="https://img.shields.io/badge/tests-multi--target-brightgreen" alt="Tests: .NET 8, 9, and 10"/>
 </p>
 
 # The local-first cognitive memory kernel for AI agents
@@ -29,6 +29,7 @@
 
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
 - **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
+- **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
 - **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
 
 → [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
@@ -127,20 +128,20 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 |---------|-------|-----------------|
 | `minimal` | 17 | Core CRUD + composite + admin + multi-agent — recommended starting point **(default)** |
 | `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 62 | Everything including expert routing, debate, synthesis, benchmarks |
+| `full` | 63 | Everything including governed knowledge promotion, expert routing, debate, synthesis, benchmarks |
 
 ## At a Glance
 
 | Metric | Value |
 |--------|-------|
-| MCP tools | 62 (profiles: 17 / 39 / 62) |
+| MCP tools | 63 (profiles: 17 / 39 / 63) |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
 | Search latency | ~2.7 ms production, ~0.04 ms benchmark |
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
-| Tests | 1155 tests per target framework (net8/9/10) across 88 files |
+| Tests | Multi-target xUnit suite across net8.0, net9.0, and net10.0 |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
 ### System Layers
@@ -149,7 +150,31 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 |-------|-----------|------------|
 | **Core** | Stable | Storage, Embeddings, Retrieval, Lifecycle, Graph |
 | **Advanced** | Stable | Clustering, Multi-Agent Sharing, Intelligence |
+| **Governed Core** | New | Constitution, Knowledge, Provenance, Learning, Planning, Semantic Assets |
 | **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks |
+
+### Governed Core vs. MCP tools
+
+The governed substrate lives in `McpEngramMemory.Core`: immutable Root/overlay Constitutions,
+versioned Knowledge and append-only Provenance, quarantined Teacher proposals, deterministic-first
+verification, atomic reference promotion, authorization-first retrieval planning, context manifests,
+profiles/loadouts, and Skill/Documentation/CodeGraph/Curriculum contracts.
+
+The 63 MCP tools include the full-profile `promote_knowledge` adapter, which executes the
+Teacher → deterministic Verifier → Constitution receipt → atomic governed-store path. Context and
+other asset-management tools remain Core APIs for embedded hosts. Every tool call also passes through
+the global Constitution pre/post filter. Skill execution is
+delegated to a host-provided `ISkillSandbox`; Engram does not run arbitrary Skill code.
+
+Identity is also host-owned. `IPrincipalContext` carries tenant and principal claims. The stdio
+server bootstraps it from `MEMORY_TENANT_ID` and `AGENT_ID`, which are process configuration rather
+than authentication. Empty tenant + default agent is explicit legacy-unisolated mode.
+
+Tenant-aware memory CRUD is implemented. The cognitive graph, clusters, lifecycle support data,
+collapse history, and diffusion caches still use global bare IDs, so affected standard/full tools
+fail closed for non-empty tenants. This is containment, not full tenant-qualified graph support.
+See [Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and
+[Security](SECURITY.md).
 
 <p align="center">
   <img src="images/how-it-works.svg?v=1.2.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
@@ -186,7 +211,7 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 
 Opus thinks, Sonnet remembers, Haiku explores.
 
-## MCP Tools (62)
+## MCP Tools (63)
 
 | Group | Tools | Description |
 |-------|-------|-------------|
@@ -209,12 +234,17 @@ Opus thinks, Sonnet remembers, Haiku explores.
 
 Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
+The server uses the `ModelContextProtocol` 2.1.0 SDK with negotiated protocol handling, a global
+request-filter pipeline, and explicit read-only/destructive/idempotent/open-world tool metadata.
+SDK package version and negotiated MCP protocol revision are not the same thing.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17), `standard` (39), `full` (62) |
-| `AGENT_ID` | `default` | Agent identity for multi-agent namespace sharing |
+| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17), `standard` (39), `full` (63) |
+| `AGENT_ID` | `default` | Host-supplied agent identity for namespace sharing. The default is explicit legacy-unisolated compatibility mode, not authentication. |
+| `MEMORY_TENANT_ID` | empty | Host-supplied tenant partition. Do not accept this value from model/tool arguments. Empty selects the legacy partition. |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
 | `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (when `MEMORY_STORAGE=sqlserver`) |
@@ -292,8 +322,9 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 |-----|-------------|
 | [First 5 Minutes](docs/first-5-minutes.md) | Store, close, recall — the whole loop |
 | [Cheat Sheet](docs/cheat-sheet.md) | One-page quick reference |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 62 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Full documentation for all 63 tools |
 | [Architecture](docs/architecture.md) | System design, retrieval pipeline, data flow |
+| [Cognitive Constitution](docs/cognitive-constitution.md) | Governed Core boundary, knowledge/provenance, learning, planning, assets, persistence, and current tenant limits |
 | [Services](docs/services.md) | All services with descriptions |
 | [Internals](docs/internals.md) | Retrieval, quantization, persistence deep dive |
 | [Project Structure](docs/project-structure.md) | File tree and module organization |
@@ -314,7 +345,7 @@ dotnet test    # full suite, including slower MSA benchmark cases
 ## Tech Stack
 
 - .NET 8/9/10, C#
-- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
+- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.1.0
 - [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67
 - [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0
 - [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX (384-dim, MIT license)

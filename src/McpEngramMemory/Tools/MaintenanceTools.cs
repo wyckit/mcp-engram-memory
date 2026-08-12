@@ -26,11 +26,13 @@ public sealed class MaintenanceTools
         _access = access;
     }
 
-    [McpServerTool(Name = "rebuild_embeddings")]
+    [McpServerTool(Name = "rebuild_embeddings", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Re-embed all entries using the current model. Use after upgrading the embedding model. Skips entries without text, preserves all metadata.")]
     public object RebuildEmbeddings(
         [Description("Namespace to rebuild ('*' for all namespaces, default: '*').")] string ns = "*")
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         using var timer = _metrics.StartTimer("rebuild_embeddings");
 
         // "*" spans every namespace in the store - only rewrite vectors in the ones this
@@ -56,11 +58,13 @@ public sealed class MaintenanceTools
             totalUpdated, totalSkipped, results.Count, results, _embedding.Dimensions);
     }
 
-    [McpServerTool(Name = "compression_stats")]
+    [McpServerTool(Name = "compression_stats", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Show vector compression stats: FP32 vs Int8 savings, quantization coverage, and memory footprint per namespace.")]
     public object CompressionStats(
         [Description("Namespace to inspect ('*' for all, default: '*').")] string ns = "*")
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new CompressionStatsResult(0, 0, 0, 0, 0f, Array.Empty<NamespaceCompressionStats>());
         var namespaces = (ns == "*" ? _index.GetNamespaces() : new[] { ns })
             .Where(_access.CanRead)
             .ToList();

@@ -132,13 +132,18 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Count entries in a specific namespace. Per-namespace read lock.</summary>
     public int CountInNamespace(string ns)
+        => CountInNamespace(ns, string.Empty);
+
+    /// <summary>Count entries in a specific tenant + namespace partition. Per-partition read lock.</summary>
+    public int CountInNamespace(string ns, string tenantId)
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
-            return _store.GetNamespace(ns)?.Count ?? 0;
+            return _store.GetNamespace(key)?.Count ?? 0;
         }
         finally { nsLock.ExitReadLock(); }
     }
@@ -149,6 +154,13 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public IReadOnlyList<string> GetNamespaces()
         => _store.GetNamespaceNames();
+
+    /// <summary>Get namespaces containing entries for exactly one tenant.</summary>
+    public IReadOnlyList<string> GetNamespaces(string tenantId)
+    {
+        _store.LoadAll();
+        return _store.GetNamespaceNames(NormalizeTenant(tenantId));
+    }
 
     // ── CRUD ──
 
@@ -315,6 +327,27 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>
+    /// Get an entry by bare id within one tenant. Returns null when no match exists or when the id
+    /// is ambiguous across multiple namespaces in that tenant. This scan is intentionally named
+    /// (rather than overloaded) so it cannot be confused with
+    /// <see cref="Get(string, string, string)"/>.
+    /// </summary>
+    public CognitiveEntry? GetForTenant(string id, string tenantId)
+    {
+        CognitiveEntry? match = null;
+        foreach (var ns in GetNamespaces(tenantId))
+        {
+            var candidate = Get(id, ns, tenantId);
+            if (candidate is null)
+                continue;
+            if (match is not null)
+                return null;
+            match = candidate;
+        }
+        return match;
+    }
+
+    /// <summary>
     /// Delete an entry by ID, searching all namespaces within the LEGACY tenant. Resolves id→ns
     /// lock-free then takes that ns's write lock. Only ever reaches legacy-tenant entries — a global
     /// id-delete can never remove another tenant's entry. Use <see cref="Delete(string, string, string)"/>
@@ -386,6 +419,25 @@ public sealed class CognitiveIndex : IDisposable
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Delete an entry by bare id within one tenant. Refuses ambiguous ids that occur in more than
+    /// one namespace, preventing a tenant-scoped caller from deleting an arbitrary match.
+    /// </summary>
+    public bool DeleteForTenant(string id, string tenantId)
+    {
+        string? matchNamespace = null;
+        foreach (var ns in GetNamespaces(tenantId))
+        {
+            if (Get(id, ns, tenantId) is null)
+                continue;
+            if (matchNamespace is not null)
+                return false;
+            matchNamespace = ns;
+        }
+
+        return matchNamespace is not null && Delete(id, matchNamespace, tenantId);
     }
 
     // ── Search ──
@@ -501,11 +553,13 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
     public IReadOnlyList<CognitiveSearchResult> Search(
         float[] query, string ns, int k = 5, float minScore = 0f,
-        string? category = null, HashSet<string>? includeStates = null, bool summaryFirst = false)
+        string? category = null, HashSet<string>? includeStates = null, bool summaryFirst = false,
+        string tenantId = "")
         => Search(new SearchRequest
         {
             Query = query, Namespace = ns, K = k, MinScore = minScore,
-            Category = category, IncludeStates = includeStates, SummaryFirst = summaryFirst
+            Category = category, IncludeStates = includeStates, SummaryFirst = summaryFirst,
+            TenantId = tenantId
         });
 
     /// <summary>
@@ -633,14 +687,15 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Find near-duplicates for a single entry within its namespace (O(N) scan).</summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicatesForEntry(
-        string ns, string entryId, float threshold = 0.95f)
+        string ns, string entryId, float threshold = 0.95f, string tenantId = "")
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null)
                 return Array.Empty<(string, string, float)>();
 
@@ -653,7 +708,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Find near-duplicate entries within a namespace by pairwise cosine similarity.</summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
         string ns, float threshold = 0.95f, string? category = null,
-        HashSet<string>? includeStates = null, int maxResults = 100)
+        HashSet<string>? includeStates = null, int maxResults = 100, string tenantId = "")
     {
         if (threshold < 0f || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), "Threshold must be between 0 and 1.");
@@ -661,12 +716,13 @@ public sealed class CognitiveIndex : IDisposable
         includeStates ??= new HashSet<string> { "stm", "ltm" };
 
         List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates;
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null)
                 return Array.Empty<(string, string, float)>();
 
@@ -708,13 +764,18 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Record an access hit within a known namespace. Per-ns write lock.</summary>
     public void RecordAccess(string id, string ns)
+        => RecordAccess(id, ns, string.Empty);
+
+    /// <summary>Record an access hit within an exact tenant + namespace partition.</summary>
+    public void RecordAccess(string id, string ns, string tenantId)
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
                 tuple.Entry.AccessCount++;
@@ -730,14 +791,23 @@ public sealed class CognitiveIndex : IDisposable
     /// falls back to id→ns resolve if not found there. Returns true if entry was found and updated.
     /// </summary>
     public bool BoostActivationEnergy(string id, string ns, float delta)
+        => BoostActivationEnergy(id, ns, delta, string.Empty, allowNamespaceFallback: true);
+
+    /// <summary>Boost activation energy within an exact tenant + namespace partition.</summary>
+    public bool BoostActivationEnergy(string id, string ns, float delta, string tenantId)
+        => BoostActivationEnergy(id, ns, delta, tenantId, allowNamespaceFallback: false);
+
+    private bool BoostActivationEnergy(
+        string id, string ns, float delta, string tenantId, bool allowNamespaceFallback)
     {
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
         // Fast path: try the caller's supplied ns first
-        var nsLock = NsLock(ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
                 tuple.Entry.ActivationEnergy += delta;
@@ -746,6 +816,9 @@ public sealed class CognitiveIndex : IDisposable
             }
         }
         finally { nsLock.ExitWriteLock(); }
+
+        if (!allowNamespaceFallback)
+            return false;
 
         // Fallback: resolve id→ns lock-free, then take the resolved ns's write lock
         if (!_store.TryResolveOrLoad(id, out var resolvedNs) || resolvedNs == ns)
@@ -789,6 +862,28 @@ public sealed class CognitiveIndex : IDisposable
                 return true;
             }
             return false;
+        }
+        finally { nsLock.ExitWriteLock(); }
+    }
+
+    /// <summary>Update lifecycle state within an exact tenant + namespace partition.</summary>
+    public bool SetLifecycleState(string id, string state, string ns, string tenantId)
+    {
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null || !nsEntries.TryGetValue(id, out var tuple))
+                return false;
+
+            var previousState = tuple.Entry.LifecycleState;
+            tuple.Entry.LifecycleState = state;
+            UpdateQuantization(nsEntries, id, tuple, previousState, state);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            return true;
         }
         finally { nsLock.ExitWriteLock(); }
     }
@@ -839,6 +934,37 @@ public sealed class CognitiveIndex : IDisposable
         return updated;
     }
 
+    /// <summary>Update lifecycle state for ids in an exact tenant + namespace partition.</summary>
+    public int SetLifecycleStateBatch(
+        IEnumerable<string> ids, string state, string ns, string tenantId)
+    {
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null)
+                return 0;
+
+            int updated = 0;
+            foreach (var id in ids)
+            {
+                if (!nsEntries.TryGetValue(id, out var tuple))
+                    continue;
+
+                var previousState = tuple.Entry.LifecycleState;
+                tuple.Entry.LifecycleState = state;
+                UpdateQuantization(nsEntries, id, tuple, previousState, state);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                updated++;
+            }
+            return updated;
+        }
+        finally { nsLock.ExitWriteLock(); }
+    }
+
     /// <summary>Update activation energy and lifecycle state atomically. Resolves id→ns lock-free, then per-ns write.</summary>
     public bool SetActivationEnergyAndState(string id, float activationEnergy, string? newState = null)
     {
@@ -867,17 +993,52 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitWriteLock(); }
     }
 
+    /// <summary>
+    /// Update activation energy and optional lifecycle state within an exact tenant + namespace
+    /// partition.
+    /// </summary>
+    public bool SetActivationEnergyAndState(
+        string id, float activationEnergy, string? newState, string ns, string tenantId)
+    {
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null || !nsEntries.TryGetValue(id, out var tuple))
+                return false;
+
+            var previousState = tuple.Entry.LifecycleState;
+            tuple.Entry.ActivationEnergy = activationEnergy;
+            if (newState is not null)
+            {
+                tuple.Entry.LifecycleState = newState;
+                UpdateQuantization(nsEntries, id, tuple, previousState, newState);
+            }
+            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            return true;
+        }
+        finally { nsLock.ExitWriteLock(); }
+    }
+
     // ── Bulk Reads ──
 
     /// <summary>Get all entries in a namespace. Per-namespace read lock.</summary>
     public IReadOnlyList<CognitiveEntry> GetAllInNamespace(string ns)
+        => GetAllInNamespace(ns, string.Empty);
+
+    /// <summary>Get all entries in a tenant + namespace partition. Per-partition read lock.</summary>
+    public IReadOnlyList<CognitiveEntry> GetAllInNamespace(string ns, string tenantId)
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null)
                 return Array.Empty<CognitiveEntry>();
             return nsEntries.Values.Select(t => t.Entry).ToList();
@@ -887,30 +1048,35 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Delete all entries in a namespace and remove it from in-memory state. Does NOT cascade to graph edges or clusters — callers must handle that.</summary>
     public int DeleteAllInNamespace(string ns)
+        => DeleteAllInNamespace(ns, string.Empty);
+
+    /// <summary>
+    /// Delete every entry in exactly one tenant + namespace partition. Other tenants with the
+    /// same namespace or ids are untouched. Does NOT cascade to graph edges or clusters.
+    /// </summary>
+    public int DeleteAllInNamespace(string ns, string tenantId)
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null || nsEntries.Count == 0)
             {
-                _store.RemoveNamespace(ns);
+                _store.RemoveNamespace(key);
                 return 0;
             }
 
-            int count = nsEntries.Count;
-            // Schedule per-entry persistence deletes for incremental backends (e.g. SQLite).
-            // BM25 and HNSW cleanup is handled in bulk by RemoveNamespace below — no per-entry
-            // removal needed here.
-            foreach (var id in nsEntries.Keys.ToList())
-                _store.ScheduleEntryDelete(ns, id, string.Empty);
+            var ids = nsEntries.Keys.ToList();
+            // Remove first so snapshot-based providers observe the post-delete state when their
+            // save is scheduled. This clears only the selected partition's BM25/HNSW indexes.
+            _store.RemoveNamespace(key);
+            foreach (var id in ids)
+                _store.ScheduleEntryDelete(ns, id, key.Tenant);
 
-            // Removes namespace from _namespaces, _idToNamespace, _loadedNamespaces, BM25,
-            // _hnswIndices, and deletes the persisted HNSW snapshot in one O(1) bulk step.
-            _store.RemoveNamespace(ns);
-            return count;
+            return ids.Count;
         }
         finally { nsLock.ExitWriteLock(); }
     }
@@ -921,6 +1087,22 @@ public sealed class CognitiveIndex : IDisposable
     /// returns a torn entry record.
     /// </summary>
     public IReadOnlyList<CognitiveEntry> GetAll()
+        => GetAllForTenant(string.Empty);
+
+    /// <summary>Get all entries belonging to exactly one tenant.</summary>
+    public IReadOnlyList<CognitiveEntry> GetAllForTenant(string tenantId)
+    {
+        _store.LoadAll();
+        return _store.GetTenantNamespaces(NormalizeTenant(tenantId))
+            .SelectMany(d => d.Values.Select(t => t.Entry))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Explicit system-level diagnostic snapshot across every tenant. Principal-bound tools and
+    /// maintenance paths must use <see cref="GetAllForTenant"/> instead.
+    /// </summary>
+    public IReadOnlyList<CognitiveEntry> GetAllAcrossTenants()
     {
         _store.LoadAll();
         return _store.AllNamespaces
@@ -933,21 +1115,31 @@ public sealed class CognitiveIndex : IDisposable
     /// cross-ns path is lock-free (diagnostic-grade consistency via ConcurrentDictionary).
     /// </summary>
     public (int stm, int ltm, int archived) GetStateCounts(string? ns = null)
+        => GetStateCounts(ns, string.Empty);
+
+    /// <summary>
+    /// Get lifecycle-state counts within one tenant. A null or "*" namespace aggregates only
+    /// that tenant's partitions; a concrete namespace reads exactly that tenant + namespace.
+    /// </summary>
+    public (int stm, int ltm, int archived) GetStateCounts(string? ns, string tenantId)
     {
+        string tenant = NormalizeTenant(tenantId);
         if (ns is null || ns == "*")
         {
             _store.LoadAll();
-            var entries = _store.AllNamespaces.SelectMany(d => d.Values.Select(t => t.Entry));
+            var entries = _store.GetTenantNamespaces(tenant)
+                .SelectMany(d => d.Values.Select(t => t.Entry));
             return CountStates(entries);
         }
         else
         {
-            var nsLock = NsLock(ns);
+            var key = new NsKey(tenant, ns);
+            var nsLock = NsLock(NamespaceStore.PartitionKey(key));
             nsLock.EnterReadLock();
             try
             {
                 _store.EnsureLoaded(ns);
-                var entries = _store.GetNamespace(ns) is { } nsEntries
+                var entries = _store.GetNamespace(key) is { } nsEntries
                     ? nsEntries.Values.Select(t => t.Entry)
                     : Enumerable.Empty<CognitiveEntry>();
                 return CountStates(entries);

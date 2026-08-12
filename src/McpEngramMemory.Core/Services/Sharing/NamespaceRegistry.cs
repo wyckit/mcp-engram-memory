@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using McpEngramMemory.Core.Models;
 
 namespace McpEngramMemory.Core.Services.Sharing;
@@ -24,8 +26,8 @@ public sealed class NamespaceRegistry
     // parallel; grants to the same namespace serialize through one monitor.
     private readonly ConcurrentDictionary<string, object> _permissionLocks = new();
 
-    private object LockFor(string ns) =>
-        _permissionLocks.GetOrAdd(ns, _ => new object());
+    private object LockFor(string ns, string tenantId = "") =>
+        _permissionLocks.GetOrAdd(PermissionEntryId(ns, tenantId), _ => new object());
 
     public NamespaceRegistry(CognitiveIndex index, IEmbeddingService embedding)
     {
@@ -38,14 +40,17 @@ public sealed class NamespaceRegistry
     /// Thread-safe: concurrent Share calls to the same namespace are serialized by a per-namespace
     /// monitor, so grants cannot overwrite one another. Calls to different namespaces stay parallel.
     /// </summary>
-    public ShareResult Share(string ns, string ownerAgentId, string targetAgentId, string accessLevel)
+    public ShareResult Share(string ns, string ownerAgentId, string targetAgentId, string accessLevel,
+        string tenantId = "")
     {
         if (accessLevel is not ("read" or "write"))
             return new ShareResult("error", ns, targetAgentId, accessLevel);
 
-        lock (LockFor(ns))
+        lock (LockFor(ns, tenantId))
         {
-            var permission = GetOrCreatePermissionUnlocked(ns, ownerAgentId);
+            var permission = GetPermission(ns, tenantId);
+            if (permission is null)
+                return new ShareResult("error_not_found", ns, targetAgentId, accessLevel);
 
             // Check ownership (default agent bypasses ownership checks for backward compat)
             if (permission.Owner != ownerAgentId && ownerAgentId != AgentIdentity.DefaultAgentId)
@@ -59,7 +64,7 @@ public sealed class NamespaceRegistry
             else
                 grants.Add(new ShareGrant(targetAgentId, accessLevel));
 
-            SavePermission(ns, permission.Owner, grants);
+            SavePermission(ns, permission.Owner, grants, tenantId);
             return new ShareResult("shared", ns, targetAgentId, accessLevel);
         }
     }
@@ -68,11 +73,11 @@ public sealed class NamespaceRegistry
     /// Revoke an agent's access to a namespace.
     /// Thread-safe under the same per-namespace serialization as <see cref="Share"/>.
     /// </summary>
-    public ShareResult Unshare(string ns, string ownerAgentId, string targetAgentId)
+    public ShareResult Unshare(string ns, string ownerAgentId, string targetAgentId, string tenantId = "")
     {
-        lock (LockFor(ns))
+        lock (LockFor(ns, tenantId))
         {
-            var permission = GetPermission(ns);
+            var permission = GetPermission(ns, tenantId);
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, "none");
 
@@ -80,7 +85,7 @@ public sealed class NamespaceRegistry
                 return new ShareResult("error_not_owner", ns, targetAgentId, "none");
 
             var grants = permission.SharedWith.Where(g => g.AgentId != targetAgentId).ToList();
-            SavePermission(ns, permission.Owner, grants);
+            SavePermission(ns, permission.Owner, grants, tenantId);
             return new ShareResult("unshared", ns, targetAgentId, "none");
         }
     }
@@ -89,20 +94,27 @@ public sealed class NamespaceRegistry
     /// Check if an agent has at least the specified access level to a namespace.
     /// Default agent always has access (backward compatible).
     /// </summary>
-    public bool HasAccess(string agentId, string ns, string requiredLevel = "read")
+    public bool HasAccess(string agentId, string ns, string requiredLevel = "read", string tenantId = "")
     {
         // Default agent has unrestricted access (backward compatible)
-        if (agentId == AgentIdentity.DefaultAgentId)
+        if (agentId == AgentIdentity.DefaultAgentId && NormalizeTenant(tenantId).Length == 0)
             return true;
 
-        // System namespaces are always accessible
+        // System namespaces contain control-plane data. Internal services access them
+        // through dedicated APIs; generic memory tools must not expose them to an
+        // identified principal. The legacy default remains explicitly unisolated above.
         if (ns.StartsWith('_'))
-            return true;
+            return false;
 
         // Owner always has full access
-        var permission = GetPermission(ns);
+        var permission = GetPermission(ns, tenantId);
         if (permission is null)
-            return true; // Unregistered namespaces are open (backward compat)
+        {
+            // Identified principals never inherit an unregistered namespace. A write may
+            // atomically claim only a genuinely empty namespace; pre-existing legacy content
+            // must be assigned by an administrator/migration, preventing first-writer takeover.
+            return requiredLevel == "write" && TryClaimEmptyNamespace(ns, agentId, tenantId);
+        }
 
         if (permission.Owner == agentId)
             return true;
@@ -118,10 +130,12 @@ public sealed class NamespaceRegistry
     /// <summary>
     /// Get all namespaces accessible to an agent (owned + shared).
     /// </summary>
-    public WhoAmIResult GetAccessibleNamespaces(string agentId)
+    public WhoAmIResult GetAccessibleNamespaces(string agentId, string tenantId = "")
     {
+        tenantId = NormalizeTenant(tenantId);
         var allPermissions = _index.GetAllInNamespace(SystemNamespace)
             .Where(e => e.Category == PermissionCategory)
+            .Where(e => NormalizeTenant(e.Metadata.GetValueOrDefault("tenantId")) == tenantId)
             .ToList();
 
         var owned = new List<string>();
@@ -148,11 +162,11 @@ public sealed class NamespaceRegistry
         }
 
         // If default agent, also include all persisted namespaces
-        if (agentId == AgentIdentity.DefaultAgentId)
+        if (agentId == AgentIdentity.DefaultAgentId && tenantId.Length == 0)
         {
             var registeredNs = allPermissions.Select(e => e.Metadata.GetValueOrDefault("ns") ?? e.Id).ToHashSet();
             // All non-system namespaces not in registry are implicitly owned by default
-            var allNs = _index.GetAll()
+            var allNs = _index.GetAllForTenant(tenantId)
                 .Select(e => e.Ns)
                 .Where(n => !n.StartsWith('_'))
                 .Distinct()
@@ -165,9 +179,8 @@ public sealed class NamespaceRegistry
 
     /// <summary>
     /// Claim ownership of <paramref name="ns"/> for <paramref name="agentId"/> on write, if it is
-    /// not already owned. This is the call that makes the whole ACL model functional: until it
-    /// runs, no namespace has a permission record, and <see cref="HasAccess"/> treats every
-    /// unregistered namespace as open — so every access check everywhere returns true.
+    /// not already owned. Identified principals normally claim an empty namespace atomically in
+    /// <see cref="HasAccess"/> before the write; this method is an idempotent compatibility guard.
     ///
     /// Deliberately a no-op for the default agent. Servers that never set <c>AGENT_ID</c> run as
     /// the default identity, which <see cref="HasAccess"/> short-circuits to full access anyway;
@@ -175,14 +188,13 @@ public sealed class NamespaceRegistry
     /// operator out of their own data the moment they later set an <c>AGENT_ID</c>. Access control
     /// therefore activates only once agents are actually given distinct identities.
     ///
-    /// First identified writer wins. In a multi-agent setup upgrading from a build without this
-    /// call, a pre-existing namespace stays open until some identified agent writes to it, at
-    /// which point that agent claims it and others need an explicit share.
+    /// Pre-existing unregistered content is never claimable through a data-plane write; an
+    /// administrator or migration must assign its owner explicitly.
     /// </summary>
-    public void ClaimOwnershipOnWrite(string ns, string agentId)
+    public void ClaimOwnershipOnWrite(string ns, string agentId, string tenantId = "")
     {
-        if (agentId == AgentIdentity.DefaultAgentId) return;
-        EnsureOwnership(ns, agentId);
+        if (agentId == AgentIdentity.DefaultAgentId && NormalizeTenant(tenantId).Length == 0) return;
+        EnsureOwnership(ns, agentId, tenantId);
     }
 
     /// <summary>
@@ -192,23 +204,24 @@ public sealed class NamespaceRegistry
     /// race to register the same namespace are serialized per-namespace and only the first write
     /// wins (subsequent callers become no-ops).
     /// </summary>
-    public void EnsureOwnership(string ns, string agentId)
+    public void EnsureOwnership(string ns, string agentId, string tenantId = "")
     {
         if (ns.StartsWith('_')) return; // System namespaces not tracked
+        tenantId = NormalizeTenant(tenantId);
 
         // Double-checked: fast path avoids acquiring the per-ns lock once registered.
-        if (GetPermission(ns) is not null) return;
+        if (GetPermission(ns, tenantId) is not null) return;
 
-        lock (LockFor(ns))
+        lock (LockFor(ns, tenantId))
         {
-            if (GetPermission(ns) is not null) return; // Another thread registered first
-            SavePermission(ns, agentId, Array.Empty<ShareGrant>());
+            if (GetPermission(ns, tenantId) is not null) return; // Another thread registered first
+            SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
         }
     }
 
-    private NamespacePermission? GetPermission(string ns)
+    private NamespacePermission? GetPermission(string ns, string tenantId)
     {
-        var entryId = $"perm_{ns}";
+        var entryId = PermissionEntryId(ns, tenantId);
         var entry = _index.Get(entryId, SystemNamespace);
         if (entry is null) return null;
 
@@ -217,19 +230,28 @@ public sealed class NamespaceRegistry
         return new NamespacePermission(ns, owner, ParseGrants(grantsStr));
     }
 
-    // Caller must hold LockFor(ns). Used by Share when the per-ns lock is already held.
-    private NamespacePermission GetOrCreatePermissionUnlocked(string ns, string ownerAgentId)
+    private bool TryClaimEmptyNamespace(string ns, string agentId, string tenantId)
     {
-        var existing = GetPermission(ns);
-        if (existing is not null) return existing;
+        tenantId = NormalizeTenant(tenantId);
+        lock (LockFor(ns, tenantId))
+        {
+            var existing = GetPermission(ns, tenantId);
+            if (existing is not null)
+                return existing.Owner == agentId ||
+                       existing.SharedWith.Any(grant => grant.AgentId == agentId && grant.AccessLevel == "write");
 
-        SavePermission(ns, ownerAgentId, Array.Empty<ShareGrant>());
-        return new NamespacePermission(ns, ownerAgentId, Array.Empty<ShareGrant>());
+            if (_index.GetAllInNamespace(ns, tenantId).Count != 0)
+                return false;
+
+            SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
+            return true;
+        }
     }
 
-    private void SavePermission(string ns, string owner, IReadOnlyList<ShareGrant> grants)
+    private void SavePermission(string ns, string owner, IReadOnlyList<ShareGrant> grants, string tenantId)
     {
-        var entryId = $"perm_{ns}";
+        tenantId = NormalizeTenant(tenantId);
+        var entryId = PermissionEntryId(ns, tenantId);
         var grantsStr = string.Join(";", grants.Select(g => $"{g.AgentId}:{g.AccessLevel}"));
         var vector = _embedding.Embed($"namespace permission {ns}");
 
@@ -242,6 +264,7 @@ public sealed class NamespaceRegistry
             metadata: new Dictionary<string, string>
             {
                 ["ns"] = ns,
+                ["tenantId"] = tenantId,
                 ["owner"] = owner,
                 ["grants"] = grantsStr
             },
@@ -252,6 +275,21 @@ public sealed class NamespaceRegistry
 
         _index.Upsert(entry);
     }
+
+    private static string PermissionEntryId(string ns, string tenantId)
+    {
+        tenantId = NormalizeTenant(tenantId);
+        if (tenantId.Length == 0)
+            return $"perm_{ns}";
+
+        // Keep legacy ids byte-for-byte stable while using a bounded, non-reversible tenant
+        // discriminator for new partitions. The full tenant remains in private metadata.
+        var tenantHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tenantId)))[..16];
+        return $"perm_t_{tenantHash}_{ns}";
+    }
+
+    private static string NormalizeTenant(string? tenantId) =>
+        string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     private static IReadOnlyList<ShareGrant> ParseGrants(string grantsStr)
     {

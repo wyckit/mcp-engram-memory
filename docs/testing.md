@@ -2,9 +2,11 @@
 
 [< Back to README](../README.md)
 
-88 test files. A full non-live run passes 1155 tests per target framework (net8.0, net9.0, net10.0).
+The xUnit suite targets net8.0, net9.0, and net10.0. It covers the legacy cognitive-memory engine,
+the governed Core substrate, MCP 2.1 conformance, and adversarial identity/tenant boundaries.
 
-_The per-file table below is a snapshot and drifts between releases; the headline count above is authoritative (measured at v1.3.0)._
+The per-file table below is a guide to coverage, not a release test-count ledger. Theory data and
+new regression cases make exact counts change frequently; use the test runner for the current total.
 
 ## Running Tests
 
@@ -12,6 +14,50 @@ _The per-file table below is a snapshot and drifts between releases; the headlin
 cd mcp-engram-memory
 dotnet test
 ```
+
+For a fast governance pass on one target framework:
+
+```bash
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
+  -f net8.0 \
+  --filter "FullyQualifiedName~Constitution|FullyQualifiedName~Knowledge|FullyQualifiedName~Provenance|FullyQualifiedName~LearningPipeline|FullyQualifiedName~PlanningPipeline|FullyQualifiedName~SemanticAsset|FullyQualifiedName~GovernancePersistence|FullyQualifiedName~TenantStructureIsolation|FullyQualifiedName~McpSdkConformance"
+```
+
+Use a separate artifacts directory when a live stdio server may hold the default build output:
+
+```bash
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
+  -f net8.0 --artifacts-path artifacts/governance-tests
+```
+
+## Governed substrate coverage
+
+| Test File | Invariant exercised |
+|-----------|---------------------|
+| `ConstitutionCoreTests.cs` | Canonical hashes, immutable versions, Root/overlay monotonicity, deterministic rule order |
+| `ConstitutionKernelTests.cs` | Pre/post decisions, append-only audit, evaluator failures that deny and audit |
+| `ConstitutionMcpFilterTests.cs` | Global MCP filter registration, operation envelopes, canonical argument hashing, and deny behavior |
+| `KnowledgeAssetPrimitivesTests.cs` | Memory/knowledge separation, maturity and validity, evidence, calibrated epistemic fields, permission inheritance |
+| `ProvenanceStoreTests.cs` | Exact versioned lineage, append-only assertions, tenant boundaries, source-permission intersection |
+| `LearningPipelineTests.cs` | Quarantined Teacher output, deterministic-first verification, independence, approval and promotion denial paths |
+| `GovernedKnowledgeStoreTests.cs` | Atomic reference commit, active-version conflicts, authorization recheck, idempotency, provenance/audit visibility |
+| `PlanningPipelineTests.cs` | Authorization before relevance, monotone loadouts, deterministic budgets, stale authorization removal, citations, fail-closed adapters |
+| `SemanticAssetFamilyTests.cs` | Skill, Documentation, CodeGraph, and Curriculum canonical publication and validation |
+| `AssetRuntimeTests.cs` | Host-sandbox Skill execution, deterministic verifier veto, curriculum training gates, incremental CodeGraph contracts |
+| `GovernancePersistenceTests.cs` | Checksummed snapshots, fsync journals, replay, corrupt-tail recovery, earlier-corruption failure, tenant separation |
+| `McpSdkConformanceTests.cs` | ModelContextProtocol 2.1.0 package, stdio builder registration, protocol negotiation options, generated tool schema/metadata |
+| `TenantStructureIsolationTests.cs` | Same bare IDs across tenant/legacy partitions; tenant fail-closed graph/cluster/lifecycle paths and legacy positive controls |
+
+### Security-test pattern
+
+Isolation tests require a positive control. An empty result is not evidence of enforcement when the
+fixture itself is empty or a spectral threshold was never met. The tenant suites seed data that the
+legacy-unisolated control can read/mutate, then prove an identified non-empty-tenant principal cannot
+observe or change the same global bare-ID structures.
+
+The current limitation is intentional and tested: tenant-aware entry CRUD works, but graph,
+cluster, lifecycle support, collapse, and diffusion structures are not yet tenant-qualified. Their
+affected MCP tools must fail closed rather than silently use the legacy global structures.
 
 ## Test Files
 
@@ -63,6 +109,6 @@ dotnet test
 | IntelligenceToolsTests.cs | 14 | DetectDuplicates, FindContradictions, UncollapseCluster, ListCollapseHistory, MergeMemories tool endpoints |
 | LifecycleToolsTests.cs | 13 | PromoteMemory, DeepRecall, MemoryFeedback, DecayCycle, ConfigureDecay tool endpoints |
 | MultiAgentToolsTests.cs | 12 | CrossSearch, ShareNamespace, UnshareNamespace, ListShared, WhoAmI tool endpoints |
-| SynthesisToolsTests.cs | 2 | SynthesizeMemories, GetContextBlock tool endpoints |
+| SynthesisToolsTests.cs | 2 | SynthesizeMemories tool endpoints |
 | DiversityRerankerTests.cs | 11 | Cluster-aware MMR diversity reranking: selection, cluster/category penalties, edge cases |
 | VisualizationToolsTests.cs | 10 | GetGraphSnapshot tool: node/edge serialization, filter options, stats accuracy |

@@ -6,6 +6,7 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Sharing;
 using McpEngramMemory.Core.Services.Storage;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -25,32 +26,41 @@ public sealed class AdminTools
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly ClusterManager _clusters;
-    private readonly IStorageProvider _storage;
     private readonly IBackgroundWorkerStatusTracker? _statusTracker;
     private readonly NamespaceRegistry _registry;
-    private readonly AgentIdentity _agent;
+    private readonly IPrincipalContext _principal;
 
+    [ActivatorUtilitiesConstructor]
     public AdminTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, IStorageProvider storage,
-        NamespaceRegistry registry, AgentIdentity agent,
+        NamespaceRegistry registry, IPrincipalContext principal,
         IBackgroundWorkerStatusTracker? statusTracker = null)
     {
         _index = index;
         _graph = graph;
         _clusters = clusters;
-        _storage = storage;
+        _ = storage; // Retained in the constructor for binary/source compatibility.
         _registry = registry;
-        _agent = agent;
+        _principal = principal;
         _statusTracker = statusTracker;
     }
 
-    private bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
+    public AdminTools(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters, IStorageProvider storage,
+        NamespaceRegistry registry, AgentIdentity agent,
+        IBackgroundWorkerStatusTracker? statusTracker = null)
+        : this(index, graph, clusters, storage, registry,
+            new PrincipalContext(string.Empty, agent.AgentId), statusTracker) { }
 
-    [McpServerTool(Name = "get_memory")]
+    private bool CanRead(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+    private bool CanWrite(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
+
+    [McpServerTool(Name = "get_memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
     public object GetMemory(
         [Description("Entry ID.")] string id)
     {
-        var entry = _index.Get(id);
+        var entry = _index.GetForTenant(id, _principal.TenantId);
         if (entry is null)
             return $"Entry '{id}' not found.";
 
@@ -60,8 +70,18 @@ public sealed class AdminTools
         if (!CanRead(entry.Ns))
             return $"Entry '{id}' not found.";
 
-        var edges = _graph.GetEdgesForEntry(id);
-        var clusterIds = _clusters.GetClustersForEntry(id);
+        // Graph topology is global and edges carry bare endpoint IDs. Returning an edge
+        // to a private endpoint discloses that endpoint's ID, relationship, and metadata
+        // even when its entry body is protected. Project the edge set through the same
+        // entry-level read policy as the primary object.
+        var edges = _principal.TenantId.Length == 0
+            ? _graph.GetEdgesForEntry(id)
+                .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
+                .ToList()
+            : new List<GraphEdge>();
+        var clusterIds = _principal.TenantId.Length == 0
+            ? _clusters.GetClustersForEntry(id)
+            : Array.Empty<string>();
 
         return new GetMemoryResult(
             new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState),
@@ -76,19 +96,39 @@ public sealed class AdminTools
             clusterIds);
     }
 
-    [McpServerTool(Name = "cognitive_stats")]
+    private bool CanReadEndpoint(string entryId)
+    {
+        var endpoint = _index.GetForTenant(entryId, _principal.TenantId);
+        return endpoint is not null && CanRead(endpoint.Ns);
+    }
+
+    [McpServerTool(Name = "cognitive_stats", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Check how many memories exist across lifecycle states (STM/LTM/archived), plus cluster and edge counts and the namespace list. The namespace list is capped — raise namespaceLimit or pass 0 for all. Don't use it to check background worker health; use `engram_status` for that.")]
     public LifecycleStats CognitiveStats(
         [Description("Namespace ('*' for all, default).")] string ns = "*",
         [Description("Maximum namespaces to list (default: 100). Use 0 for no cap. Counts are always exact regardless of this limit.")] int namespaceLimit = DefaultNamespaceLimit)
     {
-        var (stm, ltm, archived) = _index.GetStateCounts(ns);
-        // Namespace names alone can be sensitive (project or client names) and are a stepping
-        // stone to targeting other tools by name, so list only what this caller may read.
-        // Counts stay store-wide: they are aggregates and disclose nothing specific.
-        var namespaces = _index.GetNamespaces().Where(CanRead).ToList();
-        var edgeCount = _graph.EdgeCount;
-        var clusterCount = _clusters.ClusterCount;
+        // Counts, topology totals, and cluster totals are all existence signals. Build a
+        // principal-visible projection first, then derive every aggregate from that same
+        // projection so a caller cannot probe a private namespace by name or infer its size.
+        var namespaces = _index.GetNamespaces(_principal.TenantId).Where(CanRead).ToList();
+        var scopedNamespaces = ns == "*"
+            ? namespaces
+            : namespaces.Where(candidate => candidate == ns).ToList();
+        var visibleEntries = scopedNamespaces
+            .SelectMany(scope => _index.GetAllInNamespace(scope, _principal.TenantId))
+            .ToList();
+        var stm = visibleEntries.Count(entry => entry.LifecycleState == "stm");
+        var ltm = visibleEntries.Count(entry => entry.LifecycleState == "ltm");
+        var archived = visibleEntries.Count(entry => entry.LifecycleState == "archived");
+        var visibleIds = visibleEntries.Select(entry => entry.Id).ToHashSet();
+        var edgeCount = _principal.TenantId.Length == 0
+            ? _graph.GetAllEdges().Count(edge =>
+                visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId))
+            : 0;
+        var clusterCount = _principal.TenantId.Length == 0
+            ? scopedNamespaces.Sum(scope => _clusters.ListClusters(scope).Count)
+            : 0;
 
         // A store with hundreds of namespaces returns a list that dominates the caller's
         // context window for no benefit — the counts are what the tool is usually asked for.
@@ -105,7 +145,7 @@ public sealed class AdminTools
             listed);
     }
 
-    [McpServerTool(Name = "engram_status")]
+    [McpServerTool(Name = "engram_status", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Check the last-run timestamps, cycle counts, and error counts for every background worker (decay, consolidation, diffusion, accretion). Don't use it to see memory counts or namespace lists; use `cognitive_stats` for that.")]
     public EngramStatusOutput EngramStatus()
     {
@@ -117,16 +157,21 @@ public sealed class AdminTools
                 new EngramWorkerStatus("accretion",     null, 0, 0, 0, null));
     }
 
-    [McpServerTool(Name = "purge_debates")]
+    [McpServerTool(Name = "purge_debates", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Clean up stale debate namespaces older than maxAgeHours. Deletes entries, edges, and cluster memberships. Defaults to dry-run mode.")]
     public async Task<object> PurgeDebates(
         [Description("Maximum age in hours before a debate namespace is considered stale (default: 24).")] int maxAgeHours = 24,
         [Description("If true, only list what would be purged without deleting (default: true).")] bool dryRun = true,
         [Description("Maximum namespaces to detail in the response (default: 25). Use 0 for all. Totals are always exact regardless of this limit.")] int detailLimit = DefaultDetailLimit)
     {
-        var namespaces = _index.GetNamespaces();
+        await Task.CompletedTask;
+        var namespaces = _index.GetNamespaces(_principal.TenantId);
         var debateNamespaces = namespaces
             .Where(n => n.StartsWith("active-debate-"))
+            // Dry-run details are sensitive too, so use the execution permission for both
+            // modes. Once a debate session is claimed by its creator, other principals can
+            // neither enumerate nor delete it through this maintenance path.
+            .Where(CanWrite)
             .ToList();
 
         if (debateNamespaces.Count == 0)
@@ -139,14 +184,13 @@ public sealed class AdminTools
 
         foreach (var debateNs in debateNamespaces)
         {
-            var entries = _index.GetAllInNamespace(debateNs);
+            var entries = _index.GetAllInNamespace(debateNs, _principal.TenantId);
             if (entries.Count == 0)
             {
                 // Empty namespace — always purge
                 if (!dryRun)
                 {
-                    _index.DeleteAllInNamespace(debateNs);
-                    await _storage.DeleteNamespaceAsync(debateNs);
+                    _index.DeleteAllInNamespace(debateNs, _principal.TenantId);
                 }
                 purged.Add(new PurgedNamespaceInfo(debateNs, 0, 0, null));
                 continue;
@@ -163,15 +207,17 @@ public sealed class AdminTools
             if (!dryRun)
             {
                 // Cascade: remove graph edges and cluster memberships for each entry
-                foreach (var entry in entries)
+                if (_principal.TenantId.Length == 0)
                 {
-                    edgesRemoved += _graph.RemoveAllEdgesForEntry(entry.Id);
-                    _clusters.RemoveEntryFromAllClusters(entry.Id);
+                    foreach (var entry in entries)
+                    {
+                        edgesRemoved += _graph.RemoveAllEdgesForEntry(entry.Id);
+                        _clusters.RemoveEntryFromAllClusters(entry.Id);
+                    }
                 }
 
                 // Remove entries and namespace from index
-                _index.DeleteAllInNamespace(debateNs);
-                await _storage.DeleteNamespaceAsync(debateNs);
+                _index.DeleteAllInNamespace(debateNs, _principal.TenantId);
             }
             else
             {
@@ -181,11 +227,14 @@ public sealed class AdminTools
                 // namespaces are internally linked. That made the dry run report roughly
                 // twice the edges the real purge removes, on the one operation whose whole
                 // job is to let you check before deleting.
-                var distinct = new HashSet<(string, string, string)>();
-                foreach (var entry in entries)
-                    foreach (var edge in _graph.GetEdgesForEntry(entry.Id))
-                        distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
-                edgesRemoved = distinct.Count;
+                if (_principal.TenantId.Length == 0)
+                {
+                    var distinct = new HashSet<(string, string, string)>();
+                    foreach (var entry in entries)
+                        foreach (var edge in _graph.GetEdgesForEntry(entry.Id))
+                            distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
+                    edgesRemoved = distinct.Count;
+                }
             }
 
             totalEntriesRemoved += entryCount;

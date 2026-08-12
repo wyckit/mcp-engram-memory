@@ -90,10 +90,7 @@ public class TenantPrefixMigrationToolTests : IDisposable
     [Fact]
     public void Migrate_MultipleTenantsSamePath_AllLandInSameNamespaceDisjointByTenant()
     {
-        // Distinct ids: SQLite's (ns, id) primary key is intentionally NOT tenant-partitioned
-        // (design doc §2.2 — tenant_id lives only in json_data on this backend), so two tenants
-        // sharing both ns AND id at the destination is a SQL Server-only scenario (see the
-        // ENGRAM_TEST_SQLSERVER_CONNECTION-gated collision test below).
+        // SQLite schema v3 partitions entries by (tenant_id, ns, id).
         _storage.SaveNamespaceSync("tenant-a::work", new NamespaceData { Entries = [Entry("a1", "tenant-a::work", "alpha")] });
         _storage.SaveNamespaceSync("tenant-b::work", new NamespaceData { Entries = [Entry("b1", "tenant-b::work", "bravo")] });
 
@@ -108,17 +105,21 @@ public class TenantPrefixMigrationToolTests : IDisposable
     }
 
     [Fact]
-    public void Migrate_SameIdAcrossTenantsAtSameDestination_SqliteBackendBoundary()
+    public void Migrate_SameIdAcrossTenantsAtSameDestination_SqliteSchemaV3PreservesBoth()
     {
-        // Documents a known, deliberate backend boundary (design doc §2.2): SQLite's primary key
-        // is (ns, id) only — not tenant-partitioned — so folding two prefixed namespaces that share
-        // both the destination path AND an entry id is only safe on a tenant-partitioned backend
-        // (SQL Server's (tenant_id, ns, id) PK). On SQLite this surfaces as a constraint violation
-        // rather than silently corrupting data.
+        // Same destination namespace and entry id remain distinct across tenant partitions.
         _storage.SaveNamespaceSync("tenant-a::work", new NamespaceData { Entries = [Entry("shared", "tenant-a::work", "alpha")] });
         _storage.SaveNamespaceSync("tenant-b::work", new NamespaceData { Entries = [Entry("shared", "tenant-b::work", "bravo")] });
 
-        Assert.Throws<Microsoft.Data.Sqlite.SqliteException>(() => _tool.Migrate());
+        var manifest = _tool.Migrate();
+
+        var loaded = _storage.LoadNamespace("work");
+        Assert.Equal(2, loaded.Entries.Count);
+        Assert.Contains(loaded.Entries, entry => entry.Id == "shared" &&
+            entry.TenantId == "tenant-a" && entry.Text == "alpha");
+        Assert.Contains(loaded.Entries, entry => entry.Id == "shared" &&
+            entry.TenantId == "tenant-b" && entry.Text == "bravo");
+        Assert.True(manifest.RowCountParityOk);
     }
 
     [Fact]

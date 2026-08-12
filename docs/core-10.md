@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-Engram Memory exposes 62 MCP tools across three profiles (default
+Engram Memory exposes 63 MCP tools across three profiles (default
 `minimal` shows 17). You don't need most of them on day one. This page
 lists the 10 tools that cover the typical workflow — from first memory
 to multi-agent setups — in the order you'll naturally encounter them.

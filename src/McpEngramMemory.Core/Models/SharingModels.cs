@@ -3,6 +3,36 @@ using System.Text.Json.Serialization;
 namespace McpEngramMemory.Core.Models;
 
 /// <summary>
+/// Host-supplied identity and tenant boundary for a cognitive operation.
+/// Implementations are provided by the embedding host; MCP arguments must not be
+/// allowed to choose or override these values.
+/// </summary>
+public interface IPrincipalContext
+{
+    string TenantId { get; }
+    string AgentId { get; }
+    bool IsSystem { get; }
+    bool IsLegacyUnisolated { get; }
+}
+
+/// <summary>
+/// Immutable principal context. The empty-tenant/default-agent combination is the
+/// explicit compatibility mode used by historical single-user deployments; it is
+/// intentionally unisolated and must never be described as authenticated.
+/// </summary>
+public sealed record PrincipalContext(
+    string TenantId,
+    string AgentId,
+    bool IsSystem = false) : IPrincipalContext
+{
+    public static PrincipalContext LegacyUnisolated { get; } =
+        new(string.Empty, AgentIdentity.DefaultAgentId);
+
+    public bool IsLegacyUnisolated =>
+        !IsSystem && string.IsNullOrEmpty(TenantId) && AgentId == AgentIdentity.DefaultAgentId;
+}
+
+/// <summary>
 /// Agent identity for multi-agent memory sharing.
 /// </summary>
 public sealed record AgentIdentity(

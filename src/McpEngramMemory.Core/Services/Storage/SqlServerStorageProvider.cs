@@ -24,6 +24,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     private const int CurrentSchemaVersion = 3;
     private static readonly Regex SchemaNameRegex = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
 
+    private readonly record struct EntryStorageKey(string TenantId, string EntryId);
+
     private readonly string _connectionString;
     private readonly string _schema;
     private readonly string _schemaQuoted;
@@ -34,11 +36,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
 
     private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
-    private readonly Dictionary<string, Dictionary<string, CognitiveEntry>> _pendingEntryUpserts = new();
-    // ns -> (entryId -> tenantId). Carries the tenant per pending delete so the flushed
-    // DELETE targets the full (tenant_id, ns, id) key and never removes a co-keyed row in
-    // another tenant. Legacy (no-tenant) deletes carry tenantId "".
-    private readonly Dictionary<string, Dictionary<string, string>> _pendingEntryDeletes = new();
+    private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts = new();
+    private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes = new();
     private readonly Dictionary<string, Timer> _incrementalTimers = new();
 
     private Timer? _pendingEdgeTimer;
@@ -226,6 +225,9 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(data));
         return Convert.ToHexString(hash);
     }
+
+    private static string NormalizeTenantId(string? tenantId)
+        => string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     private bool VerifyChecksum(string data, string expectedChecksum, string context)
     {
@@ -424,10 +426,11 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                 upserts = new();
                 _pendingEntryUpserts[ns] = upserts;
             }
-            upserts[entry.Id] = entry;
+            var key = new EntryStorageKey(entry.TenantId, entry.Id);
+            upserts[key] = entry;
 
             if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
-                deletes.Remove(entry.Id);
+                deletes.Remove(key);
 
             ScheduleIncrementalFlush(ns);
         }
@@ -442,15 +445,17 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         {
             if (_disposed) return;
 
+            var key = new EntryStorageKey(NormalizeTenantId(tenantId), entryId);
+
             if (!_pendingEntryDeletes.TryGetValue(ns, out var deletes))
             {
                 deletes = new();
                 _pendingEntryDeletes[ns] = deletes;
             }
-            deletes[entryId] = tenantId ?? "";
+            deletes.Add(key);
 
             if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
-                upserts.Remove(entryId);
+                upserts.Remove(key);
 
             ScheduleIncrementalFlush(ns);
         }
@@ -464,8 +469,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         Timer? selfRef = null;
         selfRef = new Timer(_ =>
         {
-            Dictionary<string, CognitiveEntry>? upserts = null;
-            Dictionary<string, string>? deletes = null;
+            Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
+            HashSet<EntryStorageKey>? deletes = null;
 
             lock (_timerLock)
             {
@@ -489,7 +494,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     }
 
     private void WriteIncrementalChanges(string ns,
-        Dictionary<string, CognitiveEntry>? upserts, Dictionary<string, string>? deletes)
+        Dictionary<EntryStorageKey, CognitiveEntry>? upserts, HashSet<EntryStorageKey>? deletes)
     {
         if ((upserts is null || upserts.Count == 0) && (deletes is null || deletes.Count == 0))
             return;
@@ -511,10 +516,10 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     var delNsParam = deleteCmd.Parameters.Add("@ns", System.Data.SqlDbType.NVarChar, 450);
                     var delIdParam = deleteCmd.Parameters.Add("@id", System.Data.SqlDbType.NVarChar, 450);
                     delNsParam.Value = ns;
-                    foreach (var (id, tenant) in deletes)
+                    foreach (var key in deletes)
                     {
-                        delTenantParam.Value = tenant ?? "";
-                        delIdParam.Value = id;
+                        delTenantParam.Value = key.TenantId;
+                        delIdParam.Value = key.EntryId;
                         deleteCmd.ExecuteNonQuery();
                     }
                 }
@@ -771,6 +776,43 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         }
     }
 
+    /// <summary>Delete exactly one tenant + namespace partition.</summary>
+    public async Task DeleteNamespaceAsync(string ns, string tenantId)
+    {
+        tenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
+        using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+        using var tx = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            using (var cmdEntries = conn.CreateCommand())
+            {
+                cmdEntries.Transaction = tx;
+                cmdEntries.CommandText =
+                    $"DELETE FROM {_schemaQuoted}.entries WHERE tenant_id = @tenant AND ns = @ns";
+                cmdEntries.Parameters.AddWithValue("@tenant", tenantId);
+                cmdEntries.Parameters.AddWithValue("@ns", ns);
+                await cmdEntries.ExecuteNonQueryAsync();
+            }
+
+            using (var cmdHnsw = conn.CreateCommand())
+            {
+                cmdHnsw.Transaction = tx;
+                cmdHnsw.CommandText = $"DELETE FROM {_schemaQuoted}.global_data WHERE [key] = @key";
+                cmdHnsw.Parameters.AddWithValue("@key",
+                    $"hnsw_{NamespaceStore.PartitionKey(tenantId, ns)}");
+                await cmdHnsw.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            throw;
+        }
+    }
+
     // ── SQL builders ──
 
     private string BuildEntryUpsertSql() => $"""
@@ -799,7 +841,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     public void Flush()
     {
         List<(string Ns, Func<NamespaceData> Provider)> pendingNs;
-        List<(string Ns, Dictionary<string, CognitiveEntry>? Upserts, Dictionary<string, string>? Deletes)> pendingIncremental;
+        List<(string Ns, Dictionary<EntryStorageKey, CognitiveEntry>? Upserts, HashSet<EntryStorageKey>? Deletes)> pendingIncremental;
         Func<List<GraphEdge>>? edgeProvider;
         Func<List<SemanticCluster>>? clusterProvider;
         Func<List<CollapseRecord>>? collapseHistoryProvider;
@@ -820,8 +862,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                 incrementalNs.Add(k);
             foreach (var ns in incrementalNs)
             {
-                Dictionary<string, CognitiveEntry>? upserts = null;
-                Dictionary<string, string>? deletes = null;
+                Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
+                HashSet<EntryStorageKey>? deletes = null;
 
                 if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
                 {

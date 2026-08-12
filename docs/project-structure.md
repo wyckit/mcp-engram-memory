@@ -118,7 +118,7 @@ var results = index.Search(queryVector, "default", k: 5);
 ## Tech Stack
 
 - .NET 8/9/10, C#
-- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 1.0.0
+- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.1.0
 - [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67 (WordPiece tokenization)
 - [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0 (ONNX model inference)
 - [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 8.0.11 (SQLite storage backend)

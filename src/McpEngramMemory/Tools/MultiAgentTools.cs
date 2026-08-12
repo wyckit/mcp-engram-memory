@@ -4,6 +4,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Sharing;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -22,7 +23,22 @@ public sealed class MultiAgentTools
     private readonly IEmbeddingService _embedding;
     private readonly MetricsCollector _metrics;
     private readonly NamespaceRegistry _registry;
-    private readonly AgentIdentity _agent;
+    private readonly IPrincipalContext _principal;
+
+    [ActivatorUtilitiesConstructor]
+    public MultiAgentTools(
+        CognitiveIndex index,
+        IEmbeddingService embedding,
+        MetricsCollector metrics,
+        NamespaceRegistry registry,
+        IPrincipalContext principal)
+    {
+        _index = index;
+        _embedding = embedding;
+        _metrics = metrics;
+        _registry = registry;
+        _principal = principal;
+    }
 
     public MultiAgentTools(
         CognitiveIndex index,
@@ -30,13 +46,8 @@ public sealed class MultiAgentTools
         MetricsCollector metrics,
         NamespaceRegistry registry,
         AgentIdentity agent)
-    {
-        _index = index;
-        _embedding = embedding;
-        _metrics = metrics;
-        _registry = registry;
-        _agent = agent;
-    }
+        : this(index, embedding, metrics, registry,
+            new PrincipalContext(string.Empty, agent.AgentId)) { }
 
     /// <summary>
     /// Convenience overload for in-process callers embedding these tools directly: takes the
@@ -59,7 +70,7 @@ public sealed class MultiAgentTools
             JsonSerializer.SerializeToElement(namespaces), text, null, k, hybrid, rerank,
             includeStates, summaryFirst, minScore, category, diversity, diversityLambda);
 
-    [McpServerTool(Name = "cross_search")]
+    [McpServerTool(Name = "cross_search", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Find memories across multiple specific namespaces in one call, merging results by relevance rank. Don't use it when you know which single namespace to search — use `recall` for that, which also adds graph expansion and archived-entry fallback.")]
     public object CrossSearch(
         [Description("Namespaces to search. Accepts a JSON array, a comma-separated string (e.g. 'work,synthesis,mcp-engram-memory'), or a single namespace. Alias: `ns`.")] JsonElement? namespaces,
@@ -93,7 +104,8 @@ public sealed class MultiAgentTools
         using var timer = _metrics.StartTimer("cross_search");
 
         // Filter to namespaces the agent can access
-        var accessible = nsList.Where(ns => _registry.HasAccess(_agent.AgentId, ns)).ToList();
+        var accessible = nsList.Where(ns => _principal.IsSystem ||
+            _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId)).ToList();
         if (accessible.Count == 0)
             return "Error: no accessible namespaces in the provided list.";
 
@@ -107,12 +119,13 @@ public sealed class MultiAgentTools
             minScore: minScore, category: category,
             includeStates: states, hybrid: hybrid, rerank: rerank,
             summaryFirst: summaryFirst,
-            diversity: diversity, diversityLambda: diversityLambda);
+            diversity: diversity, diversityLambda: diversityLambda,
+            tenantId: _principal.TenantId);
 
         return new CrossSearchResponse(results, accessible.Count, results.Count);
     }
 
-    [McpServerTool(Name = "share_namespace")]
+    [McpServerTool(Name = "share_namespace", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Grant another agent read or write access to a namespace you own. Don't use it to check what's already shared; use `list_shared` for that.")]
     public object ShareNamespace(
         [Description("The namespace to share.")] string ns,
@@ -125,10 +138,10 @@ public sealed class MultiAgentTools
             return "Error: agentId must not be empty.";
 
         using var timer = _metrics.StartTimer("share_namespace");
-        return _registry.Share(ns, _agent.AgentId, agentId, accessLevel);
+        return _registry.Share(ns, _principal.AgentId, agentId, accessLevel, _principal.TenantId);
     }
 
-    [McpServerTool(Name = "unshare_namespace")]
+    [McpServerTool(Name = "unshare_namespace", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Revoke another agent's access to a namespace you own. Don't use it to check current sharing state first; call `list_shared` to confirm what to revoke before calling this.")]
     public object UnshareNamespace(
         [Description("The namespace to unshare.")] string ns,
@@ -140,23 +153,23 @@ public sealed class MultiAgentTools
             return "Error: agentId must not be empty.";
 
         using var timer = _metrics.StartTimer("unshare_namespace");
-        return _registry.Unshare(ns, _agent.AgentId, agentId);
+        return _registry.Unshare(ns, _principal.AgentId, agentId, _principal.TenantId);
     }
 
-    [McpServerTool(Name = "list_shared")]
+    [McpServerTool(Name = "list_shared", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("List every namespace other agents have shared with you, showing owner and access level. Don't use it to check your own namespaces or identity; use `whoami` for the full picture of what you own and can access.")]
     public object ListShared()
     {
         using var timer = _metrics.StartTimer("list_shared");
-        var result = _registry.GetAccessibleNamespaces(_agent.AgentId);
+        var result = _registry.GetAccessibleNamespaces(_principal.AgentId, _principal.TenantId);
         return result.SharedNamespaces;
     }
 
-    [McpServerTool(Name = "whoami")]
+    [McpServerTool(Name = "whoami", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Check this agent's ID and the full list of namespaces it owns or has access to. Don't use it only to see shared namespaces; use `list_shared` when you specifically want the inbound-sharing view with owner attribution.")]
     public object WhoAmI()
     {
         using var timer = _metrics.StartTimer("whoami");
-        return _registry.GetAccessibleNamespaces(_agent.AgentId);
+        return _registry.GetAccessibleNamespaces(_principal.AgentId, _principal.TenantId);
     }
 }

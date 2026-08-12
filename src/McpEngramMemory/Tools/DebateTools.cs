@@ -38,7 +38,7 @@ public sealed class DebateTools
         _access = access;
     }
 
-    [McpServerTool(Name = "consult_expert_panel")]
+    [McpServerTool(Name = "consult_expert_panel", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Search multiple expert namespaces in parallel and collect perspectives into a debate session. " +
         "Returns integer-aliased nodes for easy reference. Use for multi-expert deliberation on a problem.")]
     public object ConsultExpertPanel(
@@ -58,75 +58,94 @@ public sealed class DebateTools
         if (string.IsNullOrWhiteSpace(sessionId))
             return "Error: sessionId must not be empty.";
 
+        var states = ParseStates(includeStates);
+        float[] queryVector = _embedding.Embed(problemStatement);
+        string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
+        if (!_access.CanWrite(debateNs))
+            return SessionUnavailable(sessionId);
+
         if (!_sessions.TryCreateSession(sessionId))
             return $"Error: Session '{sessionId}' already exists. Use a new sessionId or call resolve_debate first.";
 
-        var states = ParseStates(includeStates);
-
-        // Embed the problem statement once
-        float[] queryVector = _embedding.Embed(problemStatement);
-        string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
+        // Bind the volatile session to the same ACL boundary as its persisted nodes.
+        // Re-check after claiming to close a concurrent first-writer race.
+        _access.ClaimOnWrite(debateNs);
+        if (!_access.CanWrite(debateNs))
+        {
+            _sessions.RemoveSession(sessionId);
+            return SessionUnavailable(sessionId);
+        }
 
         // Search each expert namespace sequentially — CognitiveIndex.Search uses
         // EnterUpgradeableReadLock which serializes concurrent callers anyway
         var perspectives = new List<ExpertPerspective>();
         int expertsWithContext = 0;
 
-        foreach (var expertNs in experts)
+        try
         {
-            // Expert namespaces are supplied by the caller directly, so this is a normal
-            // namespace read - a namespace the caller can't read yields no context, same as
-            // a namespace with nothing in it, and falls through to the cold-start path below.
-            IReadOnlyList<CognitiveSearchResult> results = Array.Empty<CognitiveSearchResult>();
-            if (_access.CanRead(expertNs))
+            foreach (var expertNs in experts)
             {
-                try
+                // Expert namespaces are supplied by the caller directly, so this is a normal
+                // namespace read - a namespace the caller can't read yields no context, same as
+                // a namespace with nothing in it, and falls through to the cold-start path below.
+                IReadOnlyList<CognitiveSearchResult> results = Array.Empty<CognitiveSearchResult>();
+                if (_access.CanRead(expertNs))
                 {
-                    results = _index.Search(queryVector, expertNs, perExpertK, minScore, includeStates: states);
-                }
-                catch (Exception ex)
-                {
-                    return $"Error searching expert '{expertNs}': {ex.Message}";
-                }
-            }
-
-            bool hadContext = results.Count > 0;
-            if (hadContext) expertsWithContext++;
-
-            if (!hadContext)
-            {
-                // Cold-start: create a placeholder noting no prior context
-                string coldStartId = $"debate-{sessionId}-{expertNs}-cold";
-                string coldStartText = $"[{expertNs}] No historical context found for: {problemStatement}. Relying on pre-trained persona.";
-                var coldVector = _embedding.Embed(coldStartText);
-                var coldEntry = new CognitiveEntry(coldStartId, coldVector, debateNs, coldStartText,
-                    category: "debate-perspective");
-                _index.Upsert(coldEntry);
-
-                int alias = _sessions.RegisterNode(sessionId, coldStartId);
-                perspectives.Add(new ExpertPerspective(alias, expertNs, coldStartId, coldStartText, 0f, false));
-                continue;
-            }
-
-            // Store each result as a debate node
-            foreach (var result in results)
-            {
-                string debateEntryId = $"debate-{sessionId}-{expertNs}-{result.Id}";
-                string perspectiveText = $"[{expertNs}] {result.Text ?? result.Id}";
-                var perspectiveVector = _embedding.Embed(perspectiveText);
-                var debateEntry = new CognitiveEntry(debateEntryId, perspectiveVector, debateNs,
-                    perspectiveText, category: "debate-perspective",
-                    metadata: new Dictionary<string, string>
+                    try
                     {
-                        ["sourceExpert"] = expertNs,
-                        ["sourceEntryId"] = result.Id,
-                        ["debateSessionId"] = sessionId
-                    });
-                _index.Upsert(debateEntry);
+                        results = _index.Search(queryVector, expertNs, perExpertK, minScore,
+                            includeStates: states, tenantId: _access.TenantId);
+                    }
+                    catch (Exception ex)
+                    {
+                        CleanupFailedSession(sessionId, debateNs);
+                        return $"Error searching expert '{expertNs}': {ex.Message}";
+                    }
+                }
 
-                int alias = _sessions.RegisterNode(sessionId, debateEntryId);
-                perspectives.Add(new ExpertPerspective(alias, expertNs, debateEntryId, result.Text, result.Score, true));
+                bool hadContext = results.Count > 0;
+                if (hadContext) expertsWithContext++;
+
+                if (!hadContext)
+                {
+                    // Cold-start: create a placeholder noting no prior context
+                    string coldStartId = $"debate-{sessionId}-{expertNs}-cold";
+                    string coldStartText = $"[{expertNs}] No historical context found for: {problemStatement}. Relying on pre-trained persona.";
+                    var coldVector = _embedding.Embed(coldStartText);
+                    var coldEntry = new CognitiveEntry(coldStartId, coldVector, debateNs, coldStartText,
+                        category: "debate-perspective", tenantId: _access.TenantId);
+                    _index.Upsert(coldEntry);
+
+                    int alias = _sessions.RegisterNode(sessionId, coldStartId);
+                    perspectives.Add(new ExpertPerspective(alias, expertNs, coldStartId, coldStartText, 0f, false));
+                    continue;
+                }
+
+                // Store each result as a debate node
+                foreach (var result in results)
+                {
+                    string debateEntryId = $"debate-{sessionId}-{expertNs}-{result.Id}";
+                    string perspectiveText = $"[{expertNs}] {result.Text ?? result.Id}";
+                    var perspectiveVector = _embedding.Embed(perspectiveText);
+                    var debateEntry = new CognitiveEntry(debateEntryId, perspectiveVector, debateNs,
+                        perspectiveText, category: "debate-perspective",
+                        metadata: new Dictionary<string, string>
+                        {
+                            ["sourceExpert"] = expertNs,
+                            ["sourceEntryId"] = result.Id,
+                            ["debateSessionId"] = sessionId
+                        }, tenantId: _access.TenantId);
+                    _index.Upsert(debateEntry);
+
+                    int alias = _sessions.RegisterNode(sessionId, debateEntryId);
+                    perspectives.Add(new ExpertPerspective(alias, expertNs, debateEntryId, result.Text, result.Score, true));
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            CleanupFailedSession(sessionId, debateNs);
+            return $"Error creating debate session: {ex.Message}";
         }
 
         return new ConsultPanelResult(
@@ -134,7 +153,7 @@ public sealed class DebateTools
             experts.Length, expertsWithContext);
     }
 
-    [McpServerTool(Name = "map_debate_graph")]
+    [McpServerTool(Name = "map_debate_graph", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Create knowledge graph edges between debate nodes using integer aliases. " +
         "Call after consult_expert_panel to map agreements, contradictions, and dependencies between perspectives.")]
     public object MapDebateGraph(
@@ -147,8 +166,12 @@ public sealed class DebateTools
             return "Error: sessionId must not be empty.";
         if (edges is null || edges.Length == 0)
             return "Error: At least one edge must be provided.";
+
+        string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
+        if (!_access.CanWrite(debateNs))
+            return SessionNotFound(sessionId);
         if (!_sessions.HasSession(sessionId))
-            return $"Error: Session '{sessionId}' not found. Call consult_expert_panel first.";
+            return SessionNotFound(sessionId);
 
         var edgeDetails = new List<string>();
         var graphEdges = new List<GraphEdge>();
@@ -180,12 +203,14 @@ public sealed class DebateTools
         }
 
         // Batch-add all edges in a single lock acquisition
-        int created = graphEdges.Count > 0 ? _graph.AddEdges(graphEdges) : 0;
+        int created = graphEdges.Count > 0 && _access.TenantId.Length == 0
+            ? _graph.AddEdges(graphEdges)
+            : 0;
 
         return new MapDebateGraphResult(sessionId, created, edgeDetails);
     }
 
-    [McpServerTool(Name = "resolve_debate")]
+    [McpServerTool(Name = "resolve_debate", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Finalize a debate: store consensus as LTM, link to winning perspective, archive debate nodes, and clean up session.")]
     public object ResolveDebate(
         [Description("The debate session ID.")] string sessionId,
@@ -202,6 +227,10 @@ public sealed class DebateTools
             return "Error: consensusSummary must not be empty.";
         if (string.IsNullOrWhiteSpace(targetNamespace))
             return "Error: targetNamespace must not be empty.";
+
+        string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
+        if (!_access.CanWrite(debateNs))
+            return SessionNotFound(sessionId);
         if (!_access.CanWrite(targetNamespace))
             return NamespaceAccess.WriteDenied(targetNamespace);
 
@@ -211,7 +240,7 @@ public sealed class DebateTools
         {
             return _sessions.HasSession(sessionId)
                 ? $"Error: Winning node {winningNode} not found in session '{sessionId}'."
-                : $"Error: Session '{sessionId}' not found.";
+                : SessionNotFound(sessionId);
         }
 
         // 1. Store the consensus as a new LTM entry in the target namespace
@@ -225,18 +254,20 @@ public sealed class DebateTools
                 ["winningNode"] = winningEntryId,
                 ["resolvedAt"] = DateTimeOffset.UtcNow.ToString("O")
             },
-            lifecycleState: "ltm");
+            lifecycleState: "ltm", tenantId: _access.TenantId);
         _index.Upsert(consensusEntry);
         _access.ClaimOnWrite(targetNamespace);
 
         // 2. Link winning node to consensus (parent_child)
         var parentEdge = new GraphEdge(winningEntryId, consensusId, "parent_child", 1.0f,
             new Dictionary<string, string> { ["debateSessionId"] = sessionId });
-        _graph.AddEdge(parentEdge);
+        if (_access.TenantId.Length == 0)
+            _graph.AddEdge(parentEdge);
 
         // 3. Archive all debate nodes in a single lock acquisition
         var allDebateEntryIds = _sessions.GetAllEntryIds(sessionId);
-        int archivedCount = _index.SetLifecycleStateBatch(allDebateEntryIds, "archived");
+        int archivedCount = _index.SetLifecycleStateBatch(
+            allDebateEntryIds, "archived", debateNs, _access.TenantId);
 
         // 4. Clean up session state
         _sessions.RemoveSession(sessionId);
@@ -251,5 +282,19 @@ public sealed class DebateTools
         return includeStates is not null
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             : new HashSet<string> { "stm", "ltm" };
+    }
+
+    private static string SessionNotFound(string sessionId) =>
+        $"Error: Session '{sessionId}' not found. Call consult_expert_panel first.";
+
+    private static string SessionUnavailable(string sessionId) =>
+        $"Error: Session '{sessionId}' is unavailable.";
+
+    private void CleanupFailedSession(string sessionId, string debateNs)
+    {
+        foreach (var entryId in _sessions.GetAllEntryIds(sessionId))
+            _index.Delete(entryId, debateNs, _access.TenantId);
+
+        _sessions.RemoveSession(sessionId);
     }
 }

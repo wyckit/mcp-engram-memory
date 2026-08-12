@@ -31,7 +31,7 @@ public sealed class SpectralRetrievalTools
         _access = access;
     }
 
-    [McpServerTool(Name = "spectral_recall")]
+    [McpServerTool(Name = "spectral_recall", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Graph-aware retrieval: runs the standard ANN/hybrid search to gather candidates, then re-ranks them through the memory-graph diffusion kernel. Mode 'broad' applies a low-pass filter that boosts cluster-supported memories (themes, summaries) — best for conceptual queries. Mode 'specific' applies a high-pass filter that boosts entries whose score exceeds their cluster mean — best for precise factual queries. Mode 'none' disables spectral re-ranking and returns standard search results. Spectral re-ranking can surface entries the upstream search didn't return if their cluster scored well; this is intentional.")]
     public IReadOnlyList<CognitiveSearchResult> SpectralRecall(
         [Description("Query text. Embedded via the configured embedding model.")] string query,
@@ -42,6 +42,8 @@ public sealed class SpectralRetrievalTools
         [Description("Heat-kernel diffusion time t. Larger = stronger smoothing toward cluster means. Default 1.0.")] float diffusionTime = 1.0f,
         [Description("Candidate-pool multiplier on top-K. Default 5; larger pools give the reranker more material but cost more.")] int candidateMultiplier = 5)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return Array.Empty<CognitiveSearchResult>();
         if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
 
         var parsedMode = ParseMode(mode);

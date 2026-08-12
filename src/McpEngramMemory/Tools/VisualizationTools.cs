@@ -26,7 +26,7 @@ public sealed class VisualizationTools
         _access = access;
     }
 
-    [McpServerTool(Name = "get_graph_snapshot")]
+    [McpServerTool(Name = "get_graph_snapshot", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description(
         "Export the memory graph as a JSON snapshot for visualization. " +
         "Returns all nodes (cognitive entries), typed edges (knowledge graph relationships), " +
@@ -40,18 +40,26 @@ public sealed class VisualizationTools
         [Description("Include archived entries in the snapshot (default: false).")]
         bool includeArchived = false)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+        {
+            var emptyStats = new GraphSnapshotStats(0, 0, 0, 0, 0, 0, Array.Empty<string>());
+            return new GraphSnapshot(ns, DateTimeOffset.UtcNow,
+                Array.Empty<GraphSnapshotNode>(), Array.Empty<GraphSnapshotEdge>(),
+                Array.Empty<GraphSnapshotCluster>(), emptyStats);
+        }
         // ── Nodes ────────────────────────────────────────────────────────────
         // This exports the whole graph, so an unreadable single ns or a namespace this
         // caller can't see inside "*" must vanish entirely - same shape as an empty store,
         // not a distinct denial that would confirm the namespace exists.
-        // System namespaces are excluded outright, not merely access-checked. HasAccess
-        // deliberately treats any '_'-prefixed namespace as always readable, and
+        // System namespaces are excluded outright, not merely access-checked. The
         // NamespaceRegistry stores one permission record per namespace in _system_sharing
         // with the namespace name embedded in the record's id ("perm_<ns>"). Exporting them
         // therefore hands back the name of every private namespace in the store - the exact
         // disclosure the namespace filtering below is meant to prevent. They are internal
         // bookkeeping and have no place in a memory-graph visualisation regardless.
-        var allEntries = (ns == "*" ? _index.GetAll() : _index.GetAllInNamespace(ns))
+        var allEntries = (ns == "*"
+                ? _index.GetAllForTenant(_access.TenantId)
+                : _index.GetAllInNamespace(ns, _access.TenantId))
             .Where(e => !e.Ns.StartsWith('_'))
             .Where(e => _access.CanRead(e.Ns));
 

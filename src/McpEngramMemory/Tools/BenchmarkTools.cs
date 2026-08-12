@@ -41,7 +41,7 @@ public sealed class BenchmarkTools
         _metrics = metrics;
     }
 
-    [McpServerTool(Name = "run_benchmark")]
+    [McpServerTool(Name = "run_benchmark", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Run an IR quality benchmark in an isolated namespace. Computes Recall@K, Precision@K, MRR, nDCG@K, and latency percentiles. Namespace is cleaned up after.")]
     public object RunBenchmark(
         [Description("Dataset ID: 'default-v1' (25 seeds, 20 queries), 'paraphrase-v1' (rephrased), 'multihop-v1' (cross-topic), 'scale-v1' (80 seeds stress test), 'realworld-v1' (cognitive patterns), 'compound-v1' (domain jargon), 'lifecycle-v1', 'adversarial-v1', 'accretion-v1', 'cluster-summary-v1'.")] string datasetId = "default-v1",
@@ -63,7 +63,7 @@ public sealed class BenchmarkTools
         return _runner.Run(dataset, searchMode, contextualPrefix);
     }
 
-    [McpServerTool(Name = "run_agent_outcome_benchmark")]
+    [McpServerTool(Name = "run_agent_outcome_benchmark", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Run a task-style benchmark across four memory conditions: no memory, transcript replay, vector memory, and full Engram memory. Scores task success, evidence coverage, conflict rate, and latency, and persists a JSON artifact by default.")]
     public AgentOutcomeBenchmarkRunOutput RunAgentOutcomeBenchmark(
         [Description("Dataset ID. Core: 'agent-outcome-v1', 'agent-outcome-repo-v1', 'agent-outcome-hard-v1', 'agent-outcome-reasoning-v1'. T2 intelligence: 'reasoning-ladder-v1' (hop-depth 1-4), 'contradiction-arena-v1' (old/new fact pairs), 'adversarial-retrieval-v1' (distractor/synonym/stale traps), 'counterfactual-v1' (what-breaks-if dependency reasoning).")] string datasetId = "agent-outcome-v1",
@@ -100,7 +100,7 @@ public sealed class BenchmarkTools
         }
     }
 
-    [McpServerTool(Name = "run_live_agent_outcome_benchmark")]
+    [McpServerTool(Name = "run_live_agent_outcome_benchmark", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Run a real generation model across no-memory, transcript replay, vector memory, and full Engram conditions. Optionally includes T2 ablation conditions (no_graph, no_lifecycle, no_hybrid) for per-module attribution. Requires a live provider. The first supported provider is Ollama. Scores task success plus T2 intelligence metrics (ReasoningPathValidity, ContradictionHandling, NoiseResistance, StaleMemoryPenalty, DependencyCompletion, MinimalEvidence) from model-cited memory IDs and persists a JSON artifact by default.")]
     public async Task<LiveAgentOutcomeBenchmarkRunOutput> RunLiveAgentOutcomeBenchmark(
         [Description("Generation model name exposed by the live provider. Required. Example for Ollama: 'qwen2.5:3b'.")] string model,
@@ -196,7 +196,7 @@ public sealed class BenchmarkTools
         }
     }
 
-    [McpServerTool(Name = "compare_live_agent_outcome_artifacts")]
+    [McpServerTool(Name = "compare_live_agent_outcome_artifacts", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Compare two JSON artifacts produced by run_live_agent_outcome_benchmark. Returns condition-level deltas plus per-task improvements and regressions for the same dataset.")]
     public LiveAgentOutcomeArtifactComparisonOutput CompareLiveAgentOutcomeArtifacts(
         [Description("Baseline artifact path produced by run_live_agent_outcome_benchmark.")] string baselineArtifactPath,
@@ -229,7 +229,7 @@ public sealed class BenchmarkTools
         }
     }
 
-    [McpServerTool(Name = "check_for_regression")]
+    [McpServerTool(Name = "check_for_regression", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Check for benchmark regressions between two artifacts. Returns 'error' status if full_engram pass rate or success score regresses beyond the allowed threshold.")]
     public LiveAgentOutcomeArtifactComparisonOutput CheckForRegression(
         [Description("Baseline artifact path.")] string baselineArtifactPath,
@@ -272,7 +272,7 @@ public sealed class BenchmarkTools
         return new LiveAgentOutcomeArtifactComparisonOutput("passed", report, "No regressions detected.");
     }
 
-    [McpServerTool(Name = "get_metrics")]
+    [McpServerTool(Name = "get_metrics", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get operational metrics: P50/P95/P99 latency, throughput, and call counts per operation type. Event-style counters appear as zero-duration metric rows where Count is the useful value.")]
     public IReadOnlyList<MetricsSummary> GetMetrics(
         [Description("Operation type to filter (e.g. 'search', 'store'). Leave empty for all.")] string? operationType = null)
@@ -285,7 +285,7 @@ public sealed class BenchmarkTools
         return _metrics.GetAllSummaries();
     }
 
-    [McpServerTool(Name = "reset_metrics")]
+    [McpServerTool(Name = "reset_metrics", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Reset operational metrics counters. Optionally filter by operation type.")]
     public string ResetMetrics(
         [Description("Operation type to reset. Leave empty to reset all.")] string? operationType = null)

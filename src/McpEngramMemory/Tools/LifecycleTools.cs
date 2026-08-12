@@ -25,12 +25,14 @@ public sealed class LifecycleTools
         _access = access;
     }
 
-    [McpServerTool(Name = "promote_memory")]
+    [McpServerTool(Name = "promote_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
     public string PromoteMemory(
         [Description("Entry ID.")] string id,
         [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
         var existing = _index.Get(id);
@@ -43,7 +45,7 @@ public sealed class LifecycleTools
         return result;
     }
 
-    [McpServerTool(Name = "deep_recall")]
+    [McpServerTool(Name = "deep_recall", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Search ALL lifecycle states including archived. Auto-resurrects high-scoring archived entries to STM. Use when specifically recovering forgotten memories — recall handles this automatically for most cases.")]
     public object DeepRecall(
         [Description("Namespace to search.")] string ns,
@@ -55,6 +57,8 @@ public sealed class LifecycleTools
         [Description("Use hybrid BM25+vector search for better keyword recall (default: false).")] bool hybrid = false,
         [Description("Apply token-level reranking to improve precision (default: false).")] bool rerank = false)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return Array.Empty<CognitiveSearchResult>();
         // deep_recall returns entry text, so this is the one that matters most in this
         // class - deny like an empty result rather than a distinct "denied" reply.
         if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
@@ -73,13 +77,15 @@ public sealed class LifecycleTools
             queryText: text, hybrid: hybrid, rerank: rerank);
     }
 
-    [McpServerTool(Name = "memory_feedback")]
+    [McpServerTool(Name = "memory_feedback", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Reinforce or suppress a memory. Call after recall: positive delta boosts activation energy, negative suppresses. Drives lifecycle transitions via threshold crossing.")]
     public object MemoryFeedback(
         [Description("Entry ID to provide feedback on.")] string id,
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
         [Description("Optional namespace for threshold config lookup.")] string? ns = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         var existing = _index.Get(id);
         if (existing is null || !_access.CanWrite(existing.Ns))
             return $"Error: Entry '{id}' not found.";
@@ -99,16 +105,20 @@ public sealed class LifecycleTools
         [Description("Below this, STM demotes to LTM (default: 2.0).")] float stmThreshold = 2.0f,
         [Description("Below this, LTM archives (default: -5.0).")] float archiveThreshold = -5.0f)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new DecayCycleResult(0, 0, 0, Array.Empty<string>(), Array.Empty<string>());
         return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold);
     }
 
     public ConsolidationResult RunConsolidation(
         [Description("Namespace to consolidate, or '*' for every non-system namespace.")] string ns)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new ConsolidationResult(0, 0, 0, 0, 0, Array.Empty<string>(), Array.Empty<string>());
         return _lifecycle.RunConsolidationPass(ns);
     }
 
-    [McpServerTool(Name = "configure_decay")]
+    [McpServerTool(Name = "configure_decay", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Set per-namespace decay parameters. Applied by background decay service and decay_cycle with useStoredConfig=true.")]
     public object ConfigureDecay(
         [Description("Namespace to configure.")] string ns,
@@ -119,6 +129,8 @@ public sealed class LifecycleTools
         [Description("Override spectral diffusion of decay debt. Defaults to ON when the namespace qualifies (>=32 nodes, >=8 positive-relation edges); set false to force classical pointwise decay regardless of graph structure. Namespaces below the qualification threshold silently fall back to pointwise either way.")] bool? useSpectralDecay = null,
         [Description("Fractional-Laplacian exponent alpha for the heat kernel filter exp(-lambda^alpha). Default 1.0 = standard heat kernel. Values <1 are subdiffusive, >1 superdiffusive.")] float? subdiffusiveExponent = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         if (string.IsNullOrWhiteSpace(ns))
             return "Error: Namespace must not be empty.";
         if (!_access.CanWrite(ns))

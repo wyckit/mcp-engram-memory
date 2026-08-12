@@ -10,7 +10,7 @@ namespace McpEngramMemory.Tests;
 /// <see cref="McpServerToolAttribute"/>-decorated methods per profile grouping
 /// (mirroring the <c>MEMORY_TOOL_PROFILE</c> wiring in Program.cs) and asserts
 /// the totals the docs claim. If this test fails, a tool was added or removed —
-/// update the documented counts (62 total; minimal 17 / standard 39 / full 62)
+/// update the documented counts (63 total; minimal 17 / standard 39 / full 63)
 /// in the same change.
 /// </summary>
 public class ToolSurfaceCountTests
@@ -41,6 +41,7 @@ public class ToolSurfaceCountTests
         typeof(DebateTools),
         typeof(MaintenanceTools),
         typeof(ExpertTools),
+        typeof(GovernedLearningTools),
         typeof(SynthesisTools),
         typeof(VisualizationTools),
     };
@@ -53,7 +54,7 @@ public class ToolSurfaceCountTests
     [Theory]
     [InlineData("minimal", 17)]
     [InlineData("standard", 39)]
-    [InlineData("full", 62)]
+    [InlineData("full", 63)]
     public void Profile_exposes_documented_tool_count(string profile, int expectedCount)
     {
         var classes = new List<Type>(MinimalToolClasses);

@@ -21,7 +21,7 @@ public sealed class SynthesisTools
         _access = access;
     }
 
-    [McpServerTool(Name = "synthesize_memories")]
+    [McpServerTool(Name = "synthesize_memories", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = true)]
     [Description("Synthesize all memories in a namespace into a dense summary using a local SLM (via Ollama). " +
         "Uses map-reduce: chunks memories by cluster boundaries, summarizes each chunk locally, " +
         "then reduces into a final synthesis. Requires Ollama running locally. " +
@@ -32,6 +32,8 @@ public sealed class SynthesisTools
         [Description("Maximum number of memories to include in synthesis (default: 200).")] int maxEntries = 200,
         CancellationToken cancellationToken = default)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new SynthesisResult("empty", null, 0, 0, "", "");
         // Synthesis reads entry text and feeds it to a model, so a denied read must be
         // indistinguishable from an empty namespace - reuse the same "empty" status the
         // engine itself returns when a namespace genuinely has nothing to synthesize.

@@ -20,7 +20,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
         Converters = { new FloatArrayBase64Converter() }
     };
 
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
+
+    private readonly record struct EntryStorageKey(string TenantId, string EntryId);
 
     private readonly string _connectionString;
     private readonly object _timerLock = new();
@@ -31,8 +33,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
     private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
     // Incremental write tracking: per-namespace pending upserts and deletes
-    private readonly Dictionary<string, Dictionary<string, CognitiveEntry>> _pendingEntryUpserts = new();
-    private readonly Dictionary<string, HashSet<string>> _pendingEntryDeletes = new();
+    private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts = new();
+    private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes = new();
     private readonly Dictionary<string, Timer> _incrementalTimers = new();
 
     private Timer? _pendingEdgeTimer;
@@ -117,6 +119,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
         {
             if (fromVersion < 2)
                 MigrateToV2(conn, transaction);
+            if (fromVersion < 3)
+                MigrateToV3(conn, transaction);
 
             // Upsert version row
             using var cmd = conn.CreateCommand();
@@ -170,6 +174,41 @@ public sealed class SqliteStorageProvider : IStorageProvider
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// v2→v3: Make tenant identity part of the physical entry key. SQLite cannot alter a
+    /// primary key in place, so rebuild the table transactionally and place all existing rows
+    /// in the legacy empty-string tenant.
+    /// </summary>
+    private static void MigrateToV3(SqliteConnection conn, SqliteTransaction transaction)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            CREATE TABLE entries_v3 (
+                tenant_id TEXT NOT NULL DEFAULT '',
+                id TEXT NOT NULL,
+                ns TEXT NOT NULL,
+                json_data TEXT NOT NULL,
+                checksum TEXT NOT NULL,
+                lifecycle_state TEXT NOT NULL DEFAULT 'stm',
+                PRIMARY KEY (tenant_id, ns, id)
+            );
+
+            INSERT INTO entries_v3 (tenant_id, id, ns, json_data, checksum, lifecycle_state)
+            SELECT '', id, ns, json_data, checksum, COALESCE(lifecycle_state, 'stm')
+            FROM entries;
+
+            DROP TABLE entries;
+            ALTER TABLE entries_v3 RENAME TO entries;
+
+            CREATE INDEX idx_entries_ns ON entries(ns);
+            CREATE INDEX idx_entries_tenant_ns ON entries(tenant_id, ns);
+            CREATE INDEX idx_entries_tenant_ns_state
+                ON entries(tenant_id, ns, lifecycle_state);
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     private SqliteConnection OpenConnection()
     {
         var conn = new SqliteConnection(_connectionString);
@@ -185,6 +224,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(data));
         return Convert.ToHexString(hash);
     }
+
+    private static string NormalizeTenantId(string? tenantId)
+        => string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     private bool VerifyChecksum(string data, string expectedChecksum, string context)
     {
@@ -387,11 +429,12 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 upserts = new();
                 _pendingEntryUpserts[ns] = upserts;
             }
-            upserts[entry.Id] = entry;
+            var key = new EntryStorageKey(entry.TenantId, entry.Id);
+            upserts[key] = entry;
 
             // Cancel any pending delete for this entry
             if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
-                deletes.Remove(entry.Id);
+                deletes.Remove(key);
 
             ScheduleIncrementalFlush(ns);
         }
@@ -399,21 +442,27 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
     /// <summary>Schedule a debounced delete of a single entry.</summary>
     public void ScheduleDeleteEntry(string ns, string entryId)
+        => ScheduleDeleteEntry(ns, entryId, string.Empty);
+
+    /// <summary>Schedule a debounced delete of one tenant-scoped entry.</summary>
+    public void ScheduleDeleteEntry(string ns, string entryId, string tenantId)
     {
         lock (_timerLock)
         {
             if (_disposed) return;
+
+            var key = new EntryStorageKey(NormalizeTenantId(tenantId), entryId);
 
             if (!_pendingEntryDeletes.TryGetValue(ns, out var deletes))
             {
                 deletes = new();
                 _pendingEntryDeletes[ns] = deletes;
             }
-            deletes.Add(entryId);
+            deletes.Add(key);
 
             // Cancel any pending upsert for this entry
             if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
-                upserts.Remove(entryId);
+                upserts.Remove(key);
 
             ScheduleIncrementalFlush(ns);
         }
@@ -428,8 +477,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
         Timer? selfRef = null;
         selfRef = new Timer(_ =>
         {
-            Dictionary<string, CognitiveEntry>? upserts = null;
-            HashSet<string>? deletes = null;
+            Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
+            HashSet<EntryStorageKey>? deletes = null;
 
             lock (_timerLock)
             {
@@ -455,7 +504,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
     /// <summary>Write batched incremental changes in a single transaction.</summary>
     private void WriteIncrementalChanges(string ns,
-        Dictionary<string, CognitiveEntry>? upserts, HashSet<string>? deletes)
+        Dictionary<EntryStorageKey, CognitiveEntry>? upserts, HashSet<EntryStorageKey>? deletes)
     {
         if ((upserts is null || upserts.Count == 0) && (deletes is null || deletes.Count == 0))
             return;
@@ -470,15 +519,17 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 {
                     using var deleteCmd = conn.CreateCommand();
                     deleteCmd.Transaction = transaction;
-                    deleteCmd.CommandText = "DELETE FROM entries WHERE ns = @ns AND id = @id";
+                    deleteCmd.CommandText = "DELETE FROM entries WHERE tenant_id = @tenant AND ns = @ns AND id = @id";
+                    var delTenantParam = deleteCmd.Parameters.Add("@tenant", SqliteType.Text);
                     var delNsParam = deleteCmd.Parameters.Add("@ns", SqliteType.Text);
                     var delIdParam = deleteCmd.Parameters.Add("@id", SqliteType.Text);
                     deleteCmd.Prepare();
 
                     delNsParam.Value = ns;
-                    foreach (var id in deletes)
+                    foreach (var key in deletes)
                     {
-                        delIdParam.Value = id;
+                        delTenantParam.Value = key.TenantId;
+                        delIdParam.Value = key.EntryId;
                         deleteCmd.ExecuteNonQuery();
                     }
                 }
@@ -487,7 +538,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 {
                     using var upsertCmd = conn.CreateCommand();
                     upsertCmd.Transaction = transaction;
-                    upsertCmd.CommandText = "INSERT OR REPLACE INTO entries (id, ns, json_data, checksum, lifecycle_state) VALUES (@id, @ns, @json, @checksum, @state)";
+                    upsertCmd.CommandText = "INSERT OR REPLACE INTO entries (tenant_id, id, ns, json_data, checksum, lifecycle_state) VALUES (@tenant, @id, @ns, @json, @checksum, @state)";
+                    var tenantParam = upsertCmd.Parameters.Add("@tenant", SqliteType.Text);
                     var idParam = upsertCmd.Parameters.Add("@id", SqliteType.Text);
                     var nsParam = upsertCmd.Parameters.Add("@ns", SqliteType.Text);
                     var jsonParam = upsertCmd.Parameters.Add("@json", SqliteType.Text);
@@ -498,6 +550,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     foreach (var entry in upserts.Values)
                     {
                         var json = JsonSerializer.Serialize(entry, JsonOptions);
+                        tenantParam.Value = entry.TenantId;
                         idParam.Value = entry.Id;
                         nsParam.Value = ns;
                         jsonParam.Value = json;
@@ -648,7 +701,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
             // Insert all entries
             using var insertCmd = conn.CreateCommand();
             insertCmd.Transaction = transaction;
-            insertCmd.CommandText = "INSERT INTO entries (id, ns, json_data, checksum, lifecycle_state) VALUES (@id, @ns, @json, @checksum, @state)";
+            insertCmd.CommandText = "INSERT INTO entries (tenant_id, id, ns, json_data, checksum, lifecycle_state) VALUES (@tenant, @id, @ns, @json, @checksum, @state)";
+            var tenantParam = insertCmd.Parameters.Add("@tenant", SqliteType.Text);
             var idParam = insertCmd.Parameters.Add("@id", SqliteType.Text);
             var nsParam = insertCmd.Parameters.Add("@ns", SqliteType.Text);
             var jsonParam = insertCmd.Parameters.Add("@json", SqliteType.Text);
@@ -659,6 +713,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
             foreach (var entry in data.Entries)
             {
                 var json = JsonSerializer.Serialize(entry, JsonOptions);
+                tenantParam.Value = entry.TenantId;
                 idParam.Value = entry.Id;
                 nsParam.Value = ns;
                 jsonParam.Value = json;
@@ -733,12 +788,48 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
+    /// <summary>Delete exactly one tenant + namespace partition.</summary>
+    public async Task DeleteNamespaceAsync(string ns, string tenantId)
+    {
+        tenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
+        using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync();
+        using var tx = await conn.BeginTransactionAsync();
+        try
+        {
+            using (var cmdEntries = conn.CreateCommand())
+            {
+                cmdEntries.Transaction = (SqliteTransaction)tx;
+                cmdEntries.CommandText = "DELETE FROM entries WHERE tenant_id = @tenant AND ns = @ns";
+                cmdEntries.Parameters.AddWithValue("@tenant", tenantId);
+                cmdEntries.Parameters.AddWithValue("@ns", ns);
+                await cmdEntries.ExecuteNonQueryAsync();
+            }
+
+            using (var cmdHnsw = conn.CreateCommand())
+            {
+                cmdHnsw.Transaction = (SqliteTransaction)tx;
+                cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
+                cmdHnsw.Parameters.AddWithValue("@key",
+                    $"hnsw_{NamespaceStore.PartitionKey(tenantId, ns)}");
+                await cmdHnsw.ExecuteNonQueryAsync();
+            }
+
+            await tx.CommitAsync();
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            throw;
+        }
+    }
+
     // ── Flush + Dispose ──
 
     public void Flush()
     {
         List<(string Ns, Func<NamespaceData> Provider)> pendingNs;
-        List<(string Ns, Dictionary<string, CognitiveEntry>? Upserts, HashSet<string>? Deletes)> pendingIncremental;
+        List<(string Ns, Dictionary<EntryStorageKey, CognitiveEntry>? Upserts, HashSet<EntryStorageKey>? Deletes)> pendingIncremental;
         Func<List<GraphEdge>>? edgeProvider;
         Func<List<SemanticCluster>>? clusterProvider;
         Func<List<CollapseRecord>>? collapseHistoryProvider;
@@ -760,8 +851,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 incrementalNs.Add(k);
             foreach (var ns in incrementalNs)
             {
-                Dictionary<string, CognitiveEntry>? upserts = null;
-                HashSet<string>? deletes = null;
+                Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
+                HashSet<EntryStorageKey>? deletes = null;
 
                 if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
                 {
