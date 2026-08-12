@@ -386,7 +386,7 @@ public class InvariantTests : IDisposable
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
-        Assert.Equal(2, Convert.ToInt32(cmd.ExecuteScalar()!));
+        Assert.Equal(3, Convert.ToInt32(cmd.ExecuteScalar()!));
     }
 
     // ── State Counts Consistency ──

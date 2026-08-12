@@ -29,22 +29,26 @@ public sealed class AccretionTools
         _access = access;
     }
 
-    [McpServerTool(Name = "get_pending_collapses")]
+    [McpServerTool(Name = "get_pending_collapses", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("List dense clusters awaiting LLM summarization. Check this to find clusters ready for collapse_cluster.")]
     public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(
         [Description("Namespace to check for pending collapses.")] string ns)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return Array.Empty<PendingCollapseInfo>();
         if (!_access.CanRead(ns)) return Array.Empty<PendingCollapseInfo>();
         return _scanner.GetPendingCollapses(ns);
     }
 
-    [McpServerTool(Name = "collapse_cluster")]
+    [McpServerTool(Name = "collapse_cluster", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Execute a pending collapse: store summary as a searchable entry, archive original members, register the cluster. Reversible via uncollapse_cluster.")]
     public string CollapseCluster(
         [Description("The pending collapse ID to execute.")] string collapseId,
         [Description("LLM-generated summary text for the cluster.")] string summaryText,
         [Description("Embedding vector of the summary text.")] float[]? summaryVector = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it".
         var ns = _scanner.GetPendingCollapseNs(collapseId);
@@ -61,11 +65,13 @@ public sealed class AccretionTools
         return result;
     }
 
-    [McpServerTool(Name = "dismiss_collapse")]
+    [McpServerTool(Name = "dismiss_collapse", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Dismiss a pending collapse and exclude its members from future accretion scans.")]
     public string DismissCollapse(
         [Description("The pending collapse ID to dismiss.")] string collapseId)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         var ns = _scanner.GetPendingCollapseNs(collapseId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: Collapse '{collapseId}' not found.";
@@ -79,6 +85,8 @@ public sealed class AccretionTools
         [Description("DBSCAN minimum cluster size (default: 3).")] int minPoints = 3,
         [Description("Auto-generate extractive summaries for detected clusters without archiving members (default: false).")] bool autoSummarize = false)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new AccretionScanResult(0, 0, Array.Empty<PendingCollapseInfo>());
         return _scanner.ScanNamespace(ns, epsilon, minPoints,
             autoSummarize, autoSummarize ? _clusters : null, autoSummarize ? _embedding : null);
     }

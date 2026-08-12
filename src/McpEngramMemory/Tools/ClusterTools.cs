@@ -24,7 +24,7 @@ public sealed class ClusterTools
         _access = access;
     }
 
-    [McpServerTool(Name = "create_cluster")]
+    [McpServerTool(Name = "create_cluster", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Group entries into a semantic cluster with auto-computed centroid. Use for manual clustering when accretion scan isn't suitable.")]
     public object CreateCluster(
         [Description("Cluster identifier.")] string clusterId,
@@ -32,6 +32,8 @@ public sealed class ClusterTools
         [Description("Comma-separated initial member entry IDs.")] string memberIds,
         [Description("Human-readable cluster name.")] string? label = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
         try
@@ -45,7 +47,7 @@ public sealed class ClusterTools
         }
     }
 
-    [McpServerTool(Name = "update_cluster")]
+    [McpServerTool(Name = "update_cluster", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Add or remove cluster members and update label. Centroid recomputes automatically.")]
     public string UpdateCluster(
         [Description("Cluster to modify.")] string clusterId,
@@ -53,6 +55,8 @@ public sealed class ClusterTools
         [Description("Comma-separated entry IDs to remove.")] string? removeMemberIds = null,
         [Description("New label.")] string? label = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         // Cluster ownership isn't known until the cluster itself is resolved. Same reply
         // shape as a genuine miss - a distinct denial would confirm the cluster exists in a
         // namespace this caller cannot see.
@@ -65,13 +69,15 @@ public sealed class ClusterTools
         return _clusters.UpdateCluster(clusterId, addIds, removeIds, label);
     }
 
-    [McpServerTool(Name = "store_cluster_summary")]
+    [McpServerTool(Name = "store_cluster_summary", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Store an LLM-generated summary as a searchable entry tied to a cluster. Enables summaryFirst search mode for the cluster.")]
     public string StoreClusterSummary(
         [Description("Cluster to summarize.")] string clusterId,
         [Description("Generated summary text.")] string summaryText,
         [Description("Embedding of the summary.")] float[]? summaryVector = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         var clusterNs = _clusters.GetCluster(clusterId)?.Namespace;
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
@@ -87,11 +93,13 @@ public sealed class ClusterTools
         return $"Stored summary entry '{result}'.";
     }
 
-    [McpServerTool(Name = "get_cluster")]
+    [McpServerTool(Name = "get_cluster", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get cluster details: members, centroid, summary, and label.")]
     public object GetCluster(
         [Description("Cluster ID.")] string clusterId)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return $"Cluster '{clusterId}' not found.";
         var result = _clusters.GetCluster(clusterId);
         if (result is null || !_access.CanRead(result.Namespace))
             return $"Cluster '{clusterId}' not found.";
@@ -102,11 +110,13 @@ public sealed class ClusterTools
         return result with { Members = visibleMembers };
     }
 
-    [McpServerTool(Name = "list_clusters")]
+    [McpServerTool(Name = "list_clusters", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("List all clusters in a namespace with summary status.")]
     public IReadOnlyList<ClusterSummaryInfo> ListClusters(
         [Description("Namespace.")] string ns)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return Array.Empty<ClusterSummaryInfo>();
         if (!_access.CanRead(ns)) return Array.Empty<ClusterSummaryInfo>();
         return _clusters.ListClusters(ns);
     }

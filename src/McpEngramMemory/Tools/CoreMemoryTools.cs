@@ -8,6 +8,7 @@ using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Sharing;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 
 namespace McpEngramMemory.Tools;
@@ -27,12 +28,13 @@ public sealed class CoreMemoryTools
     private readonly SpreadingActivationService _spreading;
     private readonly ClusterManager _clusters;
     private readonly NamespaceRegistry _registry;
-    private readonly AgentIdentity _agent;
+    private readonly IPrincipalContext _principal;
 
+    [ActivatorUtilitiesConstructor]
     public CoreMemoryTools(CognitiveIndex index, PhysicsEngine physics, IEmbeddingService embedding,
         MetricsCollector metrics, KnowledgeGraph graph, QueryExpander queryExpander,
         SpreadingActivationService spreading, ClusterManager clusters,
-        NamespaceRegistry registry, AgentIdentity agent)
+        NamespaceRegistry registry, IPrincipalContext principal)
     {
         _index = index;
         _physics = physics;
@@ -43,17 +45,26 @@ public sealed class CoreMemoryTools
         _spreading = spreading;
         _clusters = clusters;
         _registry = registry;
-        _agent = agent;
+        _principal = principal;
     }
+
+    public CoreMemoryTools(CognitiveIndex index, PhysicsEngine physics, IEmbeddingService embedding,
+        MetricsCollector metrics, KnowledgeGraph graph, QueryExpander queryExpander,
+        SpreadingActivationService spreading, ClusterManager clusters,
+        NamespaceRegistry registry, AgentIdentity agent)
+        : this(index, physics, embedding, metrics, graph, queryExpander, spreading, clusters,
+            registry, new PrincipalContext(string.Empty, agent.AgentId)) { }
 
     // ── namespace access control ──────────────────────────────────────────────
     // Every data-touching tool below routes through these. Before this existed,
     // NamespaceRegistry.HasAccess was called in exactly one place in the whole server
     // (cross_search), so share_namespace/unshare_namespace protected nothing.
 
-    private bool CanRead(string ns) => _registry.HasAccess(_agent.AgentId, ns);
+    private bool CanRead(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
 
-    private bool CanWrite(string ns) => _registry.HasAccess(_agent.AgentId, ns, "write");
+    private bool CanWrite(string ns) => _principal.IsSystem ||
+        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
 
     /// <summary>
     /// Denial message for a read. Deliberately shaped like "not found" rather than "denied":
@@ -71,7 +82,7 @@ public sealed class CoreMemoryTools
     /// </summary>
     private bool CanReadEntryById(string entryId)
     {
-        var entry = _index.Get(entryId);
+        var entry = _index.GetForTenant(entryId, _principal.TenantId);
         return entry is not null && CanRead(entry.Ns);
     }
 
@@ -79,7 +90,7 @@ public sealed class CoreMemoryTools
         $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
 
 
-    [McpServerTool(Name = "store_memory")]
+    [McpServerTool(Name = "store_memory", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Save a memory when you need to supply a pre-computed embedding vector or control lifecycle state exactly. Don't use this by default; use `remember` instead — it auto-embeds, blocks duplicates, and links related entries without extra steps.")]
     public string StoreMemory(
         [Description("Unique identifier for this memory entry.")] string id,
@@ -105,12 +116,13 @@ public sealed class CoreMemoryTools
             var resolved = ResolveVector(vector, textToEmbed);
             var entry = new CognitiveEntry(id, resolved, ns, text, category,
                 MetadataNormalizer.Normalize(metadata),
-                lifecycleState ?? "stm");
+                lifecycleState ?? "stm", tenantId: _principal.TenantId);
             _index.Upsert(entry);
-            _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
+            _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
 
             // Check for near-duplicates against just this entry (O(N) instead of O(N²))
-            var duplicates = _index.FindDuplicatesForEntry(ns, id, threshold: 0.95f);
+            var duplicates = _index.FindDuplicatesForEntry(
+                ns, id, threshold: 0.95f, tenantId: _principal.TenantId);
             if (duplicates.Count > 0)
             {
                 var dupIds = duplicates.Select(d => d.IdA == id ? d.IdB : d.IdA);
@@ -125,7 +137,7 @@ public sealed class CoreMemoryTools
         }
     }
 
-    [McpServerTool(Name = "store_batch")]
+    [McpServerTool(Name = "store_batch", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Save many memories at once in a single write operation — use this when storing 5 or more entries to avoid repeated round-trips. Don't use it for one or two entries; use `remember` for those to get per-entry duplicate blocking and auto-linking.")]
     public object StoreBatch(
         [Description("Namespace for all entries.")] string ns,
@@ -153,7 +165,7 @@ public sealed class CoreMemoryTools
                 var vector = _embedding.Embed(prefix + e.Text);
                 var entry = new CognitiveEntry(e.Id, vector, ns, e.Text, e.Category,
                     MetadataNormalizer.Normalize(e.Metadata),
-                    e.LifecycleState ?? "stm");
+                    e.LifecycleState ?? "stm", tenantId: _principal.TenantId);
                 cognitiveEntries.Add(entry);
             }
         }
@@ -167,7 +179,7 @@ public sealed class CoreMemoryTools
 
         // Batch upsert with single lock
         int stored = _index.UpsertBatch(cognitiveEntries);
-        _registry.ClaimOwnershipOnWrite(ns, _agent.AgentId);
+        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
 
         // Optional duplicate check
         var warnings = new List<string>();
@@ -175,7 +187,8 @@ public sealed class CoreMemoryTools
         {
             foreach (var entry in cognitiveEntries)
             {
-                var dups = _index.FindDuplicatesForEntry(ns, entry.Id, threshold: 0.95f);
+                var dups = _index.FindDuplicatesForEntry(
+                    ns, entry.Id, threshold: 0.95f, tenantId: _principal.TenantId);
                 if (dups.Count > 0)
                 {
                     var dupIds = dups.Select(d => d.IdA == entry.Id ? d.IdB : d.IdA);
@@ -194,7 +207,7 @@ public sealed class CoreMemoryTools
         };
     }
 
-    [McpServerTool(Name = "search_memory")]
+    [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Find memories in one namespace with full parameter control (hybrid search, physics ranking, explain mode). Don't use this as your default search; use `recall` instead — it adds auto-routing, fallback to archived entries, and spectral re-ranking automatically.")]
     public object SearchMemory(
         [Description("Namespace to search.")] string ns,
@@ -247,16 +260,19 @@ public sealed class CoreMemoryTools
                 Query = resolved, Namespace = ns, QueryText = text, K = k,
                 MinScore = minScore, Category = category, IncludeStates = states,
                 Hybrid = hybrid, Rerank = rerank, SummaryFirst = summaryFirst,
-                Diversity = true, DiversityLambda = diversityLambda
+                Diversity = true, DiversityLambda = diversityLambda,
+                TenantId = _principal.TenantId
             });
         }
         else if (hybrid && text is not null)
         {
-            results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank);
+            results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank,
+                tenantId: _principal.TenantId);
         }
         else
         {
-            results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst);
+            results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst,
+                tenantId: _principal.TenantId);
             if (rerank && text is not null && results.Count > 1)
                 results = _index.Rerank(text, results);
         }
@@ -271,11 +287,13 @@ public sealed class CoreMemoryTools
                 IReadOnlyList<CognitiveSearchResult> expandedResults;
                 if (hybrid)
                 {
-                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, k, minScore, category, states, rerank);
+                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, k, minScore, category, states, rerank,
+                        tenantId: _principal.TenantId);
                 }
                 else
                 {
-                    expandedResults = _index.Search(expandedVector, ns, k, minScore, category, states, summaryFirst);
+                    expandedResults = _index.Search(expandedVector, ns, k, minScore, category, states, summaryFirst,
+                        tenantId: _principal.TenantId);
                     if (rerank)
                         expandedResults = _index.Rerank(expandedText, expandedResults);
                 }
@@ -297,14 +315,14 @@ public sealed class CoreMemoryTools
         // Side effect: record access and trigger spreading activation for returned entries
         foreach (var result in results)
         {
-            _index.RecordAccess(result.Id, ns);
+            _index.RecordAccess(result.Id, ns, _principal.TenantId);
             // Asynchronous spreading activation: propagate energy to graph neighbors and cluster peers
-            if (expandGraph)
+            if (expandGraph && _principal.TenantId.Length == 0)
                 _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f);
         }
 
         // Graph expansion: pull in neighbors of top results with edge-type-weighted scoring
-        if (expandGraph && results.Count > 0)
+        if (expandGraph && _principal.TenantId.Length == 0 && results.Count > 0)
         {
             var existingIds = results.Select(r => r.Id).ToHashSet();
             var graphExpanded = new List<CognitiveSearchResult>(results);
@@ -428,14 +446,14 @@ public sealed class CoreMemoryTools
             explained.Add(new ExplainedSearchResult(r, explanation));
         }
 
-        int totalInNamespace = _index.CountInNamespace(ns);
+        int totalInNamespace = _index.CountInNamespace(ns, _principal.TenantId);
 
         return new ExplainedSearchResponse(
             explained, totalInNamespace, searchMs, embeddingMs,
             category, states.ToList(), usePhysics, summaryFirst);
     }
 
-    [McpServerTool(Name = "delete_memory")]
+    [McpServerTool(Name = "delete_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Permanently remove a single memory and all its graph edges and cluster memberships by ID. Don't use this to archive old memories; change the lifecycle state to 'archived' via `store_memory` or `remember` to preserve them for deep recall.")]
     public string DeleteMemory(
         [Description("The identifier of the entry to delete.")] string id)
@@ -445,7 +463,7 @@ public sealed class CoreMemoryTools
         // cascade ran unconditionally, ahead of the existence check: a caller could strip an
         // entry's graph edges and cluster memberships without any right to the entry, and
         // even for ids that did not exist.
-        var existing = _index.Get(id);
+        var existing = _index.GetForTenant(id, _principal.TenantId);
         if (existing is null)
             return $"Entry '{id}' not found.";
 
@@ -453,11 +471,18 @@ public sealed class CoreMemoryTools
         if (!CanWrite(existing.Ns))
             return $"Entry '{id}' not found.";
 
-        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
-        _clusters.RemoveEntryFromAllClusters(id);
+        // Graph and cluster keys are not tenant-qualified yet. Never mutate their global
+        // bare-id state from a non-legacy tenant; that could affect another tenant's co-keyed
+        // artifact. The tenant-qualified provenance/association graph migration follows.
+        int edgesRemoved = 0;
+        if (_principal.TenantId.Length == 0)
+        {
+            edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
+            _clusters.RemoveEntryFromAllClusters(id);
+        }
 
         // Check the return value to avoid TOCTOU against a concurrent delete.
-        if (!_index.Delete(id))
+        if (!_index.DeleteForTenant(id, _principal.TenantId))
             return $"Entry '{id}' not found.";
 
         return $"Deleted entry '{id}'. Removed {edgesRemoved} edge(s) and cleaned cluster memberships.";

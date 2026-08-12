@@ -160,6 +160,7 @@ public class MultiAgentToolsTests : IDisposable
     {
         var agent = new AgentIdentity("agent-owner");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
+        _registry.EnsureOwnership("myns", "agent-owner");
 
         var result = tools.ShareNamespace("myns", "agent-reader", "read") as ShareResult;
 
@@ -193,6 +194,7 @@ public class MultiAgentToolsTests : IDisposable
     {
         var agent = new AgentIdentity("agent-owner");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
+        _registry.EnsureOwnership("myns", "agent-owner");
 
         // First share, then unshare
         tools.ShareNamespace("myns", "agent-reader", "read");

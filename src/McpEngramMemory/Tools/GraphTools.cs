@@ -39,7 +39,7 @@ public sealed class GraphTools
         return null;
     }
 
-    [McpServerTool(Name = "link_memories")]
+    [McpServerTool(Name = "link_memories", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Create a directed graph edge between two entries. Use 'cross_reference' for bidirectional links (auto-creates reverse edge).")]
     public string LinkMemories(
         [Description("Edge origin entry ID.")] string sourceId,
@@ -48,6 +48,8 @@ public sealed class GraphTools
         [Description("Edge weight 0.0-1.0 (default: 1.0).")] float weight = 1.0f,
         [Description("Optional edge metadata.")] Dictionary<string, string>? metadata = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         try
         {
             var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata);
@@ -59,23 +61,27 @@ public sealed class GraphTools
         }
     }
 
-    [McpServerTool(Name = "unlink_memories")]
+    [McpServerTool(Name = "unlink_memories", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Remove edge(s) between two memory entries.")]
     public string UnlinkMemories(
         [Description("Edge origin entry ID.")] string sourceId,
         [Description("Edge destination entry ID.")] string targetId,
         [Description("Specific relation to remove (null = all).")] string? relation = null)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return NamespaceAccess.TenantStructureUnavailable;
         return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.RemoveEdges(sourceId, targetId, relation);
     }
 
-    [McpServerTool(Name = "get_neighbors")]
+    [McpServerTool(Name = "get_neighbors", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Get entries directly connected to a node in the knowledge graph. Use to explore relationships around a specific memory.")]
     public GetNeighborsResult GetNeighbors(
         [Description("Entry ID to find neighbors for.")] string id,
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
         var result = _graph.GetNeighbors(id, relation, direction);
 
         // Edges are global and carry no namespace, so a neighbor can live anywhere -
@@ -86,7 +92,7 @@ public sealed class GraphTools
         return new GetNeighborsResult(result.Id, visible);
     }
 
-    [McpServerTool(Name = "traverse_graph")]
+    [McpServerTool(Name = "traverse_graph", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Multi-hop graph traversal from a starting entry. Use to discover transitive relationships and knowledge chains.")]
     public TraversalResult TraverseGraph(
         [Description("Starting entry ID.")] string startId,
@@ -95,6 +101,8 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
         var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
 
         // The start entry itself is included in Entries, so it must be filtered too -
@@ -114,6 +122,8 @@ public sealed class GraphTools
         [Description("Cosine-similarity threshold above which a pair gets a similar_to edge. Default 0.85 (clear semantic neighbors but not duplicates).")] float threshold = 0.85f,
         [Description("Per-scan safety cap on new edges. Default 1000.")] int maxNewEdges = 1000)
     {
+        if (_access.RequiresTenantQualifiedStructures)
+            return new AutoLinkResult(ns, 0, 0, 0, 0, false);
         return _autoLink.Scan(ns, threshold, maxNewEdges);
     }
 }

@@ -2,6 +2,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Storage;
 using Microsoft.Data.SqlClient;
+using System.Reflection;
 
 namespace McpEngramMemory.Tests;
 
@@ -321,12 +322,8 @@ public class SqlServerStorageProviderTests : IDisposable
         if (!IsEnabled()) return;
         // Same (ns, id) but two different tenants — only possible because the PK is now
         // (tenant_id, ns, id) and the incremental MERGE keys on the full tenant-rooted key.
-        // NOTE: the in-memory pending-upsert map is still keyed by id (tenant-aware batching
-        // is Phase 2 / T2-05), so the two tenants are flushed separately here to exercise the
-        // storage-level coexistence this task delivers.
         _provider!.ScheduleUpsertEntry("shared",
             new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-a copy", tenantId: "A"));
-        _provider.Flush();
         _provider.ScheduleUpsertEntry("shared",
             new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-b copy", tenantId: "B"));
         _provider.Flush();
@@ -336,6 +333,47 @@ public class SqlServerStorageProviderTests : IDisposable
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"SELECT COUNT(*) FROM [{_schema}].entries WHERE ns='shared' AND id='dup'";
         Assert.Equal(2, Convert.ToInt32(cmd.ExecuteScalar()));
+    }
+
+    [Fact]
+    public void PendingDelete_CancelsOnlyMatchingTenantUpsert()
+    {
+        if (!IsEnabled()) return;
+
+        _provider!.ScheduleUpsertEntry("shared",
+            new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-a copy", tenantId: "A"));
+        _provider.ScheduleUpsertEntry("shared",
+            new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-b copy", tenantId: "B"));
+        _provider.ScheduleDeleteEntry("shared", "dup", "A");
+        _provider.Flush();
+
+        using var conn = new SqlConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT tenant_id FROM [{_schema}].entries WHERE ns='shared' AND id='dup'";
+        Assert.Equal("B", cmd.ExecuteScalar()!.ToString());
+    }
+
+    [Fact]
+    public void PendingBatchKeys_IncludeTenantAndEntryId_WithoutDatabase()
+    {
+        var providerType = typeof(SqlServerStorageProvider);
+        var keyType = providerType.GetNestedType("EntryStorageKey", BindingFlags.NonPublic);
+        Assert.NotNull(keyType);
+
+        var tenantA = Activator.CreateInstance(keyType!, "A", "dup");
+        var tenantB = Activator.CreateInstance(keyType, "B", "dup");
+        var tenantAAgain = Activator.CreateInstance(keyType, "A", "dup");
+        Assert.NotEqual(tenantA, tenantB);
+        Assert.Equal(tenantA, tenantAAgain);
+
+        var upserts = providerType.GetField("_pendingEntryUpserts", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var upsertMapType = upserts.FieldType.GetGenericArguments()[1];
+        Assert.Equal(keyType, upsertMapType.GetGenericArguments()[0]);
+
+        var deletes = providerType.GetField("_pendingEntryDeletes", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var deleteSetType = deletes.FieldType.GetGenericArguments()[1];
+        Assert.Equal(keyType, deleteSetType.GetGenericArguments()[0]);
     }
 
     [Fact]

@@ -62,21 +62,21 @@ public class NamespaceAclEnforcementTests : IDisposable
         if (Directory.Exists(_path)) Directory.Delete(_path, true);
     }
 
-    private CoreMemoryTools Core(string agentId) => new(
+    private CoreMemoryTools Core(string agentId, string tenantId = "") => new(
         _index, new PhysicsEngine(), _embedding, new MetricsCollector(), _graph,
         new QueryExpander(), new SpreadingActivationService(_index, _graph, _clusters),
-        _clusters, _registry, new AgentIdentity(agentId));
+        _clusters, _registry, new PrincipalContext(tenantId, agentId));
 
-    private AdminTools Admin(string agentId) => new(
-        _index, _graph, _clusters, _persistence, _registry, new AgentIdentity(agentId));
+    private AdminTools Admin(string agentId, string tenantId = "") => new(
+        _index, _graph, _clusters, _persistence, _registry, new PrincipalContext(tenantId, agentId));
 
-    private CompositeTools Composite(string agentId) => new(
+    private CompositeTools Composite(string agentId, string tenantId = "") => new(
         _index, _embedding, _graph,
         new LifecycleEngine(_index, _persistence),
         new ExpertDispatcher(_index, _embedding),
         new MetricsCollector(),
         new SpectralRetrievalReranker(new MemoryDiffusionKernel(_index, _graph)),
-        _registry, new AgentIdentity(agentId));
+        _registry, new PrincipalContext(tenantId, agentId));
 
     /// <summary>Alice writes a secret, which also claims ownership of the namespace.</summary>
     private void AliceStoresSecret()
@@ -84,8 +84,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         var result = Core("alice").StoreMemory("alice-secret", AliceNs, "the launch code is hunter2");
         Assert.Contains("Stored entry", result);
 
-        // Ownership registration is what makes every later check meaningful: HasAccess treats
-        // an unregistered namespace as open, so without this the gates are all no-ops.
+        // The first write atomically claims an empty namespace for the identified principal.
         Assert.True(_registry.HasAccess("alice", AliceNs));
         Assert.False(_registry.HasAccess("bob", AliceNs));
     }
@@ -152,6 +151,65 @@ public class NamespaceAclEnforcementTests : IDisposable
     }
 
     [Fact]
+    public void ContextBlock_DoesNotReturnAnotherAgentsStableMemories()
+    {
+        AliceStoresSecret();
+        _index.SetLifecycleState("alice-secret", "ltm");
+
+        var result = Composite("bob").GetContextBlock(AliceNs, minAccessCount: 1);
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+
+        Assert.DoesNotContain("hunter2", json);
+        Assert.Contains("No accessible memories", json);
+    }
+
+    [Fact]
+    public void ExpertRoutedRecall_SkipsInaccessibleExpertNamespace()
+    {
+        const string expertNs = "expert_private_security";
+        Assert.Contains("Stored entry", Core("alice").StoreMemory(
+            "expert-secret", expertNs, "private expert says rotate the vault key"));
+        new ExpertDispatcher(_index, _embedding)
+            .CreateExpert("private_security", "security vault key specialist");
+
+        var result = Composite("bob").Recall("security vault key specialist");
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+
+        Assert.DoesNotContain("rotate the vault key", json);
+        Assert.DoesNotContain(expertNs, json);
+    }
+
+    [Fact]
+    public void RecallGraphExpansion_DoesNotCrossIntoUnreadableNamespace()
+    {
+        AliceStoresSecret();
+        const string bobNs = "bob-work";
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            "bob-public", bobNs, "launch checklist"));
+        _graph.AddEdge(new GraphEdge("bob-public", "alice-secret", "depends_on"));
+
+        var result = Composite("bob").Recall("launch checklist", ns: bobNs, expandGraph: true);
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+
+        Assert.DoesNotContain("hunter2", json);
+        Assert.DoesNotContain("alice-secret", json);
+    }
+
+    [Fact]
+    public void GetMemory_FiltersEdgesToUnreadableEndpoints()
+    {
+        AliceStoresSecret();
+        const string bobNs = "bob-work";
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            "bob-public", bobNs, "launch checklist"));
+        _graph.AddEdge(new GraphEdge("bob-public", "alice-secret", "depends_on"));
+
+        var result = Assert.IsType<GetMemoryResult>(Admin("bob").GetMemory("bob-public"));
+
+        Assert.Empty(result.Edges);
+    }
+
+    [Fact]
     public void CognitiveStats_DoesNotDiscloseAnotherAgentsNamespaceNames()
     {
         AliceStoresSecret();
@@ -159,6 +217,96 @@ public class NamespaceAclEnforcementTests : IDisposable
         var stats = Admin("bob").CognitiveStats();
 
         Assert.DoesNotContain(AliceNs, stats.Namespaces);
+    }
+
+    [Fact]
+    public void CognitiveStats_ExcludesUnreadableEntriesEdgesAndClusters()
+    {
+        AliceStoresSecret();
+        Assert.Contains("Stored entry", Core("alice").StoreMemory(
+            "alice-secret-2", AliceNs, "second private launch code"));
+        _graph.AddEdge(new GraphEdge("alice-secret", "alice-secret-2", "similar_to"));
+        _clusters.CreateCluster("alice-cluster", AliceNs, ["alice-secret", "alice-secret-2"]);
+
+        var global = Admin("bob").CognitiveStats();
+        var directProbe = Admin("bob").CognitiveStats(AliceNs);
+
+        Assert.Equal(0, global.TotalEntries);
+        Assert.Equal(0, global.EdgeCount);
+        Assert.Equal(0, global.ClusterCount);
+        Assert.Equal(0, directProbe.TotalEntries);
+        Assert.Equal(0, directProbe.EdgeCount);
+        Assert.Equal(0, directProbe.ClusterCount);
+    }
+
+    [Fact]
+    public async Task PurgeDebates_CannotInspectOrDeleteAnotherAgentsSession()
+    {
+        const string debateNs = "active-debate-alice-session";
+        var entry = new CognitiveEntry(
+            "debate-alice-node", [0.5f, 0.5f], debateNs, "private deliberation")
+        {
+            CreatedAt = DateTimeOffset.UtcNow.AddHours(-48)
+        };
+        _index.Upsert(entry);
+        _registry.ClaimOwnershipOnWrite(debateNs, "alice");
+
+        var dryRun = Assert.IsType<PurgeDebatesResult>(
+            await Admin("bob").PurgeDebates(maxAgeHours: 24, dryRun: true));
+        var execute = Assert.IsType<PurgeDebatesResult>(
+            await Admin("bob").PurgeDebates(maxAgeHours: 24, dryRun: false));
+
+        Assert.Equal(0, dryRun.NamespacesAffected);
+        Assert.Empty(dryRun.Namespaces);
+        Assert.Equal(0, execute.NamespacesAffected);
+        Assert.NotNull(_index.Get("debate-alice-node", debateNs));
+    }
+
+    [Fact]
+    public void PrincipalTenant_SameNamespaceAndIdRemainStrictlyIsolated()
+    {
+        const string ns = "shared-name";
+        const string id = "same-id";
+        var tenantA = Core("alice", "tenant-a");
+        var tenantB = Core("bob", "tenant-b");
+
+        Assert.Contains("Stored entry", tenantA.StoreMemory(id, ns, "tenant A secret"));
+        Assert.Contains("Stored entry", tenantB.StoreMemory(id, ns, "tenant B secret"));
+
+        var aSearch = System.Text.Json.JsonSerializer.Serialize(
+            tenantA.SearchMemory(ns, text: "secret"));
+        var bSearch = System.Text.Json.JsonSerializer.Serialize(
+            tenantB.SearchMemory(ns, text: "secret"));
+        var aGet = Assert.IsType<GetMemoryResult>(Admin("alice", "tenant-a").GetMemory(id));
+        var bGet = Assert.IsType<GetMemoryResult>(Admin("bob", "tenant-b").GetMemory(id));
+
+        Assert.Contains("tenant A secret", aSearch);
+        Assert.DoesNotContain("tenant B secret", aSearch);
+        Assert.Contains("tenant B secret", bSearch);
+        Assert.DoesNotContain("tenant A secret", bSearch);
+        Assert.Equal("tenant A secret", aGet.Text);
+        Assert.Equal("tenant B secret", bGet.Text);
+        Assert.Equal(1, Admin("alice", "tenant-a").CognitiveStats().TotalEntries);
+        Assert.Equal(1, Admin("bob", "tenant-b").CognitiveStats().TotalEntries);
+
+        Assert.Contains("Deleted entry", tenantA.DeleteMemory(id));
+        Assert.Null(_index.Get(id, ns, "tenant-a"));
+        Assert.Equal("tenant B secret", _index.Get(id, ns, "tenant-b")?.Text);
+    }
+
+    [Fact]
+    public void NamespaceOwnership_IsQualifiedByTenant()
+    {
+        const string ns = "same-project";
+        Assert.Contains("Stored entry", Core("alice", "tenant-a").StoreMemory(
+            "a", ns, "owned independently by A"));
+        Assert.Contains("Stored entry", Core("bob", "tenant-b").StoreMemory(
+            "b", ns, "owned independently by B"));
+
+        Assert.True(_registry.HasAccess("alice", ns, "write", "tenant-a"));
+        Assert.False(_registry.HasAccess("bob", ns, "write", "tenant-a"));
+        Assert.True(_registry.HasAccess("bob", ns, "write", "tenant-b"));
+        Assert.False(_registry.HasAccess("alice", ns, "write", "tenant-b"));
     }
 
     [Fact]
@@ -182,7 +330,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         var tools = Core(AgentIdentity.DefaultAgentId);
         Assert.Contains("Stored entry", tools.StoreMemory("d1", "default-ns", "ordinary note"));
 
-        Assert.True(_registry.HasAccess("someone-else", "default-ns"),
-            "default-agent writes must not claim ownership, or setting AGENT_ID later would lock the operator out of their own data");
+        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "default-ns"));
+        Assert.False(_registry.HasAccess("someone-else", "default-ns"),
+            "identified principals must not take over legacy content; ownership requires an administrative migration");
     }
 }

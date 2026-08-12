@@ -53,7 +53,7 @@ public class StandardProfileAclTests : IDisposable
         _registry = new NamespaceRegistry(_index, _embedding);
 
         // Alice owns the namespace; ownership is what makes any later check meaningful,
-        // since HasAccess treats an unregistered namespace as open.
+        // after the first identified write atomically claims the empty namespace.
         _index.Upsert(new CognitiveEntry("alice-secret", _embedding.Embed(Secret), AliceNs, Secret));
         _registry.EnsureOwnership(AliceNs, "alice");
     }

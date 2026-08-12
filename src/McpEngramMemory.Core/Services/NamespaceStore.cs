@@ -95,7 +95,19 @@ internal sealed class NamespaceStore
     public void RemoveNamespace(string ns)
     {
         var key = new NsKey(string.Empty, ns);
-        if (_namespaces.TryRemove(key, out var entries))
+        RemoveNamespace(key);
+        _loadedNamespaces.TryRemove(ns, out _);
+    }
+
+    /// <summary>
+    /// Remove exactly one tenant + namespace partition from in-memory state and its search
+    /// indexes. Other tenant partitions with the same namespace are left loaded and untouched.
+    /// Persistence rows are deliberately not deleted here; the caller must schedule deletes for
+    /// the removed entry ids so incremental providers can target the full (tenant, ns, id) key.
+    /// </summary>
+    public void RemoveNamespace(NsKey key)
+    {
+        if (_namespaces.TryRemove(key, out var entries) && key.Tenant.Length == 0)
         {
             int removed = 0;
             // Use the KeyValuePair overload of TryRemove so we only delete a locator entry
@@ -106,14 +118,13 @@ internal sealed class NamespaceStore
             // driving TotalCount negative.
             foreach (var id in entries.Keys)
             {
-                if (_idToNamespace.TryRemove(new KeyValuePair<string, string>(id, ns)))
+                if (_idToNamespace.TryRemove(new KeyValuePair<string, string>(id, key.Ns)))
                     removed++;
             }
             if (removed > 0)
                 Interlocked.Add(ref _totalCountApprox, -removed);
         }
-        _loadedNamespaces.TryRemove(ns, out _);
-        string pk = PartitionKey(key); // == ns for the legacy tenant
+        string pk = PartitionKey(key);
         _bm25.ClearNamespace(pk);
         _hnswIndices.TryRemove(pk, out _);
         _persistence.DeleteHnswSnapshot(pk);
@@ -133,6 +144,25 @@ internal sealed class NamespaceStore
         var inMemory = _namespaces.Keys.Select(k => k.Ns);
         return persisted.Union(inMemory).Distinct().ToList();
     }
+
+    /// <summary>
+    /// Get namespace names that currently contain entries for one tenant. Callers must load all
+    /// persisted namespaces first when they require complete discovery. Empty legacy partitions
+    /// created as a side effect of loading another tenant are excluded.
+    /// </summary>
+    public IReadOnlyList<string> GetNamespaceNames(string tenantId)
+        => _namespaces
+            .Where(kv => kv.Key.Tenant == tenantId && !kv.Value.IsEmpty)
+            .Select(kv => kv.Key.Ns)
+            .Distinct()
+            .ToList();
+
+    /// <summary>Snapshot the entry dictionaries belonging to exactly one tenant.</summary>
+    public IEnumerable<ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>>
+        GetTenantNamespaces(string tenantId)
+        => _namespaces
+            .Where(kv => kv.Key.Tenant == tenantId)
+            .Select(kv => kv.Value);
 
     /// <summary>
     /// Ensure a namespace is loaded from disk (all tenants). Thread-safe via per-namespace load lock

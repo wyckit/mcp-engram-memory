@@ -6,6 +6,54 @@
 
 `CognitiveIndex` is a thin facade managing CRUD, locking, and memory limits. Search, hybrid search, and duplicate detection are delegated to stateless engines that operate on data snapshots.
 
+The governed APIs are Core services, not additional MCP tools. The MCP server wraps all registered
+tools with `ConstitutionMcpFilter`; embedded hosts compose the same Core services directly. See
+[Cognitive Constitution and Governed Core](cognitive-constitution.md) for the execution contract.
+
+### Governance, Knowledge, Planning, and Assets
+
+| Service | Namespace | Description |
+|---------|-----------|-------------|
+| `RootConstitution` | `Constitution` | Built-in, content-addressed Root principles and non-negotiable constraints |
+| `ConstitutionComposer` | `Constitution` | Validates Root/overlay chains and rejects overlays that relax inherited constraints |
+| `DeterministicConstitutionEvaluator` | `Constitution` | Stable rule execution; missing, mismatched, or throwing rule implementations fail closed |
+| `ConstitutionKernel` | `Constitution` | Common pre/post operation boundary that turns decisions and evaluator failures into audit records |
+| `InMemoryConstitutionProvider` | `Constitution` | Thread-safe immutable Root/overlay provider; the MCP server's default provider |
+| `ConstitutionCommitGuard` | `Constitution` | Rechecks Constitution and resource versions immediately before a governed commit |
+| `KnowledgeGovernanceService` | `Knowledge` | Knowledge-version transition and governance checks independent from memory lifecycle |
+| `PermissionEnvelopeService` | `Knowledge` | Capability-by-capability source permission intersection and monotonic narrowing checks |
+| `TeacherRuntime` | `Learning` | Budgeted proposal generator that emits quarantined `KnowledgeProposal`s rather than publishing knowledge |
+| `VerifierPlanner` | `Learning` | Runs deterministic, model, and human verifiers in governed order and records independence/errors |
+| `KnowledgePromotionEvaluator` | `Learning` | Validates evidence, versions, permissions, constitutional outcome, and required approval before promotion |
+| `InMemoryGovernedKnowledgeStore` | `Governance` | Reference atomic publication of knowledge version, active pointer, provenance, and audit under one lock |
+| `InMemoryProvenanceStore` | `Provenance` | Append-only, tenant-aware, content-addressed provenance with authorized lineage reads |
+| `AgentProfileComposer` | `Planning` | Binds a loadout only when capabilities, grants, sources, and budgets remain within the profile ceiling |
+| `RetrievalPlanner` | `Planning` | Model-free source/candidate authorization before relevance ordering, with deterministic trace and abstention |
+| `ContextCompiler` | `Planning` | Re-authorizes selected references, preserves citations/provenance/audit links, and enforces deterministic budgets |
+| `AssetPublisher` | `Assets` | Canonical publication of immutable Skill, Documentation, CodeGraph, and Curriculum versions |
+| `SkillExecutionCoordinator` | `Assets` | Validates a Skill and delegates execution to a host-provided `ISkillSandbox`; Core executes no arbitrary code |
+| `IncrementalCodeGraphIndexer` | `Assets` | Selects a host-provided language extractor and publishes a content-addressed CodeGraph version |
+| `CurriculumCompiler` / `CurriculumPlanner` | `Assets` | Validates governed sources/training permissions and topologically orders curriculum objectives |
+
+### Governance Persistence
+
+The opt-in file stores are separate from legacy memory persistence:
+
+| Service | Recovery behavior |
+|---------|-------------------|
+| `FileConstitutionVersionStore` | Atomic tenant snapshot with immutable-hash and active-pointer validation |
+| `FileKnowledgeAssetStore` | Atomic checksum-protected aggregate snapshot per artifact |
+| `FileProvenanceStore` | Tenant-partitioned fsync journal with immutable assertion IDs |
+| `FileConstitutionAuditStore` | Fsync append-only audit journal with monotonic sequence |
+| `FileConstitutionDecisionStore` | Tenant-partitioned replay journal for complete decisions |
+
+Snapshots use temporary-write, disk flush, and atomic replacement. Journals checksum each record and
+may recover only a corrupt/unterminated tail; earlier corruption and tenant/schema/store/hash
+mismatches fail closed. Recovery details are exposed as `PersistenceDiagnostic`s. The MCP server
+currently registers in-memory Constitution provider/audit implementations by default, so durable
+governance requires explicit host composition. The focused file stores are individually crash-safe;
+they are not yet one transaction spanning knowledge, provenance, and audit files.
+
 | Service | Namespace | Description |
 |---------|-----------|-------------|
 | `CognitiveIndex` | `Services` | Thread-safe facade: CRUD, lifecycle state, access tracking, memory limits enforcement. Delegates search to engines below |
@@ -39,7 +87,7 @@
 | `MetricsCollector` | `Evaluation` | Thread-safe operational metrics with P50/P95/P99 latency percentiles |
 | `DebateSessionManager` | `Experts` | Volatile in-memory session state for debate workflows with integer alias mapping and 1-hour TTL auto-purge |
 | `ExpertDispatcher` | `Experts` | Semantic routing engine with flat and hierarchical (HMoE) modes — maps queries to specialized expert namespaces via cosine similarity through a 3-level domain tree (root → branch → leaf). Zero LLM API calls |
-| `NamespaceRegistry` | `Sharing` | Manages namespace ownership and sharing permissions for multi-agent memory sharing |
+| `NamespaceRegistry` | `Sharing` | Manages tenant-partitioned namespace ownership and sharing for cooperative agents; it does not authenticate `AGENT_ID` |
 | `PersistenceManager` | `Storage` | JSON file-based `IStorageProvider` with debounced async writes, SHA-256 checksums, crash recovery, storage version validation, and HNSW snapshot persistence |
 | `SqliteStorageProvider` | `Storage` | SQLite-based `IStorageProvider` with WAL mode, busy_timeout for multi-process safety, schema migration framework, incremental per-entry writes, and HNSW snapshot persistence |
 | `SqlServerStorageProvider` | `Storage` | Microsoft SQL Server-backed `IStorageProvider`. Configurable schema (default `dbo`), `MERGE`-based upserts, transactional writes, incremental per-entry persistence, HNSW snapshots stored as `hnsw_{ns}` keys |
@@ -75,6 +123,11 @@ Auto-link growth is bounded by namespace policy rather than a global edge-prunin
 | `ExplainedSearchResult` | Extended search result with full retrieval diagnostics (cosine, physics, lifecycle breakdown) |
 | `HnswSnapshot` | Topology-only HNSW graph snapshot for cold-start persistence (node IDs, levels, connections — no vectors) |
 | `ToolError` | Standard `{ status, error }` structured error response for consistent MCP tool error reporting |
+| `ArtifactRef` | Exact tenant/namespace/kind/id/version identity shared by knowledge, provenance, planning, and assets |
+| `KnowledgeVersion` | Immutable claim version with maturity, validity, calibrated epistemic components, evidence, permissions, and Constitution hash |
+| `ProvenanceAssertion` | Append-only, typed, content-addressed derivation over exact `ArtifactRef` sources |
+| `AgentProfile` / `AgentLoadout` | Authorization ceiling and monotone operating restriction for governed retrieval/context compilation |
+| `ContextManifest` | Machine-readable disclosure result with emitted fragments, typed references, budgets, omissions, trace, and no inferred truth score |
 
 ### Searchable Compression
 
@@ -89,7 +142,7 @@ Vectors use a lifecycle-driven compression pipeline:
 
 ### Persistence
 
-Two storage backends are available, selectable via environment variable:
+Three legacy memory storage backends are available, selectable via environment variable:
 
 **JSON file backend** (default):
 - Data stored in a `data/` directory as JSON files
@@ -119,8 +172,9 @@ Two storage backends are available, selectable via environment variable:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17 tools, default), `standard` (39 tools), `full` (62 tools) |
-| `AGENT_ID` | `default` | Agent identity for multi-agent sharing. Set unique ID per agent instance to enable namespace ownership and permissions |
+| `MEMORY_TOOL_PROFILE` | `minimal` | Tool profile: `minimal` (17 tools, default), `standard` (39 tools), `full` (63 tools) |
+| `AGENT_ID` | `default` | Process-wide cooperative identity label. It is not authentication; default + empty tenant is explicit legacy-unisolated mode |
+| `MEMORY_TENANT_ID` | empty | Process-wide host tenant partition. Empty selects legacy storage; never accept it from model/tool arguments |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
 | `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
 | `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (only when `MEMORY_STORAGE=sqlserver`) |

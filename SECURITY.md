@@ -76,7 +76,7 @@ levers are audit and quarantine: inspect suspect namespaces (`search_memory`,
 ## `AGENT_ID` is a cooperative label, not a security boundary
 
 Multi-agent ownership and ACLs key off the `AGENT_ID` environment variable,
-read once at startup (`src/McpEngramMemory/Program.cs`, line 118). Any process
+configured once at startup by `src/McpEngramMemory/Program.cs`. Any process
 that can set an environment variable can claim any identity, and MCP hosts
 today cannot inject a verifiable per-subagent identity into a shared server
 (tracked upstream as anthropics/claude-code#32514, closed not-planned).
@@ -92,6 +92,13 @@ Ownership is claimed by the first write from an agent that has an `AGENT_ID`
 set. Once a namespace is owned, other identified agents are refused reads and
 writes unless the owner shares it.
 
+Core receives identity through immutable `IPrincipalContext`, which carries the
+tenant, agent/principal, system flag, and explicit legacy status. That interface
+makes the trust boundary visible and lets authenticated embedding hosts supply
+verified claims. It does not turn the stdio server's environment variables into
+credentials. `MEMORY_TENANT_ID` and `AGENT_ID` remain operator-controlled,
+process-wide bootstrap values.
+
 Two consequences worth stating plainly:
 
 - **Servers that never set `AGENT_ID` are unaffected.** They run as the default
@@ -104,11 +111,54 @@ Two consequences worth stating plainly:
   readable and writable by everyone until an identified agent writes to them
   and claims them. Upgrading does not retroactively protect existing data.
 
-Enforcement covers the default `minimal` profile and the namespace-scoped tools in
-the `standard` and `full` profiles. Two paths are not yet covered:
-`ExpertDispatcher`'s hierarchical routing, which resolves context inside a Core
-service rather than the tool layer, and the benchmark tools' file-path and
-executable parameters, which are not namespace-scoped.
+All MCP tool profiles pass through the global Constitution pre/post filter and
+the namespace-scoped tools enforce the host principal. Tool-profile selection
+does not disable governance. Benchmark tools remain operator capabilities:
+their executable and artifact-path inputs are not tenant data-isolation APIs,
+and `OpenWorld` metadata tells clients when a tool may invoke an external model.
+
+## Tenant isolation and global bare-ID structures
+
+Memory entries, index partitions, namespace ownership records, and provider CRUD
+are tenant-aware. This does **not** yet extend to every cognitive support
+structure. The association graph, semantic clusters, lifecycle/collapse support
+records, and diffusion caches still use global bare entry IDs. Treating those
+structures as tenant-qualified would allow collisions and cross-tenant reads or
+mutations.
+
+The current server therefore fails closed for non-empty-tenant principals before
+affected graph, cluster, lifecycle, intelligence, accretion, diffusion, spectral,
+maintenance, synthesis, and visualization operations reach global structures.
+Read-shaped operations return empty/not-found results; mutations return an
+unavailable/error result. Tenant-scoped debate purge deletes tenant entries but
+intentionally skips global graph and cluster cascades. The empty-tenant/default
+principal retains historical behavior as explicit
+`PrincipalContext.LegacyUnisolated` mode.
+
+This is a containment boundary, not full tenant-qualified graph support. If a
+tenant needs graph/lifecycle behavior today, use a dedicated server process and
+data directory for that tenant. Do not disable or bypass the fail-closed guard.
+
+## Constitutional MCP boundary
+
+The server uses the `ModelContextProtocol` 2.1.0 SDK and registers
+`ConstitutionMcpFilter` globally for all call-tool requests. The filter builds a
+content-hashed `OperationEnvelope`, evaluates and audits the precondition,
+invokes only on allow, and evaluates/audits the postcondition. Every tool also
+declares read-only, destructive, idempotent, and open-world metadata.
+
+Preconditions are the authorization boundary. Postconditions run after the tool and
+are detection/audit only: a denial is recorded, but is not returned as a false failure
+after state may already have committed. Operations needing rollback semantics must use
+the governed transactional store, not rely on the adapter filter.
+
+Neither mechanism authenticates the caller: metadata is advisory to MCP clients,
+and the Constitution consumes the principal supplied by the host. The shipped
+server currently uses an in-memory Constitution provider and a durable file-backed
+audit store. Overlay activation is host-managed; an embedding host must load/publish
+persisted Constitution versions into the provider. Direct Core callers must invoke `ConstitutionKernel` around
+their own governed operations; the MCP filter cannot protect code that bypasses
+the MCP adapter.
 
 > **Prior versions.** Through v1.4.0 the ACL model did not function at all. The
 > permission check was reached from exactly one tool, nothing ever registered

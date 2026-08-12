@@ -36,7 +36,7 @@ public sealed class ExpertTools
         _access = access;
     }
 
-    [McpServerTool(Name = "dispatch_task")]
+    [McpServerTool(Name = "dispatch_task", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Find which expert namespace best matches your question, then retrieve relevant memories from it — use this when you don't know which namespace holds the answer. Don't use it as a general search; if you already know the namespace, use `recall` directly.")]
     public object DispatchTask(
         [Description("The core problem, question, or task to route to an expert.")] string taskDescription,
@@ -53,9 +53,17 @@ public sealed class ExpertTools
 
         using var timer = _metrics.StartTimer("dispatch_task");
 
+        if (!_access.IsLegacyUnisolated)
+        {
+            return new DispatchMissResult(
+                "needs_expert",
+                Array.Empty<ExpertMatch>(),
+                "Tenant-qualified agent profiles are not enabled for this principal.");
+        }
+
         var queryVector = _embedding.Embed(taskDescription);
 
-        if (hierarchical)
+        if (hierarchical && _access.IsLegacyUnisolated)
         {
             var result = _dispatcher.RouteHierarchical(queryVector, topK: topK(autoSearchK), threshold: threshold);
             if (result.Status == "routed" && result.Experts.Count > 0)
@@ -65,32 +73,35 @@ public sealed class ExpertTools
 
         var (status, experts) = _dispatcher.Route(queryVector, topK: 3, threshold: threshold);
 
-        if (status == "needs_expert")
+        var accessibleExperts = experts.Where(e => _access.CanRead(e.TargetNamespace)).ToList();
+
+        if (status == "needs_expert" || accessibleExperts.Count == 0)
         {
             return new DispatchMissResult(
                 "needs_expert",
-                experts,
+                accessibleExperts,
                 "No qualified expert found for this domain. Use create_expert to instantiate a specialist.");
         }
 
         // Routed — search the best expert's namespace for context
-        var bestExpert = experts[0];
+        var bestExpert = accessibleExperts[0];
         _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
         // Expert namespaces are picked by the router, not chosen by the caller, but the
         // context returned here is entry text - it must not cross an unreadable namespace
         // just because routing happened to land there.
         var context = _access.CanRead(bestExpert.TargetNamespace)
-            ? _index.Search(queryVector, bestExpert.TargetNamespace, k: autoSearchK)
+            ? _index.Search(queryVector, bestExpert.TargetNamespace, k: autoSearchK,
+                tenantId: _access.TenantId)
             : Array.Empty<CognitiveSearchResult>();
 
-        return new DispatchRoutedResult("routed", bestExpert, experts, context);
+        return new DispatchRoutedResult("routed", bestExpert, accessibleExperts, context);
 
         // Local function to calculate topK for hierarchical routing
         static int topK(int autoSearchK) => Math.Max(autoSearchK, 3);
     }
 
-    [McpServerTool(Name = "create_expert")]
+    [McpServerTool(Name = "create_expert", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Register a new expert in the semantic routing meta-index. " +
         "Embeds the persona description for future query routing via dispatch_task. " +
         "Use level='root'/'branch' for domain nodes, 'leaf' (default) for actual experts.")]
@@ -107,6 +118,8 @@ public sealed class ExpertTools
             return "Error: expertId must not be empty.";
         if (string.IsNullOrWhiteSpace(personaDescription))
             return "Error: personaDescription must not be empty.";
+        if (!_access.IsLegacyUnisolated)
+            return "Error: expert registry mutation requires the legacy-unisolated administrator until tenant-qualified agent profiles are enabled.";
 
         using var timer = _metrics.StartTimer("create_expert");
 
@@ -148,7 +161,7 @@ public sealed class ExpertTools
         return new CreateExpertResult("created", expert.ExpertId, expert.TargetNamespace, placement);
     }
 
-    [McpServerTool(Name = "link_to_parent")]
+    [McpServerTool(Name = "link_to_parent", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Link a leaf expert to a parent domain node. Use to organize experts in the hierarchical routing tree.")]
     public object LinkToParent(
         [Description("The expert ID to link.")] string expertId,
@@ -158,6 +171,8 @@ public sealed class ExpertTools
             return "Error: expertId must not be empty.";
         if (string.IsNullOrWhiteSpace(parentNodeId))
             return "Error: parentNodeId must not be empty.";
+        if (!_access.IsLegacyUnisolated)
+            return "Error: expert registry mutation requires the legacy-unisolated administrator until tenant-qualified agent profiles are enabled.";
 
         using var timer = _metrics.StartTimer("link_to_parent");
 
@@ -167,11 +182,13 @@ public sealed class ExpertTools
         return new { status = "linked", expertId, parentNodeId };
     }
 
-    [McpServerTool(Name = "get_domain_tree")]
+    [McpServerTool(Name = "get_domain_tree", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Show the full expert domain tree: root domains, branches, and leaf experts with hierarchy.")]
     public object GetDomainTree()
     {
         using var timer = _metrics.StartTimer("get_domain_tree");
+        if (!_access.IsLegacyUnisolated)
+            return new DomainTreeResult(Array.Empty<DomainNode>(), 0, 0);
         return _dispatcher.GetDomainTree();
     }
 }

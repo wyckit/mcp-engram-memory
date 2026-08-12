@@ -300,7 +300,7 @@ public class SqliteStorageProviderTests : IDisposable
         _provider.SaveNamespaceSync("ver", new NamespaceData { Entries = [entry] });
 
         var loaded = _provider.LoadNamespace("ver");
-        Assert.Equal(2, loaded.StorageVersion);
+        Assert.Equal(3, loaded.StorageVersion);
     }
 
     // ── Schema Migration ──
@@ -308,7 +308,7 @@ public class SqliteStorageProviderTests : IDisposable
     [Fact]
     public void FreshDatabase_MigratesToCurrentVersion()
     {
-        // The provider constructor runs InitializeSchema which should migrate to v2
+        // The provider constructor runs InitializeSchema which should migrate to v3.
         using var conn = new SqliteConnection($"Data Source={_testDbPath}");
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -316,7 +316,7 @@ public class SqliteStorageProviderTests : IDisposable
         // Verify schema version is set
         cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
         var version = Convert.ToInt32(cmd.ExecuteScalar()!);
-        Assert.Equal(2, version);
+        Assert.Equal(3, version);
 
         // Verify lifecycle_state column exists
         cmd.CommandText = "PRAGMA table_info(entries)";
@@ -325,6 +325,7 @@ public class SqliteStorageProviderTests : IDisposable
         while (reader.Read())
             columns.Add(reader.GetString(1));
         Assert.Contains("lifecycle_state", columns);
+        Assert.Contains("tenant_id", columns);
     }
 
     [Fact]
@@ -374,7 +375,7 @@ public class SqliteStorageProviderTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            // Open with current provider — should trigger v1→v2 migration
+            // Open with current provider — should trigger the full v1→v3 migration chain.
             using var provider = new SqliteStorageProvider(v1DbPath, debounceMs: 10);
 
             // Verify version upgraded
@@ -382,7 +383,7 @@ public class SqliteStorageProviderTests : IDisposable
             conn2.Open();
             using var cmd2 = conn2.CreateCommand();
             cmd2.CommandText = "SELECT version FROM schema_version LIMIT 1";
-            Assert.Equal(2, Convert.ToInt32(cmd2.ExecuteScalar()!));
+            Assert.Equal(3, Convert.ToInt32(cmd2.ExecuteScalar()!));
 
             // Verify lifecycle_state was backfilled from JSON
             cmd2.CommandText = "SELECT lifecycle_state FROM entries WHERE id = 'm1'";
@@ -427,5 +428,109 @@ public class SqliteStorageProviderTests : IDisposable
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT lifecycle_state FROM entries WHERE id = 'inc1'";
         Assert.Equal("archived", cmd.ExecuteScalar()!.ToString());
+    }
+
+    [Fact]
+    public void IncrementalWrites_SameNamespaceAndIdAcrossTenants_RoundTripAndDeleteIndependently()
+    {
+        const string ns = "tenant-shared";
+        const string id = "same-id";
+
+        _provider.ScheduleUpsertEntry(ns,
+            new CognitiveEntry(id, new[] { 1f }, ns, "tenant a", tenantId: "tenant-a"));
+        _provider.ScheduleUpsertEntry(ns,
+            new CognitiveEntry(id, new[] { 2f }, ns, "tenant b", tenantId: "tenant-b"));
+        _provider.Flush();
+
+        var initiallyLoaded = _provider.LoadNamespace(ns).Entries;
+        Assert.Equal(2, initiallyLoaded.Count);
+        Assert.Contains(initiallyLoaded, entry => entry.TenantId == "tenant-a" && entry.Text == "tenant a");
+        Assert.Contains(initiallyLoaded, entry => entry.TenantId == "tenant-b" && entry.Text == "tenant b");
+
+        using (var reopened = new SqliteStorageProvider(_testDbPath, debounceMs: 10))
+        {
+            var reloaded = reopened.LoadNamespace(ns).Entries;
+            Assert.Equal(2, reloaded.Count);
+            Assert.Contains(reloaded, entry => entry.TenantId == "tenant-a" && entry.Id == id);
+            Assert.Contains(reloaded, entry => entry.TenantId == "tenant-b" && entry.Id == id);
+
+            reopened.ScheduleDeleteEntry(ns, id, "tenant-a");
+            reopened.Flush();
+        }
+
+        var afterTenantDelete = _provider.LoadNamespace(ns).Entries;
+        var survivor = Assert.Single(afterTenantDelete);
+        Assert.Equal("tenant-b", survivor.TenantId);
+        Assert.Equal(id, survivor.Id);
+        Assert.Equal("tenant b", survivor.Text);
+    }
+
+    [Fact]
+    public void MigrateV2ToV3_PreservesExistingRowsInLegacyTenant()
+    {
+        var v2DbPath = Path.Combine(Path.GetTempPath(), $"sqlite_v2_test_{Guid.NewGuid():N}", "memory.db");
+        var v2Dir = Path.GetDirectoryName(v2DbPath)!;
+        Directory.CreateDirectory(v2Dir);
+
+        try
+        {
+            var entry = new CognitiveEntry("legacy", new[] { 1f }, "migration", "legacy row", lifecycleState: "ltm");
+            var json = System.Text.Json.JsonSerializer.Serialize(entry, new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                Converters = { new FloatArrayBase64Converter() }
+            });
+            var checksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(json)));
+
+            using (var conn = new SqliteConnection($"Data Source={v2DbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE schema_version (version INTEGER NOT NULL);
+                    INSERT INTO schema_version (version) VALUES (2);
+                    CREATE TABLE entries (
+                        id TEXT NOT NULL,
+                        ns TEXT NOT NULL,
+                        json_data TEXT NOT NULL,
+                        checksum TEXT NOT NULL,
+                        lifecycle_state TEXT DEFAULT 'stm',
+                        PRIMARY KEY (ns, id)
+                    );
+                    CREATE TABLE global_data (
+                        key TEXT PRIMARY KEY,
+                        json_data TEXT NOT NULL,
+                        checksum TEXT NOT NULL
+                    );
+                    CREATE INDEX idx_entries_ns ON entries(ns);
+                    CREATE INDEX idx_entries_ns_state ON entries(ns, lifecycle_state);
+                    INSERT INTO entries (id, ns, json_data, checksum, lifecycle_state)
+                    VALUES ('legacy', 'migration', @json, @checksum, 'ltm');
+                    """;
+                cmd.Parameters.AddWithValue("@json", json);
+                cmd.Parameters.AddWithValue("@checksum", checksum);
+                cmd.ExecuteNonQuery();
+            }
+
+            using var provider = new SqliteStorageProvider(v2DbPath, debounceMs: 10);
+            var migrated = Assert.Single(provider.LoadNamespace("migration").Entries);
+            Assert.Equal(string.Empty, migrated.TenantId);
+            Assert.Equal("legacy row", migrated.Text);
+
+            using var verify = new SqliteConnection($"Data Source={v2DbPath}");
+            verify.Open();
+            using var verifyCmd = verify.CreateCommand();
+            verifyCmd.CommandText = "SELECT tenant_id FROM entries WHERE ns = 'migration' AND id = 'legacy'";
+            Assert.Equal(string.Empty, verifyCmd.ExecuteScalar()!.ToString());
+            verifyCmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
+            Assert.Equal(3, Convert.ToInt32(verifyCmd.ExecuteScalar()!));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(v2Dir))
+                Directory.Delete(v2Dir, true);
+        }
     }
 }

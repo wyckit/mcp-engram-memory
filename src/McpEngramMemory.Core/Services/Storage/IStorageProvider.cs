@@ -58,5 +58,16 @@ public interface IStorageProvider : IDisposable
     /// <summary>Delete all entries in a namespace from the backing store.</summary>
     Task DeleteNamespaceAsync(string ns);
 
+    /// <summary>
+    /// Delete one tenant's partition of a namespace. Implementations should override this
+    /// before advertising tenant support. The default preserves legacy empty-tenant behavior
+    /// and fails closed for non-legacy tenants.
+    /// </summary>
+    Task DeleteNamespaceAsync(string ns, string tenantId) =>
+        string.IsNullOrWhiteSpace(tenantId)
+            ? DeleteNamespaceAsync(ns)
+            : Task.FromException(new NotSupportedException(
+                "This storage provider does not support tenant-scoped namespace deletion."));
+
     void Flush();
 }

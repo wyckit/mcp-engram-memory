@@ -39,8 +39,8 @@ public class CognitiveIndexTenantTests : IDisposable
     }
 
     private static CognitiveEntry Entry(string id, float[] vector, string ns, string tenantId,
-        string? text = null)
-        => new(id, vector, ns, text: text, tenantId: tenantId);
+        string? text = null, string lifecycleState = "stm")
+        => new(id, vector, ns, text: text, lifecycleState: lifecycleState, tenantId: tenantId);
 
     // ── Same (ns, id) under two tenants is disjoint ──
 
@@ -277,5 +277,123 @@ public class CognitiveIndexTenantTests : IDisposable
 
         Assert.Equal("alpha", _index.Get("shared", "work", TenantA)!.Text);
         Assert.Equal("bravo", _index.Get("shared", "work", TenantB)!.Text);
+    }
+
+    // Bulk reads, discovery and lifecycle counts stay inside one tenant.
+
+    [Fact]
+    public void BulkReadsAndNamespaceDiscovery_AreTenantScoped()
+    {
+        _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA,
+            text: "alpha", lifecycleState: "stm"));
+        _index.Upsert(Entry("a-only", new[] { 1f, 0f }, "personal", TenantA,
+            text: "alpha personal", lifecycleState: "ltm"));
+        _index.Upsert(Entry("shared", new[] { 0f, 1f }, "work", TenantB,
+            text: "bravo", lifecycleState: "archived"));
+        _index.Upsert(Entry("b-only", new[] { 0f, 1f }, "research", TenantB,
+            text: "bravo research", lifecycleState: "stm"));
+
+        Assert.Equal(1, _index.CountInNamespace("work", TenantA));
+        Assert.Equal(1, _index.CountInNamespace("work", TenantB));
+        Assert.Equal("alpha", Assert.Single(_index.GetAllInNamespace("work", TenantA)).Text);
+        Assert.Equal("bravo", Assert.Single(_index.GetAllInNamespace("work", TenantB)).Text);
+
+        Assert.Equal(new[] { "personal", "work" }, _index.GetNamespaces(TenantA).Order());
+        Assert.Equal(new[] { "research", "work" }, _index.GetNamespaces(TenantB).Order());
+
+        Assert.Equal((1, 0, 0), _index.GetStateCounts("work", TenantA));
+        Assert.Equal((0, 0, 1), _index.GetStateCounts("work", TenantB));
+        Assert.Equal((1, 1, 0), _index.GetStateCounts("*", TenantA));
+        Assert.Equal((1, 0, 1), _index.GetStateCounts(null, TenantB));
+
+        // Existing overloads remain legacy-only for entry reads/counts.
+        Assert.Equal(0, _index.CountInNamespace("work"));
+        Assert.Empty(_index.GetAllInNamespace("work"));
+        Assert.Equal((0, 0, 0), _index.GetStateCounts("work"));
+    }
+
+    [Fact]
+    public void DeleteAllInNamespace_RemovesOnlyExactTenantPartition()
+    {
+        const int partitionSize = 205; // Crosses the HNSW activation threshold.
+        for (int i = 0; i < partitionSize; i++)
+        {
+            string id = $"shared-{i:D3}";
+            _index.Upsert(Entry(id, new[] { 1f, 0f }, "work", TenantA,
+                text: $"alpha partition document {i}"));
+            _index.Upsert(Entry(id, new[] { 0f, 1f }, "work", TenantB,
+                text: $"bravo partition document {i}"));
+        }
+
+        Assert.Equal(partitionSize, _index.DeleteAllInNamespace("work", TenantA));
+
+        Assert.Equal(0, _index.CountInNamespace("work", TenantA));
+        Assert.Empty(_index.GetAllInNamespace("work", TenantA));
+        Assert.Empty(_index.Search(new SearchRequest
+        {
+            Query = new[] { 1f, 0f }, QueryText = "alpha partition", Namespace = "work",
+            K = 5, Hybrid = true, TenantId = TenantA
+        }));
+
+        Assert.Equal(partitionSize, _index.CountInNamespace("work", TenantB));
+        Assert.Equal("bravo partition document 7",
+            _index.Get("shared-007", "work", TenantB)!.Text);
+        var tenantBResults = _index.Search(new SearchRequest
+        {
+            Query = new[] { 0f, 1f }, QueryText = "bravo partition", Namespace = "work",
+            K = 5, Hybrid = true, TenantId = TenantB
+        });
+        Assert.NotEmpty(tenantBResults);
+        Assert.All(tenantBResults, result => Assert.StartsWith("shared-", result.Id));
+
+        _persistence.Flush();
+        using var persistence2 = new PersistenceManager(_testDataPath, debounceMs: 50);
+        using var index2 = new CognitiveIndex(persistence2);
+        Assert.Equal(0, index2.CountInNamespace("work", TenantA));
+        Assert.Equal(partitionSize, index2.CountInNamespace("work", TenantB));
+        Assert.Equal("bravo partition document 7",
+            index2.Get("shared-007", "work", TenantB)!.Text);
+    }
+
+    [Fact]
+    public void PrincipalScopedMutations_ChangeOnlyExactTenantPartition()
+    {
+        _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
+        _index.Upsert(Entry("shared", new[] { 0f, 1f }, "work", TenantB, text: "bravo"));
+
+        int tenantBAccessCount = _index.Get("shared", "work", TenantB)!.AccessCount;
+        _index.RecordAccess("shared", "work", TenantA);
+        Assert.Equal(2, _index.Get("shared", "work", TenantA)!.AccessCount);
+        Assert.Equal(tenantBAccessCount, _index.Get("shared", "work", TenantB)!.AccessCount);
+
+        Assert.True(_index.SetLifecycleState("shared", "ltm", "work", TenantA));
+        Assert.Equal("ltm", _index.Get("shared", "work", TenantA)!.LifecycleState);
+        Assert.Equal("stm", _index.Get("shared", "work", TenantB)!.LifecycleState);
+
+        Assert.True(_index.SetActivationEnergyAndState(
+            "shared", 4.5f, "archived", "work", TenantA));
+        Assert.Equal(4.5f, _index.Get("shared", "work", TenantA)!.ActivationEnergy);
+        Assert.Equal("archived", _index.Get("shared", "work", TenantA)!.LifecycleState);
+        Assert.Equal(0f, _index.Get("shared", "work", TenantB)!.ActivationEnergy);
+        Assert.Equal("stm", _index.Get("shared", "work", TenantB)!.LifecycleState);
+    }
+
+    [Fact]
+    public void BareIdTenantOperations_RefuseAmbiguousMatches()
+    {
+        _index.Upsert(Entry("unique", new[] { 1f, 0f }, "work", TenantA, text: "unique-a"));
+        _index.Upsert(Entry("duplicate", new[] { 1f, 0f }, "work", TenantA, text: "work-a"));
+        _index.Upsert(Entry("duplicate", new[] { 1f, 0f }, "personal", TenantA, text: "personal-a"));
+        _index.Upsert(Entry("unique", new[] { 0f, 1f }, "work", TenantB, text: "unique-b"));
+
+        Assert.Equal("unique-a", _index.GetForTenant("unique", TenantA)!.Text);
+        Assert.Null(_index.GetForTenant("duplicate", TenantA));
+        Assert.False(_index.DeleteForTenant("duplicate", TenantA));
+        Assert.NotNull(_index.Get("duplicate", "work", TenantA));
+        Assert.NotNull(_index.Get("duplicate", "personal", TenantA));
+
+        Assert.True(_index.DeleteForTenant("unique", TenantA));
+        Assert.Null(_index.Get("unique", "work", TenantA));
+        Assert.Equal("unique-b", _index.Get("unique", "work", TenantB)!.Text);
     }
 }

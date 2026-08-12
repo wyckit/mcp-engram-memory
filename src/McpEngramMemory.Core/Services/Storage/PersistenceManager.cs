@@ -492,6 +492,21 @@ public sealed class PersistenceManager : IStorageProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Delete only one tenant partition while preserving co-named partitions.</summary>
+    public Task DeleteNamespaceAsync(string ns, string tenantId)
+    {
+        tenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
+        var data = LoadNamespace(ns);
+        var remaining = data.Entries.Where(entry => entry.TenantId != tenantId).ToList();
+        if (remaining.Count == 0)
+            return DeleteNamespaceAsync(ns);
+
+        data.Entries = remaining;
+        SaveNamespaceSync(ns, data);
+        DeleteHnswSnapshot(NamespaceStore.PartitionKey(tenantId, ns));
+        return Task.CompletedTask;
+    }
+
     public void Dispose()
     {
         lock (_timerLock)

@@ -31,7 +31,7 @@ public sealed class MrcrBenchmarkTools
         _modelClientFactory = modelClientFactory;
     }
 
-    [McpServerTool(Name = "run_mrcr_benchmark")]
+    [McpServerTool(Name = "run_mrcr_benchmark", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = true)]
     [Description("Run the MRCR v2 (8-needle) long-context A/B benchmark. Two arms: 'full_context' stuffs the entire conversation into the prompt; 'engram_retrieval' ingests each turn into a scratch namespace and feeds only top-K hybrid-search snippets to the model. Scoring is mean cosine similarity via the local ONNX embedding model. Drives generation through the Claude Code CLI (`claude -p`) by default so it charges against the Claude subscription rather than the API.")]
     public async Task<MrcrBenchmarkRunOutput> RunMrcrBenchmark(
         [Description("Generation model name. For Claude CLI use 'opus', 'sonnet', or 'haiku'. For Ollama, e.g. 'qwen2.5:7b'.")] string model,
@@ -111,7 +111,7 @@ public sealed class MrcrBenchmarkTools
         }
     }
 
-    [McpServerTool(Name = "compare_mrcr_artifacts")]
+    [McpServerTool(Name = "compare_mrcr_artifacts", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Compare two MRCR artifacts produced by run_mrcr_benchmark. Returns per-arm similarity and pass-rate deltas plus the change in prompt-token reduction ratio.")]
     public MrcrArtifactComparisonOutput CompareMrcrArtifacts(
         [Description("Baseline MRCR artifact path.")] string baselineArtifactPath,

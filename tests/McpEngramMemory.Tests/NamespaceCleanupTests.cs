@@ -246,6 +246,50 @@ public class NamespaceCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task PersistenceManager_TenantScopedNamespaceDelete_PreservesOtherTenant()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"pm_tenant_delete_{Guid.NewGuid():N}");
+        using var pm = new PersistenceManager(tempPath, debounceMs: 50);
+        pm.SaveNamespaceSync("shared", new NamespaceData
+        {
+            Entries =
+            [
+                new CognitiveEntry("same", [1f], "shared", "tenant A", tenantId: "a"),
+                new CognitiveEntry("same", [2f], "shared", "tenant B", tenantId: "b")
+            ]
+        });
+
+        await pm.DeleteNamespaceAsync("shared", "a");
+
+        var remaining = pm.LoadNamespace("shared").Entries;
+        Assert.Single(remaining);
+        Assert.Equal("b", remaining[0].TenantId);
+        Assert.Equal("tenant B", remaining[0].Text);
+    }
+
+    [Fact]
+    public async Task SqliteStorageProvider_TenantScopedNamespaceDelete_PreservesOtherTenant()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"sqlite_tenant_delete_{Guid.NewGuid():N}", "memory.db");
+        using var provider = new SqliteStorageProvider(dbPath, debounceMs: 10);
+        provider.SaveNamespaceSync("shared", new NamespaceData
+        {
+            Entries =
+            [
+                new CognitiveEntry("same", [1f], "shared", "tenant A", tenantId: "a"),
+                new CognitiveEntry("same", [2f], "shared", "tenant B", tenantId: "b")
+            ]
+        });
+
+        await provider.DeleteNamespaceAsync("shared", "a");
+
+        var remaining = provider.LoadNamespace("shared").Entries;
+        Assert.Single(remaining);
+        Assert.Equal("b", remaining[0].TenantId);
+        Assert.Equal("tenant B", remaining[0].Text);
+    }
+
+    [Fact]
     public async Task PersistenceManager_DeleteNamespaceAsync_NonExistent_DoesNotThrow()
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"pm_delete_noexist_{Guid.NewGuid():N}");

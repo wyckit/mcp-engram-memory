@@ -1,6 +1,50 @@
 [< Back to README](../README.md)
 
-# MCP Tools Reference (62 tools)
+# MCP Tools Reference (63 tools)
+
+## Protocol and governance boundary
+
+The server uses the `ModelContextProtocol` **2.1.0** .NET SDK with stdio transport. The SDK package
+version and the negotiated MCP protocol revision are different: negotiation is handled by the SDK
+and client, and Engram does not hard-code one protocol revision.
+
+Every tool declares the MCP 2.1 metadata used by clients for display and approval:
+`ReadOnly`, `Destructive`, `Idempotent`, and `OpenWorld`. Metadata describes expected behavior; it is
+not an authorization mechanism.
+
+All tool profiles pass through the global `ConstitutionMcpFilter`. It creates a Core
+`OperationEnvelope`, evaluates/audits the precondition, invokes the tool only on allow, then
+evaluates/audits the postcondition. Governance enforcement therefore does not disappear when a
+smaller tool profile is selected. The default server uses an in-memory Constitution provider and
+a file-backed audit store; embedding hosts manage persisted overlay activation.
+
+The governed Knowledge, Provenance, Teacher/Verifier, RetrievalPlanner/ContextCompiler, and semantic
+asset APIs live in `McpEngramMemory.Core`. The full profile adds one governed publication adapter,
+`promote_knowledge`; the remaining planning and asset APIs stay embeddable Core surfaces.
+See [Cognitive Constitution and Governed Core](cognitive-constitution.md).
+
+## Principal and tenant behavior
+
+The stdio host creates `IPrincipalContext` from process configuration:
+
+- `AGENT_ID` is a cooperative identity label, not authentication.
+- `MEMORY_TENANT_ID` is a host-selected tenant partition and must not come from tool arguments.
+- empty tenant + default agent is explicit `PrincipalContext.LegacyUnisolated` compatibility mode.
+
+Entry CRUD/search is tenant-aware. The cognitive graph, clusters, lifecycle support structures,
+collapse history, and diffusion caches still use global bare entry IDs. Until those structures are
+tenant-qualified, non-empty-tenant principals fail closed for the affected standard/full tools:
+
+| Area | Non-empty-tenant behavior |
+|------|---------------------------|
+| Graph, cluster, lifecycle, intelligence, and accretion mutations | Return an unavailable/error result before global state is read or changed |
+| Graph/cluster traversal and diagnostics | Return empty/not-found results |
+| Diffusion and spectral retrieval | Return null/empty; cached global bases are not exposed or invalidated |
+| Maintenance, synthesis, visualization | Return unavailable or empty results; global entries/structures are not processed |
+| Admin debate purge | Deletes tenant entries only and intentionally skips global graph/cluster cascades |
+
+This is fail-closed containment, **not** full tenant-qualified graph support. Legacy-unisolated mode
+retains historical graph/lifecycle behavior. See [Security](../SECURITY.md).
 
 ### Core Memory (4 tools)
 
@@ -128,6 +172,12 @@ Seventeen benchmark datasets: six core datasets (default, paraphrase, multihop, 
 | `run_mrcr_benchmark` | Run the MRCR v2 (8-needle) long-context A/B benchmark: `full_context` stuffs the whole conversation into the prompt; `engram_retrieval` ingests each turn into a scratch namespace and feeds only top-K hybrid-search snippets. Scored by mean cosine similarity via the local ONNX embedding model; drives generation through the Claude Code CLI (`claude -p`) by default. |
 | `compare_mrcr_artifacts` | Compare two MRCR artifacts from `run_mrcr_benchmark`: per-arm similarity and pass-rate deltas plus the change in prompt-token reduction ratio. |
 
+### Governed Learning (1 tool, full profile)
+
+| Tool | Description |
+|------|-------------|
+| `promote_knowledge` | Convert an evidence-backed claim into a governed Knowledge version. Requires a non-legacy tenant and an owned namespace; runs the quarantined Teacher, deterministic evidence verifier, Constitution commit authorization, permission intersection, provenance creation, and crash-safe atomic asset/audit/active-pointer commit. This is distinct from `promote_memory`, which changes only STM/LTM/archive lifecycle state. |
+
 ### Maintenance (2 tools)
 
 | Tool | Description |
@@ -160,7 +210,7 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 | `list_shared` | List all namespaces shared with the current agent, showing owner and access level. |
 | `whoami` | Return the current agent identity and accessible namespaces summary. |
 
-Multi-agent workflow: Set `AGENT_ID` environment variable per agent instance. Namespace ownership is established on first write. Use `share_namespace` to grant cross-agent access, `cross_search` to query across shared namespaces. The default agent (`AGENT_ID` not set) has unrestricted access for backward compatibility.
+Multi-agent workflow: the host supplies `AGENT_ID` per agent instance and, when tenant partitioning is enabled, `MEMORY_TENANT_ID`. Namespace ownership is established on first write. Use `share_namespace` to grant cross-agent access and `cross_search` to query shared namespaces. The default agent with an empty tenant has unrestricted access only as the explicit legacy-unisolated compatibility mode; environment variables are deployment inputs, not an authentication boundary.
 
 ### Memory Diffusion Kernel (3 tools)
 
