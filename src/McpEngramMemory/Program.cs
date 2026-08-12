@@ -147,7 +147,13 @@ var governancePath = Environment.GetEnvironmentVariable("MEMORY_GOVERNANCE_PATH"
 builder.Services.AddSingleton<IPrincipalContext>(principalContext);
 builder.Services.AddSingleton(new AgentIdentity(agentId));
 builder.Services.AddSingleton<NamespaceRegistry>();
-builder.Services.AddSingleton<NamespaceAccess>();
+// NamespaceAccess retains an AgentIdentity compatibility constructor for v1 in-process hosts.
+// Both constructor dependencies are registered here, so the default DI constructor selector sees
+// two equally valid candidates. Select the tenant-aware constructor explicitly; otherwise every
+// standard/full-profile tool that depends on NamespaceAccess fails only when first invoked.
+builder.Services.AddSingleton(sp => new NamespaceAccess(
+    sp.GetRequiredService<NamespaceRegistry>(),
+    sp.GetRequiredService<IPrincipalContext>()));
 builder.Services.AddSingleton<IConstitutionProvider, InMemoryConstitutionProvider>();
 builder.Services.AddSingleton(new FileConstitutionVersionStore(governancePath));
 builder.Services.AddSingleton(new FileKnowledgeAssetStore(governancePath));
