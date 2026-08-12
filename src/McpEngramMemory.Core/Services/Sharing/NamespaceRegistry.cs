@@ -36,7 +36,13 @@ public sealed class NamespaceRegistry
     }
 
     /// <summary>
-    /// Grant an agent access to a namespace. Creates the permission entry if it doesn't exist.
+    /// Grant an agent access to a namespace. An unregistered namespace resolves through
+    /// <see cref="RegisterLegacyOwnerUnlocked"/>: the legacy default agent becomes its owner (it
+    /// already has unrestricted access, so this only materializes the record grants hang off),
+    /// while an identified principal gets <c>error_not_found</c> rather than taking it over.
+    /// System namespaces are never shareable — <see cref="HasAccess"/> refuses them ahead of any
+    /// permission lookup, so a grant on one would be inert.
+    ///
     /// Thread-safe: concurrent Share calls to the same namespace are serialized by a per-namespace
     /// monitor, so grants cannot overwrite one another. Calls to different namespaces stay parallel.
     /// </summary>
@@ -46,9 +52,13 @@ public sealed class NamespaceRegistry
         if (accessLevel is not ("read" or "write"))
             return new ShareResult("error", ns, targetAgentId, accessLevel);
 
+        if (ns.StartsWith('_'))
+            return new ShareResult("error_not_found", ns, targetAgentId, accessLevel);
+
         lock (LockFor(ns, tenantId))
         {
-            var permission = GetPermission(ns, tenantId);
+            var permission = GetPermission(ns, tenantId)
+                             ?? RegisterLegacyOwnerUnlocked(ns, ownerAgentId, tenantId);
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, accessLevel);
 
@@ -228,6 +238,28 @@ public sealed class NamespaceRegistry
         var owner = entry.Metadata.GetValueOrDefault("owner") ?? AgentIdentity.DefaultAgentId;
         var grantsStr = entry.Metadata.GetValueOrDefault("grants") ?? "";
         return new NamespacePermission(ns, owner, ParseGrants(grantsStr));
+    }
+
+    /// <summary>
+    /// Materialize the owner record that <see cref="Share"/> needs to hang grants off, but only for
+    /// the legacy-unisolated default agent. That agent never registers ownership on its own:
+    /// <see cref="ClaimOwnershipOnWrite"/> is deliberately a no-op for it and
+    /// <see cref="HasAccess"/> short-circuits it to full access, so without this every
+    /// <c>share_namespace</c> call on a server started without <c>AGENT_ID</c> would fail with
+    /// <c>error_not_found</c> and there would be no MCP-reachable way to register an owner first.
+    /// Recording it as owner grants it nothing it did not already have.
+    ///
+    /// Returns null for every identified principal: those must claim a namespace by writing to it
+    /// (or be assigned it administratively), so sharing can never be the act that takes over
+    /// pre-existing unregistered content. Caller must hold <see cref="LockFor"/>.
+    /// </summary>
+    private NamespacePermission? RegisterLegacyOwnerUnlocked(string ns, string agentId, string tenantId)
+    {
+        if (agentId != AgentIdentity.DefaultAgentId || NormalizeTenant(tenantId).Length != 0)
+            return null;
+
+        SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
+        return new NamespacePermission(ns, agentId, Array.Empty<ShareGrant>());
     }
 
     private bool TryClaimEmptyNamespace(string ns, string agentId, string tenantId)

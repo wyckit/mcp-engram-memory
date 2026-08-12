@@ -98,6 +98,82 @@ public sealed class GovernancePersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task AuditAppend_KeepsSequenceDenseAcrossConcurrentStoreInstances()
+    {
+        // Two instances stand in for two server processes sharing one governance root — the
+        // default path is install-relative, so the documented per-agent deployment shares it.
+        // Each must number from the journal, not from its own in-memory count.
+        var first = new FileConstitutionAuditStore(_root);
+        var second = new FileConstitutionAuditStore(_root);
+
+        await first.AppendAsync(Audit("event-1", "tenant-a"));
+        await second.AppendAsync(Audit("event-2", "tenant-b"));
+        await first.AppendAsync(Audit("event-3", "tenant-a"));
+        await second.AppendAsync(Audit("event-4", "tenant-b"));
+
+        var reopened = await new FileConstitutionAuditStore(_root).ReadAllAsync();
+
+        Assert.Equal([1L, 2L, 3L, 4L], reopened.Select(value => value.Sequence));
+        Assert.Equal(["event-1", "event-2", "event-3", "event-4"],
+            reopened.Select(value => value.EventId));
+        // Both live instances must also see the peer's records, not just their own.
+        Assert.Equal(4, (await first.ReadAllAsync()).Count);
+        Assert.Equal(4, (await second.ReadAllAsync()).Count);
+    }
+
+    [Fact]
+    public async Task AuditAppend_SurvivesConcurrentWritersUnderContention()
+    {
+        var stores = Enumerable.Range(0, 4).Select(_ => new FileConstitutionAuditStore(_root)).ToArray();
+
+        await Task.WhenAll(stores.SelectMany((store, storeIndex) =>
+            Enumerable.Range(0, 5).Select(async index =>
+                await store.AppendAsync(Audit($"event-{storeIndex}-{index}", "tenant-a")))));
+
+        var records = await new FileConstitutionAuditStore(_root).ReadAllAsync();
+
+        Assert.Equal(20, records.Count);
+        Assert.Equal(Enumerable.Range(1, 20).Select(value => (long)value),
+            records.Select(value => value.Sequence));
+        Assert.Equal(20, records.Select(value => value.EventId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task AuditReplay_FailedIdentityCheckLeavesNoPartialState()
+    {
+        var store = new FileConstitutionAuditStore(_root);
+        await store.AppendAsync(Audit("event-1", "tenant-a"));
+        await store.AppendAsync(Audit("event-2", "tenant-a"));
+        await store.AppendAsync(Audit("event-3", "tenant-a"));
+
+        // Desync the middle record's envelope tenant from its payload. The envelope's own fields
+        // are outside the payload checksum, so this reaches the store's identity check rather than
+        // being caught earlier by replay's hash verification.
+        string journal = Path.Combine(_root, "audit.journal");
+        string[] lines = await File.ReadAllLinesAsync(journal);
+        string original = lines[1];
+        lines[1] = original.Replace(
+            "\"store\":\"constitution-audit\",\"tenantId\":\"tenant-a\"",
+            "\"store\":\"constitution-audit\",\"tenantId\":\"tenant-x\"");
+        Assert.NotEqual(original, lines[1]);
+        await File.WriteAllLinesAsync(journal, lines);
+
+        var reopened = new FileConstitutionAuditStore(_root);
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await reopened.ReadAllAsync());
+
+        // A retry must re-derive from disk rather than replay on top of a half-applied set.
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await reopened.ReadAllAsync());
+
+        await File.WriteAllLinesAsync(journal, [lines[0], original, lines[2]]);
+        var recovered = await reopened.ReadAllAsync();
+
+        Assert.Equal([1L, 2L, 3L], recovered.Select(value => value.Sequence));
+        await reopened.AppendAsync(Audit("event-4", "tenant-a"));
+        Assert.Equal([1L, 2L, 3L, 4L],
+            (await new FileConstitutionAuditStore(_root).ReadAllAsync()).Select(value => value.Sequence));
+    }
+
+    [Fact]
     public async Task AuditReplay_RejectsCorruptionBeforeTail()
     {
         var store = new FileConstitutionAuditStore(_root);

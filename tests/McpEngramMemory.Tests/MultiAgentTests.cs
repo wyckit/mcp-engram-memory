@@ -105,6 +105,45 @@ public class MultiAgentTests : IDisposable
     }
 
     [Fact]
+    public void Share_DefaultAgent_RegistersOwnershipOnDemand()
+    {
+        // The default agent never claims ownership on write, so Share is the only place its
+        // permission record can come into being. Without that, share_namespace is unusable on
+        // every server started without AGENT_ID.
+        var result = _registry.Share("work", AgentIdentity.DefaultAgentId, "agent-b", "read");
+
+        Assert.Equal("shared", result.Status);
+        Assert.True(_registry.HasAccess("agent-b", "work", "read"));
+        Assert.False(_registry.HasAccess("agent-b", "work", "write"));
+
+        var revoked = _registry.Unshare("work", AgentIdentity.DefaultAgentId, "agent-b");
+
+        Assert.Equal("unshared", revoked.Status);
+        Assert.False(_registry.HasAccess("agent-b", "work", "read"));
+    }
+
+    [Fact]
+    public void Share_IdentifiedAgent_CannotTakeOverUnregisteredNamespace()
+    {
+        var result = _registry.Share("work", "agent-a", "agent-b", "read");
+
+        Assert.Equal("error_not_found", result.Status);
+        Assert.False(_registry.HasAccess("agent-b", "work", "read"));
+        Assert.False(_registry.HasAccess("agent-a", "work", "read"));
+    }
+
+    [Fact]
+    public void Share_RejectsSystemNamespaces()
+    {
+        // HasAccess refuses '_' namespaces ahead of any permission lookup, so a grant on one
+        // would be inert. Fail loudly instead of reporting a share that grants nothing.
+        var result = _registry.Share("_system_sharing", AgentIdentity.DefaultAgentId, "agent-b", "read");
+
+        Assert.Equal("error_not_found", result.Status);
+        Assert.False(_registry.HasAccess("agent-b", "_system_sharing"));
+    }
+
+    [Fact]
     public void Share_RejectsInvalidAccessLevel()
     {
         var result = _registry.Share("work", "agent-a", "agent-b", "admin");

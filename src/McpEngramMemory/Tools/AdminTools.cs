@@ -108,27 +108,40 @@ public sealed class AdminTools
         [Description("Namespace ('*' for all, default).")] string ns = "*",
         [Description("Maximum namespaces to list (default: 100). Use 0 for no cap. Counts are always exact regardless of this limit.")] int namespaceLimit = DefaultNamespaceLimit)
     {
-        // Counts, topology totals, and cluster totals are all existence signals. Build a
-        // principal-visible projection first, then derive every aggregate from that same
-        // projection so a caller cannot probe a private namespace by name or infer its size.
+        // Counts, topology totals, and cluster totals are all existence signals, so every
+        // aggregate is derived from the same principal-visible namespace set — a caller cannot
+        // probe a private namespace by name or infer its size.
         var namespaces = _index.GetNamespaces(_principal.TenantId).Where(CanRead).ToList();
         var scopedNamespaces = ns == "*"
             ? namespaces
             : namespaces.Where(candidate => candidate == ns).ToList();
-        var visibleEntries = scopedNamespaces
-            .SelectMany(scope => _index.GetAllInNamespace(scope, _principal.TenantId))
-            .ToList();
-        var stm = visibleEntries.Count(entry => entry.LifecycleState == "stm");
-        var ltm = visibleEntries.Count(entry => entry.LifecycleState == "ltm");
-        var archived = visibleEntries.Count(entry => entry.LifecycleState == "archived");
-        var visibleIds = visibleEntries.Select(entry => entry.Id).ToHashSet();
-        var edgeCount = _principal.TenantId.Length == 0
-            ? _graph.GetAllEdges().Count(edge =>
-                visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId))
-            : 0;
-        var clusterCount = _principal.TenantId.Length == 0
-            ? scopedNamespaces.Sum(scope => _clusters.ListClusters(scope).Count)
-            : 0;
+
+        // Counts come from the index's per-partition tally rather than a materialized entry
+        // list. This tool is asked for the summary, not the contents, so pulling every visible
+        // entry into a list just to run three predicates over it is pure overhead.
+        int stm = 0, ltm = 0, archived = 0;
+        foreach (var scope in scopedNamespaces)
+        {
+            var (scopeStm, scopeLtm, scopeArchived) = _index.GetStateCounts(scope, _principal.TenantId);
+            stm += scopeStm;
+            ltm += scopeLtm;
+            archived += scopeArchived;
+        }
+
+        // Graph and cluster keys are bare ids, so topology totals are meaningful only in the
+        // legacy partition and are fixed at zero elsewhere. Build the visible-id set — which
+        // costs a pass over every visible entry — only when a count actually depends on it.
+        int edgeCount = 0, clusterCount = 0;
+        if (_principal.TenantId.Length == 0)
+        {
+            var visibleIds = scopedNamespaces
+                .SelectMany(scope => _index.GetAllInNamespace(scope, _principal.TenantId))
+                .Select(entry => entry.Id)
+                .ToHashSet();
+            edgeCount = _graph.GetAllEdges().Count(edge =>
+                visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId));
+            clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope).Count);
+        }
 
         // A store with hundreds of namespaces returns a list that dominates the caller's
         // context window for no benefit — the counts are what the tool is usually asked for.

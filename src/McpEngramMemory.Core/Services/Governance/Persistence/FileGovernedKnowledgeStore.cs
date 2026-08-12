@@ -16,6 +16,15 @@ namespace McpEngramMemory.Core.Services.Governance.Persistence;
 public sealed class FileGovernedKnowledgeStore : IGovernedKnowledgeStore
 {
     private const string StoreName = "governed-promotion";
+
+    /// <summary>
+    /// Bounded because promotion runs on a request-serving path while holding <c>_gate</c>: a peer
+    /// that crashed with the lock handle leaked would otherwise wedge this store indefinitely,
+    /// taking every other promotion and read on it down too. Surfacing the holder's IOException
+    /// leaves the caller a retryable failure instead of a hang.
+    /// </summary>
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(30);
+
     private readonly string _root;
     private readonly ConstitutionCommitGuard _commitGuard;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -51,7 +60,7 @@ public sealed class FileGovernedKnowledgeStore : IGovernedKnowledgeStore
         {
             var path = PathFor(reference.TenantId, reference.Namespace, reference.ArtifactId);
             await using var processLock = await CrashSafeJsonPersistence.AcquireExclusiveLockAsync(
-                path, cancellationToken).ConfigureAwait(false);
+                path, LockTimeout, cancellationToken).ConfigureAwait(false);
             var authority = resolveCurrentAuthority();
             var recheck = _commitGuard.Recheck(commit.AuthorizationSnapshot,
                 authority.ConstitutionVersionHash, authority.ResourceVersions);

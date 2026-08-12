@@ -39,13 +39,23 @@ internal static class CrashSafeJsonPersistence
     /// Acquires a cross-instance/process lock beside a snapshot. The stable lock file is never
     /// deleted (deleting creates inode races on Unix); exclusive FileShare semantics release on
     /// handle disposal and after process failure.
+    ///
+    /// <paramref name="timeout"/> is required rather than defaulted: every caller so far serves a
+    /// request while holding an in-process gate, so silently waiting forever on a peer that leaked
+    /// the handle is never the behavior they want. Past the deadline the holder's IOException
+    /// surfaces, leaving a retryable failure instead of a hang. Pass
+    /// <see cref="Timeout.InfiniteTimeSpan"/> only for genuine background work.
     /// </summary>
     public static async ValueTask<FileStream> AcquireExclusiveLockAsync(
         string snapshotPath,
+        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         string lockPath = $"{snapshotPath}.lock";
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        long deadline = timeout == Timeout.InfiniteTimeSpan
+            ? long.MaxValue
+            : Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -54,7 +64,7 @@ internal static class CrashSafeJsonPersistence
                 return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
                     FileShare.None, 1, FileOptions.WriteThrough);
             }
-            catch (IOException)
+            catch (IOException) when (Environment.TickCount64 < deadline)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken).ConfigureAwait(false);
             }
