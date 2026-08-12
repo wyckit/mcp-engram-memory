@@ -90,10 +90,17 @@ public sealed class MultiAgentTools
         // single namespace — so the names are both correct and inconsistent, and callers
         // reach for `ns` out of habit. Rather than rename (which would break every existing
         // caller of a published tool), accept either name and any reasonable shape.
-        if (namespaces is not null && ns is not null)
+        //
+        // "Supplied" has to mean "carries a real JSON value", not merely "is non-null". An
+        // omitted optional JsonElement? can still bind to a present element whose ValueKind
+        // is Null or Undefined, and a nullability check counted that as supplied — so a call
+        // passing only `namespaces` was rejected for passing both, which is the documented
+        // usage and made the tool unreachable over MCP. StringListNormalizer already treats
+        // those two kinds as absent; this now agrees with it.
+        if (IsSupplied(namespaces) && IsSupplied(ns))
             return "Error: supply either namespaces or ns, not both — they are the same parameter.";
 
-        var nsInput = namespaces ?? ns;
+        var nsInput = IsSupplied(namespaces) ? namespaces : ns;
         if (!StringListNormalizer.TryNormalize(nsInput, "namespaces", out var nsList, out var nsError))
             return $"Error: {nsError}";
         if (nsList is null || nsList.Length == 0)
@@ -124,6 +131,14 @@ public sealed class MultiAgentTools
 
         return new CrossSearchResponse(results, accessible.Count, results.Count);
     }
+
+    /// <summary>
+    /// True when an optional <see cref="JsonElement"/> parameter carries a real value. Whether an
+    /// omitted parameter arrives as C# null or as a present element holding JSON null depends on
+    /// the client and SDK binding, so nullability alone cannot answer "did the caller supply this".
+    /// </summary>
+    private static bool IsSupplied(JsonElement? value) =>
+        value is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) };
 
     [McpServerTool(Name = "share_namespace", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Grant another agent read or write access to a namespace you own. Don't use it to check what's already shared; use `list_shared` for that.")]

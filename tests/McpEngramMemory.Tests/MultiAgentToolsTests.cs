@@ -62,6 +62,43 @@ public class MultiAgentToolsTests : IDisposable
         Assert.Contains("not both", Assert.IsType<string>(result));
     }
 
+    /// <summary>
+    /// An omitted optional parameter does not always reach the tool as C# null: depending on the
+    /// client and SDK binding it can arrive as a present JsonElement holding JSON null. The
+    /// both-supplied guard originally tested nullability, so it fired on calls that passed only
+    /// `namespaces` - rejecting the documented usage and making cross_search unreachable over MCP
+    /// while every in-process test, which passes literal null, kept passing.
+    /// </summary>
+    [Fact]
+    public void CrossSearch_TreatsJsonNullAliasAsOmitted()
+    {
+        _index.Upsert(new CognitiveEntry("a1", [0.5f, 0.5f], "alpha", "shared topic text"));
+
+        var jsonNull = Wire<string?>(null);
+        Assert.Equal(JsonValueKind.Null, jsonNull.ValueKind);
+
+        var viaNamespaces = _tools.CrossSearch(Wire("alpha"), "shared topic", ns: jsonNull);
+        var viaAlias = _tools.CrossSearch(jsonNull, "shared topic", ns: Wire("alpha"));
+
+        Assert.IsType<CrossSearchResponse>(viaNamespaces);
+        Assert.IsType<CrossSearchResponse>(viaAlias);
+        Assert.Equal(
+            ((CrossSearchResponse)viaNamespaces).Results.Count,
+            ((CrossSearchResponse)viaAlias).Results.Count);
+    }
+
+    /// <summary>Both genuinely absent is still an empty-list error, not a both-supplied error.</summary>
+    [Fact]
+    public void CrossSearch_JsonNullForBothReportsEmptyNamespaces()
+    {
+        var jsonNull = Wire<string?>(null);
+
+        var result = Assert.IsType<string>(_tools.CrossSearch(jsonNull, "q", ns: jsonNull));
+
+        Assert.DoesNotContain("not both", result);
+        Assert.Contains("must not be empty", result);
+    }
+
     [Fact]
     public void CrossSearch_RejectsUnusableShape()
     {
