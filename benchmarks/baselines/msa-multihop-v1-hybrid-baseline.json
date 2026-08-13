@@ -1,6 +1,6 @@
 {
   "datasetId": "msa-multihop-v1",
-  "runAt": "2026-08-13T11:06:35.143172\u002B00:00",
+  "runAt": "2026-08-13T12:02:31.4913923\u002B00:00",
   "queryScores": [
     {
       "queryId": "mh-q-auth-2hop",
@@ -8,7 +8,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.542,
+      "latencyMs": 0.4162,
       "actualResultIds": [
         "mh-auth-1",
         "mh-auth-0",
@@ -22,7 +22,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.6258764,
-      "latencyMs": 0.3831,
+      "latencyMs": 0.2267,
       "actualResultIds": [
         "mh-auth-0",
         "mh-auth-1",
@@ -36,7 +36,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.2573,
+      "latencyMs": 0.2451,
       "actualResultIds": [
         "mh-data-pipeline-0",
         "mh-data-pipeline-1",
@@ -50,7 +50,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.6781,
+      "latencyMs": 0.523,
       "actualResultIds": [
         "mh-data-pipeline-0",
         "mh-data-pipeline-3",
@@ -64,7 +64,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.2428,
+      "latencyMs": 0.1912,
       "actualResultIds": [
         "mh-deployment-1",
         "mh-deployment-0",
@@ -78,7 +78,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9090667,
-      "latencyMs": 0.3199,
+      "latencyMs": 0.2459,
       "actualResultIds": [
         "mh-deployment-0",
         "mh-deployment-3",
@@ -92,7 +92,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9594535,
-      "latencyMs": 0.518,
+      "latencyMs": 0.2596,
       "actualResultIds": [
         "mh-ml-training-1",
         "mh-ml-training-2",
@@ -106,7 +106,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.6258764,
-      "latencyMs": 0.3423,
+      "latencyMs": 0.2499,
       "actualResultIds": [
         "mh-ml-training-3",
         "mh-ml-training-2",
@@ -120,7 +120,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.207,
+      "latencyMs": 0.1875,
       "actualResultIds": [
         "mh-observability-0",
         "mh-observability-1",
@@ -134,7 +134,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2,
+      "latencyMs": 0.1772,
       "actualResultIds": [
         "mh-observability-0",
         "mh-observability-3",
@@ -148,7 +148,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.2055,
+      "latencyMs": 0.2017,
       "actualResultIds": [
         "mh-networking-1",
         "mh-networking-0",
@@ -162,7 +162,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2933,
+      "latencyMs": 0.2521,
       "actualResultIds": [
         "mh-networking-0",
         "mh-networking-3",
@@ -176,7 +176,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.216,
+      "latencyMs": 0.0728,
       "actualResultIds": [
         "mh-security-incident-1",
         "mh-security-incident-0",
@@ -190,7 +190,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2488,
+      "latencyMs": 0.1893,
       "actualResultIds": [
         "mh-security-incident-3",
         "mh-security-incident-0",
@@ -204,7 +204,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.3075,
+      "latencyMs": 0.2633,
       "actualResultIds": [
         "mh-frontend-render-1",
         "mh-frontend-render-0",
@@ -218,7 +218,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.8722072,
-      "latencyMs": 0.2793,
+      "latencyMs": 0.2686,
       "actualResultIds": [
         "mh-frontend-render-3",
         "mh-frontend-render-2",
@@ -232,7 +232,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9838989,
-      "latencyMs": 0.273,
+      "latencyMs": 0.244,
       "actualResultIds": [
         "mh-database-write-1",
         "mh-database-write-0",
@@ -246,7 +246,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2074,
+      "latencyMs": 0.1852,
       "actualResultIds": [
         "mh-database-write-3",
         "mh-database-write-0",
@@ -260,7 +260,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9594535,
-      "latencyMs": 0.3057,
+      "latencyMs": 0.2416,
       "actualResultIds": [
         "mh-container-lifecycle-0",
         "mh-container-lifecycle-2",
@@ -274,7 +274,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9090667,
-      "latencyMs": 0.3755,
+      "latencyMs": 0.2626,
       "actualResultIds": [
         "mh-container-lifecycle-3",
         "mh-container-lifecycle-0",
@@ -288,7 +288,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.216,
+      "latencyMs": 0.1805,
       "actualResultIds": [
         "mh-api-design-0",
         "mh-api-design-1",
@@ -302,7 +302,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2952,
+      "latencyMs": 0.2758,
       "actualResultIds": [
         "mh-api-design-0",
         "mh-api-design-3",
@@ -316,7 +316,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9594535,
-      "latencyMs": 0.1498,
+      "latencyMs": 0.0754,
       "actualResultIds": [
         "mh-testing-pyramid-1",
         "mh-testing-pyramid-2",
@@ -330,7 +330,7 @@
       "precisionAtK": 1,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.2975,
+      "latencyMs": 0.2439,
       "actualResultIds": [
         "mh-testing-pyramid-3",
         "mh-testing-pyramid-0",
@@ -344,7 +344,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.4586,
+      "latencyMs": 24.2696,
       "actualResultIds": [
         "mh-memory-hierarchy-0",
         "mh-memory-hierarchy-1",
@@ -358,7 +358,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.9090667,
-      "latencyMs": 0.3151,
+      "latencyMs": 0.2972,
       "actualResultIds": [
         "mh-memory-hierarchy-3",
         "mh-memory-hierarchy-0",
@@ -372,7 +372,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 0.8451594,
-      "latencyMs": 0.2103,
+      "latencyMs": 0.2454,
       "actualResultIds": [
         "mh-event-sourcing-2",
         "mh-event-sourcing-1",
@@ -386,7 +386,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.1862,
+      "latencyMs": 0.2338,
       "actualResultIds": [
         "mh-event-sourcing-0",
         "mh-event-sourcing-3",
@@ -400,7 +400,7 @@
       "precisionAtK": 0.75,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.2105,
+      "latencyMs": 0.2611,
       "actualResultIds": [
         "mh-search-engine-0",
         "mh-search-engine-1",
@@ -414,7 +414,7 @@
       "precisionAtK": 0.5,
       "mrr": 1,
       "ndcgAtK": 0.80349636,
-      "latencyMs": 0.2076,
+      "latencyMs": 0.2546,
       "actualResultIds": [
         "mh-search-engine-0",
         "mh-search-engine-3",
@@ -427,8 +427,8 @@
   "meanPrecisionAtK": 0.675,
   "meanMrr": 1,
   "meanNdcgAtK": 0.8995517,
-  "meanLatencyMs": 0.29830999999999996,
-  "p95LatencyMs": 0.5312,
+  "meanLatencyMs": 1.04136,
+  "p95LatencyMs": 0.4749399999999997,
   "totalEntries": 60,
   "totalQueries": 30,
   "mode": "hybrid"

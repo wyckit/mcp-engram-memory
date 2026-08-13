@@ -1,6 +1,6 @@
 {
   "datasetId": "physics-v1",
-  "runAt": "2026-08-13T11:06:35.3340977\u002B00:00",
+  "runAt": "2026-08-13T12:02:31.7476445\u002B00:00",
   "queryScores": [
     {
       "queryId": "p-q01",
@@ -8,7 +8,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.4752,
+      "latencyMs": 0.5473,
       "actualResultIds": [
         "p-idx-hot",
         "p-idx-cold",
@@ -23,7 +23,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 0.8339912,
-      "latencyMs": 0.3259,
+      "latencyMs": 0.312,
       "actualResultIds": [
         "p-memleak-cold",
         "p-memleak-hot",
@@ -38,7 +38,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.5059,
+      "latencyMs": 0.4172,
       "actualResultIds": [
         "p-rest-hot",
         "p-rest-cold",
@@ -53,7 +53,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 0.8339912,
-      "latencyMs": 0.3195,
+      "latencyMs": 0.3485,
       "actualResultIds": [
         "p-thread-cold",
         "p-thread-hot",
@@ -68,7 +68,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.3275,
+      "latencyMs": 0.3386,
       "actualResultIds": [
         "p-json-hot",
         "p-json-cold",
@@ -83,7 +83,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 0.8339912,
-      "latencyMs": 0.3014,
+      "latencyMs": 0.3285,
       "actualResultIds": [
         "p-error-cold",
         "p-error-hot",
@@ -98,7 +98,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.3415,
+      "latencyMs": 0.3784,
       "actualResultIds": [
         "p-cache-hot",
         "p-cache-cold",
@@ -113,7 +113,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 0.8339912,
-      "latencyMs": 0.2854,
+      "latencyMs": 0.3484,
       "actualResultIds": [
         "p-log-cold",
         "p-log-hot",
@@ -128,7 +128,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 0.8339912,
-      "latencyMs": 0.3533,
+      "latencyMs": 0.3252,
       "actualResultIds": [
         "p-config-cold",
         "p-config-hot",
@@ -143,7 +143,7 @@
       "precisionAtK": 0.4,
       "mrr": 1,
       "ndcgAtK": 1,
-      "latencyMs": 0.3891,
+      "latencyMs": 0.3677,
       "actualResultIds": [
         "p-di-hot",
         "p-di-cold",
@@ -157,8 +157,8 @@
   "meanPrecisionAtK": 0.4,
   "meanMrr": 1,
   "meanNdcgAtK": 0.91699564,
-  "meanLatencyMs": 0.36246999999999996,
-  "p95LatencyMs": 0.492085,
+  "meanLatencyMs": 0.37118,
+  "p95LatencyMs": 0.4887549999999999,
   "totalEntries": 20,
   "totalQueries": 10,
   "mode": "hybrid_rerank"
