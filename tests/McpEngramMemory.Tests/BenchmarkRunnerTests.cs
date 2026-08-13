@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -1136,9 +1137,43 @@ public class BenchmarkRunnerTests
         }
         Assert.True(result.MeanLatencyMs < 500); // Must not be catastrophically slow
 
+        PersistMsaArtifact(datasetId, mode, result);
+
         index.Dispose();
         persistence.Dispose();
         if (Directory.Exists(dataPath))
             Directory.Delete(dataPath, true);
     }
+
+    /// <summary>
+    /// Emit this run's metrics so the nightly regression gate has something to gate.
+    ///
+    /// These benchmarks are deterministic — retrieval quality over a fixed dataset using the
+    /// embedded ONNX model, no live endpoint anywhere — so they run fine on a CI runner. They
+    /// just never wrote anything down, which is why the nightly failed every night with
+    /// "produced no artifact" while the benchmarks themselves passed.
+    ///
+    /// <see cref="BenchmarkRunResult"/> already serializes to the flat IR shape the gate parses
+    /// (meanRecallAtK / meanMrr / meanNdcgAtK, plus queryScores[] for its paired t-test), so this
+    /// writes the result as-is rather than projecting a bespoke summary that could drift from
+    /// what the gate reads.
+    ///
+    /// Only writes when BENCHMARK_ARTIFACTS_PATH is set. CI pins it to the repo root; leaving it
+    /// unset keeps ordinary local test runs from scattering dated folders.
+    /// </summary>
+    private static void PersistMsaArtifact(string datasetId, string mode, BenchmarkRunResult result)
+    {
+        string? root = Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH");
+        if (string.IsNullOrWhiteSpace(root))
+            return;
+
+        // Date the folder from the run itself, in UTC, to match what the gate looks for.
+        string datedDir = Path.Combine(root, $"{result.RunAt.UtcDateTime:yyyy-MM-dd}");
+        Directory.CreateDirectory(datedDir);
+
+        string path = Path.Combine(datedDir, $"{datasetId}-{mode}-msa.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(result, MsaArtifactJson));
+    }
+
+    private static readonly JsonSerializerOptions MsaArtifactJson = new() { WriteIndented = true };
 }
