@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models.Constitution;
 
 namespace McpEngramMemory.Core.Services.Governance.Persistence;
@@ -21,8 +22,24 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
     /// <summary>Bounded so a peer that leaked the lock handle cannot wedge the audit path.</summary>
     private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// One in-process gate per journal path, shared by every instance pointing at that journal.
+    ///
+    /// The cross-process file lock exists to exclude other processes, and it is a 10 ms spin-poll
+    /// because that is all a file lock can be. Letting in-process writers contend on it turns N
+    /// concurrent appends into N pool work items spinning on synchronous file I/O — which starves
+    /// the thread pool for everything else in the process, not just for the audit path. Serializing
+    /// in memory first leaves the file lock uncontended within a process and doing only the job it
+    /// is actually needed for.
+    ///
+    /// Keyed case-insensitively: over-serializing two spellings of one path costs nothing, while
+    /// under-serializing would put them back on the file lock.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> PathGates =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly string _path;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _gate;
     private readonly List<ConstitutionAuditRecord> _records = new();
     private readonly List<PersistenceDiagnostic> _diagnostics = new();
     // Journal length observed at the end of the last successful sync or append. -1 forces the
@@ -30,7 +47,10 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
     private long _syncedLength = -1;
 
     public FileConstitutionAuditStore(string root)
-        => _path = Path.Combine(Path.GetFullPath(root ?? throw new ArgumentNullException(nameof(root))), "audit.journal");
+    {
+        _path = Path.Combine(Path.GetFullPath(root ?? throw new ArgumentNullException(nameof(root))), "audit.journal");
+        _gate = PathGates.GetOrAdd(_path, _ => new SemaphoreSlim(1, 1));
+    }
 
     public IReadOnlyList<PersistenceDiagnostic> Diagnostics
     {

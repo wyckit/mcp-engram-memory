@@ -67,17 +67,24 @@ public class LockHierarchyTests : IDisposable
         _index.EntryUpserted += Handler;
         try
         {
-            var aTask = Task.Run(() => _index.Upsert(MakeEntry("a-1", "ns-a", "A content")));
-            // 10 s gives slack for a saturated CI ThreadPool (xunit runs many test classes in
-            // parallel) where Task.Run scheduling alone can spike past 2 s under load. The
-            // healthy path fires the handler in milliseconds, so this only relaxes the false-
-            // negative bound, not the test's discriminative power.
+            // Dedicated threads, not the thread pool. This test is about lock behaviour, but its
+            // timeouts were measuring scheduling: xunit runs many classes in parallel and the
+            // writer blocks in its handler, so a saturated pool could delay Task.Run from even
+            // starting the writer. The bound here was already relaxed once from 2 s to 10 s for
+            // that reason and still failed in CI. LongRunning takes the work off the pool
+            // entirely, which removes the false negative at its source rather than widening the
+            // window it hides in.
+            var aTask = Task.Factory.StartNew(
+                () => _index.Upsert(MakeEntry("a-1", "ns-a", "A content")),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Assert.True(aReached.Wait(TimeSpan.FromSeconds(10)), "ns-a writer did not reach handler");
 
             // A is parked in its handler — its lock is already released. B must proceed.
             // Await the task after the wait so any exception thrown inside the Upsert
             // propagates instead of being stashed on the Task and silently lost.
-            var bTask = Task.Run(() => _index.Upsert(MakeEntry("b-1", "ns-b", "B content")));
+            var bTask = Task.Factory.StartNew(
+                () => _index.Upsert(MakeEntry("b-1", "ns-b", "B content")),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Assert.True(
                 ReferenceEquals(await Task.WhenAny(bTask, Task.Delay(TimeSpan.FromSeconds(2))), bTask),
                 "ns-b writer blocked while ns-a was in its event handler — either events fire inside the lock, or per-ns locks are not independent");
