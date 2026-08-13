@@ -38,33 +38,20 @@
   <Import Project="build\McpEngramMemory.Core.targets" />
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.4" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.4" />
-    <PackageReference Include="FastBertTokenizer" Version="0.4.67" />
-    <!-- Aligned with Microsoft.ML.OnnxRuntimeGenAI 0.14.1's floor (>= 1.23.0) so both the
-         embedding and synthesis backends share one native onnxruntime. API used by
-         OnnxEmbeddingService (InferenceSession/OrtValue/RunOptions) is unchanged across 1.17→1.23. -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="FastBertTokenizer" Version="1.0.28" />
+    <!-- Kept current with the optional ONNX Runtime GenAI backend so embedding and
+         synthesis use one compatible native runtime. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
     <!-- In-process SLM generation for SynthesisEngine (Qwen2.5-0.5B). CPU package; bring in
          Microsoft.ML.OnnxRuntimeGenAI.Cuda / .DirectML at the app layer for GPU acceleration. -->
-    <PackageReference Include="System.Numerics.Tensors" Version="9.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.29" />
-    <!--
-      Direct reference solely to lift the native SQLite bundle out of GHSA-2m69-gcr7-jv3q
-      (CVE-2025-6965), which affects SQLitePCLRaw.lib.e_sqlite3 <= 2.1.11 — a numeric
-      truncation in bundled SQLite before 3.50.2 that can corrupt memory.
-
-      Upgrading Microsoft.Data.Sqlite does not fix this on its own: 8.0.29 still pulls
-      2.1.6 transitively and even 9.0.18 pulls only 2.1.10, both inside the affected
-      range. Naming the bundle directly overrides the transitive pin. Stays on the 2.1.x
-      ABI line, so Microsoft.Data.Sqlite.Core's `SQLitePCLRaw.core >= 2.1.6` requirement
-      is satisfied unchanged.
-
-      Remove this once Microsoft.Data.Sqlite ships a servicing release that pulls
-      2.1.12 or later by itself.
-    -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.2" />
+    <PackageReference Include="System.Numerics.Tensors" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <!-- Keep the native SQLite bundle explicit so its security servicing cadence is not
+         limited to Microsoft.Data.Sqlite's transitive minimum version. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
   </ItemGroup>
 
 </Project>

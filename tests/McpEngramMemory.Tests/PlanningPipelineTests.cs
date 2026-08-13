@@ -38,10 +38,10 @@ public sealed class PlanningPipelineTests
         Assert.Equal(new[] { allowed }, relevanceCalls);
         Assert.Equal(allowed, Assert.Single(plan.Items).Artifact);
         Assert.DoesNotContain(plan.Trace, item => item.Artifact == denied);
-        var authorizationSequence = Assert.Single(plan.Trace.Where(item =>
-            item.Stage == PlanningTraceStage.ArtifactAuthorization && item.Artifact == allowed)).Sequence;
-        var relevanceSequence = Assert.Single(plan.Trace.Where(item =>
-            item.Stage == PlanningTraceStage.RelevanceOrdering && item.Artifact == allowed)).Sequence;
+        var authorizationSequence = Assert.Single(plan.Trace, item =>
+            item.Stage == PlanningTraceStage.ArtifactAuthorization && item.Artifact == allowed).Sequence;
+        var relevanceSequence = Assert.Single(plan.Trace, item =>
+            item.Stage == PlanningTraceStage.RelevanceOrdering && item.Artifact == allowed).Sequence;
         Assert.True(authorizationSequence < relevanceSequence);
     }
 

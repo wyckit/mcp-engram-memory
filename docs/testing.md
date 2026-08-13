@@ -45,7 +45,7 @@ dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
 | `SemanticAssetFamilyTests.cs` | Skill, Documentation, CodeGraph, and Curriculum canonical publication and validation |
 | `AssetRuntimeTests.cs` | Host-sandbox Skill execution, deterministic verifier veto, curriculum training gates, incremental CodeGraph contracts |
 | `GovernancePersistenceTests.cs` | Checksummed snapshots, fsync journals, replay, corrupt-tail recovery, earlier-corruption failure, tenant separation |
-| `McpSdkConformanceTests.cs` | ModelContextProtocol 2.1.0 package, stdio builder registration, protocol negotiation options, generated tool schema/metadata |
+| `McpSdkConformanceTests.cs` | ModelContextProtocol 2.2.0 package, stdio builder registration, protocol negotiation options, generated tool schema/metadata |
 | `TenantStructureIsolationTests.cs` | Same bare IDs across tenant/legacy partitions; tenant fail-closed graph/cluster/lifecycle paths and legacy positive controls |
 
 ### Security-test pattern

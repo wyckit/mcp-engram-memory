@@ -21,13 +21,13 @@ namespace McpEngramMemory.Tests;
 public class McpSdkConformanceTests
 {
     [Fact]
-    public void Runtime_uses_the_pinned_2_1_sdk()
+    public void Runtime_uses_the_pinned_2_2_sdk()
     {
         var informationalVersion = typeof(McpServerTool).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!
             .InformationalVersion;
 
-        Assert.StartsWith("2.1.0", informationalVersion, StringComparison.Ordinal);
+        Assert.StartsWith("2.2.0", informationalVersion, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public class McpSdkConformanceTests
         var options = new McpServerOptions();
 
         // An unpinned server negotiates both the discovery-based 2026 revision and
-        // initialize-handshake clients supported by the 2.1 SDK.
+        // initialize-handshake clients supported by the 2.2 SDK.
         Assert.Null(options.ProtocolVersion);
 
         options.ProtocolVersion = "2026-07-28";

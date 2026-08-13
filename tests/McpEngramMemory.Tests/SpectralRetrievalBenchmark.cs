@@ -10,7 +10,7 @@ using McpEngramMemory.Core.Services.Storage;
 // OnnxEmbeddingService lives directly under Core.Services (already imported above).
 using McpEngramMemory.Tools;
 using McpEngramMemory.Core.Services.Sharing;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace McpEngramMemory.Tests;
 

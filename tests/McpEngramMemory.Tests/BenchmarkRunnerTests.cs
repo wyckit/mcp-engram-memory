@@ -4,7 +4,7 @@ using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Storage;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace McpEngramMemory.Tests;
 

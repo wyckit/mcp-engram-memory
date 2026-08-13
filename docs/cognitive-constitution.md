@@ -210,9 +210,9 @@ graph support.
 See [Security](../SECURITY.md) for the threat boundary and [Architecture](architecture.md) for the
 full system map.
 
-## MCP SDK 2.1
+## MCP SDK 2.2
 
-The server references `ModelContextProtocol` **2.1.0** and uses its builder-based stdio transport,
+The server references `ModelContextProtocol` **2.2.0** and uses its builder-based stdio transport,
 request-filter pipeline, schema generation, and tool annotations. Package version and negotiated MCP
 protocol revision are different concepts: the SDK and client negotiate the protocol; Engram does not
 hard-code a single protocol revision in `Program.cs`.

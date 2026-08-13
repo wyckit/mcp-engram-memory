@@ -6,7 +6,6 @@ using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Storage;
 using System.Text.Json;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace McpEngramMemory.Tests;
 

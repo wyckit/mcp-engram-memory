@@ -5,7 +5,6 @@ using McpEngramMemory.Core.Services.Storage;
 using McpEngramMemory.Tools;
 using System.Text.Json;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace McpEngramMemory.Tests;
 
@@ -85,14 +84,10 @@ public class LiveAgentOutcomeRegressionTests : IDisposable
         {
             // No run has produced a candidate for this dataset on the baseline's model.
             // Legitimately not a regression signal (fresh clone, or that model was not
-            // re-run), but xunit 2.5.3 has no runtime Assert.Skip, so this passes
-            // vacuously — log it so a green result that compared nothing stays visible
-            // in the TRX output rather than masquerading as coverage.
-            _output.WriteLine(
-                $"SKIP {datasetId}: no artifact matching '{pattern}' in any dated folder " +
-                $"under '{ResolveArtifactRoot(root)}'. Baseline model '{baselineModel}' " +
-                "has not been re-run. Nothing was compared.");
-            return;
+            // re-run), so report the case accurately as a dynamic xUnit v3 skip.
+            Assert.Skip(
+                $"No artifact matching '{pattern}' exists in any dated folder under " +
+                $"'{ResolveArtifactRoot(root)}'. Baseline model '{baselineModel}' has not been re-run.");
         }
 
         _output.WriteLine(

@@ -101,7 +101,7 @@ public sealed class LearningPipelineTests
         var trace = await planner.VerifyAsync(
             Proposal(), new[] { deterministic, sameModel }, Budget(maxVerifierRuns: 2));
 
-        var modelRun = Assert.Single(trace.Runs.Where(run => run.Verifier.Kind == VerifierKind.Model));
+        var modelRun = Assert.Single(trace.Runs, run => run.Verifier.Kind == VerifierKind.Model);
         Assert.False(modelRun.IsIndependentFromTeacher);
         Assert.False(trace.HasIndependentModelPass);
     }

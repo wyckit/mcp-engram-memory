@@ -234,7 +234,7 @@ Opus thinks, Sonnet remembers, Haiku explores.
 
 Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
 
-The server uses the `ModelContextProtocol` 2.1.0 SDK with negotiated protocol handling, a global
+The server uses the `ModelContextProtocol` 2.2.0 SDK with negotiated protocol handling, a global
 request-filter pipeline, and explicit read-only/destructive/idempotent/open-world tool metadata.
 SDK package version and negotiated MCP protocol revision are not the same thing.
 
@@ -345,12 +345,12 @@ dotnet test    # full suite, including slower MSA benchmark cases
 ## Tech Stack
 
 - .NET 8/9/10, C#
-- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.1.0
-- [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67
-- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0
+- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.2.0
+- [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 1.0.28
+- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.29.0
 - [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX (384-dim, MIT license)
-- [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 8.0.11
-- xUnit (tests)
+- [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 10.0.11
+- xUnit v3 (tests)
 
 ## License
 

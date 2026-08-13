@@ -141,7 +141,7 @@ data directory for that tenant. Do not disable or bypass the fail-closed guard.
 
 ## Constitutional MCP boundary
 
-The server uses the `ModelContextProtocol` 2.1.0 SDK and registers
+The server uses the `ModelContextProtocol` 2.2.0 SDK and registers
 `ConstitutionMcpFilter` globally for all call-tool requests. The filter builds a
 content-hashed `OperationEnvelope`, evaluates and audits the precondition,
 invokes only on allow, and evaluates/audits the postcondition. Every tool also

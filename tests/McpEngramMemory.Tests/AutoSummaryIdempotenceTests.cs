@@ -119,6 +119,8 @@ public sealed class AutoSummaryIdempotenceTests : IDisposable
         var b = new ClusterManager(_index, _persistence);
         var secondScan = _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: b, embedding: _embedding);
 
+        Assert.NotNull(firstScan.AutoSummaries);
+        Assert.NotNull(secondScan.AutoSummaries);
         var firstId = Assert.Single(firstScan.AutoSummaries).ClusterId;
         var secondId = Assert.Single(secondScan.AutoSummaries).ClusterId;
 

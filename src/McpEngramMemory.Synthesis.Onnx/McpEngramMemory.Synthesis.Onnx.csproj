@@ -42,7 +42,7 @@
          RID (linux-x64/arm64, osx-x64/arm64, win-x64/arm64, iOS xcframeworks, Android aars),
          roughly 500 MB in total. Keeping it here rather than in Core means neither the
          McpEngramMemory tool package nor a plain Core install pays that cost. -->
-    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.14.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.15.2" />
   </ItemGroup>
 
 </Project>

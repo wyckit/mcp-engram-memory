@@ -53,7 +53,7 @@ The Core library has no MCP dependency. Constitution evaluation, knowledge/versi
 permission intersection, provenance validation, learning, planning, semantic assets, and persistence
 recovery can be used by an in-process .NET host.
 
-The server depends on `ModelContextProtocol` 2.1.0 and uses:
+The server depends on `ModelContextProtocol` 2.2.0 and uses:
 
 - builder-based stdio transport and dependency injection;
 - the global call-tool request-filter pipeline for pre/post constitutional evaluation;

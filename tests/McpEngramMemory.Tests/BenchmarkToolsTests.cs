@@ -237,7 +237,7 @@ public class BenchmarkToolsTests : IDisposable
         Assert.Equal("full_engram", result.Report.ImprovedTasks[0].Condition);
         Assert.Equal("hard-graph-inversion", result.Report.ImprovedTasks[0].TaskId);
         Assert.Contains("qwen2.5:7b", result.Report.Summary);
-        var fullEngram = Assert.Single(result.Report.ConditionDiffs.Where(d => d.Condition == "full_engram"));
+        var fullEngram = Assert.Single(result.Report.ConditionDiffs, d => d.Condition == "full_engram");
         Assert.True(fullEngram.SuccessDelta > 0.49f);
     }
 

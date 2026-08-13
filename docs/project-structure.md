@@ -118,10 +118,10 @@ var results = index.Search(queryVector, "default", k: 5);
 ## Tech Stack
 
 - .NET 8/9/10, C#
-- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.1.0
-- [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 0.4.67 (WordPiece tokenization)
-- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.23.0 (ONNX model inference)
-- [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 8.0.11 (SQLite storage backend)
+- [ModelContextProtocol](https://www.nuget.org/packages/ModelContextProtocol) 2.2.0
+- [FastBertTokenizer](https://www.nuget.org/packages/FastBertTokenizer) 1.0.28 (WordPiece tokenization)
+- [Microsoft.ML.OnnxRuntime](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime) 1.29.0 (ONNX model inference)
+- [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite) 10.0.11 (SQLite storage backend)
 - [bge-micro-v2](https://huggingface.co/TaylorAI/bge-micro-v2) ONNX model (384-dimensional vectors, MIT license, downloaded at build time)
-- Microsoft.Extensions.Hosting 8.0.1
-- xUnit (tests)
+- Microsoft.Extensions.Hosting 10.0.11
+- xUnit v3 (tests)

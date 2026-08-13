@@ -4,11 +4,11 @@
 
 ## Protocol and governance boundary
 
-The server uses the `ModelContextProtocol` **2.1.0** .NET SDK with stdio transport. The SDK package
+The server uses the `ModelContextProtocol` **2.2.0** .NET SDK with stdio transport. The SDK package
 version and the negotiated MCP protocol revision are different: negotiation is handled by the SDK
 and client, and Engram does not hard-code one protocol revision.
 
-Every tool declares the MCP 2.1 metadata used by clients for display and approval:
+Every tool declares MCP safety metadata used by clients for display and approval:
 `ReadOnly`, `Destructive`, `Idempotent`, and `OpenWorld`. Metadata describes expected behavior; it is
 not an authorization mechanism.
 
