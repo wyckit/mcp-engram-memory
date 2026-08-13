@@ -57,8 +57,41 @@ public class SqliteStorageProviderTests : IDisposable
             //
             // That determinism is what gives the post-dispose assertion meaning: with no WAL
             // to reclaim, it would pass whether or not the checkpoint ever ran.
-            using var pin = new SqliteConnection($"Data Source={dbPath}");
+            //
+            // Two things are needed to make "held open" actually mean what this test assumes.
+            //
+            // Pooling=False: Microsoft.Data.Sqlite pools by connection string, and this pin string
+            // would otherwise be byte-identical to the provider's, making the pin a loan from the
+            // same pool rather than a handle of its own. ClearAllPools() is process-wide static
+            // state that five other test classes call, and with maxParallelThreads=4 one of them
+            // firing mid-test could reclaim it.
+            //
+            // An open READ TRANSACTION: this is the part the original test was missing, and the
+            // actual cause of the flake. An idle connection stops SQLite *deleting* the WAL; it
+            // does not stop it being *checkpointed and truncated*, because an idle connection is
+            // not a reader. Measured at the moment of failure: journal_mode=wal, memory.db 397 KB,
+            // memory.db-wal 0 B — the frames had already been copied into the main database and
+            // the log reset. A reader holding a snapshot from before the writes cannot have the
+            // checkpointer advance past it, so the frames must stay in the log.
+            using var pin = new SqliteConnection($"Data Source={dbPath};Pooling=False");
             pin.Open();
+
+            // Raw BEGIN DEFERRED rather than SqliteConnection.BeginTransaction(): that API defaults
+            // to IsolationLevel.Serializable, which issues BEGIN IMMEDIATE and takes a RESERVED
+            // write lock — the provider's own writes below then fail with "database is locked".
+            // A deferred transaction whose first statement is a SELECT holds only a read lock,
+            // which in WAL mode does not block writers but does pin the snapshot.
+            using (var begin = pin.CreateCommand())
+            {
+                begin.CommandText = "BEGIN DEFERRED;";
+                begin.ExecuteNonQuery();
+            }
+            using (var snapshot = pin.CreateCommand())
+            {
+                // Deferred takes no lock until a statement runs, so actually read something.
+                snapshot.CommandText = "SELECT COUNT(*) FROM entries;";
+                snapshot.ExecuteScalar();
+            }
 
             // Enough rows to push the WAL past SQLite's 1,000-page auto-checkpoint so there
             // is something substantial left to reclaim.
@@ -67,12 +100,26 @@ public class SqliteStorageProviderTests : IDisposable
                 entries.Add(new CognitiveEntry($"e{i}", new float[64], "walns", $"entry body {i}"));
             provider.SaveNamespaceSync("walns", new NamespaceData { Entries = entries });
 
-            Assert.True(File.Exists(walPath), "expected a -wal file while a connection is held open");
-            var walBeforeDispose = new FileInfo(walPath).Length;
-            Assert.True(walBeforeDispose > 0, "expected a non-empty WAL before dispose");
+            // Failure here would mean the reader snapshot above did not hold the log, so report
+            // what SQLite actually left on disk rather than just that a bool was false.
+            static string Listing(string path) => string.Join(", ",
+                Directory.GetFiles(Path.GetDirectoryName(path)!)
+                    .Select(f => $"{Path.GetFileName(f)}({new FileInfo(f).Length}B)"));
 
-            // Release the pin so the checkpoint can truncate: wal_checkpoint(TRUNCATE) needs
-            // no other readers.
+            Assert.True(File.Exists(walPath),
+                $"expected a -wal file while a reader snapshot is held open. dir=[{Listing(dbPath)}]");
+            var walBeforeDispose = new FileInfo(walPath).Length;
+            Assert.True(walBeforeDispose > 0,
+                $"expected a non-empty WAL before dispose — the log was checkpointed despite an "
+                + $"open reader. dir=[{Listing(dbPath)}]");
+
+            // Release the reader and the pin so the checkpoint can truncate:
+            // wal_checkpoint(TRUNCATE) needs no other readers.
+            using (var end = pin.CreateCommand())
+            {
+                end.CommandText = "ROLLBACK;";
+                end.ExecuteNonQuery();
+            }
             pin.Close();
 
             provider.Dispose();

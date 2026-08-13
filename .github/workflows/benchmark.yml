@@ -74,9 +74,15 @@ jobs:
           echo "Gating benchmark artifacts in: ${today}"
           bash scripts/check-benchmark-regression.sh "$today"
 
+      # Keep the metrics the gate actually evaluated, not just the test log. The dated folder is
+      # gitignored and regenerated per run, so without this the numbers behind a pass or a failure
+      # are gone the moment the job ends — you cannot inspect a regression after the fact, and you
+      # cannot cut a new pinned baseline from the platform the gate runs on.
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: msa-benchmark-results
-          path: '**/TestResults/*.trx'
+          path: |
+            **/TestResults/*.trx
+            benchmarks/20[0-9][0-9]-[0-9][0-9]-*/
