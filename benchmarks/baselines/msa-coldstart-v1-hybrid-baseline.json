@@ -1,0 +1,315 @@
+{
+  "datasetId": "msa-coldstart-v1",
+  "runAt": "2026-08-13T11:06:35.0060184\u002B00:00",
+  "queryScores": [
+    {
+      "queryId": "cs-q-cloud-major-1",
+      "recallAtK": 0.2,
+      "precisionAtK": 0.4,
+      "mrr": 0.5,
+      "ndcgAtK": 0.2612885,
+      "latencyMs": 0.9312,
+      "actualResultIds": [
+        "cs-0019",
+        "cs-0009",
+        "cs-0004",
+        "cs-0018",
+        "cs-0024"
+      ]
+    },
+    {
+      "queryId": "cs-q-cloud-major-2",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.5397,
+      "actualResultIds": [
+        "cs-0011",
+        "cs-0010",
+        "cs-0012",
+        "cs-0013",
+        "cs-0014"
+      ]
+    },
+    {
+      "queryId": "cs-q-backend-major-1",
+      "recallAtK": 0.3,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 0.564971,
+      "latencyMs": 0.5617,
+      "actualResultIds": [
+        "cs-0034",
+        "cs-0049",
+        "cs-0033",
+        "cs-0044",
+        "cs-0039"
+      ]
+    },
+    {
+      "queryId": "cs-q-backend-major-2",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.291,
+      "actualResultIds": [
+        "cs-0041",
+        "cs-0040",
+        "cs-0042",
+        "cs-0044",
+        "cs-0043"
+      ]
+    },
+    {
+      "queryId": "cs-q-frontend-major-1",
+      "recallAtK": 0.2,
+      "precisionAtK": 0.4,
+      "mrr": 0.33333334,
+      "ndcgAtK": 0.22581086,
+      "latencyMs": 0.4655,
+      "actualResultIds": [
+        "cs-0074",
+        "cs-0079",
+        "cs-0064",
+        "cs-0084",
+        "cs-0069"
+      ]
+    },
+    {
+      "queryId": "cs-q-frontend-major-2",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.4326,
+      "actualResultIds": [
+        "cs-0071",
+        "cs-0070",
+        "cs-0072",
+        "cs-0073",
+        "cs-0074"
+      ]
+    },
+    {
+      "queryId": "cs-q-data-major-1",
+      "recallAtK": 0.2,
+      "precisionAtK": 0.4,
+      "mrr": 0.33333334,
+      "ndcgAtK": 0.12890793,
+      "latencyMs": 0.5781,
+      "actualResultIds": [
+        "cs-0109",
+        "cs-0104",
+        "cs-0099",
+        "cs-0108",
+        "cs-0098"
+      ]
+    },
+    {
+      "queryId": "cs-q-data-major-2",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2667,
+      "actualResultIds": [
+        "cs-0101",
+        "cs-0100",
+        "cs-0102",
+        "cs-0103",
+        "cs-0104"
+      ]
+    },
+    {
+      "queryId": "cs-q-testing-major-1",
+      "recallAtK": 0.3,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 0.57693696,
+      "latencyMs": 0.3456,
+      "actualResultIds": [
+        "cs-0124",
+        "cs-0129",
+        "cs-0149",
+        "cs-0123",
+        "cs-0139"
+      ]
+    },
+    {
+      "queryId": "cs-q-testing-major-2",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.256,
+      "actualResultIds": [
+        "cs-0131",
+        "cs-0130",
+        "cs-0132",
+        "cs-0133",
+        "cs-0134"
+      ]
+    },
+    {
+      "queryId": "cs-q-botany-minor-1",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.4362,
+      "actualResultIds": [
+        "cs-0151",
+        "cs-0150",
+        "cs-0152",
+        "cs-0154",
+        "cs-0155"
+      ]
+    },
+    {
+      "queryId": "cs-q-botany-minor-2",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.6264,
+      "actualResultIds": [
+        "cs-0154",
+        "cs-0155",
+        "cs-0153",
+        "cs-0151",
+        "cs-0152"
+      ]
+    },
+    {
+      "queryId": "cs-q-geology-minor-1",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2937,
+      "actualResultIds": [
+        "cs-0156",
+        "cs-0157",
+        "cs-0158",
+        "cs-0161",
+        "cs-0160"
+      ]
+    },
+    {
+      "queryId": "cs-q-geology-minor-2",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2122,
+      "actualResultIds": [
+        "cs-0160",
+        "cs-0159",
+        "cs-0161",
+        "cs-0157",
+        "cs-0158"
+      ]
+    },
+    {
+      "queryId": "cs-q-music-minor-1",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.1993,
+      "actualResultIds": [
+        "cs-0163",
+        "cs-0162",
+        "cs-0164",
+        "cs-0167",
+        "cs-0166"
+      ]
+    },
+    {
+      "queryId": "cs-q-music-minor-2",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.1965,
+      "actualResultIds": [
+        "cs-0166",
+        "cs-0167",
+        "cs-0165",
+        "cs-0163",
+        "cs-0164"
+      ]
+    },
+    {
+      "queryId": "cs-q-culinary-minor-1",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2028,
+      "actualResultIds": [
+        "cs-0168",
+        "cs-0169",
+        "cs-0170",
+        "cs-0172",
+        "cs-0173"
+      ]
+    },
+    {
+      "queryId": "cs-q-culinary-minor-2",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.1993,
+      "actualResultIds": [
+        "cs-0172",
+        "cs-0173",
+        "cs-0171",
+        "cs-0169",
+        "cs-0170"
+      ]
+    },
+    {
+      "queryId": "cs-q-astronomy-minor-1",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.3356,
+      "actualResultIds": [
+        "cs-0174",
+        "cs-0175",
+        "cs-0176",
+        "cs-0152",
+        "cs-0150"
+      ]
+    },
+    {
+      "queryId": "cs-q-astronomy-minor-2",
+      "recallAtK": 1,
+      "precisionAtK": 0.6,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.512,
+      "actualResultIds": [
+        "cs-0178",
+        "cs-0179",
+        "cs-0177",
+        "cs-0175",
+        "cs-0176"
+      ]
+    }
+  ],
+  "meanRecallAtK": 0.81,
+  "meanPrecisionAtK": 0.67,
+  "meanMrr": 0.90833336,
+  "meanNdcgAtK": 0.83789575,
+  "meanLatencyMs": 0.394105,
+  "p95LatencyMs": 0.6416400000000002,
+  "totalEntries": 180,
+  "totalQueries": 20,
+  "mode": "hybrid"
+}

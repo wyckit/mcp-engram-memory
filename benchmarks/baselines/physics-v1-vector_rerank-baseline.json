@@ -1,0 +1,165 @@
+{
+  "datasetId": "physics-v1",
+  "runAt": "2026-08-13T11:03:32.7729813\u002B00:00",
+  "queryScores": [
+    {
+      "queryId": "p-q01",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 0.0339,
+      "actualResultIds": [
+        "p-idx-cold",
+        "p-idx-hot",
+        "p-cache-cold",
+        "p-log-hot",
+        "p-log-cold"
+      ]
+    },
+    {
+      "queryId": "p-q02",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 0.0118,
+      "actualResultIds": [
+        "p-memleak-cold",
+        "p-memleak-hot",
+        "p-cache-cold",
+        "p-cache-hot",
+        "p-log-cold"
+      ]
+    },
+    {
+      "queryId": "p-q03",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.0116,
+      "actualResultIds": [
+        "p-rest-hot",
+        "p-rest-cold",
+        "p-error-hot",
+        "p-json-hot",
+        "p-cache-hot"
+      ]
+    },
+    {
+      "queryId": "p-q04",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 0.0118,
+      "actualResultIds": [
+        "p-thread-cold",
+        "p-thread-hot",
+        "p-error-hot",
+        "p-error-cold",
+        "p-memleak-hot"
+      ]
+    },
+    {
+      "queryId": "p-q05",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.0287,
+      "actualResultIds": [
+        "p-json-hot",
+        "p-json-cold",
+        "p-log-hot",
+        "p-idx-cold",
+        "p-error-cold"
+      ]
+    },
+    {
+      "queryId": "p-q06",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 0.024,
+      "actualResultIds": [
+        "p-error-cold",
+        "p-error-hot",
+        "p-log-cold",
+        "p-log-hot",
+        "p-config-cold"
+      ]
+    },
+    {
+      "queryId": "p-q07",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.0364,
+      "actualResultIds": [
+        "p-cache-hot",
+        "p-cache-cold",
+        "p-memleak-hot",
+        "p-log-hot",
+        "p-idx-cold"
+      ]
+    },
+    {
+      "queryId": "p-q08",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 0.0172,
+      "actualResultIds": [
+        "p-log-cold",
+        "p-log-hot",
+        "p-error-hot",
+        "p-error-cold",
+        "p-memleak-hot"
+      ]
+    },
+    {
+      "queryId": "p-q09",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.73092926,
+      "latencyMs": 0.0167,
+      "actualResultIds": [
+        "p-config-cold",
+        "p-log-hot",
+        "p-config-hot",
+        "p-di-hot",
+        "p-log-cold"
+      ]
+    },
+    {
+      "queryId": "p-q10",
+      "recallAtK": 1,
+      "precisionAtK": 0.4,
+      "mrr": 1,
+      "ndcgAtK": 0.8339912,
+      "latencyMs": 11.925,
+      "actualResultIds": [
+        "p-di-cold",
+        "p-di-hot",
+        "p-config-cold",
+        "p-log-hot",
+        "p-config-hot"
+      ]
+    }
+  ],
+  "meanRecallAtK": 1,
+  "meanPrecisionAtK": 0.4,
+  "meanMrr": 1,
+  "meanNdcgAtK": 0.87348765,
+  "meanLatencyMs": 1.21171,
+  "p95LatencyMs": 6.575129999999988,
+  "totalEntries": 20,
+  "totalQueries": 10,
+  "mode": "vector_rerank"
+}

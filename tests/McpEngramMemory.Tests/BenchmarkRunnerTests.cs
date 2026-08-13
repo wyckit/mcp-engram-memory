@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -1171,8 +1172,17 @@ public class BenchmarkRunnerTests
         string datedDir = Path.Combine(root, $"{result.RunAt.UtcDateTime:yyyy-MM-dd}");
         Directory.CreateDirectory(datedDir);
 
+        // Carry the search mode inside the document, not just the filename. RegressionGateRunner
+        // keys both candidates and pinned baselines on (datasetId, mode) read from the JSON root,
+        // and BenchmarkRunResult has no mode of its own — so without this every mode of a dataset
+        // collapses to the (datasetId, "") fallback and they all resolve to whichever baseline was
+        // read first. A hybrid_rerank run would then be gated against a vector baseline: a drift
+        // check that is quietly measuring the wrong thing, which is worse than not having one.
+        var document = JsonSerializer.SerializeToNode(result, MsaArtifactJson)!.AsObject();
+        document["mode"] = mode;
+
         string path = Path.Combine(datedDir, $"{datasetId}-{mode}-msa.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(result, MsaArtifactJson));
+        File.WriteAllText(path, document.ToJsonString(MsaArtifactJson));
     }
 
     private static readonly JsonSerializerOptions MsaArtifactJson = new() { WriteIndented = true };

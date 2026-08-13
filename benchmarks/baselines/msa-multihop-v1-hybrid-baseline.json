@@ -1,0 +1,435 @@
+{
+  "datasetId": "msa-multihop-v1",
+  "runAt": "2026-08-13T11:06:35.143172\u002B00:00",
+  "queryScores": [
+    {
+      "queryId": "mh-q-auth-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.542,
+      "actualResultIds": [
+        "mh-auth-1",
+        "mh-auth-0",
+        "mh-auth-2",
+        "mh-api-design-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-auth-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.6258764,
+      "latencyMs": 0.3831,
+      "actualResultIds": [
+        "mh-auth-0",
+        "mh-auth-1",
+        "mh-testing-pyramid-3",
+        "mh-testing-pyramid-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-data-pipeline-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2573,
+      "actualResultIds": [
+        "mh-data-pipeline-0",
+        "mh-data-pipeline-1",
+        "mh-data-pipeline-2",
+        "mh-data-pipeline-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-data-pipeline-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.6781,
+      "actualResultIds": [
+        "mh-data-pipeline-0",
+        "mh-data-pipeline-3",
+        "mh-testing-pyramid-3",
+        "mh-ml-training-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-deployment-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2428,
+      "actualResultIds": [
+        "mh-deployment-1",
+        "mh-deployment-0",
+        "mh-deployment-2",
+        "mh-container-lifecycle-1"
+      ]
+    },
+    {
+      "queryId": "mh-q-deployment-4hop",
+      "recallAtK": 0.75,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9090667,
+      "latencyMs": 0.3199,
+      "actualResultIds": [
+        "mh-deployment-0",
+        "mh-deployment-3",
+        "mh-deployment-1",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-ml-training-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9594535,
+      "latencyMs": 0.518,
+      "actualResultIds": [
+        "mh-ml-training-1",
+        "mh-ml-training-2",
+        "mh-ml-training-0",
+        "mh-data-pipeline-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-ml-training-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.6258764,
+      "latencyMs": 0.3423,
+      "actualResultIds": [
+        "mh-ml-training-3",
+        "mh-ml-training-2",
+        "mh-data-pipeline-3",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-observability-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.207,
+      "actualResultIds": [
+        "mh-observability-0",
+        "mh-observability-1",
+        "mh-observability-2",
+        "mh-api-design-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-observability-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2,
+      "actualResultIds": [
+        "mh-observability-0",
+        "mh-observability-3",
+        "mh-testing-pyramid-3",
+        "mh-networking-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-networking-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2055,
+      "actualResultIds": [
+        "mh-networking-1",
+        "mh-networking-0",
+        "mh-networking-2",
+        "mh-api-design-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-networking-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2933,
+      "actualResultIds": [
+        "mh-networking-0",
+        "mh-networking-3",
+        "mh-testing-pyramid-3",
+        "mh-testing-pyramid-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-security-incident-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.216,
+      "actualResultIds": [
+        "mh-security-incident-1",
+        "mh-security-incident-0",
+        "mh-security-incident-2",
+        "mh-observability-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-security-incident-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2488,
+      "actualResultIds": [
+        "mh-security-incident-3",
+        "mh-security-incident-0",
+        "mh-testing-pyramid-3",
+        "mh-observability-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-frontend-render-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.3075,
+      "actualResultIds": [
+        "mh-frontend-render-1",
+        "mh-frontend-render-0",
+        "mh-frontend-render-2",
+        "mh-frontend-render-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-frontend-render-4hop",
+      "recallAtK": 0.75,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.8722072,
+      "latencyMs": 0.2793,
+      "actualResultIds": [
+        "mh-frontend-render-3",
+        "mh-frontend-render-2",
+        "mh-frontend-render-0",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-database-write-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9838989,
+      "latencyMs": 0.273,
+      "actualResultIds": [
+        "mh-database-write-1",
+        "mh-database-write-0",
+        "mh-database-write-3",
+        "mh-database-write-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-database-write-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2074,
+      "actualResultIds": [
+        "mh-database-write-3",
+        "mh-database-write-0",
+        "mh-networking-3",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-container-lifecycle-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9594535,
+      "latencyMs": 0.3057,
+      "actualResultIds": [
+        "mh-container-lifecycle-0",
+        "mh-container-lifecycle-2",
+        "mh-container-lifecycle-1",
+        "mh-deployment-1"
+      ]
+    },
+    {
+      "queryId": "mh-q-container-lifecycle-4hop",
+      "recallAtK": 0.75,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9090667,
+      "latencyMs": 0.3755,
+      "actualResultIds": [
+        "mh-container-lifecycle-3",
+        "mh-container-lifecycle-0",
+        "mh-container-lifecycle-2",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-api-design-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.216,
+      "actualResultIds": [
+        "mh-api-design-0",
+        "mh-api-design-1",
+        "mh-api-design-2",
+        "mh-data-pipeline-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-api-design-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2952,
+      "actualResultIds": [
+        "mh-api-design-0",
+        "mh-api-design-3",
+        "mh-testing-pyramid-3",
+        "mh-testing-pyramid-2"
+      ]
+    },
+    {
+      "queryId": "mh-q-testing-pyramid-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9594535,
+      "latencyMs": 0.1498,
+      "actualResultIds": [
+        "mh-testing-pyramid-1",
+        "mh-testing-pyramid-2",
+        "mh-testing-pyramid-0",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-testing-pyramid-4hop",
+      "recallAtK": 1,
+      "precisionAtK": 1,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2975,
+      "actualResultIds": [
+        "mh-testing-pyramid-3",
+        "mh-testing-pyramid-0",
+        "mh-testing-pyramid-2",
+        "mh-testing-pyramid-1"
+      ]
+    },
+    {
+      "queryId": "mh-q-memory-hierarchy-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.4586,
+      "actualResultIds": [
+        "mh-memory-hierarchy-0",
+        "mh-memory-hierarchy-1",
+        "mh-memory-hierarchy-2",
+        "mh-api-design-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-memory-hierarchy-4hop",
+      "recallAtK": 0.75,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.9090667,
+      "latencyMs": 0.3151,
+      "actualResultIds": [
+        "mh-memory-hierarchy-3",
+        "mh-memory-hierarchy-0",
+        "mh-memory-hierarchy-2",
+        "mh-testing-pyramid-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-event-sourcing-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 0.8451594,
+      "latencyMs": 0.2103,
+      "actualResultIds": [
+        "mh-event-sourcing-2",
+        "mh-event-sourcing-1",
+        "mh-event-sourcing-0",
+        "mh-ml-training-0"
+      ]
+    },
+    {
+      "queryId": "mh-q-event-sourcing-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.1862,
+      "actualResultIds": [
+        "mh-event-sourcing-0",
+        "mh-event-sourcing-3",
+        "mh-testing-pyramid-3",
+        "mh-api-design-1"
+      ]
+    },
+    {
+      "queryId": "mh-q-search-engine-2hop",
+      "recallAtK": 1,
+      "precisionAtK": 0.75,
+      "mrr": 1,
+      "ndcgAtK": 1,
+      "latencyMs": 0.2105,
+      "actualResultIds": [
+        "mh-search-engine-0",
+        "mh-search-engine-1",
+        "mh-search-engine-2",
+        "mh-search-engine-3"
+      ]
+    },
+    {
+      "queryId": "mh-q-search-engine-4hop",
+      "recallAtK": 0.5,
+      "precisionAtK": 0.5,
+      "mrr": 1,
+      "ndcgAtK": 0.80349636,
+      "latencyMs": 0.2076,
+      "actualResultIds": [
+        "mh-search-engine-0",
+        "mh-search-engine-3",
+        "mh-testing-pyramid-3",
+        "mh-testing-pyramid-2"
+      ]
+    }
+  ],
+  "meanRecallAtK": 0.8,
+  "meanPrecisionAtK": 0.675,
+  "meanMrr": 1,
+  "meanNdcgAtK": 0.8995517,
+  "meanLatencyMs": 0.29830999999999996,
+  "p95LatencyMs": 0.5312,
+  "totalEntries": 60,
+  "totalQueries": 30,
+  "mode": "hybrid"
+}
