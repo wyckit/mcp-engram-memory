@@ -1,4 +1,3 @@
-// DRAFT FILE — NOT ADDED TO PROJECT FILE
 // This file exercises the "snapshot-then-write" lock pattern used by all four
 // maintenance entry points: RunDecayCycle, RunConsolidationPass,
 // AutoLinkScanner.Scan, and AccretionScanner.ScanNamespace.
@@ -63,7 +62,18 @@ public class LockUpgradeRegressionTests : IDisposable
 
     public void Dispose()
     {
-        _index.Dispose();
+        // Every test here drives maintenance and writer tasks against _index. CognitiveIndex.Dispose
+        // tears down the per-namespace ReaderWriterLockSlim instances and documents that the caller
+        // must quiesce in-flight work first, so a pass still holding a lock makes it throw
+        // SynchronizationLockException.
+        //
+        // That matters on the failure path: when a test's drain assertion fails it returns with
+        // those tasks still running, and the teardown exception would replace the assertion message
+        // — you lose the actual diagnosis and see a lock-disposal error instead. Every test in this
+        // class asserts its own drain, so tolerating it here hides nothing a passing run relies on.
+        try { _index.Dispose(); }
+        catch (SynchronizationLockException) { /* a failing test's own assertion is the real signal */ }
+
         _persistence.Dispose();
         try { Directory.Delete(_dataPath, recursive: true); } catch { /* best-effort */ }
     }
@@ -489,14 +499,22 @@ public class LockUpgradeRegressionTests : IDisposable
 
         cts.Cancel(); // stop maintenance loops
 
-        // Maintenance tasks should exit promptly after cancellation — allow 5 s.
-        var maintenanceDone = await Task.WhenAny(
-            Task.WhenAll(maintenance),
-            Task.Delay(TimeSpan.FromSeconds(5)));
+        // A loop only observes cancellation between iterations, and one iteration is a full pass
+        // over 200 entries — under CI contention that comfortably outruns a few seconds. The old
+        // 5 s budget was also never enforced: its result was assigned and dropped, so the test
+        // returned while maintenance still held per-namespace locks, and teardown then died with
+        // SynchronizationLockException instead of reporting anything useful. Use the same 60 s
+        // deadline as the rest of this class, and actually assert it.
+        var allMaintenance = Task.WhenAll(maintenance);
+        var winner = await Task.WhenAny(allMaintenance, Task.Delay(TimeSpan.FromSeconds(60)));
 
-        // If maintenance loops are hung it's a deadlock indicator; but since
-        // they're infinite loops we just verify writers completed successfully
-        // within the outer budget, which they already did above.
+        Assert.True(
+            ReferenceEquals(winner, allMaintenance),
+            "Maintenance passes did not exit within 60 s of cancellation — this indicates a " +
+            "deadlock in the lock-upgrade path rather than merely slow progress.");
+
+        await allMaintenance; // propagate exceptions if any
+
         Assert.Equal(200, writers.Count(t => t.IsCompletedSuccessfully));
     }
 }
