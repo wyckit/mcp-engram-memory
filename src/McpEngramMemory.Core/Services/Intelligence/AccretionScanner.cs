@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
@@ -121,7 +123,19 @@ public sealed class AccretionScanner
             foreach (var cluster in detectedClusters)
             {
                 var memberIds = cluster.Select(e => e.Id).ToList();
-                var clusterId = $"auto:{ns}:{Guid.NewGuid():N}";
+
+                // Identity comes from the member set, not from when the scan ran. A Guid here made
+                // every rescan of the same memories mint a new cluster id and therefore a new
+                // summary entry, and nothing ever removed the old one.
+                //
+                // HasExistingCluster below already suppresses the common case, but it can only see
+                // clusters that are still there. Cluster metadata and summary entries persist
+                // through separate debounced writes — ScheduleSaveClusters fires only when clusters
+                // change, while entry upserts ride the constant write stream — so an exit without a
+                // flush can keep the summary and lose the cluster. The next scan then found no match
+                // and wrote a duplicate with identical text. A deterministic id makes that rescan
+                // overwrite in place instead, whatever the reason the metadata went missing.
+                var clusterId = $"auto:{ns}:{MemberSetFingerprint(memberIds)}";
 
                 // Check if cluster already exists for these members
                 if (HasExistingCluster(clusters, ns, memberIds))
@@ -515,6 +529,18 @@ public sealed class AccretionScanner
     }
 
     /// <summary>Check if a cluster already exists for this set of members.</summary>
+    /// <summary>
+    /// Stable identity for a set of member ids, order-independent. Trimmed to 32 hex characters so
+    /// the id keeps the same shape as the Guid it replaces, which leaves previously written ids
+    /// parseable and log lines the same width.
+    /// </summary>
+    private static string MemberSetFingerprint(IEnumerable<string> memberIds)
+    {
+        var canonical = string.Join("\n", memberIds.OrderBy(id => id, StringComparer.Ordinal));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..32]
+            .ToLowerInvariant();
+    }
+
     private static bool HasExistingCluster(ClusterManager clusters, string ns, List<string> memberIds)
     {
         var existing = clusters.ListClusters(ns);
