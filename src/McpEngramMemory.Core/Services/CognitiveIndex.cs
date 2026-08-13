@@ -1234,10 +1234,35 @@ public sealed class CognitiveIndex : IDisposable
         // throws ObjectDisposedException up front.
         if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
 
+        // Per-lock best-effort. ReaderWriterLockSlim.Dispose throws if a lock is still held or has
+        // waiters, and the hosted server can genuinely reach here in that state: the maintenance
+        // passes take no CancellationToken, so a pass that outlives the host's shutdown timeout
+        // keeps its namespace lock while the container tears the object graph down.
+        //
+        // Letting that escape is what costs something. ServiceProvider disposes singletons in
+        // reverse creation order and does not catch, so a throw here abandons every disposable
+        // created earlier — including PersistenceManager, whose Dispose is the Flush that writes
+        // pending debounced entries. An exception at this point silently drops memories.
+        //
+        // Weighed against that, the lock object is not worth defending: skipping its Dispose leaks
+        // internal handles the process is about to release anyway. Losing the flush loses data.
+        int skipped = 0;
         foreach (var kv in _nsLocks)
-            kv.Value.Dispose();
+        {
+            try { kv.Value.Dispose(); }
+            catch (SynchronizationLockException) { skipped++; }
+        }
         _nsLocks.Clear();
+        DisposalContendedLockCount = skipped;
     }
+
+    /// <summary>
+    /// How many per-namespace locks were still in use when <see cref="Dispose"/> ran, and so were
+    /// left undisposed. Non-zero means shutdown raced an in-flight operation — the disposal itself
+    /// still completed. Exposed rather than logged because this type takes no logger; a host that
+    /// cares can read it after disposing, and the disposal tests assert on it.
+    /// </summary>
+    public int DisposalContendedLockCount { get; private set; }
 
     // ── Internal Helpers ──
 
