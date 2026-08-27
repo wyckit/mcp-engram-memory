@@ -31,20 +31,22 @@ The stdio host creates `IPrincipalContext` from process configuration:
 - `MEMORY_TENANT_ID` is a host-selected tenant partition and must not come from tool arguments.
 - empty tenant + default agent is explicit `PrincipalContext.LegacyUnisolated` compatibility mode.
 
-Entry CRUD/search is tenant-aware. The cognitive graph, clusters, lifecycle support structures,
-collapse history, and diffusion caches still use global bare entry IDs. Until those structures are
-tenant-qualified, non-empty-tenant principals fail closed for the affected standard/full tools:
+Tenancy is full and applies to every tool. Entry CRUD/search, the cognitive graph, clusters,
+lifecycle, collapse history, diffusion/spectral retrieval, intelligence, maintenance, synthesis, and
+visualization are all partitioned by tenant, so a non-empty-tenant principal sees and mutates only
+its own partition:
 
 | Area | Non-empty-tenant behavior |
 |------|---------------------------|
-| Graph, cluster, lifecycle, intelligence, and accretion mutations | Return an unavailable/error result before global state is read or changed |
-| Graph/cluster traversal and diagnostics | Return empty/not-found results |
-| Diffusion and spectral retrieval | Return null/empty; cached global bases are not exposed or invalidated |
-| Maintenance, synthesis, visualization | Return unavailable or empty results; global entries/structures are not processed |
-| Admin debate purge | Deletes tenant entries only and intentionally skips global graph/cluster cascades |
+| Graph (link/unlink/neighbors/traverse/auto-link) | Keyed by `(tenant, id)`; edges never cross tenants, cross-namespace association within a tenant is preserved |
+| Clusters and accretion | Keyed by `(tenant, clusterId)`; pending/committed collapses are tenant-filtered |
+| Lifecycle, intelligence, diffusion, spectral | Operate only on the caller's `(tenant, ns)` partitions; diffusion bases and decay configs are keyed by `(tenant, ns)` |
+| Maintenance, synthesis, visualization | Rebuild/summarize/snapshot only the caller's tenant partitions |
+| Admin debate purge | Deletes only the caller's tenant entries; other tenants and the legacy partition are untouched |
 
-This is fail-closed containment, **not** full tenant-qualified graph support. Legacy-unisolated mode
-retains historical graph/lifecycle behavior. See [Security](../SECURITY.md).
+An identified principal must own or be granted a namespace to reach it (an unregistered namespace is
+closed to identified agents). Legacy-unisolated mode (empty tenant + default agent) is byte-for-byte
+unchanged. See [Security](../SECURITY.md).
 
 ### Core Memory (4 tools)
 

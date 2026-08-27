@@ -1,6 +1,6 @@
 # Tenant Isolation Design (decision 3b)
 
-Status: **Phase 1 implemented** (this task, T1-06) · **Phase 2 specced** (T2-05)
+Status: **Phase 1 implemented** (storage/model) · **Phase 2 implemented** (index/search/store) · **Phase 3 implemented** (graph/intelligence/lifecycle/diffusion) — see §5
 
 This document describes the introduction of a first-class `tenant_id` into the Engram
 storage layer. The overriding constraint is **backward compatibility**: `mcp-engram-memory`
@@ -160,3 +160,54 @@ pins stay FROZEN** — tenancy is a *filter* applied around them, never a change
 2. Phase 2 (T2-05): index/search/store threading + tenant-aware provider reads/deletes.
 3. Conductor opts in by stamping `TenantId` on the entries it writes and passing `tenantId`
    on its reads. Everyone else keeps using `""` and is unaffected.
+
+---
+
+## 5. Phase 3 — tenant-qualified graph / intelligence / lifecycle / diffusion
+
+Phase 2 left the *cognitive support structures* — the knowledge graph, semantic clusters, collapse
+history, decay configs, and diffusion/spectral bases — keyed by **global bare entry ids**. Until
+Phase 3, a non-empty-tenant principal failed closed for every graph/cluster/lifecycle/intelligence/
+diffusion/spectral/maintenance/synthesis/visualization tool. Phase 3 removes that containment and
+makes those structures first-class tenant partitions.
+
+### 5.1 Chosen approach — extend the partition key, don't make ids global
+
+Bare ids are **not** globally unique (the entries PK is `(tenant, ns, id)`), so the same `(ns, id)`
+can exist under two tenants. Rather than a breaking id-format migration, Phase 3 keys every
+downstream structure by the same tenant the entry store already uses:
+
+* `GraphEdge`, `SemanticCluster`, `PendingCollapse`, `CollapseRecord`, and `DecayConfig` each gain a
+  trailing-optional `TenantId` (default `""`, `Tenancy.Normalize`, serialized as `tenantId`). Because
+  these persist as single JSON **blobs** (a serialized `List<T>`), the tenant round-trips inside each
+  element and **no `global_data` schema/PK migration is needed** — legacy blobs deserialize as
+  `tenant == ""`.
+* `KnowledgeGraph._outgoing`/`_incoming` are keyed by `(tenant, entryId)`. The graph is deliberately
+  **per-tenant, not per-`(tenant, ns)`** — cross-namespace association within a tenant is preserved
+  (the existing behavior), while edges never cross tenants (each edge carries a single `TenantId` and
+  both endpoints are interpreted within it).
+* `ClusterManager._clusters` is keyed by `(tenant, clusterId)`; `AccretionScanner` tenant-filters
+  every pending/committed collapse and keys dismissed ids by `(tenant, id)`.
+* `MemoryDiffusionKernel`'s cache/lock/failure state and `LifecycleEngine._decayConfigs` are keyed by
+  `PartitionKey(tenant, ns)` (identical to `ns` for the legacy tenant, so legacy keys are unchanged).
+
+### 5.2 Resolution and the security boundary
+
+Structures that hold a bare id resolve it **within the caller's tenant**: `GetForTenant(id, tenant)`
+for a real tenant, the fast legacy id-locator `Get(id)` for `""`. The global by-id
+`get_memory`/`delete` path stays **legacy-only** (the reverse locator is not widened), so a bare id
+can never be probed or reached across tenants. Denials keep the empty/not-found shape so no read
+becomes an existence oracle.
+
+### 5.3 Tool surface and background maintenance
+
+Every standard/full tool threads `NamespaceAccess.TenantId` into the now-tenant-aware services; the
+`RequiresTenantQualifiedStructures` fail-closed guard is removed. The four background services
+(decay, consolidation, auto-link, accretion) iterate `CognitiveIndex.GetAllTenants()` so every
+tenant's memories are maintained, not just legacy data.
+
+### 5.4 Migration
+
+Additive and backward-compatible. The existing store is 100% legacy tenant (`""`); every new
+`TenantId` defaults to `""`, so persisted graph/cluster/collapse/decay blobs keep resolving under the
+legacy partition with no migration step. Single-tenant deployments are byte-for-byte unchanged.

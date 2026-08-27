@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-27
+
+_Feature release. Full multi-tenant support now extends to the cognitive graph and intelligence
+layers, not just entry storage; the governed cognitive constitution lands; and the hybrid-search
+concurrency race is fixed. Source-compatible — new tenant parameters are trailing-optional and every
+single-tenant (legacy) deployment behaves byte-for-byte as before._
+
+### Added
+
+- **Full multi-tenant graph and intelligence.** The knowledge graph, semantic clusters, accretion/
+  collapse, lifecycle (decay, consolidation, promote, feedback, deep-recall), the diffusion kernel
+  and spectral retrieval, duplicate/contradiction/merge, maintenance, synthesis, and the graph
+  snapshot are all tenant-partitioned. The graph is keyed by `(tenant, id)` — edges never cross
+  tenants, while cross-namespace association within a tenant is preserved; clusters by
+  `(tenant, clusterId)`; diffusion bases and decay configs by `(tenant, ns)`. `GraphEdge`,
+  `SemanticCluster`, `PendingCollapse`, `CollapseRecord`, and `DecayConfig` gained a serialized
+  `TenantId`, so tenant travels inside the existing JSON blobs with **no storage migration**. The
+  previous fail-closed guard for non-empty tenants is removed and every tool threads the caller's
+  principal tenant. Background decay, consolidation, auto-link, and accretion now run for every
+  tenant. New cross-tenant isolation suite proves it with colliding same-`(ns, id)` partitions. See
+  `docs/tenant-isolation-design.md` §5.
+- **Governed cognitive constitution.** A deterministic Root Constitution with an audited pre/post
+  MCP filter, versioned Knowledge and append-only Provenance, Teacher/Verifier promotion via the
+  full-profile `promote_knowledge` tool, authorization-first retrieval planning, and citation-aware
+  context manifests. Planning/asset APIs remain embeddable Core surfaces.
+
+### Fixed
+
+- **Hybrid-search concurrency race.** `CognitiveIndex.Search` released the per-namespace read lock
+  before its BM25/hybrid calls, so a concurrent writer (a background decay/consolidation/accretion
+  pass, or another `remember`) could mutate the BM25 index mid-enumeration and throw
+  "Collection was modified". The read lock now covers the whole search path; a regression test
+  reproduces the race without the fix.
+- Documentation corrections: tool-profile counts (17 / 39 / 63), README tool-table assignments, the
+  `spectral_recall` profile, and the SQLitePCLRaw advisory version.
+
+### Changed
+
+- Dependencies modernized (FastBertTokenizer, ModelContextProtocol 2.2.0, ONNX Runtime, SQLitePCLRaw
+  3.0.5, and test tooling); builds clean with zero warnings across net8/9/10.
+
 ## [1.5.0] - 2026-08-11
 
 _Security release. The namespace ACL model did not function in any prior version — see **Security** below. Also fixes a shutdown data-hygiene bug, a dry-run miscount on a destructive operation, and two input-validation gaps, and bounds the automatic background scans._
