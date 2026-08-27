@@ -477,14 +477,14 @@ public sealed class CognitiveIndex : IDisposable
                 nsEntries.Values.ToList();
             HnswIndex? hnswIndex = _store.GetHnswIndex(pk);
 
-            // Lock-free entry resolver for BM25-only ("keyword rescue") candidates. Built from the
-            // snapshot taken above so it never re-enters this non-recursive read lock (which Get() would);
-            // the snapshot is the whole partition, so it resolves every id BM25 can surface and can never
-            // leak another tenant's entry.
-            var entryById = new Dictionary<string, CognitiveEntry>(snapshot.Count);
-            foreach (var (entry, _, _) in snapshot)
-                entryById[entry.Id] = entry;
-            Func<string, string, CognitiveEntry?> getEntry = (eid, _) => entryById.GetValueOrDefault(eid);
+            // Entry resolver for BM25-only ("keyword rescue") candidates. Resolves per-candidate
+            // straight from nsEntries rather than allocating a second whole-namespace map up front:
+            // the read lock is held for the entire method, so this partition dictionary is stable,
+            // and it is already scoped to this (tenant, ns) partition so it can never surface another
+            // tenant's entry. Reading nsEntries here instead of calling Get() also avoids re-entering
+            // this non-recursive read lock.
+            Func<string, string, CognitiveEntry?> getEntry = (eid, _) =>
+                nsEntries.TryGetValue(eid, out var tuple) ? tuple.Entry : null;
 
             // When diversity is active, fetch more candidates so MMR has a broader pool
             int diversityMultiplier = request.Diversity ? 3 : 1;
