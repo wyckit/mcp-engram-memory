@@ -38,6 +38,18 @@ public sealed class KnowledgeGraph
     /// </summary>
     public long Revision => Interlocked.Read(ref _revision);
 
+    // Per-tenant topology revision. Bumped only when an edge in that tenant changes, so a
+    // tenant-scoped derived cache (the diffusion kernel) is not invalidated by unrelated tenants'
+    // writes. The global _revision still bumps on every change for callers that want it.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _tenantRevisions = new();
+
+    /// <summary>Monotonic topology revision for one tenant (0 if the tenant has no edges yet).</summary>
+    public long RevisionFor(string tenantId)
+        => _tenantRevisions.TryGetValue(tenantId ?? string.Empty, out var r) ? r : 0;
+
+    private void BumpTenant(string tenantId)
+        => _tenantRevisions.AddOrUpdate(tenantId ?? string.Empty, 1L, static (_, v) => v + 1);
+
     public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index)
     {
         _persistence = persistence;
@@ -78,6 +90,7 @@ public sealed class KnowledgeGraph
             }
 
             Interlocked.Increment(ref _revision);
+            BumpTenant(edge.TenantId);
             ScheduleSaveEdges();
             return edge.Relation == "cross_reference"
                 ? $"Linked '{edge.SourceId}' <-> '{edge.TargetId}' (cross_reference, bidirectional)."
@@ -94,9 +107,11 @@ public sealed class KnowledgeGraph
         {
             EnsureLoadedUnderWrite();
             int count = 0;
+            var touchedTenants = new HashSet<string>();
             foreach (var edge in edges)
             {
                 AddEdgeInternal(edge);
+                touchedTenants.Add(edge.TenantId);
                 if (edge.Relation == "cross_reference")
                 {
                     var reverse = new GraphEdge(edge.TargetId, edge.SourceId, "cross_reference",
@@ -109,6 +124,7 @@ public sealed class KnowledgeGraph
             if (count > 0)
             {
                 Interlocked.Increment(ref _revision);
+                foreach (var t in touchedTenants) BumpTenant(t);
                 ScheduleSaveEdges();
             }
             return count;
@@ -130,6 +146,7 @@ public sealed class KnowledgeGraph
             if (removed > 0)
             {
                 Interlocked.Increment(ref _revision);
+                BumpTenant(tenantId);
                 ScheduleSaveEdges();
             }
 
@@ -171,6 +188,7 @@ public sealed class KnowledgeGraph
             if (removed > 0)
             {
                 Interlocked.Increment(ref _revision);
+                BumpTenant(tenantId);
                 ScheduleSaveEdges();
             }
 
@@ -318,9 +336,10 @@ public sealed class KnowledgeGraph
         try
         {
             EnsureLoaded();
-            contradictEdges = _outgoing.Values
-                .SelectMany(l => l)
-                .Where(e => e.Relation == "contradicts" && e.TenantId == tenantId)
+            contradictEdges = _outgoing
+                .Where(kv => kv.Key.Tenant == tenantId)
+                .SelectMany(kv => kv.Value)
+                .Where(e => e.Relation == "contradicts")
                 .ToList();
         }
         finally { _lock.ExitUpgradeableReadLock(); }
@@ -413,6 +432,7 @@ public sealed class KnowledgeGraph
             if (transferred > 0)
             {
                 Interlocked.Increment(ref _revision);
+                BumpTenant(tenantId);
                 ScheduleSaveEdges();
             }
 

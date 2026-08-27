@@ -74,14 +74,10 @@ public sealed class AdminTools
         // to a private endpoint discloses that endpoint's ID, relationship, and metadata
         // even when its entry body is protected. Project the edge set through the same
         // entry-level read policy as the primary object.
-        var edges = _principal.TenantId.Length == 0
-            ? _graph.GetEdgesForEntry(id)
-                .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
-                .ToList()
-            : new List<GraphEdge>();
-        var clusterIds = _principal.TenantId.Length == 0
-            ? _clusters.GetClustersForEntry(id)
-            : Array.Empty<string>();
+        var edges = _graph.GetEdgesForEntry(id, _principal.TenantId)
+            .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
+            .ToList();
+        var clusterIds = _clusters.GetClustersForEntry(id, _principal.TenantId);
 
         return new GetMemoryResult(
             new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState),
@@ -131,16 +127,15 @@ public sealed class AdminTools
         // Graph and cluster keys are bare ids, so topology totals are meaningful only in the
         // legacy partition and are fixed at zero elsewhere. Build the visible-id set — which
         // costs a pass over every visible entry — only when a count actually depends on it.
-        int edgeCount = 0, clusterCount = 0;
-        if (_principal.TenantId.Length == 0)
+        int edgeCount, clusterCount;
         {
             var visibleIds = scopedNamespaces
                 .SelectMany(scope => _index.GetAllInNamespace(scope, _principal.TenantId))
                 .Select(entry => entry.Id)
                 .ToHashSet();
-            edgeCount = _graph.GetAllEdges().Count(edge =>
+            edgeCount = _graph.GetAllEdges(_principal.TenantId).Count(edge =>
                 visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId));
-            clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope).Count);
+            clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope, _principal.TenantId).Count);
         }
 
         // A store with hundreds of namespaces returns a list that dominates the caller's
@@ -219,14 +214,11 @@ public sealed class AdminTools
 
             if (!dryRun)
             {
-                // Cascade: remove graph edges and cluster memberships for each entry
-                if (_principal.TenantId.Length == 0)
+                // Cascade: remove the tenant's graph edges and cluster memberships for each entry
+                foreach (var entry in entries)
                 {
-                    foreach (var entry in entries)
-                    {
-                        edgesRemoved += _graph.RemoveAllEdgesForEntry(entry.Id);
-                        _clusters.RemoveEntryFromAllClusters(entry.Id);
-                    }
+                    edgesRemoved += _graph.RemoveAllEdgesForEntry(entry.Id, _principal.TenantId);
+                    _clusters.RemoveEntryFromAllClusters(entry.Id, _principal.TenantId);
                 }
 
                 // Remove entries and namespace from index
@@ -240,14 +232,11 @@ public sealed class AdminTools
                 // namespaces are internally linked. That made the dry run report roughly
                 // twice the edges the real purge removes, on the one operation whose whole
                 // job is to let you check before deleting.
-                if (_principal.TenantId.Length == 0)
-                {
-                    var distinct = new HashSet<(string, string, string)>();
-                    foreach (var entry in entries)
-                        foreach (var edge in _graph.GetEdgesForEntry(entry.Id))
-                            distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
-                    edgesRemoved = distinct.Count;
-                }
+                var distinct = new HashSet<(string, string, string)>();
+                foreach (var entry in entries)
+                    foreach (var edge in _graph.GetEdgesForEntry(entry.Id, _principal.TenantId))
+                        distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
+                edgesRemoved = distinct.Count;
             }
 
             totalEntriesRemoved += entryCount;

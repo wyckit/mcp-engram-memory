@@ -36,22 +36,28 @@ public sealed class SpreadingActivationService
     /// <param name="id">The accessed memory's ID.</param>
     /// <param name="ns">The namespace of the accessed memory.</param>
     /// <param name="baseEnergy">Base energy to propagate (default 1.0).</param>
-    public SpreadingResult PropagateAccess(string id, string ns, float baseEnergy = 1.0f)
+    /// <param name="tenantId">Tenant whose graph/cluster structures to traverse; "" is the legacy tenant.</param>
+    public SpreadingResult PropagateAccess(string id, string ns, float baseEnergy = 1.0f, string tenantId = "")
     {
         var boosted = new Dictionary<string, float>();
 
-        // Phase 1: Graph-based spreading activation
-        PropagateGraph(id, baseEnergy, depth: 0, boosted);
+        // Phase 1: Graph-based spreading activation (within the caller's tenant)
+        PropagateGraph(id, baseEnergy, depth: 0, boosted, tenantId);
 
         // Phase 2: Cluster-based pre-warming
-        PropagateCluster(id, baseEnergy, boosted);
+        PropagateCluster(id, baseEnergy, boosted, tenantId);
 
         // Phase 3: Apply all accumulated boosts
         int applied = 0;
         foreach (var (targetId, totalBoost) in boosted)
         {
             if (targetId == id) continue; // Don't self-boost
-            if (_index.BoostActivationEnergy(targetId, ns, totalBoost))
+            // Legacy keeps its cross-namespace id fallback; a tenant boost targets the exact
+            // (tenant, ns) partition (no fallback, so it never reaches another tenant's entry).
+            bool ok = tenantId.Length == 0
+                ? _index.BoostActivationEnergy(targetId, ns, totalBoost)
+                : _index.BoostActivationEnergy(targetId, ns, totalBoost, tenantId);
+            if (ok)
                 applied++;
         }
 
@@ -61,12 +67,12 @@ public sealed class SpreadingActivationService
     /// <summary>
     /// Recursive graph-based energy propagation with fan-out attenuation and depth cutoff.
     /// </summary>
-    private void PropagateGraph(string id, float energy, int depth, Dictionary<string, float> boosted)
+    private void PropagateGraph(string id, float energy, int depth, Dictionary<string, float> boosted, string tenantId)
     {
         if (depth >= MaxPropagationDepth || energy < MinPropagationThreshold)
             return;
 
-        var neighborsResult = _graph.GetNeighbors(id);
+        var neighborsResult = _graph.GetNeighbors(id, tenantId: tenantId);
         int nodeDegree = neighborsResult.Neighbors.Count;
 
         foreach (var neighbor in neighborsResult.Neighbors)
@@ -84,20 +90,20 @@ public sealed class SpreadingActivationService
                 boosted[neighborId] = boost;
 
             // Recursive spread at reduced energy
-            PropagateGraph(neighborId, boost * RecursiveDecay, depth + 1, boosted);
+            PropagateGraph(neighborId, boost * RecursiveDecay, depth + 1, boosted, tenantId);
         }
     }
 
     /// <summary>
     /// Cluster-based pre-warming: accessing any member activates cluster summary and top peers.
     /// </summary>
-    private void PropagateCluster(string id, float baseEnergy, Dictionary<string, float> boosted)
+    private void PropagateCluster(string id, float baseEnergy, Dictionary<string, float> boosted, string tenantId)
     {
-        var clusterIds = _clusters.GetClustersForEntry(id);
+        var clusterIds = _clusters.GetClustersForEntry(id, tenantId);
 
         foreach (var clusterId in clusterIds)
         {
-            var clusterInfo = _clusters.GetCluster(clusterId);
+            var clusterInfo = _clusters.GetCluster(clusterId, tenantId);
             if (clusterInfo is null) continue;
 
             // Boost cluster summary node (full boost)

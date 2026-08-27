@@ -194,16 +194,25 @@ public sealed class TenantStructureIsolationTests : IDisposable
 
         var legacyA = Entry(debateA, debateNs, "legacy debate a");
         var legacyB = Entry(debateB, debateNs, "legacy debate b");
-        var tenantA = Entry(debateA, debateNs, "tenant debate a", TenantId);
+        var tenantAe = Entry(debateA, debateNs, "tenant debate a", TenantId);
+        var tenantBe = Entry(debateB, debateNs, "tenant debate b", TenantId);
         legacyA.CreatedAt = stale;
         legacyB.CreatedAt = stale;
-        tenantA.CreatedAt = stale;
+        tenantAe.CreatedAt = stale;
+        tenantBe.CreatedAt = stale;
         _index.Upsert(legacyA);
         _index.Upsert(legacyB);
-        _index.Upsert(tenantA);
+        _index.Upsert(tenantAe);
+        _index.Upsert(tenantBe);
         _registry.EnsureOwnership(debateNs, "alice", TenantId);
+
+        // Legacy graph + cluster.
         _graph.AddEdge(new GraphEdge(debateA, debateB, "supports"));
         _clusters.CreateCluster("debate-cluster", debateNs, [debateA, debateB]);
+        // Tenant graph + cluster over the SAME ids, so the purge cascade must clean up the tenant's
+        // own edges/memberships (not the legacy ones).
+        _graph.AddEdge(new GraphEdge(debateA, debateB, "opposes", 1f, null, TenantId));
+        _clusters.CreateCluster("tenant-debate-cluster", debateNs, [debateA, debateB], null, TenantId);
 
         var tenantAdmin = new AdminTools(
             _index, _graph, _clusters, _persistence, _registry,
@@ -212,10 +221,14 @@ public sealed class TenantStructureIsolationTests : IDisposable
             await tenantAdmin.PurgeDebates(maxAgeHours: 24, dryRun: false));
 
         Assert.Equal(1, tenantResult.NamespacesAffected);
-        Assert.Equal(1, tenantResult.TotalEntriesRemoved);
+        Assert.Equal(2, tenantResult.TotalEntriesRemoved);
+        Assert.True(tenantResult.TotalEdgesRemoved >= 1);
         Assert.Null(_index.Get(debateA, debateNs, TenantId));
         Assert.NotNull(_index.Get(debateA, debateNs));
-        // The legacy graph/cluster are untouched by a tenant purge: the legacy debate edge survives.
+        // The tenant's own edge and cluster membership were cascaded away by the tenant purge...
+        Assert.DoesNotContain(_graph.GetAllEdges(TenantId), e => e.Relation == "opposes");
+        Assert.Empty(_clusters.GetClustersForEntry(debateA, TenantId));
+        // ...while the legacy graph/cluster are untouched.
         Assert.Contains(_graph.GetAllEdges(""), e => e.SourceId == debateA && e.TargetId == debateB && e.Relation == "supports");
         Assert.Contains("debate-cluster", _clusters.GetClustersForEntry(debateA));
     }

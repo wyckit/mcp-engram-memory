@@ -198,14 +198,12 @@ public sealed class DebateTools
                     ["debateSessionId"] = sessionId,
                     ["sourceAlias"] = debateEdge.SourceNode.ToString(),
                     ["targetAlias"] = debateEdge.TargetNode.ToString()
-                }));
+                }, _access.TenantId));
             edgeDetails.Add($"[Node {debateEdge.SourceNode}] --({debateEdge.Relation}, w={debateEdge.Weight})--> [Node {debateEdge.TargetNode}]");
         }
 
-        // Batch-add all edges in a single lock acquisition
-        int created = graphEdges.Count > 0 && _access.TenantId.Length == 0
-            ? _graph.AddEdges(graphEdges)
-            : 0;
+        // Batch-add all edges in a single lock acquisition (within the caller's tenant)
+        int created = graphEdges.Count > 0 ? _graph.AddEdges(graphEdges) : 0;
 
         return new MapDebateGraphResult(sessionId, created, edgeDetails);
     }
@@ -260,9 +258,8 @@ public sealed class DebateTools
 
         // 2. Link winning node to consensus (parent_child)
         var parentEdge = new GraphEdge(winningEntryId, consensusId, "parent_child", 1.0f,
-            new Dictionary<string, string> { ["debateSessionId"] = sessionId });
-        if (_access.TenantId.Length == 0)
-            _graph.AddEdge(parentEdge);
+            new Dictionary<string, string> { ["debateSessionId"] = sessionId }, _access.TenantId);
+        _graph.AddEdge(parentEdge);
 
         // 3. Archive all debate nodes in a single lock acquisition
         var allDebateEntryIds = _sessions.GetAllEntryIds(sessionId);

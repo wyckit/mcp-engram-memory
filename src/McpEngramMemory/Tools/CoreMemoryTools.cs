@@ -317,12 +317,12 @@ public sealed class CoreMemoryTools
         {
             _index.RecordAccess(result.Id, ns, _principal.TenantId);
             // Asynchronous spreading activation: propagate energy to graph neighbors and cluster peers
-            if (expandGraph && _principal.TenantId.Length == 0)
-                _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f);
+            if (expandGraph)
+                _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f, tenantId: _principal.TenantId);
         }
 
         // Graph expansion: pull in neighbors of top results with edge-type-weighted scoring
-        if (expandGraph && _principal.TenantId.Length == 0 && results.Count > 0)
+        if (expandGraph && results.Count > 0)
         {
             var existingIds = results.Select(r => r.Id).ToHashSet();
             var graphExpanded = new List<CognitiveSearchResult>(results);
@@ -331,7 +331,7 @@ public sealed class CoreMemoryTools
             foreach (var result in results)
             {
                 // Graph neighbor expansion with edge-type-weighted scoring
-                var neighbors = _graph.GetNeighbors(result.Id);
+                var neighbors = _graph.GetNeighbors(result.Id, tenantId: _principal.TenantId);
                 foreach (var neighbor in neighbors.Neighbors)
                 {
                     if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -356,10 +356,10 @@ public sealed class CoreMemoryTools
                 }
 
                 // Cluster expansion: include cluster peers of top results
-                var clusterIds = _clusters.GetClustersForEntry(result.Id);
+                var clusterIds = _clusters.GetClustersForEntry(result.Id, _principal.TenantId);
                 foreach (var clusterId in clusterIds)
                 {
-                    var clusterInfo = _clusters.GetCluster(clusterId);
+                    var clusterInfo = _clusters.GetCluster(clusterId, _principal.TenantId);
                     if (clusterInfo is null) continue;
 
                     // Include cluster summary node at high priority
@@ -471,15 +471,10 @@ public sealed class CoreMemoryTools
         if (!CanWrite(existing.Ns))
             return $"Entry '{id}' not found.";
 
-        // Graph and cluster keys are not tenant-qualified yet. Never mutate their global
-        // bare-id state from a non-legacy tenant; that could affect another tenant's co-keyed
-        // artifact. The tenant-qualified provenance/association graph migration follows.
-        int edgesRemoved = 0;
-        if (_principal.TenantId.Length == 0)
-        {
-            edgesRemoved = _graph.RemoveAllEdgesForEntry(id);
-            _clusters.RemoveEntryFromAllClusters(id);
-        }
+        // Cascade the delete to the entry's tenant-partitioned graph edges and cluster
+        // memberships so nothing dangles to the now-removed entry.
+        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id, _principal.TenantId);
+        _clusters.RemoveEntryFromAllClusters(id, _principal.TenantId);
 
         // Check the return value to avoid TOCTOU against a concurrent delete.
         if (!_index.DeleteForTenant(id, _principal.TenantId))

@@ -125,11 +125,8 @@ public sealed class CompositeTools
             if (result.Score < 0.65f) continue;
 
             var relation = result.Score >= 0.85f ? "similar_to" : "cross_reference";
-            if (_principal.TenantId.Length == 0)
-            {
-                _graph.AddEdge(new GraphEdge(id, result.Id, relation));
-                links.Add($"{result.Id} ({relation}, {result.Score:F3})");
-            }
+            _graph.AddEdge(new GraphEdge(id, result.Id, relation, tenantId: _principal.TenantId));
+            links.Add($"{result.Id} ({relation}, {result.Score:F3})");
         }
 
         if (links.Count > 0)
@@ -196,17 +193,17 @@ public sealed class CompositeTools
                         tenantId: _principal.TenantId));
 
             // Expand with graph neighbors
-            var expanded = expandGraph && _principal.TenantId.Length == 0
+            var expanded = expandGraph
                 ? ExpandWithGraph(results, states)
                 : results;
 
             // Fallback FIRST: if hybrid produced poor scores, swap in deep_recall
             // before spectral re-ranking. Otherwise spectral runs on the low-score
             // expansion and gets discarded when fallback overrides it.
-            if (_principal.TenantId.Length == 0 &&
-                (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f)))
+            if (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f))
             {
-                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f);
+                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f,
+                    tenantId: _principal.TenantId);
                 if (deepResults.Count > results.Count ||
                     (deepResults.Count > 0 && (results.Count == 0 || deepResults[0].Score > results[0].Score)))
                 {
@@ -219,8 +216,7 @@ public sealed class CompositeTools
             // with (post-graph-expansion or post-deep_recall fallback). Restricted
             // to entries already in the candidate pool for Specific mode; Broad
             // mode applies a cluster-dominance-gated max-neighbor boost.
-            if (_principal.TenantId.Length == 0)
-                expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
+            expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
 
             // Record access for actually-returned entries (after spectral
             // re-ranking, since that may have reshaped the top-K).
@@ -332,10 +328,9 @@ public sealed class CompositeTools
         {
             foreach (var relatedId in relatedIdList)
             {
-                if (_principal.TenantId.Length == 0 &&
-                    _index.GetForTenant(relatedId, _principal.TenantId) is not null)
+                if (_index.GetForTenant(relatedId, _principal.TenantId) is not null)
                 {
-                    _graph.AddEdge(new GraphEdge(id, relatedId, "elaborates"));
+                    _graph.AddEdge(new GraphEdge(id, relatedId, "elaborates", tenantId: _principal.TenantId));
                     actions.Add($"linked to {relatedId}");
                 }
             }
@@ -352,11 +347,8 @@ public sealed class CompositeTools
             if (relatedIdList is not null && relatedIdList.Contains(r.Id)) continue;
             if (r.Score < 0.7f) continue;
 
-            if (_principal.TenantId.Length == 0)
-            {
-                _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference"));
-                autoLinked++;
-            }
+            _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference", tenantId: _principal.TenantId));
+            autoLinked++;
         }
         if (autoLinked > 0)
             actions.Add($"auto-linked to {autoLinked} related memor{(autoLinked == 1 ? "y" : "ies")}");
@@ -427,7 +419,7 @@ public sealed class CompositeTools
 
         foreach (var result in results)
         {
-            var neighbors = _graph.GetNeighbors(result.Id);
+            var neighbors = _graph.GetNeighbors(result.Id, tenantId: _principal.TenantId);
             foreach (var neighbor in neighbors.Neighbors)
             {
                 if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -491,7 +483,7 @@ public sealed class CompositeTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3);
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3, tenantId: _principal.TenantId);
 
         var output = new List<CognitiveSearchResult>(k);
         foreach (var (id, score) in reranked)
@@ -606,7 +598,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _principal.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (fullClusterSeen.Contains(n.Entry.Id)) continue;
@@ -614,7 +606,7 @@ public sealed class CompositeTools
                     queue.Enqueue(n.Entry.Id);
 
                     if (seen.Contains(n.Entry.Id)) continue;
-                    var entry = _index.Get(n.Entry.Id, ns);
+                    var entry = _index.Get(n.Entry.Id, ns, _principal.TenantId);
                     if (entry is null) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
@@ -656,7 +648,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _principal.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (!candidateIds.Contains(n.Entry.Id)) continue;

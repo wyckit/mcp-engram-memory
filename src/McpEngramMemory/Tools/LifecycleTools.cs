@@ -89,10 +89,10 @@ public sealed class LifecycleTools
         if (existing is null || !_access.CanWrite(existing.Ns))
             return $"Error: Entry '{id}' not found.";
 
-        // For a tenant caller the entry must be resolved by (ns, tenant), so fall back to the
-        // entry's own namespace when no config-hint ns was supplied. Legacy callers keep the
-        // original behavior (null ns -> bare id lookup and default thresholds).
-        string? feedbackNs = _access.TenantId.Length == 0 ? ns : (ns ?? existing.Ns);
+        // For a tenant caller the entry is resolved within its own namespace (the caller's `ns` is
+        // only a config hint and may point elsewhere, which would spuriously fail resolution).
+        // Legacy callers keep the original behavior (null ns -> bare id lookup, default thresholds).
+        string? feedbackNs = _access.TenantId.Length == 0 ? ns : existing.Ns;
         var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, _access.TenantId);
         if (result is null)
             return $"Error: Entry '{id}' not found.";

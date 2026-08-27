@@ -121,7 +121,7 @@ public class MemoryDiffusionKernel
         // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
         // legacy cache keys are unchanged.
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
-        long currentRev = _graph.Revision;
+        long currentRev = _graph.RevisionFor(tenantId);
         if (_cache.TryGetValue(pk, out var cached)
             && cached.GraphRevision == currentRev
             && (cached.TopK >= topK || cached.TopK >= cached.NodeCount))
@@ -138,7 +138,7 @@ public class MemoryDiffusionKernel
         var nsLock = _nsLocks.GetOrAdd(pk, _ => new object());
         lock (nsLock)
         {
-            currentRev = _graph.Revision;
+            currentRev = _graph.RevisionFor(tenantId);
             if (_cache.TryGetValue(pk, out cached)
                 && cached.GraphRevision == currentRev
                 && cached.TopK >= topK)
@@ -231,7 +231,7 @@ public class MemoryDiffusionKernel
     {
         var basis = GetBasis(ns, DefaultTopK, tenantId);
         if (basis is null) return null;
-        bool stale = basis.GraphRevision != _graph.Revision;
+        bool stale = basis.GraphRevision != _graph.RevisionFor(tenantId);
         return new DiffusionStats(
             ns,
             basis.NodeCount,
