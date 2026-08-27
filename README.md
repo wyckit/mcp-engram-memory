@@ -13,6 +13,36 @@
 
 **Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction handling, all running locally with zero external API.
 
+- **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
+- **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
+- **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
+- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
+
+→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
+
+## How It Works
+
+Engram sits between your AI assistant and a local store. Every memory is embedded, indexed for hybrid search, woven into a knowledge graph, and then left to *evolve* on its own — background workers decay noise, consolidate what matters, and reconcile contradictions while you're away.
+
+<p align="center">
+  <img src="images/how-it-works.svg?v=1.2.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
+</p>
+
+The loop, end to end:
+
+1. **Store** — `remember` embeds text with a local ONNX model (bge-micro-v2, 384-dim), detects near-duplicates, and auto-links the new memory to related ones in the graph.
+2. **Search** — `recall` runs hybrid retrieval (BM25 keyword + vector similarity, fused with RRF), expands synonyms, applies MMR diversity, and re-ranks through the graph's spectral structure.
+3. **Route** — with the namespace omitted, `recall` auto-routes across expert namespaces to find knowledge you didn't know where to look for.
+4. **Evolve** — background services run the *physics*: spectral decay fades weakly-connected memories, sleep consolidation promotes STM → LTM, auto-link densifies the graph, and contradiction detection archives superseded logic.
+
+Retrieval itself is a nine-stage pipeline — candidate generation, keyword rescue, fusion, diversity, and spectral re-ranking:
+
+<p align="center">
+  <img src="images/retrieval-pipeline.svg?v=1.2.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
+</p>
+
+## See It in Action
+
 <p align="center">
   <!--
     Animated hero GIF of the live memory graph.
@@ -27,12 +57,31 @@
 
 <p align="center"><em>The memory graph consolidating in real time — short-term (amber) memories cluster and promote to long-term (blue) during a sleep cycle.</em></p>
 
-- **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
-- **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
-- **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
-- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
+The built-in D3.js graph viewer lets you explore your own memory graph interactively. Generate a snapshot from any AI assistant, then open the viewer:
 
-→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
+```
+get_graph_snapshot   →   save the JSON   →   open visualization/memory-graph.html
+```
+
+<p align="center">
+  <img src="images/graph-overview.png" alt="Memory graph overview — 1,207 nodes, 375 edges, 178 clusters" width="860"/>
+</p>
+
+<p align="center">
+  <img src="images/graph-detail.png" alt="Memory graph connected-only detail view" width="860"/>
+</p>
+
+**Viewer features:**
+- **Force-directed layout** — related memories cluster together, typed edges (elaborates, contradicts, depends_on, …) shown in distinct neon colors
+- **Lifecycle colors** — STM nodes amber, LTM nodes blue; cluster summaries marked with a dashed ring
+- **Convex-hull cluster overlays** — cluster membership visible at a glance
+- **Search & highlight** — type in the search bar to instantly dim non-matching nodes and pulse-highlight matches in gold; `‹ ›` buttons or `Enter / Shift+Enter` to cycle through results
+- **Zoom / pan / rotate** — `+` / `−` / `⊡` buttons; scroll to zoom; right-click drag to rotate the whole graph
+- **Fractal density overlay** — zooms out reveal a quadtree density map color-coded by lifecycle state
+- **Connected-only filter** — hide isolated nodes to focus on the linked knowledge graph
+- **Drag-and-drop JSON loading** — drop a snapshot file directly onto the viewer
+
+The snapshot file is not committed (it's personal memory data). Generate a fresh one any time with `get_graph_snapshot`.
 
 ## Quickstart
 
@@ -91,45 +140,6 @@ See [`examples/`](examples/) for ready-to-use config files.
 
 </details>
 
-## Memory Graph Visualizer
-
-The built-in D3.js graph viewer lets you explore your memory graph interactively.
-
-**Generate a snapshot** (call this MCP tool from any AI assistant):
-```
-get_graph_snapshot   →   save the JSON   →   open visualization/memory-graph.html
-```
-
-<p align="center">
-  <img src="images/graph-overview.png" alt="Memory graph overview — 1,207 nodes, 375 edges, 178 clusters" width="860"/>
-</p>
-
-<p align="center">
-  <img src="images/graph-detail.png" alt="Memory graph connected-only detail view" width="860"/>
-</p>
-
-**Features:**
-- **Force-directed layout** — related memories cluster together, typed edges (elaborates, contradicts, depends_on, …) shown in distinct neon colors
-- **Lifecycle colors** — STM nodes amber, LTM nodes blue; cluster summaries marked with a dashed ring
-- **Convex-hull cluster overlays** — cluster membership visible at a glance
-- **Search & highlight** — type in the search bar to instantly dim non-matching nodes and pulse-highlight matches in gold; `‹ ›` buttons or `Enter / Shift+Enter` to cycle through results
-- **Zoom / pan / rotate** — `+` / `−` / `⊡` buttons; scroll to zoom; right-click drag to rotate the whole graph
-- **Fractal density overlay** — zooms out reveal a quadtree density map color-coded by lifecycle state
-- **Connected-only filter** — hide isolated nodes to focus on the linked knowledge graph
-- **Drag-and-drop JSON loading** — drop a snapshot file directly onto the viewer
-
-The snapshot file is not committed (it's personal memory data). Generate a fresh one any time with `get_graph_snapshot`.
-
-## Tool Profiles
-
-Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
-
-| Profile | Tools | What's included |
-|---------|-------|-----------------|
-| `minimal` | 17 | Core CRUD + composite + admin + multi-agent — recommended starting point **(default)** |
-| `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 63 | Everything including governed knowledge promotion, expert routing, debate, synthesis, benchmarks |
-
 ## At a Glance
 
 | Metric | Value |
@@ -144,7 +154,45 @@ Control how many tools are exposed with `MEMORY_TOOL_PROFILE`:
 | Tests | Multi-target xUnit suite across net8.0, net9.0, and net10.0 |
 | CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
 
-### System Layers
+## Tool Profiles
+
+Engram exposes a tunable tool surface. Start on `minimal` — three headline verbs (`remember`, `recall`, `reflect`) plus admin and multi-agent — and widen only if you need the advanced subsystems. Control it with `MEMORY_TOOL_PROFILE`:
+
+| Profile | Tools | What's included |
+|---------|-------|-----------------|
+| `minimal` | 17 | Core CRUD + composite + admin + multi-agent — recommended starting point **(default)** |
+| `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 63 | Everything including governed knowledge promotion, expert routing, debate, synthesis, benchmarks |
+
+### MCP Tools (63)
+
+| Group | Tools | Description |
+|-------|-------|-------------|
+| Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
+| Composite | `remember`, `recall` (with `spectralMode`), `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, context assembly, and graph-aware spectral re-ranking on `recall` (default `auto`) |
+| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS; similarity-based auto-link densification runs as a 6-hour background sweep |
+| Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
+| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `configure_decay` | State transitions (STM/LTM/archived) and per-namespace decay configuration; spectral decay diffusion and sleep consolidation run automatically as background services |
+| Memory Diffusion | `compute_diffusion_basis`, `diffusion_stats`, `invalidate_diffusion`, `spectral_recall` | Graph-Laplacian eigenbasis primitive shared by decay, consolidation, and retrieval; standalone graph-aware retrieval |
+| Intelligence | `detect_duplicates`, `find_contradictions`, `merge_memories`, `uncollapse_cluster`, `list_collapse_history` | Dedup, contradiction detection, merge, collapse reversal |
+| Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
+| Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
+| Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate` | Multi-perspective analysis with debate tracking |
+| Synthesis | `synthesize_memories` | Map-reduce synthesis via a local SLM served by Ollama. For fully in-process generation, embed `McpEngramMemory.Core` and add the optional [`McpEngramMemory.Synthesis.Onnx`](#optional-in-process-synthesis) package |
+| Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse` | DBSCAN cluster detection and two-phase summarization (the density scan runs as a 30-min background sweep) |
+| Governed Learning | `promote_knowledge` | Full-profile adapter for the Teacher → deterministic Verifier → Constitution receipt → atomic governed-store promotion path |
+| Admin | `get_memory`, `cognitive_stats`, `engram_status`, `purge_debates` | Inspection, system-wide statistics, background-worker health, and stale debate-namespace cleanup |
+| Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
+| Benchmarks | `run_benchmark`, `run_agent_outcome_benchmark`, `run_live_agent_outcome_benchmark`, `compare_live_agent_outcome_artifacts`, `check_for_regression`, `get_metrics`, `reset_metrics`, `run_mrcr_benchmark`, `compare_mrcr_artifacts` | IR quality validation, proxy and live memory-condition benchmarking, artifact diffing, CI regression gating, latency/throughput metrics, and MRCR v2 long-context A/B |
+| Visualization | `get_graph_snapshot` | Memory-graph JSON snapshot (nodes, typed edges, clusters) for the built-in D3 viewer (`visualization/memory-graph.html`) |
+
+Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
+
+The server uses the `ModelContextProtocol` 2.2.0 SDK with negotiated protocol handling, a global
+request-filter pipeline, and explicit read-only/destructive/idempotent/open-world tool metadata.
+SDK package version and negotiated MCP protocol revision are not the same thing.
+
+## Architecture
 
 | Layer | Stability | Components |
 |-------|-----------|------------|
@@ -176,14 +224,6 @@ fail closed for non-empty tenants. This is containment, not full tenant-qualifie
 See [Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and
 [Security](SECURITY.md).
 
-<p align="center">
-  <img src="images/how-it-works.svg?v=1.2.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
-</p>
-
-<p align="center">
-  <img src="images/retrieval-pipeline.svg?v=1.2.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
-</p>
-
 ## AI Assistant Setup
 
 Model execution belongs to the host harness, not the Engram server: expert profiles route to persona-backed memory namespaces, while the host model reasons over the retrieved evidence. See [Model and Reasoning Routing](docs/model-routing.md) for canonical task tiers, the current Codex model mapping, reasoning escalation rules, and ready-to-use profiles.
@@ -210,33 +250,6 @@ For step-by-step setup prompts, see [AI Assistant Setup](docs/ai-assistant-setup
 | **Utility sub-agents** | Haiku (`model: "haiku"`) | Codebase exploration, file searches, grep research, simple lookups |
 
 Opus thinks, Sonnet remembers, Haiku explores.
-
-## MCP Tools (63)
-
-| Group | Tools | Description |
-|-------|-------|-------------|
-| Core Memory | `store_memory`, `store_batch`, `search_memory`, `delete_memory` | Vector CRUD with namespace isolation, batch import, and lifecycle-aware search |
-| Composite | `remember`, `recall` (with `spectralMode`), `reflect`, `get_context_block` | High-level wrappers with auto-dedup, auto-linking, expert routing, context assembly, and graph-aware spectral re-ranking on `recall` (default `auto`) |
-| Knowledge Graph | `link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph` | Directed graph with 7 relation types and multi-hop BFS; similarity-based auto-link densification runs as a 6-hour background sweep |
-| Clustering | `create_cluster`, `update_cluster`, `store_cluster_summary`, `get_cluster`, `list_clusters` | Semantic grouping with auto-computed centroids |
-| Lifecycle | `promote_memory`, `memory_feedback`, `deep_recall`, `configure_decay` | State transitions (STM/LTM/archived) and per-namespace decay configuration; spectral decay diffusion and sleep consolidation run automatically as background services |
-| Memory Diffusion | `compute_diffusion_basis`, `diffusion_stats`, `invalidate_diffusion`, `spectral_recall` | Graph-Laplacian eigenbasis primitive shared by decay, consolidation, and retrieval; standalone graph-aware retrieval |
-| Intelligence | `detect_duplicates`, `find_contradictions`, `merge_memories`, `uncollapse_cluster`, `list_collapse_history` | Dedup, contradiction detection, merge, collapse reversal |
-| Expert Routing | `dispatch_task`, `create_expert`, `get_domain_tree`, `link_to_parent` | HMoE semantic routing with 3-level domain tree |
-| Multi-Agent | `cross_search`, `share_namespace`, `unshare_namespace`, `list_shared`, `whoami` | Namespace sharing, permissions, cross-namespace RRF search |
-| Debate | `consult_expert_panel`, `map_debate_graph`, `resolve_debate`, `purge_debates` | Multi-perspective analysis with debate tracking |
-| Synthesis | `synthesize_memories` | Map-reduce synthesis via a local SLM served by Ollama. For fully in-process generation, embed `McpEngramMemory.Core` and add the optional [`McpEngramMemory.Synthesis.Onnx`](#optional-in-process-synthesis) package |
-| Accretion | `get_pending_collapses`, `collapse_cluster`, `dismiss_collapse` | DBSCAN cluster detection and two-phase summarization (the density scan runs as a 30-min background sweep) |
-| Admin | `get_memory`, `cognitive_stats`, `engram_status`, `get_metrics`, `reset_metrics` | Inspection, system-wide statistics, background-worker health, and latency metrics |
-| Maintenance | `rebuild_embeddings`, `compression_stats` | Re-embed entries and storage diagnostics |
-| Benchmarks | `run_benchmark`, `run_agent_outcome_benchmark`, `run_live_agent_outcome_benchmark`, `compare_live_agent_outcome_artifacts`, `check_for_regression`, `run_mrcr_benchmark`, `compare_mrcr_artifacts` | IR quality validation, proxy and live memory-condition benchmarking, artifact diffing, CI regression gating, and MRCR v2 long-context A/B |
-| Visualization | `get_graph_snapshot` | Memory-graph JSON snapshot (nodes, typed edges, clusters) for the built-in D3 viewer (`visualization/memory-graph.html`) |
-
-Full tool documentation: [MCP Tools Reference](docs/mcp-tools-reference.md)
-
-The server uses the `ModelContextProtocol` 2.2.0 SDK with negotiated protocol handling, a global
-request-filter pipeline, and explicit read-only/destructive/idempotent/open-world tool metadata.
-SDK package version and negotiated MCP protocol revision are not the same thing.
 
 ## Environment Variables
 

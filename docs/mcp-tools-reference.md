@@ -55,13 +55,14 @@ retains historical graph/lifecycle behavior. See [Security](../SECURITY.md).
 | `search_memory` | k-NN search within a namespace with optional hybrid mode (BM25+vector fusion with synonym expansion, cascade retrieval, BM25 semantic gate, and auto-PRF), cluster-aware MMR diversity reranking (`diversity: true`), lifecycle/category filtering, summary-first mode, physics-based re-ranking, and `explain` mode for full retrieval diagnostics. |
 | `delete_memory` | Remove a memory entry by ID. Cascades to remove associated graph edges and cluster memberships. |
 
-### Composite Tools (5 tools)
+### Composite Tools (4 tools)
+
+Minimal profile. `spectral_recall` is a separate standard/full-profile tool — see [Memory Diffusion & Spectral Retrieval](#memory-diffusion--spectral-retrieval-4-tools).
 
 | Tool | Description |
 |------|-------------|
 | `remember` | Intelligent store: saves a memory with auto-generated embedding, duplicate detection, and auto-linking to related existing memories. Use instead of store_memory + detect_duplicates + link_memories. |
 | `recall` | Intelligent search: searches with auto-routing to the best namespace via expert dispatch, with fallback to direct search. Combines search_memory + dispatch_task in one call. New `spectralMode` parameter (default `"auto"`) re-ranks results through the memory-diffusion kernel: short conceptual queries get a cluster-boost (Broad), longer/precise queries get cluster-mean subtraction (Specific). Pass `"none"` to disable. |
-| `spectral_recall` | Standalone graph-aware retrieval: runs hybrid search to gather candidates, then re-ranks them through the memory-diffusion kernel. Use `mode="broad"` for thematic queries (cluster-boost surfaces topic-related memories the upstream search missed), `mode="specific"` for precise queries (boost outliers above cluster mates), `mode="none"` to bypass spectral re-ranking. Falls back gracefully on namespaces below the kernel threshold. |
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
 | `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 
@@ -212,13 +213,16 @@ Expert routing workflow: `dispatch_task` (route query) → if miss: `create_expe
 
 Multi-agent workflow: the host supplies `AGENT_ID` per agent instance and, when tenant partitioning is enabled, `MEMORY_TENANT_ID`. Namespace ownership is established on first write. Use `share_namespace` to grant cross-agent access and `cross_search` to query shared namespaces. The default agent with an empty tenant has unrestricted access only as the explicit legacy-unisolated compatibility mode; environment variables are deployment inputs, not an authentication boundary.
 
-### Memory Diffusion Kernel (3 tools)
+### Memory Diffusion & Spectral Retrieval (4 tools)
+
+Standard and full profiles. Three diffusion-kernel primitives plus the standalone `spectral_recall` retrieval tool built on them.
 
 | Tool | Description |
 |------|-------------|
 | `compute_diffusion_basis` | Force computation of the top-K diffusion basis (graph-Laplacian eigenbasis) for a namespace. Returns diagnostics; the basis is held in-memory by the server and consumed by spectral decay, sleep consolidation, and spectral retrieval. Returns null if the namespace is below the spectral threshold (32 nodes / 8 positive-relation edges). Background pre-warming runs every 30 minutes via `DiffusionKernelWarmupService`. |
 | `diffusion_stats` | Diagnostics for the cached diffusion basis of a namespace: node count, edge count, top-K, smallest/largest eigenvalues, graph revision, computed-at timestamp, and stale flag. Does not force recomputation. |
 | `invalidate_diffusion` | Drop the cached diffusion basis for a namespace. Useful after manual graph surgery or if you suspect drift. The next read recomputes lazily. |
+| `spectral_recall` | Standalone graph-aware retrieval: runs hybrid search to gather candidates, then re-ranks them through the memory-diffusion kernel. Use `mode="broad"` for thematic queries (cluster-boost surfaces topic-related memories the upstream search missed), `mode="specific"` for precise queries (boost outliers above cluster mates), `mode="none"` to bypass spectral re-ranking. Falls back gracefully on namespaces below the kernel threshold. |
 
 The diffusion kernel holds the top-K eigenbasis of the normalized Laplacian `L = I - D^(-1/2) W D^(-1/2)` built from positive-relation edges only (`parent_child`, `cross_reference`, `similar_to`, `elaborates`, `depends_on`; `contradicts` excluded so `L` stays positive semi-definite). Same primitive serves three subsystems: spectral decay (debt diffusion), sleep consolidation (long-time heat-kernel propagation), and spectral retrieval (low-pass / high-pass relevance re-ranking).
 
