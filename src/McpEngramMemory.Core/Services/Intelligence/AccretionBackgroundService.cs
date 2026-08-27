@@ -56,14 +56,17 @@ public sealed class AccretionBackgroundService : BackgroundService
             var swTotal = Stopwatch.StartNew();
             try
             {
-                var namespaces = _index.GetNamespaces();
                 int totalClusters = 0;
+                int nsCount = 0;
 
-                foreach (var ns in namespaces)
+                // Scan every tenant's namespaces (the legacy tenant "" is included when present).
+                foreach (var tenant in _index.GetAllTenants())
+                foreach (var ns in _index.GetNamespaces(tenant))
                 {
+                    nsCount++;
                     var sw = Stopwatch.StartNew();
                     var result = _scanner.ScanNamespace(ns,
-                        autoSummarize: true, clusters: _clusters, embedding: _embedding);
+                        autoSummarize: true, clusters: _clusters, embedding: _embedding, tenantId: tenant);
                     sw.Stop();
                     totalClusters += result.ClustersDetected;
                     totalEntriesProcessed += result.ScannedCount;
@@ -75,7 +78,7 @@ public sealed class AccretionBackgroundService : BackgroundService
 
                 swTotal.Stop();
                 _logger.LogDebug("Accretion scan completed across {Count} namespace(s), {Clusters} total clusters",
-                    namespaces.Count, totalClusters);
+                    nsCount, totalClusters);
             }
             catch (Exception ex)
             {

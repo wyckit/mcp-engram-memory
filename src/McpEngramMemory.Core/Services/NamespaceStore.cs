@@ -157,6 +157,13 @@ internal sealed class NamespaceStore
             .Distinct()
             .ToList();
 
+    /// <summary>
+    /// Distinct tenant ids across all loaded partitions (includes the legacy tenant "" when legacy
+    /// data is present). Callers that need complete discovery must <see cref="LoadAll"/> first.
+    /// </summary>
+    public IReadOnlyList<string> GetAllTenants()
+        => _namespaces.Keys.Select(k => k.Tenant).Distinct().ToList();
+
     /// <summary>Snapshot the entry dictionaries belonging to exactly one tenant.</summary>
     public IEnumerable<ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>>
         GetTenantNamespaces(string tenantId)

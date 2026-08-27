@@ -51,15 +51,25 @@ public sealed class ConsolidationBackgroundService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _lifecycle.RunConsolidationPass("*");
+                // Consolidate every tenant partition (legacy "" included when present).
+                int promotions = 0, archivals = 0;
+                foreach (var tenant in _lifecycle.GetAllTenants())
+                {
+                    var result = _lifecycle.RunConsolidationPass("*", tenant);
+                    entriesProcessed += result.ProcessedEntries;
+                    promotions += result.StmToLtm;
+                    archivals += result.LtmToArchived;
+                    var partial = LifecyclePartialFailure.DescribeConsolidation(result);
+                    if (partial is not null)
+                    {
+                        errorMessage = partial;
+                        _logger?.LogWarning("Consolidation pass (tenant='{Tenant}') completed with partial failures: {Message}", tenant, partial);
+                    }
+                }
                 sw.Stop();
-                entriesProcessed = result.ProcessedEntries;
                 _logger?.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} promotionsCount={PromotionsCount} archivalsCount={ArchivalsCount}",
-                    "consolidation", "*", sw.ElapsedMilliseconds, entriesProcessed, result.StmToLtm, result.LtmToArchived);
-                errorMessage = LifecyclePartialFailure.DescribeConsolidation(result);
-                if (errorMessage is not null)
-                    _logger?.LogWarning("Consolidation pass completed with partial failures: {Message}", errorMessage);
+                    "consolidation", "*", sw.ElapsedMilliseconds, entriesProcessed, promotions, archivals);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {

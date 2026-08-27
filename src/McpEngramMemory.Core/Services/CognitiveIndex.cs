@@ -162,6 +162,16 @@ public sealed class CognitiveIndex : IDisposable
         return _store.GetNamespaceNames(NormalizeTenant(tenantId));
     }
 
+    /// <summary>
+    /// All distinct tenant ids in the store (includes the legacy tenant "" when legacy data exists).
+    /// Loads every persisted namespace first so background maintenance can cover every tenant.
+    /// </summary>
+    public IReadOnlyList<string> GetAllTenants()
+    {
+        _store.LoadAll();
+        return _store.GetAllTenants();
+    }
+
     // ── CRUD ──
 
     /// <summary>Add or replace a cognitive entry. LTM/archived entries are auto-quantized for fast search.</summary>

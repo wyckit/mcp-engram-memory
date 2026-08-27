@@ -30,6 +30,9 @@ public sealed class LifecycleEngine
         _logger = logger;
     }
 
+    /// <summary>All distinct tenant ids in the store — used by background maintenance to cover every tenant.</summary>
+    public IReadOnlyList<string> GetAllTenants() => _index.GetAllTenants();
+
     /// <summary>Set or update a per-namespace decay configuration.</summary>
     public DecayConfig SetDecayConfig(string ns, float? decayRate = null, float? reinforcementWeight = null,
         float? stmThreshold = null, float? archiveThreshold = null,
