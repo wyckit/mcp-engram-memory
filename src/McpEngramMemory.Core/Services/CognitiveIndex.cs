@@ -457,8 +457,14 @@ public sealed class CognitiveIndex : IDisposable
         var nskey = new NsKey(NormalizeTenant(request.TenantId), request.Namespace);
         string pk = NamespaceStore.PartitionKey(nskey);
 
-        IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot;
-        HnswIndex? hnswIndex;
+        // Hold the per-namespace read lock across the ENTIRE search — the candidate snapshot, the
+        // vector search, and every BM25/hybrid/PRF/auto-escalation call below. BM25Index.Search reads
+        // shared inner NamespaceIndex state (plain Dictionary/HashSet) that concurrent writers mutate
+        // under this same lock's write side. Releasing the lock right after the snapshot (as this method
+        // did previously) left every BM25 call unlocked, so a background decay/consolidation/accretion
+        // pass or a concurrent remember could mutate those collections mid-enumeration — risking a
+        // "Collection was modified" throw or torn scores. This is a read lock, so concurrent searches
+        // still run fully in parallel; only writers to this namespace wait.
         var nsLock = NsLock(pk);
         nsLock.EnterReadLock();
         try
@@ -467,87 +473,92 @@ public sealed class CognitiveIndex : IDisposable
             var nsEntries = _store.GetNamespace(nskey);
             if (nsEntries is null || nsEntries.Count == 0)
                 return Array.Empty<CognitiveSearchResult>();
-            snapshot = nsEntries.Values.ToList();
-            hnswIndex = _store.GetHnswIndex(pk);
-        }
-        finally { nsLock.ExitReadLock(); }
+            IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot =
+                nsEntries.Values.ToList();
+            HnswIndex? hnswIndex = _store.GetHnswIndex(pk);
 
-        // Tenant-scoped entry resolver for BM25-only ("keyword rescue") candidates. Ignores the
-        // namespace argument supplied by the search engine and resolves strictly within this
-        // partition, so hybrid search can never surface another tenant's entry.
-        Func<string, string, CognitiveEntry?> getEntry = (eid, _) => Get(eid, request.Namespace, nskey.Tenant);
+            // Lock-free entry resolver for BM25-only ("keyword rescue") candidates. Built from the
+            // snapshot taken above so it never re-enters this non-recursive read lock (which Get() would);
+            // the snapshot is the whole partition, so it resolves every id BM25 can surface and can never
+            // leak another tenant's entry.
+            var entryById = new Dictionary<string, CognitiveEntry>(snapshot.Count);
+            foreach (var (entry, _, _) in snapshot)
+                entryById[entry.Id] = entry;
+            Func<string, string, CognitiveEntry?> getEntry = (eid, _) => entryById.GetValueOrDefault(eid);
 
-        // When diversity is active, fetch more candidates so MMR has a broader pool
-        int diversityMultiplier = request.Diversity ? 3 : 1;
+            // When diversity is active, fetch more candidates so MMR has a broader pool
+            int diversityMultiplier = request.Diversity ? 3 : 1;
 
-        if (request.Hybrid && request.QueryText is not null)
-        {
-            // Expand query with domain synonyms for BM25 vocabulary bridging
-            var expandedQueryText = _synonymExpander.Expand(request.QueryText);
-
-            // Scale vector candidate pool with namespace size for better hybrid recall
-            int candidateK = snapshot.Count >= 5000
-                ? Math.Max(request.K * 12, 80)
-                : Math.Max(request.K * 6, 30);
-            var vectorResults = _vectorSearch.Search(
-                request.Query, snapshot, candidateK, request.MinScore,
-                request.Category, request.IncludeStates, false, hnswIndex);
-            int hybridK = request.K * diversityMultiplier;
-            var hybridResults = _hybridSearch.HybridSearch(
-                vectorResults, expandedQueryText, pk, hybridK,
-                request.IncludeStates, request.Category,
-                request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
-
-            // Auto-PRF: if top hybrid result is low confidence, expand query with
-            // terms from initial results and re-search for improved recall
-            if (hybridResults.Count > 0 &&
-                hybridResults[0].Score < 0.04f &&
-                hybridResults.Count >= 3)
+            if (request.Hybrid && request.QueryText is not null)
             {
-                var prfQuery = _queryExpander.Expand(expandedQueryText, hybridResults, maxTerms: 6, minDocFreq: 2);
-                if (prfQuery != expandedQueryText)
+                // Expand query with domain synonyms for BM25 vocabulary bridging
+                var expandedQueryText = _synonymExpander.Expand(request.QueryText);
+
+                // Scale vector candidate pool with namespace size for better hybrid recall
+                int candidateK = snapshot.Count >= 5000
+                    ? Math.Max(request.K * 12, 80)
+                    : Math.Max(request.K * 6, 30);
+                var vectorResults = _vectorSearch.Search(
+                    request.Query, snapshot, candidateK, request.MinScore,
+                    request.Category, request.IncludeStates, false, hnswIndex);
+                int hybridK = request.K * diversityMultiplier;
+                var hybridResults = _hybridSearch.HybridSearch(
+                    vectorResults, expandedQueryText, pk, hybridK,
+                    request.IncludeStates, request.Category,
+                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
+
+                // Auto-PRF: if top hybrid result is low confidence, expand query with
+                // terms from initial results and re-search for improved recall
+                if (hybridResults.Count > 0 &&
+                    hybridResults[0].Score < 0.04f &&
+                    hybridResults.Count >= 3)
                 {
-                    var prfResults = _hybridSearch.HybridSearch(
-                        vectorResults, prfQuery, pk, hybridK,
-                        request.IncludeStates, request.Category,
-                        request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
-                    // Use PRF results if they improve top score
-                    if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
-                        return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, snapshot);
+                    var prfQuery = _queryExpander.Expand(expandedQueryText, hybridResults, maxTerms: 6, minDocFreq: 2);
+                    if (prfQuery != expandedQueryText)
+                    {
+                        var prfResults = _hybridSearch.HybridSearch(
+                            vectorResults, prfQuery, pk, hybridK,
+                            request.IncludeStates, request.Category,
+                            request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
+                        // Use PRF results if they improve top score
+                        if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
+                            return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, snapshot);
+                    }
                 }
+
+                return ApplyDiversity(ApplyCategoryBoost(hybridResults, request.QueryText), request, snapshot);
             }
 
-            return ApplyDiversity(ApplyCategoryBoost(hybridResults, request.QueryText), request, snapshot);
+            // Vector-only search with auto-escalation to hybrid when confidence is low
+            int vectorK = request.K * diversityMultiplier;
+            var vectorOnlyResults = _vectorSearch.Search(
+                request.Query, snapshot, vectorK, request.MinScore,
+                request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
+
+            // Auto-escalate: if top vector result is low confidence and we have query text,
+            // retry as hybrid search to let BM25 rescue keyword-dependent queries
+            if (request.QueryText is not null &&
+                vectorOnlyResults.Count > 0 &&
+                vectorOnlyResults[0].Score < 0.50f &&
+                !request.SummaryFirst)
+            {
+                int candidateK = snapshot.Count >= 5000
+                    ? Math.Max(request.K * 10, 60)
+                    : Math.Max(request.K * 5, 25);
+                var broadVectorResults = _vectorSearch.Search(
+                    request.Query, snapshot, candidateK, request.MinScore,
+                    request.Category, request.IncludeStates, false, hnswIndex);
+                var expandedQueryText = _synonymExpander.Expand(request.QueryText);
+                var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
+                    broadVectorResults, expandedQueryText, pk, request.K * diversityMultiplier,
+                    request.IncludeStates, request.Category,
+                    false, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count), request.QueryText);
+                return ApplyDiversity(escalatedResults, request, snapshot);
+            }
+
+            return ApplyDiversity(vectorOnlyResults, request, snapshot);
         }
-
-        // Vector-only search with auto-escalation to hybrid when confidence is low
-        int vectorK = request.K * diversityMultiplier;
-        var vectorOnlyResults = _vectorSearch.Search(
-            request.Query, snapshot, vectorK, request.MinScore,
-            request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
-
-        // Auto-escalate: if top vector result is low confidence and we have query text,
-        // retry as hybrid search to let BM25 rescue keyword-dependent queries
-        if (request.QueryText is not null &&
-            vectorOnlyResults.Count > 0 &&
-            vectorOnlyResults[0].Score < 0.50f &&
-            !request.SummaryFirst)
-        {
-            int candidateK = snapshot.Count >= 5000
-                ? Math.Max(request.K * 10, 60)
-                : Math.Max(request.K * 5, 25);
-            var broadVectorResults = _vectorSearch.Search(
-                request.Query, snapshot, candidateK, request.MinScore,
-                request.Category, request.IncludeStates, false, hnswIndex);
-            var expandedQueryText = _synonymExpander.Expand(request.QueryText);
-            var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
-                broadVectorResults, expandedQueryText, pk, request.K * diversityMultiplier,
-                request.IncludeStates, request.Category,
-                false, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count), request.QueryText);
-            return ApplyDiversity(escalatedResults, request, snapshot);
-        }
-
-        return ApplyDiversity(vectorOnlyResults, request, snapshot);
+        finally { nsLock.ExitReadLock(); }
     }
 
     /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
