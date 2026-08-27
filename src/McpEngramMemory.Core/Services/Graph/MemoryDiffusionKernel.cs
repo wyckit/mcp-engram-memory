@@ -21,7 +21,7 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///
 /// Construction. For namespace <c>ns</c>:
 /// 1. Snapshot entry ids in stable order from <see cref="CognitiveIndex.GetAllInNamespace(string)"/>.
-/// 2. Snapshot the global edge list from <see cref="KnowledgeGraph.GetAllEdges"/>, filter
+/// 2. Snapshot the edge list from <see cref="KnowledgeGraph.GetAllEdges()"/>, filter
 ///    to edges whose endpoints are both in <c>ns</c> and whose relation is in
 ///    <see cref="PositiveRelations"/> (parent_child, cross_reference, similar_to,
 ///    elaborates, depends_on). The <c>contradicts</c> relation is excluded so the

@@ -6,6 +6,13 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// <summary>
 /// In-memory knowledge graph using adjacency lists for directed edges between cognitive entries.
 ///
+/// Tenant isolation: adjacency is keyed by <c>(tenant, entryId)</c>, and every <see cref="GraphEdge"/>
+/// carries its own <see cref="GraphEdge.TenantId"/>. A lookup for tenant T only ever sees T's edges,
+/// so the graph never connects entries across tenants — while still allowing cross-namespace
+/// association WITHIN a tenant (the legacy behavior for tenant <c>""</c> is byte-for-byte identical,
+/// since every legacy edge and lookup uses tenant <c>""</c>). Entry resolution is tenant-scoped:
+/// the fast legacy id locator for tenant <c>""</c>, a tenant-scoped scan otherwise.
+///
 /// Locking strategy:
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
 /// - Mutating methods use EnterWriteLock directly.
@@ -14,10 +21,10 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// </summary>
 public sealed class KnowledgeGraph
 {
-    // outgoing[sourceId] = list of edges from sourceId
-    private readonly Dictionary<string, List<GraphEdge>> _outgoing = new();
-    // incoming[targetId] = list of edges to targetId
-    private readonly Dictionary<string, List<GraphEdge>> _incoming = new();
+    // outgoing[(tenant, sourceId)] = list of edges from sourceId within that tenant
+    private readonly Dictionary<(string Tenant, string Id), List<GraphEdge>> _outgoing = new();
+    // incoming[(tenant, targetId)] = list of edges to targetId within that tenant
+    private readonly Dictionary<(string Tenant, string Id), List<GraphEdge>> _incoming = new();
     private readonly ReaderWriterLockSlim _lock = new();
     private readonly IStorageProvider _persistence;
     private readonly CognitiveIndex _index;
@@ -37,7 +44,7 @@ public sealed class KnowledgeGraph
         _index = index;
     }
 
-    /// <summary>Total number of edges in the graph.</summary>
+    /// <summary>Total number of edges in the graph, across all tenants.</summary>
     public int EdgeCount
     {
         get
@@ -52,7 +59,7 @@ public sealed class KnowledgeGraph
         }
     }
 
-    /// <summary>Create a directed edge between two entries.</summary>
+    /// <summary>Create a directed edge between two entries. The edge's own TenantId scopes the partition.</summary>
     public string AddEdge(GraphEdge edge)
     {
         _lock.EnterWriteLock();
@@ -61,11 +68,12 @@ public sealed class KnowledgeGraph
             EnsureLoadedUnderWrite();
             AddEdgeInternal(edge);
 
-            // Auto-create reverse edge for cross_reference
+            // Auto-create reverse edge for cross_reference (same tenant partition)
             if (edge.Relation == "cross_reference")
             {
                 var reverse = new GraphEdge(edge.TargetId, edge.SourceId, "cross_reference",
-                    edge.Weight, edge.Metadata.Count > 0 ? new Dictionary<string, string>(edge.Metadata) : null);
+                    edge.Weight, edge.Metadata.Count > 0 ? new Dictionary<string, string>(edge.Metadata) : null,
+                    edge.TenantId);
                 AddEdgeInternal(reverse);
             }
 
@@ -92,7 +100,8 @@ public sealed class KnowledgeGraph
                 if (edge.Relation == "cross_reference")
                 {
                     var reverse = new GraphEdge(edge.TargetId, edge.SourceId, "cross_reference",
-                        edge.Weight, edge.Metadata.Count > 0 ? new Dictionary<string, string>(edge.Metadata) : null);
+                        edge.Weight, edge.Metadata.Count > 0 ? new Dictionary<string, string>(edge.Metadata) : null,
+                        edge.TenantId);
                     AddEdgeInternal(reverse);
                 }
                 count++;
@@ -107,16 +116,16 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Remove edges between two entries, optionally filtered by relation.</summary>
-    public string RemoveEdges(string sourceId, string targetId, string? relation = null)
+    /// <summary>Remove edges between two entries within a tenant, optionally filtered by relation.</summary>
+    public string RemoveEdges(string sourceId, string targetId, string? relation = null, string tenantId = "")
     {
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
             int removed = 0;
-            removed += RemoveMatching(_outgoing, sourceId, e => e.TargetId == targetId && (relation == null || e.Relation == relation));
-            removed += RemoveMatching(_incoming, targetId, e => e.SourceId == sourceId && (relation == null || e.Relation == relation));
+            removed += RemoveMatching(_outgoing, (tenantId, sourceId), e => e.TargetId == targetId && (relation == null || e.Relation == relation));
+            removed += RemoveMatching(_incoming, (tenantId, targetId), e => e.SourceId == sourceId && (relation == null || e.Relation == relation));
 
             if (removed > 0)
             {
@@ -131,31 +140,32 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Remove ALL edges referencing an entry (cascade delete).</summary>
-    public int RemoveAllEdgesForEntry(string id)
+    /// <summary>Remove ALL edges referencing an entry within a tenant (cascade delete).</summary>
+    public int RemoveAllEdgesForEntry(string id, string tenantId = "")
     {
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
             int removed = 0;
+            var key = (tenantId, id);
 
             // Remove outgoing edges and their incoming references
-            if (_outgoing.TryGetValue(id, out var outEdges))
+            if (_outgoing.TryGetValue(key, out var outEdges))
             {
                 foreach (var edge in outEdges)
-                    RemoveMatching(_incoming, edge.TargetId, e => e.SourceId == id);
+                    RemoveMatching(_incoming, (tenantId, edge.TargetId), e => e.SourceId == id);
                 removed += outEdges.Count;
-                _outgoing.Remove(id);
+                _outgoing.Remove(key);
             }
 
             // Remove incoming edges and their outgoing references
-            if (_incoming.TryGetValue(id, out var inEdges))
+            if (_incoming.TryGetValue(key, out var inEdges))
             {
                 foreach (var edge in inEdges)
-                    RemoveMatching(_outgoing, edge.SourceId, e => e.TargetId == id);
+                    RemoveMatching(_outgoing, (tenantId, edge.SourceId), e => e.TargetId == id);
                 removed += inEdges.Count;
-                _incoming.Remove(id);
+                _incoming.Remove(key);
             }
 
             if (removed > 0)
@@ -169,8 +179,8 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Get directly connected entries.</summary>
-    public GetNeighborsResult GetNeighbors(string id, string? relation = null, string direction = "both")
+    /// <summary>Get directly connected entries within a tenant.</summary>
+    public GetNeighborsResult GetNeighbors(string id, string? relation = null, string direction = "both", string tenantId = "")
     {
         // Snapshot edge data under graph lock, then resolve entries outside the lock
         // to avoid lock-ordering issues with CognitiveIndex.
@@ -184,7 +194,7 @@ public sealed class KnowledgeGraph
 
             if (direction is "both" or "outgoing")
             {
-                if (_outgoing.TryGetValue(id, out var outEdges))
+                if (_outgoing.TryGetValue((tenantId, id), out var outEdges))
                 {
                     foreach (var edge in outEdges)
                     {
@@ -196,7 +206,7 @@ public sealed class KnowledgeGraph
 
             if (direction is "both" or "incoming")
             {
-                if (_incoming.TryGetValue(id, out var inEdges))
+                if (_incoming.TryGetValue((tenantId, id), out var inEdges))
                 {
                     foreach (var edge in inEdges)
                     {
@@ -208,11 +218,11 @@ public sealed class KnowledgeGraph
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
-        // Resolve entries outside graph lock (CognitiveIndex has its own lock)
+        // Resolve entries outside graph lock (CognitiveIndex has its own lock), scoped to the tenant.
         var neighbors = new List<NeighborResult>();
         foreach (var (edge, resolveId) in edgesToResolve)
         {
-            var entry = _index.Get(resolveId);
+            var entry = ResolveEntry(resolveId, tenantId);
             if (entry is not null)
                 neighbors.Add(new NeighborResult(edge, ToEntryInfo(entry)));
         }
@@ -220,21 +230,23 @@ public sealed class KnowledgeGraph
         return new GetNeighborsResult(id, neighbors);
     }
 
-    /// <summary>Multi-hop graph traversal via BFS.</summary>
+    /// <summary>Multi-hop graph traversal via BFS, scoped to a tenant.</summary>
     public TraversalResult Traverse(string startId, int maxDepth = 2, string? relation = null,
-        float minWeight = 0f, int maxResults = 20)
+        float minWeight = 0f, int maxResults = 20, string tenantId = "")
     {
         maxDepth = Math.Clamp(maxDepth, 1, 5);
 
-        // Snapshot the graph adjacency data under the graph lock,
+        // Snapshot this tenant's adjacency under the graph lock (keyed by bare id for BFS),
         // then resolve entries outside the lock to avoid lock-ordering issues.
         Dictionary<string, List<GraphEdge>> outgoingSnapshot;
         _lock.EnterUpgradeableReadLock();
         try
         {
             EnsureLoaded();
-            // Shallow copy of adjacency lists (edges are immutable)
-            outgoingSnapshot = _outgoing.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+            // Shallow copy of this tenant's adjacency lists (edges are immutable)
+            outgoingSnapshot = _outgoing
+                .Where(kv => kv.Key.Tenant == tenantId)
+                .ToDictionary(kv => kv.Key.Id, kv => kv.Value.ToList());
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
@@ -247,7 +259,7 @@ public sealed class KnowledgeGraph
         queue.Enqueue((startId, 0));
         visited.Add(startId);
 
-        var startEntry = _index.Get(startId);
+        var startEntry = ResolveEntry(startId, tenantId);
         if (startEntry is not null)
             resultEntries.Add(ToEntryInfo(startEntry));
 
@@ -267,7 +279,7 @@ public sealed class KnowledgeGraph
                     visited.Add(edge.TargetId);
                     resultEdges.Add(edge);
 
-                    var entry = _index.Get(edge.TargetId);
+                    var entry = ResolveEntry(edge.TargetId, tenantId);
                     if (entry is not null)
                         resultEntries.Add(ToEntryInfo(entry));
 
@@ -280,25 +292,25 @@ public sealed class KnowledgeGraph
         return new TraversalResult(startId, resultEntries, resultEdges);
     }
 
-    /// <summary>Get all edges for an entry (both directions).</summary>
-    public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id)
+    /// <summary>Get all edges for an entry within a tenant (both directions).</summary>
+    public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id, string tenantId = "")
     {
         _lock.EnterUpgradeableReadLock();
         try
         {
             EnsureLoaded();
             var edges = new List<GraphEdge>();
-            if (_outgoing.TryGetValue(id, out var outEdges))
+            if (_outgoing.TryGetValue((tenantId, id), out var outEdges))
                 edges.AddRange(outEdges);
-            if (_incoming.TryGetValue(id, out var inEdges))
+            if (_incoming.TryGetValue((tenantId, id), out var inEdges))
                 edges.AddRange(inEdges);
             return edges;
         }
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Get all edges with a 'contradicts' relation for entries in a namespace.</summary>
-    public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns)
+    /// <summary>Get all edges with a 'contradicts' relation for entries in a namespace within a tenant.</summary>
+    public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns, string tenantId = "")
     {
         List<GraphEdge> contradictEdges;
 
@@ -308,17 +320,17 @@ public sealed class KnowledgeGraph
             EnsureLoaded();
             contradictEdges = _outgoing.Values
                 .SelectMany(l => l)
-                .Where(e => e.Relation == "contradicts")
+                .Where(e => e.Relation == "contradicts" && e.TenantId == tenantId)
                 .ToList();
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
-        // Resolve entries outside graph lock, filter to namespace
+        // Resolve entries outside graph lock (scoped to tenant), filter to namespace
         var results = new List<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
         foreach (var edge in contradictEdges)
         {
-            var source = _index.Get(edge.SourceId);
-            var target = _index.Get(edge.TargetId);
+            var source = ResolveEntry(edge.SourceId, tenantId);
+            var target = ResolveEntry(edge.TargetId, tenantId);
 
             // Include if either entry is in the requested namespace
             if ((source?.Ns == ns) || (target?.Ns == ns))
@@ -328,7 +340,7 @@ public sealed class KnowledgeGraph
         return results;
     }
 
-    /// <summary>Get all edges (for persistence).</summary>
+    /// <summary>Get all edges across every tenant (for persistence).</summary>
     public IReadOnlyList<GraphEdge> GetAllEdges()
     {
         _lock.EnterUpgradeableReadLock();
@@ -340,46 +352,62 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Transfer all edges from one entry to another (for merge operations). Returns count of edges transferred.</summary>
-    public int TransferEdges(string fromId, string toId)
+    /// <summary>Get all edges belonging to one tenant (for per-tenant graph derivations, e.g. diffusion).</summary>
+    public IReadOnlyList<GraphEdge> GetAllEdges(string tenantId)
+    {
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            EnsureLoaded();
+            return _outgoing
+                .Where(kv => kv.Key.Tenant == tenantId)
+                .SelectMany(kv => kv.Value)
+                .ToList();
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+    }
+
+    /// <summary>Transfer all edges from one entry to another within a tenant (for merge operations). Returns count transferred.</summary>
+    public int TransferEdges(string fromId, string toId, string tenantId = "")
     {
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
             int transferred = 0;
+            var fromKey = (tenantId, fromId);
 
             // Transfer outgoing edges: fromId -> X becomes toId -> X
-            if (_outgoing.TryGetValue(fromId, out var outEdges))
+            if (_outgoing.TryGetValue(fromKey, out var outEdges))
             {
                 foreach (var edge in outEdges.ToList())
                 {
                     // Skip self-referential edges that would result from the transfer
                     if (edge.TargetId == toId) continue;
 
-                    var newEdge = new GraphEdge(toId, edge.TargetId, edge.Relation, edge.Weight, edge.Metadata);
+                    var newEdge = new GraphEdge(toId, edge.TargetId, edge.Relation, edge.Weight, edge.Metadata, tenantId);
                     AddEdgeInternal(newEdge);
                     transferred++;
                 }
                 // Remove old outgoing list
-                _outgoing.Remove(fromId);
+                _outgoing.Remove(fromKey);
             }
 
             // Transfer incoming edges: X -> fromId becomes X -> toId
-            if (_incoming.TryGetValue(fromId, out var inEdges))
+            if (_incoming.TryGetValue(fromKey, out var inEdges))
             {
                 foreach (var edge in inEdges.ToList())
                 {
                     if (edge.SourceId == toId) continue;
 
                     // Remove the old outgoing reference (X -> fromId) from the source's outgoing list
-                    RemoveMatching(_outgoing, edge.SourceId, e => e.TargetId == fromId && e.Relation == edge.Relation);
+                    RemoveMatching(_outgoing, (tenantId, edge.SourceId), e => e.TargetId == fromId && e.Relation == edge.Relation);
 
-                    var newEdge = new GraphEdge(edge.SourceId, toId, edge.Relation, edge.Weight, edge.Metadata);
+                    var newEdge = new GraphEdge(edge.SourceId, toId, edge.Relation, edge.Weight, edge.Metadata, tenantId);
                     AddEdgeInternal(newEdge);
                     transferred++;
                 }
-                _incoming.Remove(fromId);
+                _incoming.Remove(fromKey);
             }
 
             if (transferred > 0)
@@ -395,24 +423,31 @@ public sealed class KnowledgeGraph
 
     // ── Internals ──
 
+    /// <summary>Resolve an entry id within a tenant: fast legacy locator for tenant "", tenant-scoped scan otherwise.</summary>
+    private CognitiveEntry? ResolveEntry(string id, string tenantId)
+        => tenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId);
+
     private void AddEdgeInternal(GraphEdge edge)
     {
+        var srcKey = (edge.TenantId, edge.SourceId);
+        var tgtKey = (edge.TenantId, edge.TargetId);
+
         // Remove existing edge with same source/target/relation to avoid duplicates
-        if (_outgoing.TryGetValue(edge.SourceId, out var outList))
+        if (_outgoing.TryGetValue(srcKey, out var outList))
             outList.RemoveAll(e => e.TargetId == edge.TargetId && e.Relation == edge.Relation);
-        if (_incoming.TryGetValue(edge.TargetId, out var inList))
+        if (_incoming.TryGetValue(tgtKey, out var inList))
             inList.RemoveAll(e => e.SourceId == edge.SourceId && e.Relation == edge.Relation);
 
-        if (!_outgoing.ContainsKey(edge.SourceId))
-            _outgoing[edge.SourceId] = new();
-        _outgoing[edge.SourceId].Add(edge);
+        if (!_outgoing.ContainsKey(srcKey))
+            _outgoing[srcKey] = new();
+        _outgoing[srcKey].Add(edge);
 
-        if (!_incoming.ContainsKey(edge.TargetId))
-            _incoming[edge.TargetId] = new();
-        _incoming[edge.TargetId].Add(edge);
+        if (!_incoming.ContainsKey(tgtKey))
+            _incoming[tgtKey] = new();
+        _incoming[tgtKey].Add(edge);
     }
 
-    private static int RemoveMatching(Dictionary<string, List<GraphEdge>> dict, string key, Func<GraphEdge, bool> predicate)
+    private static int RemoveMatching(Dictionary<(string Tenant, string Id), List<GraphEdge>> dict, (string, string) key, Func<GraphEdge, bool> predicate)
     {
         if (!dict.TryGetValue(key, out var list))
             return 0;
@@ -452,7 +487,7 @@ public sealed class KnowledgeGraph
         _loaded = true;
     }
 
-    // Snapshot edge data and schedule save. MUST be called within write lock.
+    // Snapshot edge data (all tenants) and schedule save. MUST be called within write lock.
     private void ScheduleSaveEdges()
     {
         var snapshot = _outgoing.Values.SelectMany(l => l).ToList();
