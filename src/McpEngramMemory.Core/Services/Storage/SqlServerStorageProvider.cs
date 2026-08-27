@@ -304,7 +304,9 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     public Dictionary<string, DecayConfig> LoadDecayConfigs()
     {
         var list = LoadGlobalData<List<DecayConfig>>("decay_configs");
-        return list?.ToDictionary(c => c.Ns) ?? new();
+        // Key by the (tenant, ns) partition so two tenants can each hold a config for the same
+        // namespace without colliding. Legacy configs (tenant "") key on the bare ns as before.
+        return list?.ToDictionary(c => NamespaceStore.PartitionKey(c.TenantId, c.Ns)) ?? new();
     }
 
     private T? LoadGlobalData<T>(string key) where T : class

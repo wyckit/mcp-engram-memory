@@ -33,15 +33,16 @@ public sealed class LifecycleEngine
     /// <summary>Set or update a per-namespace decay configuration.</summary>
     public DecayConfig SetDecayConfig(string ns, float? decayRate = null, float? reinforcementWeight = null,
         float? stmThreshold = null, float? archiveThreshold = null,
-        bool? useSpectralDecay = null, float? subdiffusiveExponent = null)
+        bool? useSpectralDecay = null, float? subdiffusiveExponent = null, string tenantId = "")
     {
+        string pk = NamespaceStore.PartitionKey(tenantId, ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();
-            if (!_decayConfigs.TryGetValue(ns, out var config))
+            if (!_decayConfigs.TryGetValue(pk, out var config))
             {
-                config = new DecayConfig(ns);
-                _decayConfigs[ns] = config;
+                config = new DecayConfig(ns, tenantId: tenantId);
+                _decayConfigs[pk] = config;
             }
 
             if (decayRate.HasValue) config.DecayRate = decayRate.Value;
@@ -57,12 +58,13 @@ public sealed class LifecycleEngine
     }
 
     /// <summary>Get the decay config for a namespace, or null if using defaults.</summary>
-    public DecayConfig? GetDecayConfig(string ns)
+    public DecayConfig? GetDecayConfig(string ns, string tenantId = "")
     {
+        string pk = NamespaceStore.PartitionKey(tenantId, ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();
-            return _decayConfigs.TryGetValue(ns, out var config) ? config : null;
+            return _decayConfigs.TryGetValue(pk, out var config) ? config : null;
         }
     }
 
@@ -88,9 +90,10 @@ public sealed class LifecycleEngine
         float reinforcementWeight = 1.0f,
         float stmThreshold = 2.0f,
         float archiveThreshold = -5.0f,
-        bool useStoredConfig = false)
+        bool useStoredConfig = false,
+        string tenantId = "")
     {
-        var allNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
+        var allNamespaces = ns == "*" ? _index.GetNamespaces(tenantId) : new[] { ns };
 
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
@@ -115,7 +118,7 @@ public sealed class LifecycleEngine
 
                 if (useStoredConfig)
                 {
-                    var config = GetDecayConfig(currentNs);
+                    var config = GetDecayConfig(currentNs, tenantId);
                     if (config is not null)
                     {
                         effectiveDecayRate = config.DecayRate;
@@ -139,7 +142,7 @@ public sealed class LifecycleEngine
                 }
 
                 // GetAllInNamespace returns a snapshot list — safe to iterate
-                var entries = _index.GetAllInNamespace(currentNs);
+                var entries = _index.GetAllInNamespace(currentNs, tenantId);
                 var nonSummary = new List<CognitiveEntry>(entries.Count);
                 foreach (var e in entries)
                     if (!e.IsSummaryNode) nonSummary.Add(e);
@@ -179,7 +182,7 @@ public sealed class LifecycleEngine
                     try
                     {
                         appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
-                            lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)));
+                            lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)), tenantId);
                     }
                     catch (Exception ex)
                     {
@@ -210,7 +213,7 @@ public sealed class LifecycleEngine
                             break;
                     }
 
-                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState);
+                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState, currentNs, tenantId);
                 }
             }
             catch (Exception ex)
@@ -260,7 +263,8 @@ public sealed class LifecycleEngine
     /// nothing to add over the regular decay cycle.
     /// </summary>
     /// <param name="ns">Namespace to consolidate, or "*" for every non-system namespace.</param>
-    public ConsolidationResult RunConsolidationPass(string ns)
+    /// <param name="tenantId">Tenant partition to consolidate; "" is the legacy tenant.</param>
+    public ConsolidationResult RunConsolidationPass(string ns, string tenantId = "")
     {
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
@@ -277,7 +281,7 @@ public sealed class LifecycleEngine
             return new ConsolidationResult(0, 1, 0, 0, 0, stmToLtmIds, ltmToArchivedIds, Array.Empty<string>());
         }
 
-        var allNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
+        var allNamespaces = ns == "*" ? _index.GetNamespaces(tenantId) : new[] { ns };
 
         foreach (var currentNs in allNamespaces)
         {
@@ -290,14 +294,14 @@ public sealed class LifecycleEngine
 
             try
             {
-                var config = GetDecayConfig(currentNs) ?? new DecayConfig(currentNs);
+                var config = GetDecayConfig(currentNs, tenantId) ?? new DecayConfig(currentNs, tenantId: tenantId);
                 if (!config.EnableConsolidation)
                 {
                     skippedNamespaces++;
                     continue;
                 }
 
-                var entries = _index.GetAllInNamespace(currentNs);
+                var entries = _index.GetAllInNamespace(currentNs, tenantId);
                 var nonSummary = new List<CognitiveEntry>(entries.Count);
                 foreach (var e in entries)
                     if (!e.IsSummaryNode) nonSummary.Add(e);
@@ -312,7 +316,7 @@ public sealed class LifecycleEngine
                 // that case explicitly to skip rather than make essentially-no-op
                 // threshold decisions on raw activation (which would duplicate the
                 // existing decay cycle's role).
-                var basis = _diffusion.GetBasis(currentNs);
+                var basis = _diffusion.GetBasis(currentNs, tenantId: tenantId);
                 if (basis is null)
                 {
                     skippedNamespaces++;
@@ -326,7 +330,7 @@ public sealed class LifecycleEngine
                 // Long-time heat kernel diffusion: exp(-t * lambda).
                 float t = config.ConsolidationDiffusionTime;
                 var smoothed = _diffusion.ApplySpectralFilter(currentNs, activation,
-                    lambda => MathF.Exp(-lambda * t));
+                    lambda => MathF.Exp(-lambda * t), tenantId);
 
                 // Apply topology-driven transitions.
                 foreach (var entry in nonSummary)
@@ -337,11 +341,11 @@ public sealed class LifecycleEngine
                     switch (entry.LifecycleState)
                     {
                         case "stm" when smoothAE >= config.ConsolidationPromotionThreshold:
-                            if (_index.SetLifecycleState(entry.Id, "ltm"))
+                            if (_index.SetLifecycleState(entry.Id, "ltm", currentNs, tenantId))
                                 stmToLtmIds.Add(entry.Id);
                             break;
                         case "ltm" when smoothAE < config.ConsolidationArchiveThreshold:
-                            if (_index.SetLifecycleState(entry.Id, "archived"))
+                            if (_index.SetLifecycleState(entry.Id, "archived", currentNs, tenantId))
                                 ltmToArchivedIds.Add(entry.Id);
                             break;
                     }
@@ -374,17 +378,23 @@ public sealed class LifecycleEngine
     }
 
     /// <summary>Promote (or demote) an entry to a specific lifecycle state.</summary>
-    public string PromoteMemory(string id, string targetState)
+    public string PromoteMemory(string id, string targetState, string ns = "", string tenantId = "")
     {
         if (targetState is not ("stm" or "ltm" or "archived"))
             return $"Error: Invalid target state '{targetState}'. Use 'stm', 'ltm', or 'archived'.";
 
-        var entry = _index.Get(id);
+        // When a namespace is supplied the lookup is tenant-scoped; a bare id (ns == "") stays on
+        // the legacy locator path so single-tenant callers are unchanged.
+        bool scoped = ns.Length != 0;
+        var entry = scoped ? _index.Get(id, ns, tenantId) : _index.Get(id);
         if (entry is null)
             return $"Error: Entry '{id}' not found.";
 
         var previousState = entry.LifecycleState;
-        if (!_index.SetLifecycleState(id, targetState))
+        bool updated = scoped
+            ? _index.SetLifecycleState(id, targetState, ns, tenantId)
+            : _index.SetLifecycleState(id, targetState);
+        if (!updated)
             return $"Error: Failed to update state for '{id}'.";
 
         return $"Entry '{id}' transitioned: {previousState} -> {targetState}.";
@@ -397,12 +407,15 @@ public sealed class LifecycleEngine
     /// </summary>
     /// <param name="id">Entry ID.</param>
     /// <param name="delta">Feedback delta: positive values reinforce, negative values suppress. Clamped to [-10, 10].</param>
-    /// <param name="ns">Optional namespace hint for config lookup.</param>
-    public FeedbackResult? ApplyFeedback(string id, float delta, string? ns = null)
+    /// <param name="ns">Optional namespace hint for config lookup and tenant-scoped resolution.</param>
+    /// <param name="tenantId">Tenant partition; "" is the legacy tenant. Only used when <paramref name="ns"/> is supplied.</param>
+    public FeedbackResult? ApplyFeedback(string id, float delta, string? ns = null, string tenantId = "")
     {
         delta = Math.Clamp(delta, -10f, 10f);
 
-        var entry = _index.Get(id);
+        // When a namespace is supplied the entry is resolved tenant-scoped; a null ns keeps the
+        // legacy bare-id path.
+        var entry = ns is not null ? _index.Get(id, ns, tenantId) : _index.Get(id);
         if (entry is null)
             return null;
 
@@ -412,14 +425,17 @@ public sealed class LifecycleEngine
 
         // Positive feedback also records an access (boosts decay resistance)
         if (delta > 0)
-            _index.RecordAccess(id);
+        {
+            if (ns is not null) _index.RecordAccess(id, ns, tenantId);
+            else _index.RecordAccess(id);
+        }
 
         // Resolve thresholds from stored config or defaults
         float stmThreshold = 2.0f;
         float archiveThreshold = -5.0f;
         if (ns is not null)
         {
-            var config = GetDecayConfig(ns);
+            var config = GetDecayConfig(ns, tenantId);
             if (config is not null)
             {
                 stmThreshold = config.StmThreshold;
@@ -445,7 +461,8 @@ public sealed class LifecycleEngine
                 break;
         }
 
-        _index.SetActivationEnergyAndState(id, newEnergy, newState);
+        if (ns is not null) _index.SetActivationEnergyAndState(id, newEnergy, newState, ns, tenantId);
+        else _index.SetActivationEnergyAndState(id, newEnergy, newState);
 
         string finalState = newState ?? previousState;
         return new FeedbackResult(id, previousEnergy, newEnergy, previousState, finalState, newState is not null);
@@ -455,10 +472,10 @@ public sealed class LifecycleEngine
     public IReadOnlyList<CognitiveSearchResult> DeepRecall(
         float[] vector, string ns, int k = 10, float minScore = 0.3f,
         float resurrectionThreshold = 0.7f,
-        string? queryText = null, bool hybrid = false, bool rerank = false)
+        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "")
     {
         var results = _index.SearchAllStates(vector, ns, k, minScore,
-            queryText: queryText, hybrid: hybrid, rerank: rerank);
+            queryText: queryText, hybrid: hybrid, rerank: rerank, tenantId: tenantId);
 
         // Auto-resurrect high-scoring archived entries and return updated results
         var updatedResults = new List<CognitiveSearchResult>(results.Count);
@@ -466,8 +483,8 @@ public sealed class LifecycleEngine
         {
             if (result.LifecycleState == "archived" && result.Score >= resurrectionThreshold)
             {
-                _index.SetLifecycleState(result.Id, "stm");
-                _index.RecordAccess(result.Id, ns);
+                _index.SetLifecycleState(result.Id, "stm", ns, tenantId);
+                _index.RecordAccess(result.Id, ns, tenantId);
                 // Return with updated lifecycle state
                 updatedResults.Add(result with { LifecycleState = "stm" });
             }
@@ -484,8 +501,8 @@ public sealed class LifecycleEngine
     {
         if (_configsLoaded || _persistence is null) return;
         var configs = _persistence.LoadDecayConfigs();
-        foreach (var (ns, config) in configs)
-            _decayConfigs[ns] = config;
+        foreach (var config in configs.Values)
+            _decayConfigs[NamespaceStore.PartitionKey(config.TenantId, config.Ns)] = config;
         _configsLoaded = true;
     }
 

@@ -597,11 +597,11 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Search ALL states including archived (for deep_recall).</summary>
     public IReadOnlyList<CognitiveSearchResult> SearchAllStates(
         float[] query, string ns, int k = 10, float minScore = 0.3f,
-        string? queryText = null, bool hybrid = false, bool rerank = false)
+        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "")
         => Search(new SearchRequest
         {
             Query = query, Namespace = ns, K = k, MinScore = minScore,
-            IncludeStates = AllStates,
+            IncludeStates = AllStates, TenantId = tenantId,
             QueryText = queryText ?? string.Empty, Hybrid = hybrid, Rerank = rerank
         });
 
