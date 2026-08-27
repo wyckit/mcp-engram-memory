@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -233,6 +234,219 @@ public sealed class TenantStructureIsolationTests : IDisposable
         Assert.Contains("debate-cluster", _clusters.GetClustersForEntry(debateA));
     }
 
+    // ── Partition-key forgery ──
+
+    /// <summary>
+    /// A partition key is composed as <c>tenant + PartitionSeparator + ns</c>, and for the legacy
+    /// tenant it is the bare namespace. So a LEGACY caller that names the namespace
+    /// <c>"tenant-a" + U+001F + "shared-structure"</c> composes byte-for-byte the same key as
+    /// (tenant-a, shared-structure) — no ACL involved, because the legacy default agent has
+    /// unrestricted access. That aliases the tenant's BM25/HNSW sub-indexes, its per-partition
+    /// lock, and its persisted snapshot; <c>DeleteAllInNamespace</c> reaches
+    /// <c>NamespaceStore.RemoveNamespace</c> and clears all three.
+    ///
+    /// Composition is now validated, so every one of those entry points refuses the forged
+    /// component instead of silently addressing another partition.
+    /// </summary>
+    [Fact]
+    public void PartitionKey_SeparatorInNamespace_CannotForgeAnotherTenantsPartition()
+    {
+        string forged = ForgedNamespace;
+
+        // The alphabet guard is public and rejects the whole control-character class, not just the
+        // separator — narrowing it to one character would reopen the hole on the next separator change.
+        var direct = Assert.Throws<ArgumentException>(
+            () => Tenancy.ValidatePartitionComponent(forged, "ns"));
+        Assert.Contains("control characters", direct.Message);
+        // The offending value is attacker-controlled, so it must not be echoed back into a log line.
+        // Ordinal is required, not stylistic: the default overload compares with the current culture,
+        // and under ICU collation a control character is zero-weight, so a culture-sensitive search
+        // for U+001F matches at position 0 of *every* string — the assertion would fail against a
+        // message that never contained the separator at all.
+        Assert.DoesNotContain(Tenancy.PartitionSeparator.ToString(), direct.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Ns, direct.Message, StringComparison.Ordinal);
+
+        // Every public partition-keyed path refuses it rather than composing tenant-a's key.
+        // DeleteAllInNamespace is the damaging one and is checked before any state is touched.
+        Assert.Throws<ArgumentException>(() => _index.DeleteAllInNamespace(forged));
+        Assert.Throws<ArgumentException>(() => _index.Get(EntryA, forged));
+        Assert.Throws<ArgumentException>(() => _index.Delete(EntryA, forged));
+        Assert.Throws<ArgumentException>(() => _index.CountInNamespace(forged));
+
+        // The other half of the key is closed too: a tenant id carrying the separator would let a
+        // tenant-scoped caller compose a *namespace* boundary instead.
+        Assert.Throws<ArgumentException>(
+            () => Tenancy.Normalize(TenantId + Tenancy.PartitionSeparator + Ns));
+
+        // OVER-CORRECTION CONTROL — the guard rejects forged components, not tenancy itself.
+        // A legitimate tenant key still composes, still resolves, and tenant-a's partition came
+        // through the rejected forgery completely intact.
+        Assert.Equal(TenantId, Tenancy.Normalize(TenantId));
+        Assert.Equal("tenant alpha", _index.Get(EntryA, Ns, TenantId)?.Text);
+        Assert.Equal(2, _index.CountInNamespace(Ns, TenantId));
+        // LEGACY MIRROR — a single-tenant deployment naming a clean namespace is untouched.
+        Assert.Equal("legacy alpha", _index.Get(EntryA, Ns)?.Text);
+        Assert.Equal(2, _index.CountInNamespace(Ns));
+    }
+
+    /// <summary>
+    /// The stay-bootable guarantee. A store written before partition components were validated can
+    /// already hold two decay-config rows that compose to one key — here a tenant-scoped row for
+    /// (tenant-a, shared-structure) and a legacy row whose namespace IS the composed key. The
+    /// obvious <c>ToDictionary</c> throws on that, turning a historical bad write into a host that
+    /// cannot start with manual database repair as the only way out. Loading must instead keep one
+    /// row deterministically and log.
+    ///
+    /// Driven through <see cref="PersistenceManager.LoadDecayConfigs"/> because the shared builder
+    /// itself is internal to McpEngramMemory.Core, which does not expose internals to this assembly.
+    /// </summary>
+    [Fact]
+    public void LoadDecayConfigs_CollidingPartitionKeys_DoesNotThrow()
+    {
+        // Its own directory under the fixture's per-run temp path, so the fixture's Dispose still
+        // owns the cleanup and no other test in this class sees the poisoned file.
+        string poisonedPath = Path.Combine(_dataPath, "poisoned_decay_store");
+        Directory.CreateDirectory(poisonedPath);
+
+        const string cleanNs = "decay-clean";
+        var poisoned = new List<DecayConfig>
+        {
+            // Legacy row FIRST in stored order, so the surviving row is decided by the
+            // tenant-scoped-first rule and not merely by file position.
+            new(ns: ForgedNamespace, decayRate: 0.99f),
+            new(ns: Ns, decayRate: 0.42f, tenantId: TenantId),
+            // A well-formed legacy row, to pin that a poisoned pair does not disturb the rest.
+            new(ns: cleanNs, decayRate: 0.11f),
+        };
+        File.WriteAllText(
+            Path.Combine(poisonedPath, "_decay_configs.json"),
+            JsonSerializer.Serialize(poisoned));
+
+        using var persistence = new PersistenceManager(poisonedPath, debounceMs: 50);
+
+        // The load completes instead of throwing — this is the whole point.
+        var loaded = persistence.LoadDecayConfigs();
+
+        // Exactly one row survives the collision, and it is the tenant-scoped one.
+        Assert.Equal(2, loaded.Count);
+        Assert.True(loaded.ContainsKey(ForgedNamespace));
+        var survivor = loaded[ForgedNamespace];
+        Assert.Equal(TenantId, survivor.TenantId);
+        Assert.Equal(Ns, survivor.Ns);
+        Assert.Equal(0.42f, survivor.DecayRate);
+
+        // LEGACY MIRROR — a well-formed legacy row still keys on the bare namespace, unchanged.
+        Assert.True(loaded.ContainsKey(cleanNs));
+        var clean = loaded[cleanNs];
+        Assert.Equal(string.Empty, clean.TenantId);
+        Assert.Equal(0.11f, clean.DecayRate);
+    }
+
+    /// <summary>
+    /// A tenant id arrives from a host environment variable or an auth-token claim, so
+    /// <c>" tenant-a "</c> and <c>"tenant-a"</c> would otherwise address two different partitions
+    /// for every consumer at once. Normalization therefore has to live in the init accessor: a
+    /// <c>with</c> expression bypasses the constructor entirely and would reintroduce the raw value.
+    /// </summary>
+    [Fact]
+    public void PrincipalContext_PaddedTenantId_NormalizesAtConstruction()
+    {
+        var padded = new PrincipalContext($"  {TenantId}\t", "alice");
+        Assert.Equal(TenantId, padded.TenantId);
+
+        // The `with` path is the one the constructor cannot cover.
+        var copied = padded with { TenantId = $"\n{TenantId}  " };
+        Assert.Equal(TenantId, copied.TenantId);
+
+        // Observable consequence: the padded principal lands in tenant-a's partition, not the
+        // legacy one, so it sees tenant-a's cluster and only that.
+        var paddedClusters = new ClusterTools(_clusters, _embedding, Access(padded));
+        Assert.Equal("tenant-cluster", Assert.Single(paddedClusters.ListClusters(Ns)).ClusterId);
+        Assert.Equal(TenantId, Access(copied).TenantId);
+
+        // Case is PRESERVED by decision — folding here would silently merge two distinct tenants.
+        Assert.Equal("Tenant-A", new PrincipalContext(" Tenant-A ", "alice").TenantId);
+        Assert.NotEqual(padded.TenantId, new PrincipalContext(" TENANT-A ", "alice").TenantId);
+
+        // Refused rather than silently truncated or allowed to forge a partition key.
+        Assert.Throws<ArgumentException>(
+            () => new PrincipalContext(new string('t', Tenancy.MaxTenantIdLength + 1), "alice"));
+        Assert.Throws<ArgumentException>(
+            () => padded with { TenantId = TenantId + Tenancy.PartitionSeparator });
+
+        // OVER-CORRECTION CONTROL / LEGACY MIRROR — a max-length id is accepted, and null,
+        // empty and whitespace all still collapse to the legacy partition.
+        Assert.Equal(
+            new string('t', Tenancy.MaxTenantIdLength),
+            new PrincipalContext($" {new string('t', Tenancy.MaxTenantIdLength)} ", "alice").TenantId);
+        Assert.Equal(string.Empty, new PrincipalContext(null!, "alice").TenantId);
+        Assert.Equal(string.Empty, new PrincipalContext("   ", "alice").TenantId);
+        Assert.True(PrincipalContext.LegacyUnisolated.IsLegacyUnisolated);
+        Assert.Equal(string.Empty, PrincipalContext.LegacyUnisolated.TenantId);
+    }
+
+    /// <summary>
+    /// THE EXPLOIT. Synthesis chunks entries along cluster boundaries and puts the cluster's LABEL
+    /// into the map and reduce prompts. The entries were already gathered from the tenant partition,
+    /// but the cluster lookup used to fall back to the legacy ("") partition — a real, populated
+    /// dataset, not a sentinel — so another partition's cluster labels were written straight into
+    /// this tenant's prompts and on to the model.
+    ///
+    /// The assertion is on PROMPT TEXT, never on status: the status is "synthesized" either way,
+    /// which is precisely why <see cref="Synthesis_RunsOverTenantPartition"/> could not see this.
+    /// </summary>
+    [Fact]
+    public async Task Synthesis_ClusterLabels_AreTenantScoped()
+    {
+        var generator = new RecordingTextGenerator();
+        var synthesis = new SynthesisEngine(_index, _clusters, generator);
+        var tenantSynthesis = new SynthesisTools(synthesis, Tenant());
+
+        var result = Assert.IsType<SynthesisResult>(await tenantSynthesis.SynthesizeMemories(Ns));
+        Assert.Equal("synthesized", result.Status);
+
+        var prompts = generator.Prompts;
+        Assert.NotEmpty(prompts);
+        // The tenant's own cluster label reached the prompts...
+        Assert.Contains(prompts, p => p.Contains("tenant cluster", StringComparison.Ordinal));
+        // ...and the colliding legacy cluster's label reached none of them.
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy cluster", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("global-cluster", p));
+        // Entry text was already tenant-scoped; pin it so a regression there cannot hide here.
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy alpha", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy beta", p));
+    }
+
+    /// <summary>
+    /// LEGACY MIRROR — the fix scopes the cluster lookup to the caller's partition; for a
+    /// single-tenant deployment that partition is still the legacy one, so its prompts are
+    /// byte-for-byte what they always were.
+    /// </summary>
+    [Fact]
+    public async Task Synthesis_LegacyPrincipal_StillUsesLegacyClusterLabel()
+    {
+        var generator = new RecordingTextGenerator();
+        var synthesis = new SynthesisEngine(_index, _clusters, generator);
+        var legacySynthesis = new SynthesisTools(synthesis, Legacy());
+
+        var result = Assert.IsType<SynthesisResult>(await legacySynthesis.SynthesizeMemories(Ns));
+        Assert.Equal("synthesized", result.Status);
+
+        var prompts = generator.Prompts;
+        Assert.NotEmpty(prompts);
+        Assert.Contains(prompts, p => p.Contains("legacy cluster", StringComparison.Ordinal));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant cluster", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant alpha", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant beta", p));
+    }
+
+    /// <summary>
+    /// The namespace that composes to tenant-a's partition key when it is named by a LEGACY caller,
+    /// for whom the composed key is the bare namespace.
+    /// </summary>
+    private static string ForgedNamespace
+        => string.Concat(TenantId, Tenancy.PartitionSeparator.ToString(), Ns);
+
     private NamespaceAccess Access(IPrincipalContext principal)
         => new(_registry, principal);
 
@@ -283,9 +497,31 @@ public sealed class TenantStructureIsolationTests : IDisposable
         public float[] Embed(string text) => [0f, 1f, 0f];
     }
 
+    /// <summary>
+    /// Captures every prompt handed to the generator. The prompt is the only place a cluster
+    /// label ever becomes observable — <see cref="SynthesisResult.Status"/> reads "synthesized"
+    /// whether the labels came from this tenant's partition or someone else's, which is exactly
+    /// why <see cref="Synthesis_RunsOverTenantPartition"/> passed while the leak was live.
+    ///
+    /// The list is lock-guarded and reads snapshot under the SAME lock:
+    /// <see cref="SynthesisEngine"/> runs two map workers, so <see cref="GenerateAsync"/> is
+    /// called concurrently and an unsynchronized <c>List.Add</c> would tear or lose entries.
+    /// <see cref="AvailabilityCalls"/> needs no lock only because it is incremented once,
+    /// before the pipeline starts.
+    /// </summary>
     private sealed class RecordingTextGenerator : ITextGenerator
     {
+        // Plain object, not System.Threading.Lock: this fixture also builds for net8.0.
+        private readonly object _gate = new();
+        private readonly List<string> _prompts = [];
+
         public int AvailabilityCalls { get; private set; }
+
+        /// <summary>Snapshot of the prompts captured so far, taken under the capture lock.</summary>
+        public IReadOnlyList<string> Prompts
+        {
+            get { lock (_gate) return _prompts.ToArray(); }
+        }
 
         public Task<bool> IsAvailableAsync(string model, CancellationToken ct = default)
         {
@@ -299,7 +535,10 @@ public sealed class TenantStructureIsolationTests : IDisposable
             int maxTokens = 512,
             float temperature = 0.1f,
             CancellationToken ct = default)
-            => Task.FromResult<string?>("generated synthesis");
+        {
+            lock (_gate) _prompts.Add(prompt);
+            return Task.FromResult<string?>("generated synthesis");
+        }
 
         public void Dispose() { }
     }

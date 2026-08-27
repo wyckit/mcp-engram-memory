@@ -472,13 +472,28 @@ public sealed class LifecycleEngine
     }
 
     /// <summary>Deep recall: search all states and auto-resurrect high-scoring archived entries.</summary>
+    /// <remarks>
+    /// <c>resurrect</c> controls whether this pass may mutate. Resurrection promotes an archived
+    /// entry back to "stm" and records an access, so a read-shaped call performs a write on the
+    /// caller's behalf; a caller that holds only read permission on the namespace must pass false
+    /// and gets the same rows without the side effect. The parameter is trailing and defaults to
+    /// true so every existing caller — including the benchmark runners that drive the UseLifecycle
+    /// ablation and whose IR baselines would otherwise shift — keeps its current behaviour with no
+    /// argument change.
+    /// </remarks>
     public IReadOnlyList<CognitiveSearchResult> DeepRecall(
         float[] vector, string ns, int k = 10, float minScore = 0.3f,
         float resurrectionThreshold = 0.7f,
-        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "")
+        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "",
+        bool resurrect = true)
     {
         var results = _index.SearchAllStates(vector, ns, k, minScore,
             queryText: queryText, hybrid: hybrid, rerank: rerank, tenantId: tenantId);
+
+        // Read-only path. Only the write is withheld, never the rows: the archived entries are
+        // returned exactly as found, so an unprivileged caller's result set is indistinguishable
+        // in content and count from a privileged one and reveals nothing about the denial.
+        if (!resurrect) return results;
 
         // Auto-resurrect high-scoring archived entries and return updated results
         var updatedResults = new List<CognitiveSearchResult>(results.Count);

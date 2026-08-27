@@ -160,7 +160,9 @@ public sealed class PersistenceManager : IStorageProvider
         var list = LoadGlobalFile<List<DecayConfig>>(Path.Combine(_basePath, "_decay_configs.json"), "decay configs");
         // Key by the (tenant, ns) partition so two tenants can each hold a config for the same
         // namespace without colliding. Legacy configs (tenant "") key on the bare ns as before.
-        return list?.ToDictionary(c => NamespaceStore.PartitionKey(c.TenantId, c.Ns)) ?? new();
+        // A store poisoned before partition-component validation existed must still boot, so the
+        // shared builder resolves a colliding pair rather than throwing on a duplicate key.
+        return NamespaceStore.DecayConfigsByPartition(list, _logger);
     }
 
     private T? LoadGlobalFile<T>(string path, string label) where T : class

@@ -74,8 +74,13 @@ public sealed class LifecycleTools
             return $"Error: {ex.Message}";
         }
 
+        // The read above authorizes seeing archived text; it does not authorize promoting it.
+        // Auto-resurrection is a write that this tool performs on the caller's behalf, so it is
+        // gated separately - a read-only grantee gets the same rows, scores and order, and only
+        // the reported LifecycleState differs, because nothing was actually moved to STM.
         return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold,
-            queryText: text, hybrid: hybrid, rerank: rerank, tenantId: _access.TenantId);
+            queryText: text, hybrid: hybrid, rerank: rerank, tenantId: _access.TenantId,
+            resurrect: _access.CanWrite(ns));
     }
 
     [McpServerTool(Name = "memory_feedback", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]

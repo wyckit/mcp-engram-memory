@@ -473,8 +473,18 @@ public sealed class CoreMemoryTools
 
         // Cascade the delete to the entry's tenant-partitioned graph edges and cluster
         // memberships so nothing dangles to the now-removed entry.
-        int edgesRemoved = _graph.RemoveAllEdgesForEntry(id, _principal.TenantId);
-        _clusters.RemoveEntryFromAllClusters(id, _principal.TenantId);
+        //
+        // The cascade goes through TopologyCascade rather than calling the graph and cluster
+        // managers directly, even though this call site is already safe: the GetForTenant
+        // resolution above returns null for an id that exists in more than one namespace, so a
+        // colliding id never reaches here in the first place. Every other caller of the
+        // non-cascading DeleteAllInNamespace open-codes this same pair of calls and each one
+        // re-decides whether to guard, which is exactly how the guard goes missing. Routing
+        // through the shared helper makes the guarded form the only reachable one, so a later
+        // edit here cannot quietly drop it.
+        var cascade = TopologyCascade.CascadeAll(
+            _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true);
+        int edgesRemoved = cascade.EdgesRemoved;
 
         // Check the return value to avoid TOCTOU against a concurrent delete.
         if (!_index.DeleteForTenant(id, _principal.TenantId))

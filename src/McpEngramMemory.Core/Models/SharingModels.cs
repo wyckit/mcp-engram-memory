@@ -19,12 +19,35 @@ public interface IPrincipalContext
 /// Immutable principal context. The empty-tenant/default-agent combination is the
 /// explicit compatibility mode used by historical single-user deployments; it is
 /// intentionally unisolated and must never be described as authenticated.
+///
+/// This is the boundary where a raw tenant id supplied by a host (environment variable, auth
+/// token claim, embedding application) first enters the process, so it is the one place that can
+/// close the split-brain where <c>"t"</c> and <c>" t "</c> address different partitions for every
+/// host at once rather than per consumer. Normalization therefore lives in the accessor, not in
+/// the constructor body alone: a <c>with</c> expression bypasses the constructor entirely and
+/// would otherwise reintroduce the raw path.
 /// </summary>
-public sealed record PrincipalContext(
-    string TenantId,
-    string AgentId,
-    bool IsSystem = false) : IPrincipalContext
+public sealed record PrincipalContext : IPrincipalContext
 {
+    private readonly string _tenantId = string.Empty;
+
+    public PrincipalContext(string tenantId, string agentId, bool isSystem = false)
+    {
+        TenantId = tenantId;
+        AgentId = agentId;
+        IsSystem = isSystem;
+    }
+
+    public string TenantId
+    {
+        get => _tenantId;
+        init => _tenantId = Tenancy.Normalize(value);
+    }
+
+    public string AgentId { get; init; }
+
+    public bool IsSystem { get; init; }
+
     public static PrincipalContext LegacyUnisolated { get; } =
         new(string.Empty, AgentIdentity.DefaultAgentId);
 

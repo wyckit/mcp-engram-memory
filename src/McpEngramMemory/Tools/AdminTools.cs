@@ -77,7 +77,15 @@ public sealed class AdminTools
         var edges = _graph.GetEdgesForEntry(id, _principal.TenantId)
             .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
             .ToList();
-        var clusterIds = _clusters.GetClustersForEntry(id, _principal.TenantId);
+        // Cluster membership is the same kind of disclosure as an edge: a cluster id names a
+        // grouping that lives in some namespace, and co-membership tells the caller that this
+        // entry was grouped with content they cannot read. Membership is deliberately allowed
+        // to span namespaces, so the gate is the cluster's OWN namespace — CanRead(m.Ns), the
+        // same predicate ClusterTools.GetCluster applies — not equality with entry.Ns.
+        var clusterIds = _clusters.GetClusterMembershipsForEntry(id, _principal.TenantId)
+            .Where(m => CanRead(m.Ns))
+            .Select(m => m.ClusterId)
+            .ToList();
 
         return new GetMemoryResult(
             new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState),
@@ -183,12 +191,13 @@ public sealed class AdminTools
             .ToList();
 
         if (debateNamespaces.Count == 0)
-            return new PurgeDebatesResult(0, 0, 0, dryRun, Array.Empty<PurgedNamespaceInfo>());
+            return new PurgeDebatesResult(0, 0, 0, 0, dryRun, Array.Empty<PurgedNamespaceInfo>());
 
         var cutoff = DateTimeOffset.UtcNow.AddHours(-maxAgeHours);
         var purged = new List<PurgedNamespaceInfo>();
         int totalEntriesRemoved = 0;
         int totalEdgesRemoved = 0;
+        int totalIdsSkippedAmbiguous = 0;
 
         foreach (var debateNs in debateNamespaces)
         {
@@ -200,7 +209,7 @@ public sealed class AdminTools
                 {
                     _index.DeleteAllInNamespace(debateNs, _principal.TenantId);
                 }
-                purged.Add(new PurgedNamespaceInfo(debateNs, 0, 0, null));
+                purged.Add(new PurgedNamespaceInfo(debateNs, 0, 0, 0, null));
                 continue;
             }
 
@@ -210,38 +219,37 @@ public sealed class AdminTools
                 continue; // Not stale yet
 
             int entryCount = entries.Count;
-            int edgesRemoved = 0;
+
+            // Graph and cluster topology is keyed by bare id, but an id is only unique per
+            // (tenant, namespace) — so cascading on a debate entry's id can tear out edges and
+            // cluster memberships belonging to a same-named entry in a live namespace. The
+            // cascade therefore re-resolves each id and skips the ambiguous ones.
+            //
+            // Both branches go through the SAME call with only `apply` differing, so the dry
+            // run cannot report a different edge count from the purge it is previewing — that
+            // exact divergence was already found and fixed once (CHANGELOG "dry-run count").
+            var cascade = TopologyCascade.CascadeAll(
+                _index, _graph, _clusters,
+                entries.Select(e => e.Id),
+                _principal.TenantId,
+                apply: !dryRun);
 
             if (!dryRun)
             {
-                // Cascade: remove the tenant's graph edges and cluster memberships for each entry
-                foreach (var entry in entries)
-                {
-                    edgesRemoved += _graph.RemoveAllEdgesForEntry(entry.Id, _principal.TenantId);
-                    _clusters.RemoveEntryFromAllClusters(entry.Id, _principal.TenantId);
-                }
-
-                // Remove entries and namespace from index
+                // Residual, deliberately accepted: for a skipped ambiguous id the entry itself
+                // still goes (DeleteAllInNamespace is namespace-scoped, so it can only touch
+                // this debate namespace) while its edges are left dangling. Dangling edges are
+                // an already-tolerated graph state — GetNeighbors and Traverse both skip
+                // endpoints that no longer resolve — and are strictly preferable to silently
+                // destroying another namespace's live topology.
                 _index.DeleteAllInNamespace(debateNs, _principal.TenantId);
-            }
-            else
-            {
-                // Dry run: count the DISTINCT edges that would be removed. Summing
-                // GetEdgesForEntry over every entry double-counts any edge whose endpoints
-                // both live in this namespace — which is most of them, since debate
-                // namespaces are internally linked. That made the dry run report roughly
-                // twice the edges the real purge removes, on the one operation whose whole
-                // job is to let you check before deleting.
-                var distinct = new HashSet<(string, string, string)>();
-                foreach (var entry in entries)
-                    foreach (var edge in _graph.GetEdgesForEntry(entry.Id, _principal.TenantId))
-                        distinct.Add((edge.SourceId, edge.TargetId, edge.Relation));
-                edgesRemoved = distinct.Count;
             }
 
             totalEntriesRemoved += entryCount;
-            totalEdgesRemoved += edgesRemoved;
-            purged.Add(new PurgedNamespaceInfo(debateNs, entryCount, edgesRemoved, newestEntry.CreatedAt));
+            totalEdgesRemoved += cascade.EdgesRemoved;
+            totalIdsSkippedAmbiguous += cascade.IdsSkippedAmbiguous;
+            purged.Add(new PurgedNamespaceInfo(
+                debateNs, entryCount, cascade.EdgesRemoved, cascade.IdsSkippedAmbiguous, newestEntry.CreatedAt));
         }
 
         // A real purge can span hundreds of namespaces; returning every one in full detail
@@ -252,19 +260,26 @@ public sealed class AdminTools
             : purged;
 
         return new PurgeDebatesResult(
-            purged.Count, totalEntriesRemoved, totalEdgesRemoved, dryRun, detail);
+            purged.Count, totalEntriesRemoved, totalEdgesRemoved, totalIdsSkippedAmbiguous, dryRun, detail);
     }
 }
 
+/// <param name="IdsSkippedAmbiguous">
+/// Entry ids whose namespace could not be resolved unambiguously within the tenant, so their
+/// edges and cluster memberships were left in place. Reported rather than swallowed: a purge
+/// that quietly leaves topology behind is harder to reason about than one that says so.
+/// </param>
 public sealed record PurgedNamespaceInfo(
     [property: JsonPropertyName("namespace")] string Namespace,
     [property: JsonPropertyName("entryCount")] int EntryCount,
     [property: JsonPropertyName("edgeCount")] int EdgeCount,
+    [property: JsonPropertyName("idsSkippedAmbiguous")] int IdsSkippedAmbiguous,
     [property: JsonPropertyName("newestEntryAt")] DateTimeOffset? NewestEntryAt);
 
 public sealed record PurgeDebatesResult(
     [property: JsonPropertyName("namespacesAffected")] int NamespacesAffected,
     [property: JsonPropertyName("totalEntriesRemoved")] int TotalEntriesRemoved,
     [property: JsonPropertyName("totalEdgesRemoved")] int TotalEdgesRemoved,
+    [property: JsonPropertyName("totalIdsSkippedAmbiguous")] int TotalIdsSkippedAmbiguous,
     [property: JsonPropertyName("dryRun")] bool DryRun,
     [property: JsonPropertyName("namespaces")] IReadOnlyList<PurgedNamespaceInfo> Namespaces);

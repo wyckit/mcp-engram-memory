@@ -12,6 +12,12 @@ namespace McpEngramMemory.Core.Services.Intelligence;
 /// Legacy clusters use tenant <c>""</c>, so single-tenant behavior is unchanged. Member entries are
 /// resolved tenant-scoped (fast legacy locator for <c>""</c>, tenant scan otherwise).
 ///
+/// Every public entry point normalizes its incoming tenant before it keys or filters the map. A
+/// tenant reaches this class raw from the principal, whereas <see cref="SemanticCluster.TenantId"/>
+/// is normalized at construction and <c>EnsureLoaded</c> re-keys the map from that property — so an
+/// un-normalized key agrees with the map only until the next reload, and an un-normalized filter
+/// never agrees with it at all. Normalizing at the boundary keeps one canonical form of the key.
+///
 /// Locking strategy:
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
 /// - Mutating methods use EnterWriteLock directly.
@@ -51,7 +57,10 @@ public sealed class ClusterManager
     public string CreateCluster(string clusterId, string ns, IReadOnlyList<string> memberIds, string? label = null, string tenantId = "")
     {
         List<string> memberIdsCopy;
-        var key = (tenantId, clusterId);
+        // Key on the normalized tenant: SemanticCluster normalizes its own TenantId, and EnsureLoaded
+        // re-keys the map from that property, so a raw key would survive only until the next reload.
+        var tenant = Tenancy.Normalize(tenantId);
+        var key = (tenant, clusterId);
 
         _lock.EnterWriteLock();
         try
@@ -61,14 +70,14 @@ public sealed class ClusterManager
                 return $"Error: Cluster '{clusterId}' already exists.";
 
             memberIdsCopy = memberIds.ToList();
-            var cluster = new SemanticCluster(clusterId, ns, memberIdsCopy, label, tenantId);
+            var cluster = new SemanticCluster(clusterId, ns, memberIdsCopy, label, tenant);
             _clusters[key] = cluster;
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
 
         // Compute centroid outside cluster lock (calls _index resolution which has its own lock)
-        var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenantId);
+        var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenant);
 
         _lock.EnterWriteLock();
         try
@@ -88,7 +97,8 @@ public sealed class ClusterManager
     {
         List<string> memberIdsCopy;
         int memberCount;
-        var key = (tenantId, clusterId);
+        var tenant = Tenancy.Normalize(tenantId);
+        var key = (tenant, clusterId);
 
         _lock.EnterWriteLock();
         try
@@ -120,7 +130,7 @@ public sealed class ClusterManager
         finally { _lock.ExitWriteLock(); }
 
         // Compute centroid outside cluster lock
-        var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenantId);
+        var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenant);
 
         _lock.EnterWriteLock();
         try
@@ -141,7 +151,8 @@ public sealed class ClusterManager
         // to avoid lock-ordering deadlock.
         string ns;
         string summaryId;
-        var key = (tenantId, clusterId);
+        var tenant = Tenancy.Normalize(tenantId);
+        var key = (tenant, clusterId);
         _lock.EnterWriteLock();
         try
         {
@@ -160,7 +171,7 @@ public sealed class ClusterManager
         var entry = new CognitiveEntry(
             summaryId, summaryVector, ns,
             text: summaryText, category: "cluster-summary",
-            lifecycleState: "ltm", tenantId: tenantId)
+            lifecycleState: "ltm", tenantId: tenant)
         {
             IsSummaryNode = true,
             SourceClusterId = clusterId
@@ -180,11 +191,16 @@ public sealed class ClusterManager
         string? summaryEntryId;
         int memberCount;
 
+        // The tenant arrives raw from the principal, while the map is keyed by SemanticCluster's
+        // normalized TenantId. Comparing the two forms is the split-brain that makes a tenant's own
+        // cluster look absent to it, so normalize before the lookup rather than after.
+        var tenant = Tenancy.Normalize(tenantId);
+
         _lock.EnterUpgradeableReadLock();
         try
         {
             EnsureLoaded();
-            if (!_clusters.TryGetValue((tenantId, clusterId), out var cluster))
+            if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
                 return null;
 
             clusterLabel = cluster.Label;
@@ -199,7 +215,7 @@ public sealed class ClusterManager
         var members = new List<CognitiveEntryInfo>();
         foreach (var memberId in memberIds)
         {
-            var entry = ResolveEntry(memberId, tenantId);
+            var entry = ResolveEntry(memberId, tenant);
             if (entry is not null)
                 members.Add(new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState));
         }
@@ -208,7 +224,7 @@ public sealed class ClusterManager
         CognitiveEntry? summaryEnt = null;
         if (summaryEntryId is not null)
         {
-            summaryEnt = ResolveEntry(summaryEntryId, tenantId);
+            summaryEnt = ResolveEntry(summaryEntryId, tenant);
             if (summaryEnt is not null)
                 summaryEntry = new CognitiveSearchResult(summaryEnt.Id, summaryEnt.Text, 0f, summaryEnt.LifecycleState,
                     summaryEnt.ActivationEnergy, summaryEnt.Category, summaryEnt.Metadata, summaryEnt.IsSummaryNode, summaryEnt.SourceClusterId);
@@ -220,7 +236,7 @@ public sealed class ClusterManager
         {
             foreach (var memberId in memberIds)
             {
-                var member = ResolveEntry(memberId, tenantId);
+                var member = ResolveEntry(memberId, tenant);
                 if (member is not null && member.CreatedAt > summaryEnt.CreatedAt)
                 {
                     isStale = true;
@@ -236,12 +252,14 @@ public sealed class ClusterManager
     /// <summary>List all clusters in a namespace within a tenant.</summary>
     public IReadOnlyList<ClusterSummaryInfo> ListClusters(string ns, string tenantId = "")
     {
+        var tenant = Tenancy.Normalize(tenantId);
+
         _lock.EnterUpgradeableReadLock();
         try
         {
             EnsureLoaded();
             return _clusters.Values
-                .Where(c => c.Ns == ns && c.TenantId == tenantId)
+                .Where(c => c.Ns == ns && c.TenantId == tenant)
                 .Select(c => new ClusterSummaryInfo(
                     c.ClusterId, c.Label, c.MemberIds.Count, c.SummaryEntryId is not null))
                 .ToList();
@@ -249,16 +267,34 @@ public sealed class ClusterManager
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Get all cluster IDs within a tenant that contain a given entry.</summary>
+    /// <summary>
+    /// Get all cluster IDs within a tenant that contain a given entry.
+    /// Projection of <see cref="GetClusterMembershipsForEntry"/> so the membership predicate exists
+    /// exactly once and the two views can never disagree about which clusters contain the entry.
+    /// </summary>
     public IReadOnlyList<string> GetClustersForEntry(string entryId, string tenantId = "")
+        => GetClusterMembershipsForEntry(entryId, tenantId).Select(m => m.ClusterId).ToList();
+
+    /// <summary>
+    /// Get all clusters within a tenant that contain a given entry, each paired with its own
+    /// namespace. Clusters in one tenant are not all in one namespace, so a caller that has to
+    /// authorize what it returns cannot do so from the cluster id alone; emitting the namespace the
+    /// lookup already held is what lets it filter without re-resolving every cluster.
+    /// <paramref name="tenantId"/> deliberately carries no default: a tenant-scoped lookup that
+    /// silently falls back to the legacy <c>""</c> partition would read across tenants, so a
+    /// forgotten argument must be a compile error rather than a cross-tenant read.
+    /// </summary>
+    public IReadOnlyList<ClusterMembershipInfo> GetClusterMembershipsForEntry(string entryId, string tenantId)
     {
+        var tenant = Tenancy.Normalize(tenantId);
+
         _lock.EnterUpgradeableReadLock();
         try
         {
             EnsureLoaded();
             return _clusters.Values
-                .Where(c => c.TenantId == tenantId && c.MemberIds.Contains(entryId))
-                .Select(c => c.ClusterId)
+                .Where(c => c.TenantId == tenant && c.MemberIds.Contains(entryId))
+                .Select(c => new ClusterMembershipInfo(c.ClusterId, c.Ns))
                 .ToList();
         }
         finally { _lock.ExitUpgradeableReadLock(); }
@@ -269,6 +305,7 @@ public sealed class ClusterManager
     {
         // Phase 1: Remove member from this tenant's clusters, collect affected member lists
         var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
+        var tenant = Tenancy.Normalize(tenantId);
 
         _lock.EnterWriteLock();
         try
@@ -276,7 +313,7 @@ public sealed class ClusterManager
             EnsureLoadedUnderWrite();
             foreach (var cluster in _clusters.Values)
             {
-                if (cluster.TenantId != tenantId) continue;
+                if (cluster.TenantId != tenant) continue;
                 if (cluster.MemberIds.Remove(entryId))
                     affectedClusters.Add((cluster.ClusterId, cluster.MemberIds.ToList()));
             }
@@ -290,7 +327,7 @@ public sealed class ClusterManager
 
         var centroids = new List<(string clusterId, float[]? centroid)>();
         foreach (var (clusterId, memberIds) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenantId)));
+            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenant)));
 
         // Phase 3: Apply centroids under cluster lock
         _lock.EnterWriteLock();
@@ -298,7 +335,7 @@ public sealed class ClusterManager
         {
             foreach (var (clusterId, centroid) in centroids)
             {
-                if (_clusters.TryGetValue((tenantId, clusterId), out var c))
+                if (_clusters.TryGetValue((tenant, clusterId), out var c))
                     c.Centroid = centroid;
             }
             ScheduleSaveClusters();
@@ -310,6 +347,7 @@ public sealed class ClusterManager
     public int TransferMembership(string fromId, string toId, string tenantId = "")
     {
         var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
+        var tenant = Tenancy.Normalize(tenantId);
 
         _lock.EnterWriteLock();
         try
@@ -317,7 +355,7 @@ public sealed class ClusterManager
             EnsureLoadedUnderWrite();
             foreach (var cluster in _clusters.Values)
             {
-                if (cluster.TenantId != tenantId) continue;
+                if (cluster.TenantId != tenant) continue;
                 if (!cluster.MemberIds.Remove(fromId)) continue;
 
                 if (!cluster.MemberIds.Contains(toId))
@@ -335,14 +373,14 @@ public sealed class ClusterManager
 
         var centroids = new List<(string clusterId, float[]? centroid)>();
         foreach (var (clusterId, memberIds) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenantId)));
+            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenant)));
 
         _lock.EnterWriteLock();
         try
         {
             foreach (var (clusterId, centroid) in centroids)
             {
-                if (_clusters.TryGetValue((tenantId, clusterId), out var c))
+                if (_clusters.TryGetValue((tenant, clusterId), out var c))
                     c.Centroid = centroid;
             }
             ScheduleSaveClusters();
@@ -386,7 +424,11 @@ public sealed class ClusterManager
         _persistence.ScheduleSaveClusters(() => snapshot);
     }
 
-    /// <summary>Resolve an entry id within a tenant: fast legacy locator for tenant "", tenant-scoped scan otherwise.</summary>
+    /// <summary>
+    /// Resolve an entry id within a tenant: fast legacy locator for tenant "", tenant-scoped scan
+    /// otherwise. Callers pass an already-normalized tenant, so the empty-string test really does
+    /// select the legacy partition rather than misreading a whitespace-only tenant as a real one.
+    /// </summary>
     private CognitiveEntry? ResolveEntry(string id, string tenantId)
         => tenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId);
 

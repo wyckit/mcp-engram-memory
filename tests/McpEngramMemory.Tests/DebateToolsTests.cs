@@ -11,6 +11,21 @@ namespace McpEngramMemory.Tests;
 
 public class DebateToolsTests : IDisposable
 {
+    /// <summary>The legacy, pre-tenant partition. Not a sentinel — "" is a real partition.</summary>
+    private const string LegacyTenant = "";
+
+    private const string TenantA = "tenant-a";
+    private const string TenantB = "tenant-b";
+
+    /// <summary>
+    /// Deliberately the SAME agent id on both sides of the tenant boundary. The agent-level ACL
+    /// must not be what denies a cross-tenant hijack, or the cross-tenant tests below would pass
+    /// with tenant keying removed entirely and prove nothing. The agent-level control is a
+    /// separate, still-required guarantee — see
+    /// <see cref="MapDebateGraph_OtherAgentCannotDiscoverOrMutateOwnedSession"/>.
+    /// </summary>
+    private const string SharedAgentId = "analyst";
+
     private readonly string _testDataPath;
     private readonly PersistenceManager _persistence;
     private readonly CognitiveIndex _index;
@@ -44,6 +59,13 @@ public class DebateToolsTests : IDisposable
     private DebateTools CreateTools(string agentId)
     {
         var access = new NamespaceAccess(_registry, new AgentIdentity(agentId));
+        return new DebateTools(_index, _graph, _embedding, _sessions, new MetricsCollector(), access);
+    }
+
+    /// <summary>Tools bound to an identified principal inside a specific tenant partition.</summary>
+    private DebateTools CreateTools(string agentId, string tenantId)
+    {
+        var access = new NamespaceAccess(_registry, new PrincipalContext(tenantId, agentId));
         return new DebateTools(_index, _graph, _embedding, _sessions, new MetricsCollector(), access);
     }
 
@@ -98,7 +120,7 @@ public class DebateToolsTests : IDisposable
         }
 
         // Verify session state created
-        Assert.True(_sessions.HasSession("debate-cold"));
+        Assert.True(_sessions.HasSession(LegacyTenant, "debate-cold"));
     }
 
     [Fact]
@@ -218,7 +240,7 @@ public class DebateToolsTests : IDisposable
     public void MapDebateGraph_InvalidAlias_SkipsWithMessage()
     {
         // Set up session with one node
-        _sessions.RegisterNode("skip-test", "entry-a");
+        _sessions.RegisterNode(LegacyTenant, "skip-test", "entry-a");
 
         var edges = new[]
         {
@@ -249,7 +271,7 @@ public class DebateToolsTests : IDisposable
         var message = Assert.IsType<string>(denied);
         Assert.Contains("not found", message);
         Assert.Equal(before, _graph.EdgeCount);
-        Assert.True(_sessions.HasSession("alice-map-session"));
+        Assert.True(_sessions.HasSession(LegacyTenant, "alice-map-session"));
 
         var allowed = alice.MapDebateGraph("alice-map-session",
             [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias, "contradicts", 0.9f)]);
@@ -269,7 +291,7 @@ public class DebateToolsTests : IDisposable
     [Fact]
     public void ResolveDebate_InvalidWinningNode_ReturnsError()
     {
-        _sessions.RegisterNode("resolve-bad", "entry-a");
+        _sessions.RegisterNode(LegacyTenant, "resolve-bad", "entry-a");
 
         var result = _tools.ResolveDebate("resolve-bad", 99, "consensus", "decisions");
         Assert.IsType<string>(result);
@@ -311,13 +333,13 @@ public class DebateToolsTests : IDisposable
         Assert.Equal("We decided to go with approach A.", consensus.Text);
 
         // Verify session cleaned up
-        Assert.False(_sessions.HasSession("full-pipeline"));
+        Assert.False(_sessions.HasSession(LegacyTenant, "full-pipeline"));
     }
 
     [Fact]
     public void ResolveDebate_EmptyConsensus_ReturnsError()
     {
-        _sessions.RegisterNode("empty-consensus", "entry-a");
+        _sessions.RegisterNode(LegacyTenant, "empty-consensus", "entry-a");
 
         var result = _tools.ResolveDebate("empty-consensus", 1, "", "decisions");
         Assert.IsType<string>(result);
@@ -327,7 +349,7 @@ public class DebateToolsTests : IDisposable
     [Fact]
     public void ResolveDebate_EmptyTargetNamespace_ReturnsError()
     {
-        _sessions.RegisterNode("empty-ns", "entry-a");
+        _sessions.RegisterNode(LegacyTenant, "empty-ns", "entry-a");
 
         var result = _tools.ResolveDebate("empty-ns", 1, "consensus text", "");
         Assert.IsType<string>(result);
@@ -349,14 +371,147 @@ public class DebateToolsTests : IDisposable
         var message = Assert.IsType<string>(denied);
         Assert.Contains("not found", message);
         Assert.Null(_index.Get("consensus-alice-resolve-session", "bob-decisions"));
-        Assert.True(_sessions.HasSession("alice-resolve-session"));
-        Assert.All(_sessions.GetAllEntryIds("alice-resolve-session"), id =>
+        Assert.True(_sessions.HasSession(LegacyTenant, "alice-resolve-session"));
+        Assert.All(_sessions.GetAllEntryIds(LegacyTenant, "alice-resolve-session"), id =>
             Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace)?.LifecycleState));
 
         var allowed = alice.ResolveDebate(
             "alice-resolve-session", winningNode, "Alice's consensus", "alice-decisions");
         Assert.IsType<ResolveDebateResult>(allowed);
-        Assert.False(_sessions.HasSession("alice-resolve-session"));
+        Assert.False(_sessions.HasSession(LegacyTenant, "alice-resolve-session"));
+    }
+
+    // ── Cross-tenant session isolation ──
+    //
+    // Debate session state is keyed by (tenant, sessionId). The sessionId is caller-supplied, so
+    // when the alias table was keyed by sessionId alone two tenants that picked the same id shared
+    // one table: either could read the other's entry ids and destroy its session. Every test in
+    // this section drives two identified principals that differ ONLY in tenant, so the tenant
+    // boundary — not the agent ACL — is the sole control under test.
+
+    [Fact]
+    public void ResolveDebate_TenantCannotHijackAnotherTenantsSession()
+    {
+        const string sessionId = "cross-tenant-resolve";
+        var tenantA = CreateTools(SharedAgentId, TenantA);
+        var tenantB = CreateTools(SharedAgentId, TenantB);
+
+        // Baseline: exactly what tenant B is told about this session id while it exists nowhere.
+        var beforeAnyoneHeldIt = Assert.IsType<string>(tenantB.ResolveDebate(
+            sessionId, 1, "Tenant B's consensus", "tenant-b-decisions"));
+
+        var panel = Assert.IsType<ConsultPanelResult>(tenantA.ConsultExpertPanel(
+            "Should we ship on Friday?", ["expert-a"], sessionId));
+        int winningNode = panel.Perspectives[0].NodeAlias;
+        var tenantAEntryIds = _sessions.GetAllEntryIds(TenantA, sessionId);
+        Assert.NotEmpty(tenantAEntryIds);
+
+        // The exploit. Pre-fix this resolved A's winning node through A's alias table, wrote a
+        // consensus naming A's private entry id, archived A's debate nodes and dropped A's session.
+        var hijack = Assert.IsType<string>(tenantB.ResolveDebate(
+            sessionId, winningNode, "Tenant B's consensus", "tenant-b-decisions"));
+
+        // Not-found and not-yours must be the SAME reply. Asserting only "denied" would still pass
+        // against an implementation that answered "not yours" here and "not found" above, which
+        // turns resolve_debate into an existence oracle for other tenants' session ids.
+        Assert.Equal(beforeAnyoneHeldIt, hijack);
+
+        // ...and the destructive half: nothing of A's moved.
+        Assert.True(_sessions.HasSession(TenantA, sessionId));
+        Assert.Equal(tenantAEntryIds, _sessions.GetAllEntryIds(TenantA, sessionId));
+        Assert.Null(_index.Get($"consensus-{sessionId}", "tenant-b-decisions", TenantB));
+        Assert.All(tenantAEntryIds, id =>
+            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace, TenantA)?.LifecycleState));
+
+        // Over-correction control: the owning tenant still resolves its own session.
+        var owner = Assert.IsType<ResolveDebateResult>(tenantA.ResolveDebate(
+            sessionId, winningNode, "Tenant A's consensus", "tenant-a-decisions"));
+        Assert.Equal($"consensus-{sessionId}", owner.ConsensusEntryId);
+        Assert.Equal(tenantAEntryIds[winningNode - 1], owner.WinningNodeId);
+        Assert.False(_sessions.HasSession(TenantA, sessionId));
+    }
+
+    [Fact]
+    public void MapDebateGraph_TenantCannotDiscoverAnotherTenantsSession()
+    {
+        const string sessionId = "cross-tenant-map";
+        var tenantA = CreateTools(SharedAgentId, TenantA);
+        var tenantB = CreateTools(SharedAgentId, TenantB);
+
+        // Baseline: tenant B probing an id that exists nowhere.
+        var beforeAnyoneHeldIt = Assert.IsType<string>(tenantB.MapDebateGraph(
+            sessionId, [new DebateEdge(1, 2, "contradicts", 0.9f)]));
+
+        var panel = Assert.IsType<ConsultPanelResult>(tenantA.ConsultExpertPanel(
+            "Adopt gRPC or REST?", ["expert-a", "expert-b"], sessionId));
+        Assert.True(panel.Perspectives.Count >= 2);
+        var tenantAEntryIds = _sessions.GetAllEntryIds(TenantA, sessionId);
+        int edgesBefore = _graph.EdgeCount;
+
+        var probe = Assert.IsType<string>(tenantB.MapDebateGraph(sessionId,
+            [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias,
+                "contradicts", 0.9f)]));
+
+        // Confidentiality: B's reply cannot distinguish "tenant A holds this session" from
+        // "nobody holds it". A per-edge "node N not found" reply would already be a leak.
+        Assert.Equal(beforeAnyoneHeldIt, probe);
+
+        // Pre-fix the aliases resolved through A's table and A's entry ids were persisted into B's
+        // own tenant as graph edges — a durable record of ids B was never allowed to learn.
+        Assert.Equal(edgesBefore, _graph.EdgeCount);
+        Assert.DoesNotContain(_graph.GetAllEdges(TenantB),
+            e => tenantAEntryIds.Contains(e.SourceId) || tenantAEntryIds.Contains(e.TargetId));
+
+        // Over-correction control: the owning tenant still maps its own session.
+        var owned = Assert.IsType<MapDebateGraphResult>(tenantA.MapDebateGraph(sessionId,
+            [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias,
+                "contradicts", 0.9f)]));
+        Assert.Equal(1, owned.EdgesCreated);
+    }
+
+    [Fact]
+    public void ConsultExpertPanel_SameSessionIdInTwoTenants_BothSucceed()
+    {
+        const string sessionId = "same-id-two-tenants";
+        var tenantA = CreateTools(SharedAgentId, TenantA);
+        var tenantB = CreateTools(SharedAgentId, TenantB);
+
+        var panelA = Assert.IsType<ConsultPanelResult>(tenantA.ConsultExpertPanel(
+            "Should we adopt GraphQL?", ["expert-a"], sessionId));
+
+        // The over-correction control. Pre-fix, one shared alias table meant the second tenant was
+        // refused with "Session already exists" — a denial driven entirely by another tenant's
+        // choice of id, and itself an existence oracle. Tenant keying must not be implemented by
+        // refusing any id already in use somewhere.
+        var panelB = Assert.IsType<ConsultPanelResult>(tenantB.ConsultExpertPanel(
+            "Should we adopt gRPC?", ["expert-a"], sessionId));
+
+        Assert.Equal(sessionId, panelA.SessionId);
+        Assert.Equal(sessionId, panelB.SessionId);
+        Assert.True(_sessions.HasSession(TenantA, sessionId));
+        Assert.True(_sessions.HasSession(TenantB, sessionId));
+
+        // Aliases are per-session, so each tenant numbers its own nodes from 1.
+        Assert.Equal(1, panelA.Perspectives[0].NodeAlias);
+        Assert.Equal(1, panelB.Perspectives[0].NodeAlias);
+
+        // An entry's identity is (tenant, namespace, id): the cold-start id and the debate
+        // namespace collide exactly, and each tenant still reads back its own content.
+        string collidingId = panelA.Perspectives[0].EntryId;
+        Assert.Equal(collidingId, panelB.Perspectives[0].EntryId);
+        Assert.Equal(panelA.DebateNamespace, panelB.DebateNamespace);
+
+        var storedForA = _index.Get(collidingId, panelA.DebateNamespace, TenantA);
+        var storedForB = _index.Get(collidingId, panelB.DebateNamespace, TenantB);
+        Assert.NotNull(storedForA);
+        Assert.NotNull(storedForB);
+        Assert.Contains("GraphQL", storedForA.Text ?? "");
+        Assert.Contains("gRPC", storedForB.Text ?? "");
+        Assert.DoesNotContain("gRPC", storedForA.Text ?? "");
+
+        // Duplicate detection is still enforced WITHIN a tenant.
+        var duplicate = tenantA.ConsultExpertPanel("A third question?", ["expert-a"], sessionId);
+        Assert.Contains("already exists", Assert.IsType<string>(duplicate));
     }
 
     // ── Full Pipeline Integration ──
@@ -404,6 +559,6 @@ public class DebateToolsTests : IDisposable
         var consensus = _index.Get("consensus-e2e-test", "decisions");
         Assert.NotNull(consensus);
         Assert.Equal("ltm", consensus.LifecycleState);
-        Assert.False(_sessions.HasSession("e2e-test"));
+        Assert.False(_sessions.HasSession(LegacyTenant, "e2e-test"));
     }
 }

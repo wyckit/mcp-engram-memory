@@ -90,7 +90,12 @@ public sealed class IntelligenceTools
 
         foreach (var (edge, source, target) in graphContradictions)
         {
-            if (source is null || target is null) continue;
+            // A contradiction edge is only half-anchored in `ns`: the graph query matches an edge
+            // when EITHER endpoint lives here, so the opposite endpoint can be any namespace in
+            // the tenant, including one this caller was never granted. Authorize the entry we are
+            // about to disclose, not the namespace that was asked for. CanReadEntry null-guards,
+            // so an unresolvable endpoint is skipped by the same test — fail closed.
+            if (!_access.CanReadEntry(source) || !_access.CanReadEntry(target)) continue;
 
             // Compute similarity between the two entries
             float sim = 0f;
@@ -111,6 +116,9 @@ public sealed class IntelligenceTools
             knownPairs.Add((source.Id, target.Id));
             knownPairs.Add((target.Id, source.Id));
         }
+        // Counted after the loop, never from graphContradictions.Count: the tally has to be
+        // post-filter by construction, or it reports how many pairs were withheld and the count
+        // becomes an existence oracle for the namespaces the caller cannot read.
         int graphCount = contradictions.Count;
 
         // Part 2: If a topic is provided, find high-similarity entries that might contradict

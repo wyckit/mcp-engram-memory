@@ -107,7 +107,7 @@ public sealed class NamespaceRegistry
     public bool HasAccess(string agentId, string ns, string requiredLevel = "read", string tenantId = "")
     {
         // Default agent has unrestricted access (backward compatible)
-        if (agentId == AgentIdentity.DefaultAgentId && NormalizeTenant(tenantId).Length == 0)
+        if (agentId == AgentIdentity.DefaultAgentId && Tenancy.Normalize(tenantId).Length == 0)
             return true;
 
         // System namespaces contain control-plane data. Internal services access them
@@ -142,10 +142,10 @@ public sealed class NamespaceRegistry
     /// </summary>
     public WhoAmIResult GetAccessibleNamespaces(string agentId, string tenantId = "")
     {
-        tenantId = NormalizeTenant(tenantId);
+        tenantId = Tenancy.Normalize(tenantId);
         var allPermissions = _index.GetAllInNamespace(SystemNamespace)
             .Where(e => e.Category == PermissionCategory)
-            .Where(e => NormalizeTenant(e.Metadata.GetValueOrDefault("tenantId")) == tenantId)
+            .Where(e => Tenancy.Normalize(e.Metadata.GetValueOrDefault("tenantId")) == tenantId)
             .ToList();
 
         var owned = new List<string>();
@@ -203,7 +203,7 @@ public sealed class NamespaceRegistry
     /// </summary>
     public void ClaimOwnershipOnWrite(string ns, string agentId, string tenantId = "")
     {
-        if (agentId == AgentIdentity.DefaultAgentId && NormalizeTenant(tenantId).Length == 0) return;
+        if (agentId == AgentIdentity.DefaultAgentId && Tenancy.Normalize(tenantId).Length == 0) return;
         EnsureOwnership(ns, agentId, tenantId);
     }
 
@@ -217,7 +217,7 @@ public sealed class NamespaceRegistry
     public void EnsureOwnership(string ns, string agentId, string tenantId = "")
     {
         if (ns.StartsWith('_')) return; // System namespaces not tracked
-        tenantId = NormalizeTenant(tenantId);
+        tenantId = Tenancy.Normalize(tenantId);
 
         // Double-checked: fast path avoids acquiring the per-ns lock once registered.
         if (GetPermission(ns, tenantId) is not null) return;
@@ -255,7 +255,7 @@ public sealed class NamespaceRegistry
     /// </summary>
     private NamespacePermission? RegisterLegacyOwnerUnlocked(string ns, string agentId, string tenantId)
     {
-        if (agentId != AgentIdentity.DefaultAgentId || NormalizeTenant(tenantId).Length != 0)
+        if (agentId != AgentIdentity.DefaultAgentId || Tenancy.Normalize(tenantId).Length != 0)
             return null;
 
         SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
@@ -264,7 +264,7 @@ public sealed class NamespaceRegistry
 
     private bool TryClaimEmptyNamespace(string ns, string agentId, string tenantId)
     {
-        tenantId = NormalizeTenant(tenantId);
+        tenantId = Tenancy.Normalize(tenantId);
         lock (LockFor(ns, tenantId))
         {
             var existing = GetPermission(ns, tenantId);
@@ -282,7 +282,7 @@ public sealed class NamespaceRegistry
 
     private void SavePermission(string ns, string owner, IReadOnlyList<ShareGrant> grants, string tenantId)
     {
-        tenantId = NormalizeTenant(tenantId);
+        tenantId = Tenancy.Normalize(tenantId);
         var entryId = PermissionEntryId(ns, tenantId);
         var grantsStr = string.Join(";", grants.Select(g => $"{g.AgentId}:{g.AccessLevel}"));
         var vector = _embedding.Embed($"namespace permission {ns}");
@@ -310,7 +310,7 @@ public sealed class NamespaceRegistry
 
     private static string PermissionEntryId(string ns, string tenantId)
     {
-        tenantId = NormalizeTenant(tenantId);
+        tenantId = Tenancy.Normalize(tenantId);
         if (tenantId.Length == 0)
             return $"perm_{ns}";
 
@@ -319,9 +319,6 @@ public sealed class NamespaceRegistry
         var tenantHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(tenantId)))[..16];
         return $"perm_t_{tenantHash}_{ns}";
     }
-
-    private static string NormalizeTenant(string? tenantId) =>
-        string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     private static IReadOnlyList<ShareGrant> ParseGrants(string grantsStr)
     {

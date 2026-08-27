@@ -199,4 +199,44 @@ public class ClusterManagerTests : IDisposable
         Assert.Equal(1, c1!.MemberCount);
         Assert.Equal(1, c2!.MemberCount);
     }
+
+    /// <summary>
+    /// A single entry can belong to clusters that live in different namespaces — cross-namespace
+    /// membership is intentional, not a corruption to be normalised away. That is exactly why a
+    /// caller which has to authorize what it returns cannot derive the namespace once for the whole
+    /// result set: the ACL check has to be made against the namespace of the cluster it is actually
+    /// about to reveal. GetClusterMembershipsForEntry exists to hand back that pairing, so the
+    /// pairing itself is the contract downstream filtering depends on.
+    ///
+    /// Asserting on the pair rather than on the two projections separately is deliberate: a version
+    /// that returned the right cluster ids and the right set of namespaces, but mismatched between
+    /// them, would satisfy any per-column assertion and still authorize the wrong object.
+    /// </summary>
+    [Fact]
+    public void GetClusterMembershipsForEntry_PairsEachClusterWithItsOwnNamespace()
+    {
+        // "b" is a member of both, but the clusters sit in different namespaces.
+        _clusters.CreateCluster("cm1", "test", new[] { "a", "b" }, "in test");
+        _clusters.CreateCluster("cm2", "other", new[] { "b", "c" }, "in other");
+        // A cluster "b" is NOT in, to prove the membership predicate still filters.
+        _clusters.CreateCluster("cm3", "other", new[] { "a" }, "without b");
+
+        var memberships = _clusters.GetClusterMembershipsForEntry("b", "");
+
+        Assert.Equal(2, memberships.Count);
+        // ClusterMembershipInfo is a record struct, so this compares the (ClusterId, Ns) pair as a
+        // unit — the namespace has to travel attached to the cluster it belongs to.
+        Assert.Contains(new ClusterMembershipInfo("cm1", "test"), memberships);
+        Assert.Contains(new ClusterMembershipInfo("cm2", "other"), memberships);
+        Assert.DoesNotContain(memberships, m => m.ClusterId == "cm3");
+
+        // GetClustersForEntry is now a projection over the method above rather than a second copy
+        // of the membership predicate, so the two views can never disagree about which clusters
+        // contain the entry. Pin that equivalence: if they drift, an ACL filter reading one and a
+        // cascade reading the other would act on different sets.
+        var ids = _clusters.GetClustersForEntry("b");
+        Assert.Equal(
+            memberships.Select(m => m.ClusterId).OrderBy(id => id, StringComparer.Ordinal).ToList(),
+            ids.OrderBy(id => id, StringComparer.Ordinal).ToList());
+    }
 }

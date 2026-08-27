@@ -231,11 +231,12 @@ public class RegressionTests : IDisposable
     {
         using var sessions = new DebateSessionManager();
 
-        Assert.True(sessions.TryCreateSession("s1"));
-        Assert.False(sessions.TryCreateSession("s1")); // Already exists
+        // Legacy tenant ("") — this test pins the single-tenant behaviour it always asserted.
+        Assert.True(sessions.TryCreateSession("", "s1"));
+        Assert.False(sessions.TryCreateSession("", "s1")); // Already exists
 
         // RegisterNode still works on the created session
-        int alias = sessions.RegisterNode("s1", "entry-a");
+        int alias = sessions.RegisterNode("", "s1", "entry-a");
         Assert.Equal(1, alias);
     }
 }

@@ -137,7 +137,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Count entries in a specific tenant + namespace partition. Per-partition read lock.</summary>
     public int CountInNamespace(string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
@@ -159,7 +159,7 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<string> GetNamespaces(string tenantId)
     {
         _store.LoadAll();
-        return _store.GetNamespaceNames(NormalizeTenant(tenantId));
+        return _store.GetNamespaceNames(Tenancy.Normalize(tenantId));
     }
 
     /// <summary>
@@ -321,7 +321,7 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public CognitiveEntry? Get(string id, string ns, string tenantId = "")
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
         var nsLock = NsLock(pk);
         nsLock.EnterReadLock();
@@ -343,18 +343,48 @@ public sealed class CognitiveIndex : IDisposable
     /// <see cref="Get(string, string, string)"/>.
     /// </summary>
     public CognitiveEntry? GetForTenant(string id, string tenantId)
+        => ScanForTenant(id, tenantId, namespaceSnapshot: null).Match;
+
+    /// <summary>
+    /// How many of the tenant's namespaces contain <paramref name="id"/>, saturating at 2.
+    /// This is the single expression of the ambiguity rule: a bare id is not an identity, so every
+    /// caller that reaches an entry by id alone only ever needs to distinguish none (0) from
+    /// exactly-one (1) from ambiguous (2). Counting past the second hit would cost partition
+    /// lookups that no caller can observe.
+    ///
+    /// Pass <paramref name="namespaceSnapshot"/> when guarding a sweep of many ids. Omitting it
+    /// re-lists the tenant's namespaces per call, and that listing loads every persisted namespace
+    /// — which turns a cascade over one namespace's entries into one full store reload per entry.
+    /// </summary>
+    public int CountNamespacesContaining(
+        string id, string tenantId, IReadOnlyList<string>? namespaceSnapshot = null)
+        => ScanForTenant(id, tenantId, namespaceSnapshot).Found;
+
+    /// <summary>
+    /// Shared scan behind <see cref="GetForTenant"/>, <see cref="DeleteForTenant"/> and
+    /// <see cref="CountNamespacesContaining"/>, so the three can never disagree about what counts
+    /// as ambiguous. Returns no match the moment a second namespace claims the id — an ambiguous
+    /// id resolves to nothing rather than to an arbitrary winner.
+    /// </summary>
+    private (CognitiveEntry? Match, string? Ns, int Found) ScanForTenant(
+        string id, string tenantId, IReadOnlyList<string>? namespaceSnapshot)
     {
         CognitiveEntry? match = null;
-        foreach (var ns in GetNamespaces(tenantId))
+        string? matchNs = null;
+        int found = 0;
+
+        foreach (var ns in namespaceSnapshot ?? GetNamespaces(tenantId))
         {
             var candidate = Get(id, ns, tenantId);
             if (candidate is null)
                 continue;
-            if (match is not null)
-                return null;
+            if (++found == 2)
+                return (null, null, 2);
             match = candidate;
+            matchNs = ns;
         }
-        return match;
+
+        return (match, matchNs, found);
     }
 
     /// <summary>
@@ -401,7 +431,7 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public bool Delete(string id, string ns, string tenantId = "")
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
 
         string? deletedFromNs = null;
@@ -437,16 +467,7 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public bool DeleteForTenant(string id, string tenantId)
     {
-        string? matchNamespace = null;
-        foreach (var ns in GetNamespaces(tenantId))
-        {
-            if (Get(id, ns, tenantId) is null)
-                continue;
-            if (matchNamespace is not null)
-                return false;
-            matchNamespace = ns;
-        }
-
+        var matchNamespace = ScanForTenant(id, tenantId, namespaceSnapshot: null).Ns;
         return matchNamespace is not null && Delete(id, matchNamespace, tenantId);
     }
 
@@ -460,11 +481,17 @@ public sealed class CognitiveIndex : IDisposable
         if (request.K <= 0)
             throw new ArgumentOutOfRangeException(nameof(request), "K must be positive.");
 
+        // The namespace becomes half of a composite partition key below. A namespace carrying the
+        // separator — or any other control character — could compose a key that reads as a
+        // different (tenant, ns) pair, so it is rejected here rather than allowed to forge one.
+        // This is a read path that never constructs an entry, so nothing else validates it.
+        Tenancy.ValidatePartitionComponent(request.Namespace, nameof(request));
+
         // Scope the entire search to the (tenant, ns) partition. For the legacy tenant ("") the
         // partition key is the namespace, so candidate generation, BM25 lookup and getEntry behave
         // exactly as before. Tenant candidate sets never mix, so RRF/rerank run unchanged on an
         // already-isolated pool.
-        var nskey = new NsKey(NormalizeTenant(request.TenantId), request.Namespace);
+        var nskey = new NsKey(Tenancy.Normalize(request.TenantId), request.Namespace);
         string pk = NamespaceStore.PartitionKey(nskey);
 
         // Hold the per-namespace read lock across the ENTIRE search — the candidate snapshot, the
@@ -710,7 +737,7 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicatesForEntry(
         string ns, string entryId, float threshold = 0.95f, string tenantId = "")
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
@@ -737,7 +764,7 @@ public sealed class CognitiveIndex : IDisposable
         includeStates ??= new HashSet<string> { "stm", "ltm" };
 
         List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates;
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
@@ -790,7 +817,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Record an access hit within an exact tenant + namespace partition.</summary>
     public void RecordAccess(string id, string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
@@ -821,7 +848,7 @@ public sealed class CognitiveIndex : IDisposable
     private bool BoostActivationEnergy(
         string id, string ns, float delta, string tenantId, bool allowNamespaceFallback)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         // Fast path: try the caller's supplied ns first
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
@@ -890,7 +917,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Update lifecycle state within an exact tenant + namespace partition.</summary>
     public bool SetLifecycleState(string id, string state, string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
@@ -959,7 +986,7 @@ public sealed class CognitiveIndex : IDisposable
     public int SetLifecycleStateBatch(
         IEnumerable<string> ids, string state, string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
@@ -1021,7 +1048,7 @@ public sealed class CognitiveIndex : IDisposable
     public bool SetActivationEnergyAndState(
         string id, float activationEnergy, string? newState, string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
@@ -1053,7 +1080,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Get all entries in a tenant + namespace partition. Per-partition read lock.</summary>
     public IReadOnlyList<CognitiveEntry> GetAllInNamespace(string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterReadLock();
         try
@@ -1077,7 +1104,7 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public int DeleteAllInNamespace(string ns, string tenantId)
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
         try
@@ -1114,7 +1141,7 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<CognitiveEntry> GetAllForTenant(string tenantId)
     {
         _store.LoadAll();
-        return _store.GetTenantNamespaces(NormalizeTenant(tenantId))
+        return _store.GetTenantNamespaces(Tenancy.Normalize(tenantId))
             .SelectMany(d => d.Values.Select(t => t.Entry))
             .ToList();
     }
@@ -1144,7 +1171,7 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public (int stm, int ltm, int archived) GetStateCounts(string? ns, string tenantId)
     {
-        string tenant = NormalizeTenant(tenantId);
+        string tenant = Tenancy.Normalize(tenantId);
         if (ns is null || ns == "*")
         {
             _store.LoadAll();
@@ -1187,7 +1214,7 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>Re-embed all entries in a namespace. Per-namespace write lock.</summary>
     public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding, string tenantId = "")
     {
-        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
         var nsLock = NsLock(pk);
         nsLock.EnterWriteLock();
@@ -1289,14 +1316,6 @@ public sealed class CognitiveIndex : IDisposable
     public int DisposalContendedLockCount { get; private set; }
 
     // ── Internal Helpers ──
-
-    /// <summary>
-    /// Normalize a caller-supplied tenant id to match how <see cref="CognitiveEntry"/> stores it:
-    /// null/whitespace collapses to the legacy tenant (""), otherwise it is trimmed. This keeps a
-    /// tenant-scoped lookup keyed identically to the entry it is trying to find.
-    /// </summary>
-    private static string NormalizeTenant(string? tenantId)
-        => string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
 
     /// <summary>Apply a small score boost when query terms overlap with entry categories.</summary>
     private static IReadOnlyList<CognitiveSearchResult> ApplyCategoryBoost(

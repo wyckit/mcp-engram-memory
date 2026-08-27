@@ -304,7 +304,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
         var list = LoadGlobalData<List<DecayConfig>>("decay_configs");
         // Key by the (tenant, ns) partition so two tenants can each hold a config for the same
         // namespace without colliding. Legacy configs (tenant "") key on the bare ns as before.
-        return list?.ToDictionary(c => NamespaceStore.PartitionKey(c.TenantId, c.Ns)) ?? new();
+        // A store poisoned before partition-component validation existed must still boot, so the
+        // shared builder resolves a colliding pair rather than throwing on a duplicate key.
+        return NamespaceStore.DecayConfigsByPartition(list, _logger);
     }
 
     private T? LoadGlobalData<T>(string key) where T : class

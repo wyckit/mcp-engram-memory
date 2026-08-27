@@ -39,7 +39,12 @@ public sealed class SpreadingActivationService
     /// <param name="tenantId">Tenant whose graph/cluster structures to traverse; "" is the legacy tenant.</param>
     public SpreadingResult PropagateAccess(string id, string ns, float baseEnergy = 1.0f, string tenantId = "")
     {
-        var boosted = new Dictionary<string, float>();
+        // An id alone is not an identity — ids are unique only per (tenant, namespace). Topology
+        // (graph adjacency, cluster membership) hands back bare ids, so every target is accumulated
+        // under the namespace it was actually resolved from. Keying by the pair also stops two
+        // distinct entries that happen to share an id in different namespaces of the same tenant
+        // from merging their energy into whichever namespace was discovered first.
+        var boosted = new Dictionary<(string Ns, string Id), float>();
 
         // Phase 1: Graph-based spreading activation (within the caller's tenant)
         PropagateGraph(id, baseEnergy, depth: 0, boosted, tenantId);
@@ -47,17 +52,16 @@ public sealed class SpreadingActivationService
         // Phase 2: Cluster-based pre-warming
         PropagateCluster(id, baseEnergy, boosted, tenantId);
 
-        // Phase 3: Apply all accumulated boosts
+        // Phase 3: Apply all accumulated boosts, each in its own namespace
+        var source = (Ns: ns, Id: id);
         int applied = 0;
-        foreach (var (targetId, totalBoost) in boosted)
+        foreach (var (target, totalBoost) in boosted)
         {
-            if (targetId == id) continue; // Don't self-boost
-            // Legacy keeps its cross-namespace id fallback; a tenant boost targets the exact
-            // (tenant, ns) partition (no fallback, so it never reaches another tenant's entry).
-            bool ok = tenantId.Length == 0
-                ? _index.BoostActivationEnergy(targetId, ns, totalBoost)
-                : _index.BoostActivationEnergy(targetId, ns, totalBoost, tenantId);
-            if (ok)
+            // The authoritative self-boost guard: only the exact accessed entry is excluded, not a
+            // same-id entry that lives in a different namespace.
+            if (target == source) continue;
+
+            if (ApplyBoost(target.Id, target.Ns, totalBoost, tenantId))
                 applied++;
         }
 
@@ -65,9 +69,21 @@ public sealed class SpreadingActivationService
     }
 
     /// <summary>
+    /// Boost one target in ITS OWN namespace — the single place that knows about the tenancy branch.
+    /// Legacy keeps the id→ns fallback overload (a stale or unresolvable target still lands), which
+    /// is now only a safety net because the fast path already gets the right namespace. A tenant
+    /// boost uses the no-fallback overload: the exact (tenant, targetNs) partition, so it can never
+    /// reach another tenant's co-keyed entry.
+    /// </summary>
+    private bool ApplyBoost(string targetId, string targetNs, float boost, string tenantId)
+        => tenantId.Length == 0
+            ? _index.BoostActivationEnergy(targetId, targetNs, boost)
+            : _index.BoostActivationEnergy(targetId, targetNs, boost, tenantId);
+
+    /// <summary>
     /// Recursive graph-based energy propagation with fan-out attenuation and depth cutoff.
     /// </summary>
-    private void PropagateGraph(string id, float energy, int depth, Dictionary<string, float> boosted, string tenantId)
+    private void PropagateGraph(string id, float energy, int depth, Dictionary<(string Ns, string Id), float> boosted, string tenantId)
     {
         if (depth >= MaxPropagationDepth || energy < MinPropagationThreshold)
             return;
@@ -78,18 +94,18 @@ public sealed class SpreadingActivationService
         foreach (var neighbor in neighborsResult.Neighbors)
         {
             string neighborId = neighbor.Entry.Id;
+            // The traversal already resolved this neighbor to a concrete entry, so its namespace is
+            // authoritative — it is where the boost must land, not wherever the caller came from.
+            string neighborNs = neighbor.Entry.Namespace;
             float boost = PhysicsEngine.ComputeSpreadingEnergy(energy, neighbor.Edge.Relation, nodeDegree);
 
             if (boost < MinPropagationThreshold)
                 continue;
 
-            // Accumulate boosts (a node reachable via multiple paths gets combined energy)
-            if (boosted.TryGetValue(neighborId, out float existing))
-                boosted[neighborId] = existing + boost;
-            else
-                boosted[neighborId] = boost;
+            Accumulate(boosted, neighborNs, neighborId, boost);
 
-            // Recursive spread at reduced energy
+            // Recursive spread at reduced energy. The bare id is correct here: graph adjacency is
+            // keyed (tenant, id) with no namespace dimension, so there is nothing else to pass.
             PropagateGraph(neighborId, boost * RecursiveDecay, depth + 1, boosted, tenantId);
         }
     }
@@ -97,7 +113,7 @@ public sealed class SpreadingActivationService
     /// <summary>
     /// Cluster-based pre-warming: accessing any member activates cluster summary and top peers.
     /// </summary>
-    private void PropagateCluster(string id, float baseEnergy, Dictionary<string, float> boosted, string tenantId)
+    private void PropagateCluster(string id, float baseEnergy, Dictionary<(string Ns, string Id), float> boosted, string tenantId)
     {
         var clusterIds = _clusters.GetClustersForEntry(id, tenantId);
 
@@ -106,12 +122,15 @@ public sealed class SpreadingActivationService
             var clusterInfo = _clusters.GetCluster(clusterId, tenantId);
             if (clusterInfo is null) continue;
 
-            // Boost cluster summary node (full boost)
+            // Boost cluster summary node (full boost). A CognitiveSearchResult carries no namespace,
+            // but the cluster's own namespace is authoritative for it: StoreSummary writes the
+            // summary entry with ns = cluster.Ns, which is exactly what GetCluster reports here.
             if (clusterInfo.SummaryEntry is not null)
             {
                 var summaryId = clusterInfo.SummaryEntry.Id;
+                // Cheap pre-filter only; the exact (ns, id) comparison in PropagateAccess decides.
                 if (summaryId != id)
-                    Accumulate(boosted, summaryId, baseEnergy * ClusterSummaryBoost);
+                    Accumulate(boosted, clusterInfo.Namespace, summaryId, baseEnergy * ClusterSummaryBoost);
             }
 
             // Boost top-N highest-energy cluster peers (50% boost)
@@ -121,18 +140,20 @@ public sealed class SpreadingActivationService
                 if (member.Id == id) continue;
                 if (peerCount >= MaxClusterPeers) break;
 
-                Accumulate(boosted, member.Id, baseEnergy * ClusterPeerBoost);
+                Accumulate(boosted, member.Namespace, member.Id, baseEnergy * ClusterPeerBoost);
                 peerCount++;
             }
         }
     }
 
-    private static void Accumulate(Dictionary<string, float> boosted, string id, float boost)
+    /// <summary>
+    /// Accumulate a boost against the (namespace, id) pair: a node reachable via multiple paths gets
+    /// combined energy, while two same-id entries in different namespaces stay separate targets.
+    /// </summary>
+    private static void Accumulate(Dictionary<(string Ns, string Id), float> boosted, string ns, string id, float boost)
     {
-        if (boosted.TryGetValue(id, out float existing))
-            boosted[id] = existing + boost;
-        else
-            boosted[id] = boost;
+        var key = (ns, id);
+        boosted[key] = boosted.TryGetValue(key, out float existing) ? existing + boost : boost;
     }
 }
 

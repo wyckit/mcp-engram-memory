@@ -1,4 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Sharing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -65,6 +67,38 @@ public sealed class NamespaceAccess
     /// Access check for an entry reached by id rather than by namespace. Graph edges and
     /// cluster memberships are global and carry no namespace, so anything reached through
     /// them has to be resolved before it can be checked.
+    ///
+    /// The null guard is part of the contract, not a convenience: an endpoint that failed to
+    /// resolve is indistinguishable from one the caller may not see, and both must fail closed.
+    /// <see cref="NotNullWhenAttribute"/> lets a caller use this as its only guard and still get
+    /// non-null flow analysis afterwards, so no site is tempted to stack a second null test that
+    /// would drift out of sync with the access test.
     /// </summary>
-    public bool CanReadEntry(CognitiveEntry? entry) => entry is not null && CanRead(entry.Ns);
+    public bool CanReadEntry([NotNullWhen(true)] CognitiveEntry? entry) => entry is not null && CanRead(entry.Ns);
+
+    /// <summary>
+    /// Resolve a bare id to a readable entry inside this principal's tenant, or null.
+    ///
+    /// Prefer this over <see cref="CognitiveIndex.GetForTenant"/> at any principal-facing call
+    /// site: <c>GetForTenant</c> is ACL-blind, so it both returns entries in namespaces the
+    /// caller cannot see and lets those namespaces make a visible id look ambiguous. Not-found,
+    /// not-permitted and ambiguous all come back as null and must stay indistinguishable in the
+    /// reply the caller finally receives.
+    ///
+    /// Pass <paramref name="preferredNs"/> when the call site is already authorized for a
+    /// namespace, so a same-id entry elsewhere in the tenant cannot hijack or blank the result.
+    /// </summary>
+    public CognitiveEntry? ResolveReadableEntry(CognitiveIndex index, string id, string? preferredNs = null)
+        => EntryAccessResolver.Resolve(index, id, TenantId, CanRead, preferredNs);
+
+    /// <summary>
+    /// Resolve a bare id to a writable entry inside this principal's tenant, or null.
+    ///
+    /// The write twin of <see cref="ResolveReadableEntry"/>. Authorization is checked at the
+    /// verb actually being performed, so a namespace the caller may read but not write resolves
+    /// to nothing here — a read-scoped resolution followed by a write would authorize the wrong
+    /// verb against the right object.
+    /// </summary>
+    public CognitiveEntry? ResolveWritableEntry(CognitiveIndex index, string id, string? preferredNs = null)
+        => EntryAccessResolver.Resolve(index, id, TenantId, CanWrite, preferredNs);
 }

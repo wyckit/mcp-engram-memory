@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace McpEngramMemory.Core.Services;
 
@@ -32,10 +33,11 @@ internal sealed class NamespaceStore
     /// <summary>Minimum partition size to activate HNSW indexing.</summary>
     private const int HnswThreshold = 200;
 
-    // Separator for composing a tenant-scoped partition key string used by the BM25 and HNSW
-    // sub-indexes (which are keyed by string). ASCII Unit Separator — never appears in a namespace
-    // or tenant id in practice. For the legacy tenant the composed key is just the namespace.
-    private const char PartitionSeparator = (char)0x1F;
+    // The separator used to compose a tenant-scoped partition key lives on Tenancy, together with
+    // Tenancy.ValidatePartitionComponent — the guard that makes "never appears in a namespace or
+    // tenant id" an enforced fact instead of an assumption. It is enforced where untrusted strings
+    // become key components (Tenancy.Normalize, the CognitiveEntry write ctor, and the read/delete/
+    // config paths that never construct an entry), so composition below can be injective.
 
     private readonly ConcurrentDictionary<NsKey, ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>> _namespaces = new();
     // Loaded tracking + load locks are keyed by NAMESPACE (the persistence unit): one LoadNamespace
@@ -64,11 +66,84 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>Compose the partition-key string for BM25/HNSW sub-indexes. Legacy tenant → the namespace itself.</summary>
+    /// <exception cref="ArgumentException">
+    /// Either component carries a control character, which would make the composition non-injective
+    /// and let one caller forge another tenant's key.
+    /// </exception>
     public static string PartitionKey(string tenant, string ns)
-        => tenant.Length == 0 ? ns : string.Concat(tenant, PartitionSeparator.ToString(), ns);
+    {
+        // Composition is injective only while neither component carries the separator, so validating
+        // here — the one place a key is ever composed — is what actually holds the invariant up. Every
+        // other entry point (decay configs, diffusion bases, index invalidation) reaches a partition
+        // through this method, so one check covers them all rather than each site remembering.
+        //
+        // This throws rather than asserting on purpose: a failing Debug.Assert calls
+        // Environment.FailFast, which would turn a containment bug into a killed process (and a dead
+        // test host) instead of a catchable error, and would vanish entirely in Release — exactly
+        // where forging matters. The cost is two vectorized scans of a short string, well below the
+        // allocation on the next line.
+        Tenancy.ValidatePartitionComponent(tenant, nameof(tenant));
+        Tenancy.ValidatePartitionComponent(ns, nameof(ns));
+        return ComposeKeyUnchecked(tenant, ns);
+    }
+
+    /// <summary>
+    /// The key format itself, with no assertion. Reserved for the recovery paths that must be able
+    /// to key an ALREADY-poisoned component — the whole point of those paths is to survive data the
+    /// assert exists to keep out, so they cannot route through <see cref="PartitionKey(string,string)"/>.
+    /// </summary>
+    private static string ComposeKeyUnchecked(string tenant, string ns)
+        => tenant.Length == 0 ? ns : string.Concat(tenant, Tenancy.PartitionSeparator.ToString(), ns);
 
     /// <summary>Compose the partition-key string for a <see cref="NsKey"/>.</summary>
     public static string PartitionKey(NsKey key) => PartitionKey(key.Tenant, key.Ns);
+
+    /// <summary>
+    /// Build the partition-keyed decay-config map every storage provider hands to the lifecycle
+    /// engine. Shared here because the collision it has to survive is a property of the key format,
+    /// not of any one backend: a store written before <see cref="Tenancy.ValidatePartitionComponent"/>
+    /// existed can hold two rows that compose to the same key, and the obvious
+    /// <c>ToDictionary</c> throws on that — turning a historical bad write into a host that cannot
+    /// boot, with manual database repair as the only way out. Keeping one row deterministically
+    /// (tenant-scoped ahead of legacy, then stored order) degrades a poisoned pair to a logged
+    /// warning while leaving every well-formed store byte-for-byte unchanged.
+    /// </summary>
+    internal static Dictionary<string, DecayConfig> DecayConfigsByPartition(
+        List<DecayConfig>? configs, ILogger? logger)
+    {
+        var map = new Dictionary<string, DecayConfig>();
+        if (configs is null)
+            return map;
+
+        // OrderBy is a stable sort, so within each group the stored order decides. That makes the
+        // survivor arbitrary but reproducible across boots, which is what keeps decay behaviour
+        // from flipping between restarts.
+        foreach (var config in configs.OrderBy(c => c.TenantId.Length == 0 ? 1 : 0))
+        {
+            // ComposeKeyUnchecked, not PartitionKey: the rows being keyed here are exactly the ones
+            // that may already carry a separator, so the assert would abort the boot this method
+            // exists to rescue.
+            if (map.TryAdd(ComposeKeyUnchecked(config.TenantId, config.Ns), config))
+                continue;
+
+            logger?.LogWarning(
+                "Duplicate decay-config partition key for tenant '{TenantId}' namespace '{Namespace}' — " +
+                "keeping the first row in tenant-scoped-first order and discarding the rest. This store " +
+                "was written before partition-component validation and should be repaired.",
+                EscapeControlChars(config.TenantId), EscapeControlChars(config.Ns));
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Render a partition component safely for a log line. A poisoned store is exactly the case
+    /// where these strings may hold newlines, so echoing them raw would let a bad write forge log
+    /// records. Never used on a success path.
+    /// </summary>
+    private static string EscapeControlChars(string value)
+        => value.Any(char.IsControl)
+            ? string.Concat(value.Select(c => char.IsControl(c) ? $"\\u{(int)c:X4}" : c.ToString()))
+            : value;
 
     /// <summary>Get the entry dictionary for the legacy-tenant partition of a namespace (null if absent).</summary>
     public ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>? GetNamespace(string ns)
@@ -91,6 +166,8 @@ internal sealed class NamespaceStore
     /// locator, BM25, HNSW, loaded tracking). Only removes locator entries that still point at this
     /// ns — an orphaned id that was later upserted into a different ns keeps its updated locator +
     /// count entry. Tenant partitions of the same ns are untouched (they are managed independently).
+    /// The namespace is validated by the <see cref="NsKey"/> overload this delegates to, which runs
+    /// before any state is touched.
     /// </summary>
     public void RemoveNamespace(string ns)
     {
@@ -107,6 +184,13 @@ internal sealed class NamespaceStore
     /// </summary>
     public void RemoveNamespace(NsKey key)
     {
+        // A delete reaches storage without ever constructing a CognitiveEntry, so the entry write
+        // ctor's guard does not cover it. Validate before anything is removed: a namespace carrying
+        // the separator would compose to another tenant's partition key and clear that tenant's
+        // BM25/HNSW indexes and persisted snapshot.
+        Tenancy.ValidatePartitionComponent(key.Tenant, nameof(key));
+        Tenancy.ValidatePartitionComponent(key.Ns, nameof(key));
+
         if (_namespaces.TryRemove(key, out var entries) && key.Tenant.Length == 0)
         {
             int removed = 0;
@@ -359,8 +443,30 @@ internal sealed class NamespaceStore
     /// </summary>
     public void InvalidateHnswIndex(string partitionKey)
     {
+        ValidatePartitionKey(partitionKey, nameof(partitionKey));
         _hnswIndices.TryRemove(partitionKey, out _);
         _persistence.DeleteHnswSnapshot(partitionKey);
+    }
+
+    /// <summary>
+    /// Validate an ALREADY-COMPOSED partition key at an entry point that receives one rather than
+    /// its two components. A well-formed key is either a bare namespace (legacy tenant) or exactly
+    /// <c>tenant + separator + ns</c>, so at most one separator is legal and every other control
+    /// character is a component that skipped its boundary guard. This cannot distinguish a legacy
+    /// namespace that smuggled in one separator from a genuine tenant key — that ambiguity is
+    /// inherent to the flattened representation and is closed where components are validated on the
+    /// way in, not here.
+    /// </summary>
+    private static void ValidatePartitionKey(string partitionKey, string paramName)
+    {
+        int sep = partitionKey.IndexOf(Tenancy.PartitionSeparator);
+        if (sep < 0)
+        {
+            Tenancy.ValidatePartitionComponent(partitionKey, paramName);
+            return;
+        }
+        Tenancy.ValidatePartitionComponent(partitionKey[..sep], paramName);
+        Tenancy.ValidatePartitionComponent(partitionKey[(sep + 1)..], paramName);
     }
 
     /// <summary>Try to restore a partition's HNSW index from a persisted snapshot. Falls back to lazy rebuild if snapshot is stale.</summary>
