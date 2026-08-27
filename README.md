@@ -11,10 +11,10 @@
 
 # The local-first cognitive memory kernel for AI agents
 
-**Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction handling, all running locally with zero external API.
+**Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction detection, all running locally with zero external API.
 
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
-- **Contradiction Management** — auto-detects when goals or architecture change, then archives the stale logic so the agent stops acting on decisions you already reversed.
+- **Contradiction Detection** — `find_contradictions` surfaces conflicting goals or architecture decisions on demand, so you can review and retire logic you've already reversed instead of letting the agent keep acting on it.
 - **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
 - **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
 
@@ -22,7 +22,7 @@
 
 ## How It Works
 
-Engram sits between your AI assistant and a local store. Every memory is embedded, indexed for hybrid search, woven into a knowledge graph, and then left to *evolve* on its own — background workers decay noise, consolidate what matters, and reconcile contradictions while you're away.
+Engram sits between your AI assistant and a local store. Every memory is embedded, indexed for hybrid search, woven into a knowledge graph, and then left to *evolve* on its own — background workers decay noise, consolidate what matters, and densify the graph while you're away.
 
 <p align="center">
   <img src="images/how-it-works.svg?v=1.2.0" alt="How It Works — store, search, link, route, with automatic diffusion subsystem and lifecycle transitions" width="900"/>
@@ -31,9 +31,9 @@ Engram sits between your AI assistant and a local store. Every memory is embedde
 The loop, end to end:
 
 1. **Store** — `remember` embeds text with a local ONNX model (bge-micro-v2, 384-dim), detects near-duplicates, and auto-links the new memory to related ones in the graph.
-2. **Search** — `recall` runs hybrid retrieval (BM25 keyword + vector similarity, fused with RRF), expands synonyms, applies MMR diversity, and re-ranks through the graph's spectral structure.
+2. **Search** — `recall` runs hybrid retrieval (BM25 keyword + vector similarity, fused with RRF), expands synonyms, and re-ranks through the graph's spectral structure. (Opt-in MMR diversity reranking is available on `search_memory` and `cross_search`.)
 3. **Route** — with the namespace omitted, `recall` auto-routes across expert namespaces to find knowledge you didn't know where to look for.
-4. **Evolve** — background services run the *physics*: spectral decay fades weakly-connected memories, sleep consolidation promotes STM → LTM, auto-link densifies the graph, and contradiction detection archives superseded logic.
+4. **Evolve** — background services run the *physics*: spectral decay fades weakly-connected memories (archiving the weakest), sleep consolidation promotes well-connected STM to LTM, and auto-link densifies the graph.
 
 Retrieval itself is a nine-stage pipeline — candidate generation, keyword rescue, fusion, diversity, and spectral re-ranking:
 
