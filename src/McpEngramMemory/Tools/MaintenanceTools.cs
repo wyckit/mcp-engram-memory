@@ -31,14 +31,12 @@ public sealed class MaintenanceTools
     public object RebuildEmbeddings(
         [Description("Namespace to rebuild ('*' for all namespaces, default: '*').")] string ns = "*")
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         using var timer = _metrics.StartTimer("rebuild_embeddings");
 
-        // "*" spans every namespace in the store - only rewrite vectors in the ones this
+        // "*" spans every namespace in the caller's tenant - only rewrite vectors in the ones this
         // caller may write to. A single explicit ns that fails the check simply rebuilds
         // nothing, same shape as "namespace has no entries".
-        var namespaces = (ns == "*" ? _index.GetNamespaces() : new[] { ns })
+        var namespaces = (ns == "*" ? _index.GetNamespaces(_access.TenantId) : new[] { ns })
             .Where(_access.CanWrite)
             .ToList();
 
@@ -47,7 +45,7 @@ public sealed class MaintenanceTools
 
         foreach (var namespaceName in namespaces)
         {
-            var (updated, skipped) = _index.RebuildEmbeddings(namespaceName, _embedding);
+            var (updated, skipped) = _index.RebuildEmbeddings(namespaceName, _embedding, _access.TenantId);
             results.Add(new RebuildNamespaceResult(namespaceName, updated, skipped));
             totalUpdated += updated;
             totalSkipped += skipped;
@@ -63,9 +61,7 @@ public sealed class MaintenanceTools
     public object CompressionStats(
         [Description("Namespace to inspect ('*' for all, default: '*').")] string ns = "*")
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new CompressionStatsResult(0, 0, 0, 0, 0f, Array.Empty<NamespaceCompressionStats>());
-        var namespaces = (ns == "*" ? _index.GetNamespaces() : new[] { ns })
+        var namespaces = (ns == "*" ? _index.GetNamespaces(_access.TenantId) : new[] { ns })
             .Where(_access.CanRead)
             .ToList();
 
@@ -75,8 +71,8 @@ public sealed class MaintenanceTools
 
         foreach (var namespaceName in namespaces)
         {
-            var entries = _index.GetAllInNamespace(namespaceName);
-            var (stm, ltm, archived) = _index.GetStateCounts(namespaceName);
+            var entries = _index.GetAllInNamespace(namespaceName, _access.TenantId);
+            var (stm, ltm, archived) = _index.GetStateCounts(namespaceName, _access.TenantId);
 
             int quantizedCount = ltm + archived; // LTM and archived entries are quantized
             int dims = entries.Count > 0 ? entries[0].Vector.Length : _embedding.Dimensions;

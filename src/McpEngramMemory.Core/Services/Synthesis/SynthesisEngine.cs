@@ -55,7 +55,7 @@ public sealed class SynthesisEngine
     /// </summary>
     public async Task<SynthesisResult> SynthesizeNamespaceAsync(
         string ns, string? query = null, int maxEntries = 200,
-        CancellationToken ct = default)
+        string tenantId = "", CancellationToken ct = default)
     {
         // 1. Check backend availability (Ollama daemon or in-process ONNX model).
         bool available = await _generator.IsAvailableAsync(_mapModel, ct);
@@ -73,8 +73,8 @@ public sealed class SynthesisEngine
                        "For the in-process ONNX backend: stage the model dir or set SYNTHESIS_ONNX_MODEL_DIR.");
         }
 
-        // 2. Gather memories
-        var entries = _index.GetAllInNamespace(ns)
+        // 2. Gather memories (within this tenant)
+        var entries = _index.GetAllInNamespace(ns, tenantId)
             .Where(e => !e.IsSummaryNode && e.LifecycleState is "stm" or "ltm")
             .OrderByDescending(e => e.AccessCount)
             .ThenByDescending(e => e.ActivationEnergy)

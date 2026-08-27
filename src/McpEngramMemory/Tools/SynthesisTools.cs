@@ -32,15 +32,13 @@ public sealed class SynthesisTools
         [Description("Maximum number of memories to include in synthesis (default: 200).")] int maxEntries = 200,
         CancellationToken cancellationToken = default)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new SynthesisResult("empty", null, 0, 0, "", "");
         // Synthesis reads entry text and feeds it to a model, so a denied read must be
         // indistinguishable from an empty namespace - reuse the same "empty" status the
         // engine itself returns when a namespace genuinely has nothing to synthesize.
         if (!_access.CanRead(ns))
             return new SynthesisResult("empty", null, 0, 0, "", "");
 
-        var result = await _synthesis.SynthesizeNamespaceAsync(ns, query, maxEntries, cancellationToken);
+        var result = await _synthesis.SynthesizeNamespaceAsync(ns, query, maxEntries, _access.TenantId, cancellationToken);
         return result;
     }
 }

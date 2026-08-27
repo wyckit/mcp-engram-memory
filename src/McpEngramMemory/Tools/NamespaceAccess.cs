@@ -40,15 +40,6 @@ public sealed class NamespaceAccess
 
     public bool IsLegacyUnisolated => _principal.IsLegacyUnisolated;
 
-    /// <summary>
-    /// True when the caller is in a tenant partition whose graph, cluster, lifecycle, and
-    /// synthesis structures have not yet been migrated from legacy bare-id storage.
-    /// </summary>
-    public bool RequiresTenantQualifiedStructures => _principal.TenantId.Length > 0;
-
-    public const string TenantStructureUnavailable =
-        "Error: this operation requires tenant-qualified graph/lifecycle structures that are not enabled yet.";
-
     public bool CanRead(string ns) => _principal.IsSystem ||
         _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
 

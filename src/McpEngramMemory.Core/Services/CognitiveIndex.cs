@@ -1175,14 +1175,16 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>Re-embed all entries in a namespace. Per-namespace write lock.</summary>
-    public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding)
+    public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding, string tenantId = "")
     {
-        var nsLock = NsLock(ns);
+        var key = new NsKey(NormalizeTenant(tenantId), ns);
+        string pk = NamespaceStore.PartitionKey(key);
+        var nsLock = NsLock(pk);
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
-            var nsEntries = _store.GetNamespace(ns);
+            var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null)
                 return (0, 0);
 
@@ -1203,7 +1205,8 @@ public sealed class CognitiveIndex : IDisposable
                     oldEntry.Id, newVector, oldEntry.Ns, oldEntry.Text,
                     oldEntry.Category, oldEntry.Metadata, oldEntry.LifecycleState,
                     oldEntry.CreatedAt, oldEntry.LastAccessedAt, oldEntry.AccessCount,
-                    oldEntry.ActivationEnergy, oldEntry.IsSummaryNode, oldEntry.SourceClusterId);
+                    oldEntry.ActivationEnergy, oldEntry.IsSummaryNode, oldEntry.SourceClusterId,
+                    oldEntry.Keywords, oldEntry.TenantId);
 
                 var quantized = newEntry.LifecycleState is "ltm" or "archived"
                     ? VectorQuantizer.Quantize(newVector)
@@ -1218,7 +1221,7 @@ public sealed class CognitiveIndex : IDisposable
                 _store.ScheduleSave(ns);
                 // Invalidate the stale HNSW index so it is rebuilt lazily on the next search.
                 // The old topology references pre-re-embedding vectors and would return wrong candidates.
-                _store.InvalidateHnswIndex(ns);
+                _store.InvalidateHnswIndex(pk);
             }
 
             return (updated, skipped);

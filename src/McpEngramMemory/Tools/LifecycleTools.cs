@@ -7,7 +7,8 @@ using ModelContextProtocol.Server;
 namespace McpEngramMemory.Tools;
 
 /// <summary>
-/// MCP tools for cognitive lifecycle management.
+/// MCP tools for cognitive lifecycle management. Every operation is scoped to the caller's tenant
+/// (<see cref="NamespaceAccess.TenantId"/>); the legacy tenant ("") behaves exactly as before.
 /// </summary>
 [McpServerToolType]
 public sealed class LifecycleTools
@@ -25,21 +26,23 @@ public sealed class LifecycleTools
         _access = access;
     }
 
+    /// <summary>Resolve an entry by id within the caller's tenant (fast legacy locator for tenant "").</summary>
+    private CognitiveEntry? Resolve(string id) =>
+        _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
+
     [McpServerTool(Name = "promote_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
     public string PromoteMemory(
         [Description("Entry ID.")] string id,
         [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
-        var existing = _index.Get(id);
+        var existing = Resolve(id);
         if (existing is null || !_access.CanWrite(existing.Ns))
             return $"Error: Entry '{id}' not found.";
 
-        var result = _lifecycle.PromoteMemory(id, targetState);
+        var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(existing.Ns);
         return result;
@@ -57,8 +60,6 @@ public sealed class LifecycleTools
         [Description("Use hybrid BM25+vector search for better keyword recall (default: false).")] bool hybrid = false,
         [Description("Apply token-level reranking to improve precision (default: false).")] bool rerank = false)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return Array.Empty<CognitiveSearchResult>();
         // deep_recall returns entry text, so this is the one that matters most in this
         // class - deny like an empty result rather than a distinct "denied" reply.
         if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
@@ -74,7 +75,7 @@ public sealed class LifecycleTools
         }
 
         return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold,
-            queryText: text, hybrid: hybrid, rerank: rerank);
+            queryText: text, hybrid: hybrid, rerank: rerank, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "memory_feedback", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -84,13 +85,15 @@ public sealed class LifecycleTools
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
         [Description("Optional namespace for threshold config lookup.")] string? ns = null)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
-        var existing = _index.Get(id);
+        var existing = Resolve(id);
         if (existing is null || !_access.CanWrite(existing.Ns))
             return $"Error: Entry '{id}' not found.";
 
-        var result = _lifecycle.ApplyFeedback(id, delta, ns);
+        // For a tenant caller the entry must be resolved by (ns, tenant), so fall back to the
+        // entry's own namespace when no config-hint ns was supplied. Legacy callers keep the
+        // original behavior (null ns -> bare id lookup and default thresholds).
+        string? feedbackNs = _access.TenantId.Length == 0 ? ns : (ns ?? existing.Ns);
+        var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, _access.TenantId);
         if (result is null)
             return $"Error: Entry '{id}' not found.";
 
@@ -105,17 +108,14 @@ public sealed class LifecycleTools
         [Description("Below this, STM demotes to LTM (default: 2.0).")] float stmThreshold = 2.0f,
         [Description("Below this, LTM archives (default: -5.0).")] float archiveThreshold = -5.0f)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new DecayCycleResult(0, 0, 0, Array.Empty<string>(), Array.Empty<string>());
-        return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold);
+        return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
+            tenantId: _access.TenantId);
     }
 
     public ConsolidationResult RunConsolidation(
         [Description("Namespace to consolidate, or '*' for every non-system namespace.")] string ns)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new ConsolidationResult(0, 0, 0, 0, 0, Array.Empty<string>(), Array.Empty<string>());
-        return _lifecycle.RunConsolidationPass(ns);
+        return _lifecycle.RunConsolidationPass(ns, _access.TenantId);
     }
 
     [McpServerTool(Name = "configure_decay", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
@@ -129,15 +129,13 @@ public sealed class LifecycleTools
         [Description("Override spectral diffusion of decay debt. Defaults to ON when the namespace qualifies (>=32 nodes, >=8 positive-relation edges); set false to force classical pointwise decay regardless of graph structure. Namespaces below the qualification threshold silently fall back to pointwise either way.")] bool? useSpectralDecay = null,
         [Description("Fractional-Laplacian exponent alpha for the heat kernel filter exp(-lambda^alpha). Default 1.0 = standard heat kernel. Values <1 are subdiffusive, >1 superdiffusive.")] float? subdiffusiveExponent = null)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         if (string.IsNullOrWhiteSpace(ns))
             return "Error: Namespace must not be empty.";
         if (!_access.CanWrite(ns))
             return NamespaceAccess.WriteDenied(ns);
 
         var config = _lifecycle.SetDecayConfig(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
-            useSpectralDecay, subdiffusiveExponent);
+            useSpectralDecay, subdiffusiveExponent, _access.TenantId);
         return config;
     }
 

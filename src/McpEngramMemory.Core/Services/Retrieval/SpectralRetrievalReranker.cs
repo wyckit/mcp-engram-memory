@@ -63,18 +63,20 @@ public sealed class SpectralRetrievalReranker
     /// <param name="mode">Filter shape. <see cref="SpectralRetrievalMode.None"/> short-circuits.</param>
     /// <param name="topK">Result cap on the reranked list.</param>
     /// <param name="diffusionTime">Heat-kernel time t. Larger t = stronger smoothing toward cluster means. Default 1.0.</param>
+    /// <param name="tenantId">Tenant partition the basis is scoped to; "" is the legacy tenant.</param>
     public IReadOnlyList<(string Id, float Score)> Rerank(
         string ns,
         IReadOnlyList<(string Id, float Score)> originalResults,
         SpectralRetrievalMode mode,
         int topK = 10,
-        float diffusionTime = 1.0f)
+        float diffusionTime = 1.0f,
+        string tenantId = "")
     {
         if (originalResults.Count == 0)
             return Array.Empty<(string, float)>();
 
         // Passthrough fast paths: explicit None, or no qualifying basis.
-        if (mode == SpectralRetrievalMode.None || _kernel.GetBasis(ns) is null)
+        if (mode == SpectralRetrievalMode.None || _kernel.GetBasis(ns, tenantId: tenantId) is null)
         {
             return SortAndCap(originalResults, topK);
         }
@@ -95,7 +97,7 @@ public sealed class SpectralRetrievalReranker
             _ => _ => 1f,
         };
 
-        var smoothed = _kernel.ApplySpectralFilter(ns, signal, filter);
+        var smoothed = _kernel.ApplySpectralFilter(ns, signal, filter, tenantId);
 
         // Collect every entry that has any signal (original or spectrally-induced),
         // dedup, sort by smoothed score descending, take top-K.
