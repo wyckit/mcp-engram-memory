@@ -10,6 +10,10 @@ public sealed class DecayConfig
     [JsonPropertyName("ns")]
     public string Ns { get; }
 
+    /// <summary>Tenant partition this decay config belongs to. Legacy configs default to <c>""</c>.</summary>
+    [JsonPropertyName("tenantId")]
+    public string TenantId { get; }
+
     [JsonPropertyName("decayRate")]
     public float DecayRate { get; set; } = 0.1f;
 
@@ -132,9 +136,11 @@ public sealed class DecayConfig
         bool enableConsolidation = true, float consolidationDiffusionTime = 10.0f,
         float consolidationPromotionThreshold = 0.0f, float consolidationArchiveThreshold = -5.0f,
         bool enableAutoLink = true, float autoLinkSimilarityThreshold = 0.85f,
-        int autoLinkMaxNewEdgesPerScan = 1000)
+        int autoLinkMaxNewEdgesPerScan = 1000,
+        string? tenantId = null)
     {
         Ns = ns;
+        TenantId = Tenancy.Normalize(tenantId);
         DecayRate = decayRate;
         ReinforcementWeight = reinforcementWeight;
         StmThreshold = stmThreshold;
@@ -204,6 +210,10 @@ public sealed class CollapseRecord
     [JsonPropertyName("ns")]
     public string Ns { get; }
 
+    /// <summary>Tenant partition this collapse record belongs to. Legacy records default to <c>""</c>.</summary>
+    [JsonPropertyName("tenantId")]
+    public string TenantId { get; }
+
     [JsonPropertyName("memberIds")]
     public List<string> MemberIds { get; }
 
@@ -218,7 +228,8 @@ public sealed class CollapseRecord
         string collapseId, string clusterId, string summaryEntryId,
         string ns, List<string> memberIds,
         Dictionary<string, string> previousStates,
-        DateTimeOffset collapsedAt)
+        DateTimeOffset collapsedAt,
+        string? tenantId = null)
     {
         CollapseId = collapseId;
         ClusterId = clusterId;
@@ -227,12 +238,14 @@ public sealed class CollapseRecord
         MemberIds = memberIds;
         PreviousStates = previousStates;
         CollapsedAt = collapsedAt;
+        TenantId = Tenancy.Normalize(tenantId);
     }
 
     public CollapseRecord(
         string collapseId, string clusterId, string summaryEntryId,
         string ns, List<string> memberIds,
-        Dictionary<string, string> previousStates)
+        Dictionary<string, string> previousStates,
+        string? tenantId = null)
     {
         CollapseId = collapseId;
         ClusterId = clusterId;
@@ -241,5 +254,6 @@ public sealed class CollapseRecord
         MemberIds = memberIds;
         PreviousStates = previousStates;
         CollapsedAt = DateTimeOffset.UtcNow;
+        TenantId = Tenancy.Normalize(tenantId);
     }
 }

@@ -13,6 +13,13 @@ public sealed class GraphEdge
     [JsonPropertyName("targetId")]
     public string TargetId { get; }
 
+    /// <summary>
+    /// Tenant partition this edge belongs to. Both endpoints resolve within this tenant; the graph
+    /// never connects entries across tenants. Legacy edges default to <c>""</c>.
+    /// </summary>
+    [JsonPropertyName("tenantId")]
+    public string TenantId { get; }
+
     [JsonPropertyName("relation")]
     public string Relation { get; }
 
@@ -28,7 +35,8 @@ public sealed class GraphEdge
         string targetId,
         string relation,
         float weight = 1.0f,
-        Dictionary<string, string>? metadata = null)
+        Dictionary<string, string>? metadata = null,
+        string? tenantId = null)
     {
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new ArgumentException("SourceId must not be empty.", nameof(sourceId));
@@ -42,5 +50,6 @@ public sealed class GraphEdge
         Relation = relation;
         Weight = Math.Clamp(weight, 0f, 1f);
         Metadata = metadata is not null ? new Dictionary<string, string>(metadata) : new();
+        TenantId = Tenancy.Normalize(tenantId);
     }
 }
