@@ -105,8 +105,8 @@ Set `MEMORY_TOOL_PROFILE` in your MCP config to control exposed tools:
 | Profile | Tools | Includes |
 |---------|-------|---------|
 | `minimal` | 17 | Core CRUD, composite (remember/recall/reflect), admin (+ `engram_status`), multi-agent **(default)** |
-| `standard` | 41 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
-| `full` | 65 | Everything — expert routing, debate, synthesis, benchmarks, visualization |
+| `standard` | 39 | Adds graph (+auto-link), lifecycle (+consolidation), clustering, intelligence, memory-diffusion kernel, spectral retrieval |
+| `full` | 63 | Everything — governed knowledge promotion, expert routing, debate, synthesis, benchmarks, visualization |
 
 `minimal` is the default. `get_graph_snapshot` requires `full`. Most daily use works on `minimal`.
 

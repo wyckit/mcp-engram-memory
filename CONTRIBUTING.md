@@ -41,7 +41,7 @@ src/
   McpEngramMemory.Core/   Library — memory engine, search, graph, clustering
   McpEngramMemory/        MCP server (dotnet global tool) built on top of Core
 tests/
-  McpEngramMemory.Tests/  xUnit tests (>850 across net8/9/10)
+  McpEngramMemory.Tests/  xUnit tests (1,100+ across net8/9/10)
 docs/                     User-facing documentation
 benchmarks/               Benchmark datasets, result artifacts, baselines
 examples/                 MCP config snippets for Claude Code, VS Code, etc.

@@ -170,10 +170,10 @@ the MCP adapter.
 ## Known dependency advisories
 
 - **GHSA-2m69-gcr7-jv3q / CVE-2025-6965 — resolved in 1.5.0.**
-  `SQLitePCLRaw` is now pinned to 2.1.12, which is outside the advisory's affected
+  `SQLitePCLRaw` is now pinned to 3.0.5, which is outside the advisory's affected
   range (`<= 2.1.11`). Earlier releases shipped 2.1.6 transitively and documented
-  this as accepted risk on the grounds that no patched release existed; 2.1.12 has
-  since shipped, so that reasoning is obsolete.
+  this as accepted risk on the grounds that no patched release existed; a fixed
+  release has since shipped, so that reasoning is obsolete.
 
   Upgrading `Microsoft.Data.Sqlite` does not fix it on its own — 8.0.29 still pulls
   2.1.6 and 9.0.18 pulls only 2.1.10, both affected — so `McpEngramMemory.Core`
