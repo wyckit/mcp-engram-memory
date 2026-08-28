@@ -55,6 +55,25 @@ All notable changes to this project will be documented in this file.
   namespace field (`CognitiveEntryInfo` always did); that mistaken belief is what spawned the
   duplicate resolvers now removed.
 
+### Fixed
+
+- **`delete_memory` can now delete an id that collides across namespaces** (#21). Two entries
+  sharing an id in different namespaces of the same tenant were mutually undeletable: the bare-id
+  ambiguity guard blanked each one's resolution, and the tool answered "not found" for an id that
+  demonstrably existed, with no way out through the MCP surface. Two changes close it:
+  - **New optional `ns` parameter** — an exact `(tenant, ns, id)` disambiguator. Trailing,
+    optional, and JSON-bound by name, so existing callers' payloads deserialize unchanged.
+  - **Bare-id deletes converge on `EntryAccessResolver`** like the rest of the tool surface:
+    resolution is now "unique among namespaces the caller may *write*", so an invisible or
+    read-only same-id twin no longer blanks a legitimate delete. Two writable twins still refuse
+    rather than guess, and not-found, not-permitted, and ambiguous all reply byte-equal to a
+    genuine miss — never a distinct denial.
+
+  The `(tenant, id)` topology cascade keeps its tenant-wide ambiguity guard untouched: deleting
+  one twin leaves the physically shared edges and cluster memberships to the survivor (the reply
+  never discloses that a skip happened), and once the id is unique again a later delete cascades
+  normally.
+
 ## [1.6.0] - 2026-08-27
 
 _Feature release. Full multi-tenant support now extends to the cognitive graph and intelligence

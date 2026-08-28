@@ -467,38 +467,77 @@ public sealed class CoreMemoryTools
     [McpServerTool(Name = "delete_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Permanently remove a single memory and all its graph edges and cluster memberships by ID. Don't use this to archive old memories; change the lifecycle state to 'archived' via `store_memory` or `remember` to preserve them for deep recall.")]
     public string DeleteMemory(
-        [Description("The identifier of the entry to delete.")] string id)
+        [Description("The identifier of the entry to delete.")] string id,
+        [Description("Namespace holding the entry. Pass it when the id exists in more than one namespace — a bare-id delete refuses an ambiguous id rather than guessing — or whenever you already know the namespace. Omit to resolve the id across the namespaces you can write.")] string? ns = null)
     {
         // Resolve first, so the entry's namespace - and therefore whether this caller may
         // touch it - is known before anything is destroyed. Previously the edge and cluster
         // cascade ran unconditionally, ahead of the existence check: a caller could strip an
         // entry's graph edges and cluster memberships without any right to the entry, and
         // even for ids that did not exist.
-        var existing = _index.GetForTenant(id, _principal.TenantId);
-        if (existing is null)
-            return $"Entry '{id}' not found.";
+        //
+        // Two resolution modes, one authorization rule (the caller must be able to WRITE the
+        // resolved namespace), one reply for every failure. An entry's identity is
+        // (tenant, namespace, id) — ids are unique only per (tenant, namespace) — so a bare id
+        // can name two entries at once, and refusing that ambiguity used to make same-id twins
+        // mutually undeletable through this tool with no way out (issue #21):
+        //
+        //  - ns provided: exact (tenant, ns, id) lookup — the disambiguator that reaches one
+        //    twin of a colliding id.
+        //  - ns omitted: resolve with the write predicate, "unique among namespaces this caller
+        //    may write". An invisible or read-only twin can then neither hijack the resolution
+        //    nor blank it out, while two WRITABLE twins still refuse rather than let namespace
+        //    enumeration order pick which entry dies.
+        //
+        // Not-found, not-permitted, and ambiguous all return the same reply, byte-equal to a
+        // genuine miss — a distinct reply for any one of them is an existence oracle over
+        // namespaces the caller cannot see.
+        CognitiveEntry? existing;
+        if (!string.IsNullOrWhiteSpace(ns))
+        {
+            // A namespace that fails partition validation (control characters) can never hold
+            // an entry, so the truthful reply is the same miss — not a distinct error that
+            // would make malformed probes distinguishable.
+            try { existing = _index.Get(id, ns, _principal.TenantId); }
+            catch (ArgumentException) { existing = null; }
 
-        // Same reply as a genuine miss - a distinct denial would confirm the id exists.
-        if (!CanWrite(existing.Ns))
-            return $"Entry '{id}' not found.";
+            if (existing is null || !CanWrite(ns))
+                return $"Entry '{id}' not found.";
+        }
+        else
+        {
+            existing = EntryAccessResolver.Resolve(_index, id, _principal.TenantId, CanWrite);
+            if (existing is null)
+                return $"Entry '{id}' not found.";
+        }
 
         // Cascade the delete to the entry's tenant-partitioned graph edges and cluster
         // memberships so nothing dangles to the now-removed entry.
         //
         // The cascade goes through TopologyCascade rather than calling the graph and cluster
-        // managers directly, even though this call site is already safe: the GetForTenant
-        // resolution above returns null for an id that exists in more than one namespace, so a
-        // colliding id never reaches here in the first place. Every other caller of the
-        // non-cascading DeleteAllInNamespace open-codes this same pair of calls and each one
-        // re-decides whether to guard, which is exactly how the guard goes missing. Routing
-        // through the shared helper makes the guarded form the only reachable one, so a later
-        // edit here cannot quietly drop it.
+        // managers directly. Every other caller of the non-cascading DeleteAllInNamespace
+        // open-codes this same pair of calls and each one re-decides whether to guard, which is
+        // exactly how the guard goes missing. Routing through the shared helper makes the
+        // guarded form the only reachable one, so a later edit here cannot quietly drop it.
+        //
+        // The helper's guard is TENANT-WIDE and deliberately stricter than the resolution
+        // above: edges and cluster memberships are keyed (tenant, bare id) and physically
+        // SHARED between same-id twins, so when a twin exists anywhere in the tenant — visible
+        // to this caller or not — the cascade skips and the survivor keeps the shared topology.
+        // Once one twin is gone the id is unambiguous again and a later delete cascades
+        // normally. The skip count is deliberately not surfaced in the reply: it is a one-bit
+        // "a same-id twin exists somewhere in your tenant" oracle, including over namespaces
+        // the caller cannot see.
         var cascade = TopologyCascade.CascadeAll(
             _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true);
         int edgesRemoved = cascade.EdgesRemoved;
 
+        // Namespace-scoped delete: the resolution above already decided WHICH entry this is, so
+        // the delete targets exactly that partition. DeleteForTenant would re-run its own
+        // ACL-blind tenant-wide ambiguity check and contradict the resolver's verdict — undoing
+        // both fixes this method's resolution exists to provide.
         // Check the return value to avoid TOCTOU against a concurrent delete.
-        if (!_index.DeleteForTenant(id, _principal.TenantId))
+        if (!_index.Delete(id, existing.Ns, tenantId: _principal.TenantId))
             return $"Entry '{id}' not found.";
 
         return $"Deleted entry '{id}'. Removed {edgesRemoved} edge(s) and cleaned cluster memberships.";
