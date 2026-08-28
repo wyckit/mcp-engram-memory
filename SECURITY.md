@@ -134,7 +134,8 @@ maintenance, synthesis, and visualization tools. Graph edges never connect entri
 in different tenants (both endpoints are interpreted within the edge's tenant);
 cross-namespace association *within* a tenant is preserved. Reads that resolve an
 id the caller cannot see return empty/not-found rather than a distinct denial, so
-no operation becomes an existence oracle. The global bare `get_memory`/`delete`
+no operation reports existence directly — with one measured exception, documented
+under *Known residual* below. The global bare `get_memory`/`delete`
 by-id path stays legacy-only, so a bare id can never be probed across tenants.
 Background decay, consolidation, auto-link, and accretion run for every tenant.
 
@@ -147,6 +148,53 @@ historical behavior as explicit `PrincipalContext.LegacyUnisolated` mode.
 authentication: they are an isolation boundary between cooperating identities, not
 a defense against a hostile process that can set its own env. For mutually
 untrusted tenants, still run separate server processes and data directories.
+
+### Known residual: bare-id topology suppression
+
+An entry's identity is `(tenant, namespace, id)`, and ids are unique only per
+`(tenant, namespace)`. Graph adjacency and cluster membership, however, are keyed
+`(tenant, id)` with no namespace component, so two entries that share an id in
+different namespaces of the **same tenant** share one graph node and one
+membership bucket.
+
+Because of that, resolving an id to the twin a caller *can* see is sufficient to
+authorize an entry-scoped operation (promote, feedback, a namespace-qualified
+delete — each acts on the qualified entry that was authorized) but is **not**
+sufficient to authorize a topology operation, which would reach the shared node
+and therefore the twin the caller cannot see. Topology operations
+(`link_memories`, `unlink_memories`, `get_neighbors`, `traverse_graph`, the edge
+and cluster projections of `get_memory` and `cognitive_stats`, `reflect`'s
+`relatedIds`, search/recall graph expansion, and the visualization projections)
+therefore apply a deliberately **ACL-blind, tenant-wide** duplicate test and fail
+closed — refusing writes and withholding topology — when the bare id is duplicated
+anywhere in the tenant. This matches the cascade posture already used by
+`delete_memory` and `purge_debates`.
+
+**The residual.** Failing closed is itself observable: topology disappearing tells
+a caller that *some* entry with that id exists somewhere in its tenant that it
+cannot see. Precisely scoped, that leak is:
+
+- **One bit, existence only.** It never discloses the namespace, the content, the
+  owning agent, or the edges themselves.
+- **Intra-tenant only.** The duplicate test is tenant-scoped, so it cannot be
+  observed across a tenant boundary. Where the tenant boundary is the customer
+  boundary, this never crosses it.
+- **Strictly preferable to the alternative.** Without the guard, the caller would
+  obtain the other principal's actual edge ids, relations, weights and metadata,
+  and could mutate them.
+
+The cheaper-looking alternative — refusing to create a second entry with the same
+id elsewhere in the tenant — was evaluated and rejected: a write rejected because
+an id is taken in a namespace the caller cannot see is a *stronger* existence
+oracle than the one it would replace, and it would not repair collisions that
+already exist.
+
+**Remediation.** Namespace-qualifying persisted graph endpoints and cluster
+members removes the shared node, and with it this residual. Tracked as issue #19.
+Until then, treat namespace ACLs *within* a single tenant as a separation-of-duty
+mechanism between cooperating agents rather than a barrier between mutually
+distrusting ones; put mutually distrusting principals in separate tenants, and
+mutually untrusted tenants in separate processes.
 
 ## Constitutional MCP boundary
 

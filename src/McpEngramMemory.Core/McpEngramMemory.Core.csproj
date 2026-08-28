@@ -29,6 +29,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- This assembly ships as a NuGet package, so its public surface is a semver commitment.
+         Seams that exist only so a test can drive a deterministic pass stay internal and are
+         reached through here, rather than being widened to public for the test's convenience. -->
+    <InternalsVisibleTo Include="McpEngramMemory.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\images\icon.png" Pack="true" PackagePath="\" />
     <None Include="build\McpEngramMemory.Core.targets" Pack="true" PackagePath="build\" />

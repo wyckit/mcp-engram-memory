@@ -83,13 +83,16 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
 
     /// <summary>
     /// Run one full warmup sweep across every tenant's qualifying namespaces.
-    /// Public so a test can drive a single deterministic pass and assert on what the
-    /// kernel was asked to compute, rather than waiting out <see cref="StartupDelay"/>
-    /// and racing the hosted loop; <see cref="ExecuteAsync"/> is the only production
-    /// caller. Throws <see cref="OperationCanceledException"/> if
-    /// <paramref name="stoppingToken"/> trips mid-sweep.
+    /// <see cref="ExecuteAsync"/> is the only production caller. Internal rather than public
+    /// so a test can drive a single deterministic pass — asserting on what the kernel was
+    /// asked to compute instead of waiting out <see cref="StartupDelay"/> and racing the
+    /// hosted loop — without the seam becoming part of this package's public surface: this
+    /// assembly ships on NuGet, and a consumer calling this directly would take a full
+    /// synchronous store load on its own thread. Throws
+    /// <see cref="OperationCanceledException"/> if <paramref name="stoppingToken"/> trips
+    /// mid-sweep.
     /// </summary>
-    public void WarmAllQualifyingPartitions(CancellationToken stoppingToken)
+    internal void WarmAllQualifyingPartitions(CancellationToken stoppingToken)
     {
         int warmed = 0;
         int bypassed = 0;
