@@ -37,10 +37,7 @@ public sealed class GraphTools
     /// </summary>
     private string? DenyIfCannotWrite(string id)
     {
-        var entry = _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId: _access.TenantId);
-        if (entry is null || !_access.CanWrite(entry.Ns))
-            return $"Error: Entry '{id}' not found.";
-        return null;
+        return _access.ResolveWritableEntry(_index, id) is null ? $"Error: Entry '{id}' not found." : null;
     }
 
     [McpServerTool(Name = "link_memories", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]

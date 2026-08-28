@@ -60,14 +60,13 @@ public sealed class AdminTools
     public object GetMemory(
         [Description("Entry ID.")] string id)
     {
-        var entry = _index.GetForTenant(id, _principal.TenantId);
-        if (entry is null)
-            return $"Entry '{id}' not found.";
-
-        // get_memory resolves by id across every namespace, so without this it hands back the
+        // get_memory resolves by id across every namespace, so unguarded it hands back the
         // full text and metadata of any entry whose id a caller can guess or has seen in a
-        // graph edge. Same reply as a genuine miss - a distinct denial would confirm the id.
-        if (!CanRead(entry.Ns))
+        // graph edge. EntryAccessResolver applies the read predicate before matching, and
+        // not-found, not-permitted, and ambiguous all share the reply of a genuine miss -
+        // a distinct denial would confirm the id. Same semantics as the edge filter below.
+        var entry = EntryAccessResolver.Resolve(_index, id, _principal.TenantId, CanRead);
+        if (entry is null)
             return $"Entry '{id}' not found.";
 
         // Graph topology is global and edges carry bare endpoint IDs. Returning an edge
@@ -100,11 +99,8 @@ public sealed class AdminTools
             clusterIds);
     }
 
-    private bool CanReadEndpoint(string entryId)
-    {
-        var endpoint = _index.GetForTenant(entryId, _principal.TenantId);
-        return endpoint is not null && CanRead(endpoint.Ns);
-    }
+    private bool CanReadEndpoint(string entryId) =>
+        EntryAccessResolver.Resolve(_index, entryId, _principal.TenantId, CanRead) is not null;
 
     [McpServerTool(Name = "cognitive_stats", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Check how many memories exist across lifecycle states (STM/LTM/archived), plus cluster and edge counts and the namespace list. The namespace list is capped — raise namespaceLimit or pass 0 for all. Don't use it to check background worker health; use `engram_status` for that.")]

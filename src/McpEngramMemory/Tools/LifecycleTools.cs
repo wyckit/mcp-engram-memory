@@ -26,9 +26,12 @@ public sealed class LifecycleTools
         _access = access;
     }
 
-    /// <summary>Resolve an entry by id within the caller's tenant (fast legacy locator for tenant "").</summary>
-    private CognitiveEntry? Resolve(string id) =>
-        _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
+    /// <summary>
+    /// Resolve a bare id to a writable entry within the caller's tenant — see
+    /// <see cref="EntryAccessResolver"/> for the semantics. Both consumers (PromoteMemory and
+    /// MemoryFeedback) are writes, so the write predicate is the right verb here.
+    /// </summary>
+    private CognitiveEntry? Resolve(string id) => _access.ResolveWritableEntry(_index, id);
 
     [McpServerTool(Name = "promote_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
@@ -39,7 +42,7 @@ public sealed class LifecycleTools
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
         var existing = Resolve(id);
-        if (existing is null || !_access.CanWrite(existing.Ns))
+        if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
         var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, tenantId: _access.TenantId);
@@ -92,7 +95,7 @@ public sealed class LifecycleTools
         [Description("Optional namespace for threshold config lookup.")] string? ns = null)
     {
         var existing = Resolve(id);
-        if (existing is null || !_access.CanWrite(existing.Ns))
+        if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
         // For a tenant caller the entry is resolved within its own namespace (the caller's `ns` is

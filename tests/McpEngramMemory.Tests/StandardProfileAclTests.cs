@@ -300,7 +300,7 @@ public class StandardProfileAclTests : IDisposable
         // The rows still come back, unchanged in content and count. Withholding the write must
         // not degrade into withholding the result, or a grantee could read their own permission
         // level off the size of the reply.
-        var row = Assert.Single(results.Where(r => r.Id == "alice-archived"));
+        var row = Assert.Single(results, r => r.Id == "alice-archived");
         Assert.Equal("archived", row.LifecycleState);
 
         // ...and nothing actually moved. This is the assertion the fix exists for: the uniform

@@ -73,18 +73,9 @@ public sealed class CoreMemoryTools
     /// </summary>
     private static string ReadDenied(string ns) => $"No accessible memories in namespace '{ns}'.";
 
-    /// <summary>
-    /// Access check for an entry reached by id rather than by namespace. The graph and cluster
-    /// DTOs (<c>CognitiveEntryInfo</c>, <c>CognitiveSearchResult</c>) carry no namespace field,
-    /// which is very likely why expansion silently crossed namespaces for so long - the
-    /// namespace simply is not visible at the call site. Costs one index lookup per expanded
-    /// candidate, which is bounded by the result count.
-    /// </summary>
-    private bool CanReadEntryById(string entryId)
-    {
-        var entry = _index.GetForTenant(entryId, _principal.TenantId);
-        return entry is not null && CanRead(entry.Ns);
-    }
+    /// <summary>Resolution + authorization for an entry reached by bare id — see <see cref="EntryAccessResolver"/> for the semantics.</summary>
+    private bool CanReadEntryById(string entryId) =>
+        EntryAccessResolver.Resolve(_index, entryId, _principal.TenantId, CanRead) is not null;
 
     private static string WriteDenied(string ns) =>
         $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
