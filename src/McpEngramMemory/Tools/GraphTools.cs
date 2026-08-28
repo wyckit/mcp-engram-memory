@@ -29,15 +29,35 @@ public sealed class GraphTools
         _access = access;
     }
 
+    /// <summary>Reply for every refusal on this path. One string, so the three refusal reasons -
+    /// no such entry, not writable, id shared with an invisible twin - cannot drift apart into an
+    /// existence oracle.</summary>
+    private static string NotFound(string id) => $"Error: Entry '{id}' not found.";
+
     /// <summary>
-    /// Access check for an edge endpoint reached by id. Graph edges carry no namespace of
-    /// their own, so the only way to know whether a caller may touch one is to resolve the
-    /// entry (within the caller's tenant) and check its namespace. Same reply shape as a genuine
-    /// miss - a distinct denial would confirm the id exists in a namespace the caller cannot see.
+    /// Access check for an edge endpoint reached by id. Two conditions, and they authorize
+    /// different objects, so both are required.
+    ///
+    /// Resolution authorizes the ENTRY: graph edges carry no namespace of their own, so the only
+    /// way to know whether a caller may touch one is to resolve the entry (within the caller's
+    /// tenant) and check its namespace.
+    ///
+    /// The ambiguity test authorizes the NODE, which is not the same object. Adjacency is keyed
+    /// (tenant, id) with no namespace, so a caller who resolves to a twin they may write is still
+    /// about to mutate the node their twin shares with every other same-id entry in the tenant -
+    /// including ones in namespaces they cannot see. Resolution is ACL-filtered and cannot see
+    /// that twin, which is exactly why the second test has to be ACL-blind. See
+    /// <see cref="BareIdTopology"/>.
+    ///
+    /// Both refuse with the same reply as a genuine miss - a distinct denial would confirm the id
+    /// exists in a namespace the caller cannot see.
     /// </summary>
     private string? DenyIfCannotWrite(string id)
     {
-        return _access.ResolveWritableEntry(_index, id) is null ? $"Error: Entry '{id}' not found." : null;
+        if (!BareIdTopology.IsTopologySafe(_index, id, tenantId: _access.TenantId))
+            return NotFound(id);
+
+        return _access.ResolveWritableEntry(_index, id) is null ? NotFound(id) : null;
     }
 
     [McpServerTool(Name = "link_memories", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -78,6 +98,13 @@ public sealed class GraphTools
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
+        // The seed names a node, not an entry. When the tenant holds this id in two namespaces the
+        // node is shared with a twin the caller may not see, so its adjacency is not attributable
+        // to the entry the caller means - answer as a node with no neighbors, which is what a
+        // caller with no readable neighbors already sees.
+        if (!BareIdTopology.IsTopologySafe(_index, id, tenantId: _access.TenantId))
+            return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
+
         var result = _graph.GetNeighbors(id, relation, direction, tenantId: _access.TenantId);
 
         // Edges are tenant-scoped but span namespaces, so a neighbor can live in a namespace this
@@ -96,6 +123,16 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
+        // One sweep guard for the whole traversal: the root check below and the edge check further
+        // down would otherwise each re-list the tenant's namespaces, and that listing reloads the
+        // store.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
+        // Same rule as GetNeighbors, applied to the traversal root: a shared seed node cannot be
+        // attributed to the entry the caller means, so there is no walk to start.
+        if (!topology.IsTopologySafe(startId))
+            return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
+
         var result = _graph.Traverse(startId, tenantId: _access.TenantId, maxDepth: maxDepth, relation: relation, minWeight: minWeight, maxResults: maxResults);
 
         // The start entry itself is included in Entries, so it must be filtered too -
@@ -103,8 +140,14 @@ public sealed class GraphTools
         // as the traversal root. Drop any edge whose endpoint fell out of the visible set.
         var visibleEntries = result.Entries.Where(e => _access.CanRead(e.Namespace)).ToList();
         var visibleIds = visibleEntries.Select(e => e.Id).ToHashSet();
+
+        // Guarding only the seed would close one hop and leave the rest open: the BFS inside
+        // KnowledgeGraph walks bare-id adjacency at every hop, so a walk that starts on an
+        // unambiguous node can still cross a shared one and come back carrying edges that belong
+        // to an invisible twin. Every reported edge must therefore be attributable at BOTH ends.
         var visibleEdges = result.Edges
             .Where(e => visibleIds.Contains(e.SourceId) && visibleIds.Contains(e.TargetId))
+            .Where(e => topology.IsTopologySafe(e.SourceId) && topology.IsTopologySafe(e.TargetId))
             .ToList();
 
         return new TraversalResult(result.StartId, visibleEntries, visibleEdges);

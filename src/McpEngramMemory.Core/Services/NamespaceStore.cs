@@ -27,6 +27,13 @@ internal readonly record struct NsKey(string Tenant, string Ns);
 /// (Get(id)/Delete(id) and the id→ns resolvers) must resolve strictly within the legacy tenant so
 /// a caller can never probe or reach another tenant's entry by id alone. Tenant partitions are
 /// reached only through the explicit tenant-scoped APIs.
+///
+/// The candidate index (<see cref="_idCandidates"/>) is a second, independent structure and covers
+/// every tenant precisely because it is tenant-QUALIFIED: a lookup names the tenant it wants, so
+/// tracking another tenant's placements cannot widen what a tenant-less caller reaches. The two are
+/// not interchangeable — the locator answers "the one namespace" (tenant-blind, last writer wins),
+/// the candidate index answers "every namespace of THIS tenant", which is the only form in which
+/// unique-versus-ambiguous is decidable.
 /// </summary>
 internal sealed class NamespaceStore
 {
@@ -46,6 +53,14 @@ internal sealed class NamespaceStore
     // LEGACY-ONLY reverse index: id → ns. Only legacy-tenant ("") entries are tracked here so the
     // global id-based operations resolve strictly within the legacy tenant.
     private readonly ConcurrentDictionary<string, string> _idToNamespace = new();
+    // Candidate index: (tenant, id) → every namespace of that tenant currently holding the id.
+    // Set-valued because (tenant, ns, id) is the real identity — one id legitimately occurs in
+    // several namespaces of one tenant, and a bare-id resolver that saw only one of them would
+    // call an ambiguous id unique and then act on an arbitrary twin. Keyed by value tuple so
+    // equality is structural and ordinal, and valued by a ConcurrentDictionary used as a set
+    // because the BCL has no concurrent set: both halves stay lock-free, which is what lets the
+    // per-partition write locks above stay the only locks on the hot path.
+    private readonly ConcurrentDictionary<(string Tenant, string Id), ConcurrentDictionary<string, byte>> _idCandidates = new();
     // BM25/HNSW sub-indexes are keyed by the composed partition-key STRING (see PartitionKey).
     private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
     private readonly ConcurrentDictionary<string, object> _loadLocks = new();
@@ -177,10 +192,11 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>
-    /// Remove exactly one tenant + namespace partition from in-memory state and its search
-    /// indexes. Other tenant partitions with the same namespace are left loaded and untouched.
-    /// Persistence rows are deliberately not deleted here; the caller must schedule deletes for
-    /// the removed entry ids so incremental providers can target the full (tenant, ns, id) key.
+    /// Remove exactly one tenant + namespace partition from in-memory state, its candidate-index
+    /// placements and its search indexes. Other tenant partitions with the same namespace are left
+    /// loaded and untouched. Persistence rows are deliberately not deleted here; the caller must
+    /// schedule deletes for the removed entry ids so incremental providers can target the full
+    /// (tenant, ns, id) key.
     /// </summary>
     public void RemoveNamespace(NsKey key)
     {
@@ -191,17 +207,27 @@ internal sealed class NamespaceStore
         Tenancy.ValidatePartitionComponent(key.Tenant, nameof(key));
         Tenancy.ValidatePartitionComponent(key.Ns, nameof(key));
 
-        if (_namespaces.TryRemove(key, out var entries) && key.Tenant.Length == 0)
+        if (_namespaces.TryRemove(key, out var entries))
         {
             int removed = 0;
-            // Use the KeyValuePair overload of TryRemove so we only delete a locator entry
-            // when it currently points at THIS namespace. Guards against a rare but real
-            // scenario: id X was upserted to ns=A (orphan), then re-upserted to ns=B (locator
-            // now points at B). If we unconditionally TryRemove(X), we'd blow away B's
-            // locator AND decrement the total count while B's entries dict still has X —
-            // driving TotalCount negative.
             foreach (var id in entries.Keys)
             {
+                // The candidate index is retracted for EVERY tenant, not just the legacy one: it
+                // is keyed by the full (tenant, ns, id) placement, so a tenant partition skipped
+                // here would keep naming a namespace whose entries no longer exist — and a
+                // candidate that outlives its partition is exactly the stale resolution this
+                // index exists to prevent.
+                UntrackCandidate(id, key.Ns, key.Tenant);
+
+                if (key.Tenant.Length != 0)
+                    continue;
+
+                // Use the KeyValuePair overload of TryRemove so we only delete a locator entry
+                // when it currently points at THIS namespace. Guards against a rare but real
+                // scenario: id X was upserted to ns=A (orphan), then re-upserted to ns=B (locator
+                // now points at B). If we unconditionally TryRemove(X), we'd blow away B's
+                // locator AND decrement the total count while B's entries dict still has X —
+                // driving TotalCount negative.
                 if (_idToNamespace.TryRemove(new KeyValuePair<string, string>(id, key.Ns)))
                     removed++;
             }
@@ -356,7 +382,9 @@ internal sealed class NamespaceStore
     /// <summary>Remove an entry from the BM25 keyword index for the given partition key.</summary>
     public void RemoveBM25(string id, string partitionKey) => _bm25.Remove(id, partitionKey);
 
-    // ── Id Locator (reverse index: entryId → namespace) — LEGACY tenant only ──
+    // ── Id Locators: the LEGACY-only reverse index (entryId → one ns) and the tenant-qualified
+    //    candidate index ((tenant, entryId) → every ns holding it). Both are maintained by the
+    //    same Track/Untrack pair so they cannot drift apart. ──
 
     /// <summary>Resolve a legacy-tenant namespace via locator, falling back to LoadAll if not found.</summary>
     public bool TryResolveOrLoad(string entryId, out string ns)
@@ -368,13 +396,21 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>
-    /// Track an entry's namespace in the LEGACY locator + total count. Tenant entries (non-empty
-    /// tenantId) are intentionally NOT tracked here, keeping the global id/count paths legacy-scoped.
+    /// Record that (<paramref name="tenantId"/>, <paramref name="ns"/>) holds
+    /// <paramref name="entryId"/>, in the candidate index for every tenant and additionally in the
+    /// LEGACY locator + total count. Tenant entries (non-empty tenantId) are intentionally NOT put
+    /// in the locator, keeping the global id/count paths legacy-scoped.
     /// Increments TotalCount atomically only when the id was not already tracked (so upsert-of-existing
     /// doesn't drift the count).
     /// </summary>
     public void TrackEntry(string entryId, string ns, string tenantId)
     {
+        // Upsert never removes the id from a namespace it previously occupied, so the candidate
+        // set grows rather than moves — which is what makes it agree with a full scan, where both
+        // twins would have been found. The locator below moves instead, and that difference is
+        // exactly why it cannot answer the ambiguity question.
+        TrackCandidate(entryId, ns, tenantId);
+
         if (tenantId.Length != 0)
             return; // tenant partitions are excluded from the global locator/count by design
 
@@ -384,11 +420,93 @@ internal sealed class NamespaceStore
             _idToNamespace[entryId] = ns;
     }
 
-    /// <summary>Remove a (legacy) entry from the locator. Decrements TotalCount atomically if the id was tracked.</summary>
-    public void UntrackEntry(string entryId)
+    /// <summary>
+    /// Retract one (<paramref name="tenantId"/>, <paramref name="ns"/>, <paramref name="entryId"/>)
+    /// placement from the candidate index, and for the legacy tenant also from the locator +
+    /// TotalCount. The namespace and tenant are required rather than looked up: the candidate index
+    /// is set-valued, so retracting the right placement needs the full triple, and a delete in one
+    /// namespace must not evict a surviving twin in another.
+    /// </summary>
+    public void UntrackEntry(string entryId, string ns, string tenantId)
     {
+        UntrackCandidate(entryId, ns, tenantId);
+
+        if (tenantId.Length != 0)
+            return;
+
+        // Deliberately unconditional on ns, unlike RemoveNamespace above: this is the pre-existing
+        // legacy-locator contract and the delete paths that call it already resolved through the
+        // locator or are deleting the only legacy placement they know of.
         if (_idToNamespace.TryRemove(entryId, out _))
             Interlocked.Decrement(ref _totalCountApprox);
+    }
+
+    /// <summary>
+    /// Every namespace of <paramref name="tenantId"/> that currently holds
+    /// <paramref name="entryId"/>. Constant-time in the number of namespaces the tenant owns —
+    /// this is the structure that replaces walking them all.
+    ///
+    /// Exact only over partitions that have been materialized in this process, so a caller that
+    /// needs completeness must have loaded the persisted namespaces first (see
+    /// <see cref="LoadAll"/>). Returning a stale-but-superset answer would be tolerable — every
+    /// caller re-reads the partition to confirm — but a stale MISS would not, which is why every
+    /// path that can move an id between partitions maintains this index.
+    /// </summary>
+    public IReadOnlyList<string> GetCandidateNamespaces(string entryId, string tenantId)
+    {
+        if (!_idCandidates.TryGetValue((tenantId, entryId), out var bucket))
+            return Array.Empty<string>();
+
+        // Materialize rather than hand back the live key collection: the caller iterates it while
+        // probing partitions, and a concurrent write to this bucket would otherwise mutate the
+        // sequence mid-walk.
+        return bucket.Keys.ToList();
+    }
+
+    /// <summary>
+    /// Add one placement to the candidate index. Lock-free, and safe against a concurrent
+    /// <see cref="UntrackCandidate"/> for the same id in a DIFFERENT namespace — which genuinely
+    /// races, because those two run under two different per-partition write locks.
+    /// </summary>
+    private void TrackCandidate(string entryId, string ns, string tenantId)
+    {
+        var key = (tenantId, entryId);
+        while (true)
+        {
+            var bucket = _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>());
+            bucket[ns] = 0;
+
+            // Re-read what is published. UntrackCandidate retires a bucket it observed empty, and
+            // that can land between our GetOrAdd and our write — stranding this namespace in a
+            // dictionary no lookup can reach. A missing candidate is a silently wrong resolution
+            // (the worst outcome here), so we republish instead. The loop can only repeat while
+            // another thread keeps retiring buckets for this same id, and each retirement it
+            // observes is a real concurrent delete.
+            if (_idCandidates.TryGetValue(key, out var published) && ReferenceEquals(published, bucket))
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Remove one placement from the candidate index, retiring the bucket once it is empty so a
+    /// store that churns ids does not retain a dictionary per id ever seen.
+    /// </summary>
+    private void UntrackCandidate(string entryId, string ns, string tenantId)
+    {
+        var key = (tenantId, entryId);
+        if (!_idCandidates.TryGetValue(key, out var bucket))
+            return;
+
+        bucket.TryRemove(ns, out _);
+        if (!bucket.IsEmpty)
+            return;
+
+        // The KeyValuePair overload again, for the same reason as in RemoveNamespace: only the
+        // exact instance observed empty is unpublished, so a racing TrackCandidate that already
+        // published a fresh bucket keeps it. The reverse interleaving — our removal landing after
+        // that thread's write — is closed by the republish check in TrackCandidate.
+        _idCandidates.TryRemove(
+            new KeyValuePair<(string Tenant, string Id), ConcurrentDictionary<string, byte>>(key, bucket));
     }
 
     // ── HNSW Index Management (keyed by composed partition key) ──
@@ -517,6 +635,13 @@ internal sealed class NamespaceStore
                 ? VectorQuantizer.Quantize(entry.Vector)
                 : null;
             nsDict[entry.Id] = (entry, norm, quantized);
+
+            // Track the placement the row actually landed in (entry.Ns, which keyed nsDict above),
+            // not the namespace being loaded: a row whose Ns disagrees with its file lives in the
+            // partition its own Ns names, and that is the partition a candidate lookup must send
+            // the caller to. This is the path that makes the index complete after LoadAll — without
+            // it, an id in a namespace untouched this process would resolve as a miss.
+            TrackCandidate(entry.Id, entry.Ns, entry.TenantId);
 
             // Only legacy-tenant entries populate the global locator + count.
             if (entry.TenantId.Length == 0)

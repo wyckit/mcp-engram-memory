@@ -24,7 +24,11 @@ namespace McpEngramMemory.Core.Services;
 /// Operations that resolve id → namespace (Get(id), Delete(id), RecordAccess(id),
 /// SetLifecycleState, SetActivationEnergyAndState) resolve lock-free via the
 /// NamespaceStore._idToNamespace ConcurrentDictionary, then acquire the resolved
-/// namespace's lock for the actual work.
+/// namespace's lock for the actual work. The tenant-scoped bare-id operations
+/// (GetNamespacesContaining, GetForTenant, DeleteForTenant, CountNamespacesContaining) resolve
+/// through the tenant-qualified candidate index instead — same lock-free-then-acquire shape, but
+/// set-valued, because within one tenant a bare id can name more than one entry and those callers
+/// have to be able to tell that.
 ///
 /// Events (<see cref="EntryUpserted"/>, <see cref="EntryDeleted"/>) fire AFTER the
 /// per-namespace lock is released, so handlers can call back into the index safely.
@@ -160,6 +164,31 @@ public sealed class CognitiveIndex : IDisposable
     {
         _store.LoadAll();
         return _store.GetNamespaceNames(Tenancy.Normalize(tenantId));
+    }
+
+    /// <summary>
+    /// The namespaces of <paramref name="tenantId"/> that hold <paramref name="id"/> — usually one,
+    /// occasionally two, never the whole namespace list. Every bare-id path (resolution,
+    /// ambiguity counting, tenant-scoped get/delete) probes this instead of walking the tenant.
+    ///
+    /// The store-wide load is kept, deliberately. The full walk this replaces was complete only
+    /// because <see cref="GetNamespaces(string)"/> loads every persisted namespace first, and the
+    /// candidate index is exact only over partitions materialized in this process.
+    /// Dropping the load would turn a namespace nothing has touched into a silent miss — or worse,
+    /// leave an ambiguous id looking unique because only one twin happened to be resident, which
+    /// is precisely the arbitrary-twin outcome the ambiguity rule exists to refuse. The saving
+    /// being banked is the probing, not the loading: after the first call each EnsureLoaded is a
+    /// dictionary hit, while each probe removed was a lock acquisition.
+    ///
+    /// Returns namespaces, never entries, so it discloses nothing on its own — the caller still
+    /// applies its own access predicate before looking inside any of them.
+    /// </summary>
+    /// <param name="id">Bare entry id.</param>
+    /// <param name="tenantId">Required. "" is the legacy partition, not a wildcard.</param>
+    public IReadOnlyList<string> GetNamespacesContaining(string id, string tenantId)
+    {
+        _store.LoadAll();
+        return _store.GetCandidateNamespaces(id, Tenancy.Normalize(tenantId));
     }
 
     /// <summary>
@@ -352,9 +381,13 @@ public sealed class CognitiveIndex : IDisposable
     /// exactly-one (1) from ambiguous (2). Counting past the second hit would cost partition
     /// lookups that no caller can observe.
     ///
+    /// The namespaces actually probed come from <see cref="GetNamespacesContaining"/>, so the cost
+    /// is one or two partition reads rather than one per namespace the tenant owns.
+    ///
     /// Pass <paramref name="namespaceSnapshot"/> when guarding a sweep of many ids. Omitting it
     /// re-lists the tenant's namespaces per call, and that listing loads every persisted namespace
     /// — which turns a cascade over one namespace's entries into one full store reload per entry.
+    /// A supplied snapshot still restricts the walk to the namespaces it names.
     /// </summary>
     public int CountNamespacesContaining(
         string id, string tenantId, IReadOnlyList<string>? namespaceSnapshot = null)
@@ -369,13 +402,38 @@ public sealed class CognitiveIndex : IDisposable
     private (CognitiveEntry? Match, string? Ns, int Found) ScanForTenant(
         string id, string tenantId, IReadOnlyList<string>? namespaceSnapshot)
     {
+        string tenant = Tenancy.Normalize(tenantId);
+
+        // Probe the candidate namespaces rather than the tenant's whole namespace list. A namespace
+        // that does not hold the id contributed nothing to any of Match/Ns/Found before, so
+        // dropping it changes no outcome — only the number of partitions touched.
+        //
+        // A caller-supplied snapshot means the caller has ALREADY listed the tenant's namespaces,
+        // and that listing is what loads every persisted namespace, so the index is complete
+        // without reloading here. That is the entire reason the parameter exists: it keeps a sweep
+        // over one namespace's entries from triggering a full store reload per entry.
+        IReadOnlyList<string> candidates = namespaceSnapshot is null
+            ? GetNamespacesContaining(id, tenant)
+            : _store.GetCandidateNamespaces(id, tenant);
+
         CognitiveEntry? match = null;
         string? matchNs = null;
         int found = 0;
 
-        foreach (var ns in namespaceSnapshot ?? GetNamespaces(tenantId))
+        foreach (var ns in candidates)
         {
-            var candidate = Get(id, ns, tenantId: tenantId);
+            // The snapshot still bounds the walk. It is a restriction on which namespaces the
+            // caller is willing to consider, and one outside it was never visited before either;
+            // honoring it keeps this identical to the old scan for a narrowed snapshot instead of
+            // quietly widening what a sweep counts.
+            if (namespaceSnapshot is not null && !namespaceSnapshot.Contains(ns))
+                continue;
+
+            // Re-read the partition instead of trusting the index. The candidate index is
+            // maintained outside the per-partition locks, so a placement a concurrent delete just
+            // retired can still be named here; confirming with Get keeps a stale candidate from
+            // inventing an entry, and keeps Found a count of what actually exists.
+            var candidate = Get(id, ns, tenantId: tenant);
             if (candidate is null)
                 continue;
             if (++found == 2)
@@ -407,7 +465,9 @@ public sealed class CognitiveIndex : IDisposable
             var nsEntries = _store.GetNamespace(ns);
             if (nsEntries is not null && nsEntries.TryRemove(id, out _))
             {
-                _store.UntrackEntry(id);
+                // Legacy tenant throughout this overload, so the placement being retracted is
+                // exactly ("", ns, id) — the one the locator resolved us to a few lines above.
+                _store.UntrackEntry(id, ns, string.Empty);
                 _store.RemoveBM25(id, ns);
                 _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id, string.Empty);
@@ -443,8 +503,11 @@ public sealed class CognitiveIndex : IDisposable
             var nsEntries = _store.GetNamespace(key);
             if (nsEntries is not null && nsEntries.TryRemove(id, out _))
             {
-                if (key.Tenant.Length == 0)
-                    _store.UntrackEntry(id);
+                // Unconditional on tenant now: the candidate index is tenant-qualified and must
+                // lose this placement for EVERY tenant, or a deleted entry keeps offering its
+                // namespace to the next bare-id resolution. UntrackEntry still confines the legacy
+                // locator and TotalCount to the legacy tenant, exactly as the guard here did.
+                _store.UntrackEntry(id, ns, key.Tenant);
                 _store.RemoveBM25(id, pk);
                 _store.RemoveFromHnsw(pk, id);
                 _store.ScheduleEntryDelete(ns, id, key.Tenant);

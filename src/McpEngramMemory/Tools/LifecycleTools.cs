@@ -8,7 +8,14 @@ namespace McpEngramMemory.Tools;
 
 /// <summary>
 /// MCP tools for cognitive lifecycle management. Every operation is scoped to the caller's tenant
-/// (<see cref="NamespaceAccess.TenantId"/>); the legacy tenant ("") behaves exactly as before.
+/// (<see cref="NamespaceAccess.TenantId"/>).
+///
+/// The legacy tenant ("") is a partition, not a privilege level. Identified ACL principals
+/// routinely operate in it, and only the DEFAULT AGENT is unisolated — that is
+/// <see cref="NamespaceAccess.IsLegacyUnisolated"/>, which additionally requires
+/// <see cref="AgentIdentity.DefaultAgentId"/>. No check in this class may be relaxed on an
+/// empty tenant id alone; doing so hands every identified legacy principal the exemption
+/// intended for the single-user deployment.
 /// </summary>
 [McpServerToolType]
 public sealed class LifecycleTools
@@ -92,17 +99,25 @@ public sealed class LifecycleTools
     public object MemoryFeedback(
         [Description("Entry ID to provide feedback on.")] string id,
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
-        [Description("Optional namespace for threshold config lookup.")] string? ns = null)
+        [Description("Ignored. Accepted only so existing callers keep working: the entry that receives the feedback, and the decay thresholds applied to it, both come from the namespace the ID resolves to inside your tenant.")] string? ns = null)
     {
+        // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
+        // "exists but you can't touch it" - a distinct denial would confirm the id exists.
         var existing = Resolve(id);
         if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
-        // For a tenant caller the entry is resolved within its own namespace (the caller's `ns` is
-        // only a config hint and may point elsewhere, which would spuriously fail resolution).
-        // Legacy callers keep the original behavior (null ns -> bare id lookup, default thresholds).
-        string? feedbackNs = _access.TenantId.Length == 0 ? ns : existing.Ns;
-        var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, tenantId: _access.TenantId);
+        // existing.Ns is the ONLY legal target, because it is the only namespace this call
+        // authorized. Ids are unique per (tenant, namespace), so forwarding any other namespace
+        // authorizes one entry and mutates a different one - and `ns` is caller-controlled, which
+        // makes the victim caller-chosen. It is therefore not passed on at all, not even as the
+        // config hint its name suggests: ApplyFeedback derives thresholds from the same namespace
+        // it mutates, so a hint that disagreed with the target could only be wrong.
+        //
+        // In particular this must not be relaxed for an empty tenant. "" is the legacy PARTITION,
+        // which identified ACL principals share; the unisolated principal is the default agent,
+        // and it needs no relaxation here because its predicate already admits every namespace.
+        var result = _lifecycle.ApplyFeedback(id, delta, existing.Ns, tenantId: _access.TenantId);
         if (result is null)
             return $"Error: Entry '{id}' not found.";
 

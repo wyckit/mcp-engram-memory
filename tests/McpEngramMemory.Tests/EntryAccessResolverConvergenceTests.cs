@@ -24,6 +24,13 @@ namespace McpEngramMemory.Tests;
 /// against an arbitrary twin. AdminTools/CoreMemoryTools already used the unique-among-all
 /// GetForTenant, so their only delta is identified-principal and in the safe direction: an
 /// invisible same-id twin can no longer blank (or win) resolution of the one visible entry.
+///
+/// That convergence covers ENTRY-scoped operations only. Resolving to the twin the caller can see
+/// authorizes an operation on that qualified entry, and nothing more — it cannot authorize a
+/// TOPOLOGY operation, because graph adjacency and cluster membership are keyed (tenant, id) with
+/// no namespace and the two twins share one node. Topology sites therefore take the ACL-BLIND
+/// tenant-wide test in <see cref="BareIdTopology"/> on top of resolution, which is why the last
+/// test here is the mirror image of the entry-scoped ones rather than another instance of them.
 /// </summary>
 public class EntryAccessResolverConvergenceTests : IDisposable
 {
@@ -158,15 +165,33 @@ public class EntryAccessResolverConvergenceTests : IDisposable
         Assert.DoesNotContain(result.Edges, e => e.TargetId == "dup");
     }
 
-    // ── Identified principal: filter-before-match on the converged write path ──
+    // ── Identified principal: the graph path is stricter than the entry path, on purpose ──
 
     [Fact]
-    public void LinkMemories_IdentifiedAgent_VisibleUniqueId_NotBlankedByInvisibleTwin()
+    public void LinkMemories_IdentifiedAgent_RefusesWhenAnInvisibleTwinSharesTheGraphNode()
     {
-        // The GraphTools analogue of NamespaceAclEnforcementTests'
-        // Reflect_LinksOwnEntryEvenWhenTheSameIdExistsInAPrivateNamespace, without preferredNs:
-        // alice's invisible twin must contribute neither a match nor an ambiguity signal, so
-        // bob's id stays unique among the namespaces his write predicate admits.
+        // This test used to assert the opposite, and asserting the opposite was the bug. The
+        // reasoning that produced it is sound for an ENTRY-scoped verb and wrong for this one.
+        //
+        // For an entry-scoped verb — promote, feedback, get_memory's primary object — resolution
+        // is rightly ACL-filtered: alice's invisible twin is a DIFFERENT object living at a
+        // different (tenant, namespace, id), so it must contribute neither a match nor an
+        // ambiguity signal, or "your operation silently did nothing" announces that a private
+        // twin exists. Bob's entry stays unique among the namespaces his write predicate admits
+        // and the verb lands on it. T1-T4 above are all that shape and all still hold.
+        //
+        // link_memories is not that verb. It writes GRAPH TOPOLOGY, and KnowledgeGraph keys
+        // adjacency (tenant, id) with no namespace — so bob's "shared-id" and alice's
+        // "shared-id" are not two nodes that resemble each other, they are ONE node. Authorizing
+        // through the twin bob can see and then writing to that node mutates topology that reads
+        // as belonging to alice's private entry: authorize object A, act on object B. Resolution
+        // is ACL-filtered and structurally cannot see the twin that makes the node shared, which
+        // is exactly why the topology gate has to be the ACL-BLIND tenant-wide test in
+        // BareIdTopology and cannot be folded into resolution.
+        //
+        // Namespace-qualified endpoints (issue #19) are the real fix and would let this succeed
+        // safely. Until then a shared node fails closed, and the cost — one bit, "a twin exists
+        // somewhere in this tenant" — is documented on BareIdTopology and accepted.
         Assert.Contains("Stored entry", Core("alice").StoreMemory(
             "shared-id", "alice-private", "alice's private postmortem"));
         Assert.Contains("Stored entry", Core("bob").StoreMemory(
@@ -177,8 +202,16 @@ public class EntryAccessResolverConvergenceTests : IDisposable
 
         var result = Graph("bob").LinkMemories("shared-id", "bob-note", relation: "elaborates");
 
-        Assert.Contains("Linked", result);
-        Assert.Contains(_graph.GetEdgesForEntry("shared-id", tenantId: ""),
-            e => e.SourceId == "shared-id" && e.TargetId == "bob-note" && e.Relation == "elaborates");
+        Assert.Equal("Error: Entry 'shared-id' not found.", result);
+
+        // Byte-equal to a genuine miss once the id this test varied is normalized away. THIS
+        // EQUALITY IS THE PROPERTY, and it is why the refusal reply had to be the ordinary
+        // not-found string: a distinct "ambiguous" or "shared node" reply would hand bob the
+        // very existence oracle the suppression exists to shrink to one bit.
+        var genuineMiss = Graph("bob").LinkMemories("no-such-entry-anywhere", "bob-note", relation: "elaborates");
+        Assert.Equal(genuineMiss.Replace("no-such-entry-anywhere", "shared-id", StringComparison.Ordinal), result);
+
+        // And nothing was written to the shared node.
+        Assert.Empty(_graph.GetEdgesForEntry("shared-id", tenantId: ""));
     }
 }

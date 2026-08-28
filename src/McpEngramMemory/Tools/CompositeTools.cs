@@ -72,8 +72,19 @@ public sealed class CompositeTools
     /// neither hijack the link nor blank it. Write access, not read, matches
     /// <c>GraphTools.LinkMemories</c>, which requires it on both endpoints.
     /// </summary>
-    private CognitiveEntry? ResolveLinkTarget(string targetId, string preferredNs) =>
-        EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
+    private CognitiveEntry? ResolveLinkTarget(string targetId, string preferredNs)
+    {
+        // Resolution authorizes the ENTRY. The edge, though, is written onto the bare-id graph
+        // node, which a same-id twin in a namespace this caller cannot see shares byte for byte —
+        // so authorizing through the twin we can resolve would still hang topology off the one we
+        // cannot. Topology therefore takes the ACL-blind tenant-wide test as well, the same
+        // posture GraphTools.LinkMemories and TopologyCascade already take. Both failures return
+        // null, so "no such id" and "that id has a twin somewhere" stay indistinguishable.
+        if (!BareIdTopology.IsTopologySafe(_index, targetId, _access.TenantId))
+            return null;
+
+        return EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
+    }
 
     [McpServerTool(Name = "remember", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Save a new memory with automatic duplicate detection and graph linking — the default way to store anything. Don't use `store_memory` directly unless you need to supply a raw embedding vector or skip duplicate checking.")]
@@ -124,11 +135,18 @@ public sealed class CompositeTools
         var related = existing.Count > 0 ? existing : _index.Search(
             vector, ns, k: 5, minScore: 0.65f, tenantId: _access.TenantId);
         var links = new List<string>();
+        // One sweep for the whole loop: the per-id overload re-lists the tenant's namespaces and
+        // that listing reloads the store, so guarding a result set id-by-id would cost one full
+        // reload per candidate. Both endpoints are tested — an edge lands on two bare nodes, and
+        // either of them may be shared with a twin this caller cannot see.
+        var topology = BareIdTopology.ForSweep(_index, _access.TenantId);
+        bool selfLinkable = topology.IsTopologySafe(id);
         foreach (var result in related)
         {
             if (result.Id == id) continue;
             if (result.IsSummaryNode) continue;
             if (result.Score < 0.65f) continue;
+            if (!selfLinkable || !topology.IsTopologySafe(result.Id)) continue;
 
             var relation = result.Score >= 0.85f ? "similar_to" : "cross_reference";
             _graph.AddEdge(new GraphEdge(id, result.Id, relation, tenantId: _access.TenantId));
@@ -341,11 +359,16 @@ public sealed class CompositeTools
         if (relatedIdList is { Length: > 0 })
         {
             int skipped = 0;
+            // The reflection's own id is the source endpoint of every edge below, and it is a
+            // bare node too: if a twin of it exists elsewhere in the tenant, links drawn from it
+            // would attach to that twin's topology. Fail the whole block closed rather than
+            // per-target, and report it through the same aggregate count.
+            bool selfLinkable = BareIdTopology.IsTopologySafe(_index, id, _access.TenantId);
             foreach (var relatedId in relatedIdList)
             {
                 if (relatedId == id) continue;
 
-                if (ResolveLinkTarget(relatedId, ns) is null)
+                if (!selfLinkable || ResolveLinkTarget(relatedId, ns) is null)
                 {
                     skipped++;
                     continue;
@@ -367,11 +390,17 @@ public sealed class CompositeTools
         var related = _index.Search(vector, ns, k: 5, minScore: 0.7f,
             tenantId: _access.TenantId);
         int autoLinked = 0;
+        // Same guard as the explicit relatedIds above, and for the same reason — these targets
+        // came from a search this caller is authorized for, but the edge still lands on a bare
+        // node that a twin may share. One sweep for the loop; see BareIdTopology.
+        var topology = BareIdTopology.ForSweep(_index, _access.TenantId);
+        bool selfAutoLinkable = topology.IsTopologySafe(id);
         foreach (var r in related)
         {
             if (r.Id == id) continue;
             if (r.IsSummaryNode) continue;
             if (relatedIdList is not null && relatedIdList.Contains(r.Id)) continue;
+            if (!selfAutoLinkable || !topology.IsTopologySafe(r.Id)) continue;
             if (r.Score < 0.7f) continue;
 
             _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference", tenantId: _access.TenantId));
@@ -444,8 +473,17 @@ public sealed class CompositeTools
         var expanded = new List<CognitiveSearchResult>(results);
         float lowestScore = results.Min(r => r.Score);
 
+        // The seeds are entries the caller may read, but graph adjacency is keyed (tenant, id)
+        // with no namespace: an id the tenant holds in two namespaces names ONE node, shared with
+        // a twin the caller cannot see. Expanding through it would attach that twin's topology to
+        // this caller's hit, so an ambiguous seed contributes no neighbors. One sweep for the
+        // whole expansion — see BareIdTopology for why the test is ACL-blind and what it costs.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
         foreach (var result in results)
         {
+            if (!topology.IsTopologySafe(result.Id)) continue;
+
             var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
                 tenantId: _access.TenantId);
             foreach (var neighbor in neighbors.Neighbors)
@@ -620,12 +658,18 @@ public sealed class CompositeTools
             componentOf.TryGetValue(c.Id, out var comp) && comp == dominantComponent);
         if (clusterMember is not null)
         {
+            // This BFS reads bare-id adjacency at every hop, so the guard belongs on each node
+            // whose neighbors we are about to read, not only on the root: a walk that starts
+            // unambiguous can still reach a node shared with an invisible twin and pull that
+            // twin's component in behind it. One sweep for the walk.
+            var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
             var queue = new Queue<string>();
             var fullClusterSeen = new HashSet<string> { clusterMember.Id };
             queue.Enqueue(clusterMember.Id);
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
+                if (!topology.IsTopologySafe(id)) continue;
                 var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
@@ -664,6 +708,12 @@ public sealed class CompositeTools
         var componentOf = new Dictionary<string, int>(candidates.Count);
         int nextComponent = 0;
 
+        // Components are built from bare-id adjacency, so a node the tenant holds in two
+        // namespaces would merge two candidates through an edge that belongs to an invisible
+        // twin — and the dominant component that comes out of this drives which entries get
+        // boosted and which extra ones get surfaced. An unattributable node stays a singleton.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
         foreach (var c in candidates)
         {
             if (componentOf.ContainsKey(c.Id)) continue;
@@ -676,6 +726,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
+                if (!topology.IsTopologySafe(id)) continue;
                 var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {

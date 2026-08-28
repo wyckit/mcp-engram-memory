@@ -303,17 +303,33 @@ public sealed class CoreMemoryTools
 
         searchSw.Stop();
 
+        // Every hop below leaves the namespace this call was authorized for and re-enters the store
+        // by BARE id. Graph adjacency and cluster membership are keyed (tenant, id) with no
+        // namespace, so an id the tenant holds in two namespaces names ONE node shared by both
+        // entries: the seed is a result the caller may read, but the topology hanging off it
+        // belongs just as much to a twin they cannot see. Suppress expansion per SEED rather than
+        // per reply, so one ambiguous hit costs its own neighbors and nothing else.
+        //
+        // Built only when expansion was actually asked for: constructing the guard lists the
+        // tenant's namespaces, and a plain search must not pay for a guard it never consults.
+        // One sweep for the whole call — a per-id test re-lists (and so reloads) per seed.
+        var topology = expandGraph ? BareIdTopology.ForSweep(_index, tenantId: _principal.TenantId) : null;
+
         // Side effect: record access and trigger spreading activation for returned entries
         foreach (var result in results)
         {
+            // RecordAccess is namespace-qualified and lands on the entry that was actually
+            // returned, so it needs no topology guard.
             _index.RecordAccess(result.Id, ns, _principal.TenantId);
-            // Asynchronous spreading activation: propagate energy to graph neighbors and cluster peers
-            if (expandGraph)
+            // Asynchronous spreading activation: propagate energy to graph neighbors and cluster
+            // peers. It walks the same shared node, and it WRITES — an ambiguous seed would push
+            // activation energy into an invisible twin's neighbors.
+            if (topology is not null && topology.IsTopologySafe(result.Id))
                 _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f, tenantId: _principal.TenantId);
         }
 
         // Graph expansion: pull in neighbors of top results with edge-type-weighted scoring
-        if (expandGraph && results.Count > 0)
+        if (topology is not null && results.Count > 0)
         {
             var existingIds = results.Select(r => r.Id).ToHashSet();
             var graphExpanded = new List<CognitiveSearchResult>(results);
@@ -321,6 +337,9 @@ public sealed class CoreMemoryTools
 
             foreach (var result in results)
             {
+                // Fail closed on the seed: no attributable node, no expansion from it.
+                if (!topology.IsTopologySafe(result.Id)) continue;
+
                 // Graph neighbor expansion with edge-type-weighted scoring
                 var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
                     tenantId: _principal.TenantId);

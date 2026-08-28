@@ -30,8 +30,17 @@ All notable changes to this project will be documented in this file.
     unchanged); `SynthesizeNamespaceAsync` keeps `ct` trailing and optional.
     `PromoteMemory`/`ApplyFeedback` also lost their `ns` defaults — `ns: ""` / `ns: null` now
     selects the legacy bare-id locator explicitly.
-  - `DiffusionKernelWarmupService` now warms every tenant's diffusion bases (previously only the
-    legacy partition was ever warmed — the second incident above).
+  - `DiffusionKernelWarmupService` now sweeps `GetAllTenants()` → `GetNamespaces(tenant)` →
+    `GetBasis(ns, tenantId: tenant)`, so every tenant's bases are pre-warmed. Previously it
+    enumerated namespaces with the no-tenant overload and warmed every one of them as the legacy
+    partition — the second incident above — which warmed the wrong `(tenant, ns)` partition for
+    every identified tenant and left them paying a foreground eigendecomposition on first use.
+    Fault isolation stays on the partition now that a tenant loop wraps the namespace loop:
+    neither a failing basis nor an unreadable tenant's namespace enumeration aborts the sweep for
+    the partitions after it, and each warning names both tenant and namespace. Tenant discovery
+    costs a full `NamespaceStore.LoadAll` that the old no-tenant enumeration did not pay; it is
+    idempotent per namespace, and it runs on the background thread after the existing 5s startup
+    delay, so the startup path is unaffected.
 - **Bare-id resolution converged on `EntryAccessResolver`** in `link_memories`/`unlink_memories`,
   `promote_memory`, `memory_feedback`, and `get_memory`'s edge filter. Legacy (single-tenant)
   resolution changes from "whatever the global id→ns map happens to hold" to "unique match among

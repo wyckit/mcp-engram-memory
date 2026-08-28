@@ -446,11 +446,19 @@ public class NamespaceAclEnforcementTests : IDisposable
     }
 
     [Fact]
-    public void Reflect_LinksOwnEntryEvenWhenTheSameIdExistsInAPrivateNamespace()
+    public void Reflect_RefusesToLinkASharedIdEvenWhenTheCallerOwnsAVisibleTwin()
     {
         // An id is not an identity — entries are identified by (tenant, namespace, id) and ids
-        // are unique only per (tenant, namespace). So a bare relatedId can name several entries
-        // at once, and how the resolver breaks that tie is itself a disclosure channel.
+        // are unique only per (tenant, namespace). Resolution can pick the twin Bob owns, and for
+        // an ENTRY-scoped operation that is the right answer. An edge is not entry-scoped: graph
+        // adjacency is keyed (tenant, id) with no namespace, so all three twins below share ONE
+        // node. Linking to "the one Bob can write" would hang Bob's edge off Alice's private
+        // entry as well — authorize A, mutate B. Topology therefore fails closed on a tenant-wide
+        // duplicate, ACL-blind, exactly as GraphTools.LinkMemories and TopologyCascade do.
+        //
+        // This test asserted the opposite until the second review of PR #22: it pinned the link
+        // SUCCEEDING, which is the behaviour the reviewer identified as the bypass. Namespace-
+        // qualified endpoints (issue #19) are what make linking safe again.
         const string sharedId = "postmortem-notes";
         const string bobNs = "bob-work";
         const string bobArchiveNs = "bob-archive";
@@ -459,11 +467,6 @@ public class NamespaceAclEnforcementTests : IDisposable
             sharedId, AliceNs, "alice's private postmortem"));
         Assert.False(_registry.HasAccess("bob", AliceNs, "write", tenantId: ""));
 
-        // A second twin Bob CAN write. Without the preferredNs short-circuit the resolution is
-        // ambiguous among namespaces Bob is entitled to and collapses to null, so a legitimate
-        // link silently disappears; with it, the namespace the call site is already authorized
-        // for wins. Alice's invisible twin must contribute neither a match nor an ambiguity
-        // signal — "your link did nothing" would otherwise announce that a private twin exists.
         Assert.Contains("Stored entry", Core("bob").StoreMemory(
             sharedId, bobArchiveNs, "bob's older copy"));
         Assert.Contains("Stored entry", Core("bob").StoreMemory(
@@ -473,11 +476,51 @@ public class NamespaceAclEnforcementTests : IDisposable
             "the postmortem missed the rollback step", bobNs, "twin-id",
             relatedIds: RelatedIds(sharedId)));
 
+        // The reflection itself still stores — only the edge is withheld.
         Assert.Equal("stored", result.Status);
-        Assert.Contains($"linked to {sharedId}", result.Actions);
+        Assert.DoesNotContain(result.Actions, a => a.Contains($"linked to {sharedId}", StringComparison.Ordinal));
+        Assert.Empty(_graph.GetEdgesForEntry(result.Id, tenantId: ""));
+
+        // Alice's entry gains nothing: no edge was hung off the shared node.
+        Assert.Empty(_graph.GetEdgesForEntry(sharedId, tenantId: ""));
+
+        // The refusal is reported as the same aggregate count as a genuine miss, with no id and
+        // no reason — otherwise "not linkable" would announce that a twin exists somewhere.
+        Assert.Contains(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
+
+        // The comparison call goes in a different namespace Bob also owns: reflect short-circuits
+        // with "duplicate_warning" when a prior reflection on a similar topic already lives in the
+        // target namespace, and that path returns before the linking block runs at all. Asserting
+        // the status keeps a future dedup change from silently turning this into a vacuous test.
+        var absent = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "an unrelated lesson about cache invalidation", bobArchiveNs, "absent-id",
+            relatedIds: RelatedIds("no-such-id-anywhere")));
+        Assert.Equal("stored", absent.Status);
+        Assert.Equal(
+            result.Actions.Single(a => a.Contains("skipped", StringComparison.Ordinal)),
+            absent.Actions.Single(a => a.Contains("skipped", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Reflect_StillLinksWhenTheTargetIdIsUniqueInTheTenant()
+    {
+        // OVER-CORRECTION CONTROL for the test above: the guard refuses DUPLICATED ids, not
+        // linking. With no twin anywhere, Bob's link must still be drawn.
+        const string uniqueId = "rollback-runbook";
+        const string bobNs = "bob-work";
+
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            uniqueId, bobNs, "bob's runbook"));
+
+        var result = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the runbook needs a rollback step", bobNs, "unique-id",
+            relatedIds: RelatedIds(uniqueId)));
+
+        Assert.Equal("stored", result.Status);
+        Assert.Contains($"linked to {uniqueId}", result.Actions);
         Assert.DoesNotContain(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
         Assert.Contains(_graph.GetEdgesForEntry(result.Id, tenantId: ""),
-            e => e.TargetId == sharedId && e.Relation == "elaborates");
+            e => e.TargetId == uniqueId && e.Relation == "elaborates");
     }
 
     [Fact]

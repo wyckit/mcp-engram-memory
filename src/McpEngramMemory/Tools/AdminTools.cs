@@ -69,22 +69,38 @@ public sealed class AdminTools
         if (entry is null)
             return $"Entry '{id}' not found.";
 
+        // The resolution above authorized an ENTRY, and it was right to do so ACL-filtered: the
+        // text and metadata returned belong to the qualified (tenant, namespace, id) entry this
+        // caller can see. The two collections below are not that object. Graph adjacency and
+        // cluster membership are keyed (tenant, id) with no namespace, so they describe a node
+        // SHARED with every same-id entry in the tenant — including the invisible twin whose
+        // existence the ACL-filtered resolution is deliberately blind to. Attaching that shared
+        // node's topology to the twin the caller happens to see is how a private edge is served
+        // up as if it belonged to somebody else's entry, so the topology gate is the ACL-blind
+        // tenant-wide test and the entry gate is not reused for it. See BareIdTopology for the
+        // asymmetry and for the one bit this suppression costs.
+        bool topologySafe = BareIdTopology.IsTopologySafe(_index, id, tenantId: _principal.TenantId);
+
         // Graph topology is global and edges carry bare endpoint IDs. Returning an edge
         // to a private endpoint discloses that endpoint's ID, relationship, and metadata
         // even when its entry body is protected. Project the edge set through the same
         // entry-level read policy as the primary object.
-        var edges = _graph.GetEdgesForEntry(id, tenantId: _principal.TenantId)
-            .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
-            .ToList();
+        var edges = topologySafe
+            ? _graph.GetEdgesForEntry(id, tenantId: _principal.TenantId)
+                .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
+                .ToList()
+            : (IReadOnlyList<GraphEdge>)Array.Empty<GraphEdge>();
         // Cluster membership is the same kind of disclosure as an edge: a cluster id names a
         // grouping that lives in some namespace, and co-membership tells the caller that this
         // entry was grouped with content they cannot read. Membership is deliberately allowed
         // to span namespaces, so the gate is the cluster's OWN namespace — CanRead(m.Ns), the
         // same predicate ClusterTools.GetCluster applies — not equality with entry.Ns.
-        var clusterIds = _clusters.GetClusterMembershipsForEntry(id, tenantId: _principal.TenantId)
-            .Where(m => CanRead(m.Ns))
-            .Select(m => m.ClusterId)
-            .ToList();
+        var clusterIds = topologySafe
+            ? _clusters.GetClusterMembershipsForEntry(id, tenantId: _principal.TenantId)
+                .Where(m => CanRead(m.Ns))
+                .Select(m => m.ClusterId)
+                .ToList()
+            : (IReadOnlyList<string>)Array.Empty<string>();
 
         return new GetMemoryResult(
             new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState),
@@ -137,8 +153,18 @@ public sealed class AdminTools
                 .SelectMany(scope => _index.GetAllInNamespace(scope, _principal.TenantId))
                 .Select(entry => entry.Id)
                 .ToHashSet();
+            // visibleIds holds BARE ids, so membership in it says the caller can see AN entry with
+            // that id, not that this edge belongs to it. A caller who creates twins of two ids that
+            // another principal privately linked would otherwise see that private edge counted
+            // here — a tally is a smaller disclosure than the edge itself but still an oracle,
+            // answerable one probe at a time. Count only edges attributable at both ends. Guarded
+            // by a sweep because a store's edge list revisits the same ids many times over.
+            var topology = BareIdTopology.ForSweep(_index, tenantId: _principal.TenantId);
             edgeCount = _graph.GetAllEdges(_principal.TenantId).Count(edge =>
-                visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId));
+                visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId)
+                && topology.IsTopologySafe(edge.SourceId) && topology.IsTopologySafe(edge.TargetId));
+            // Clusters need no such guard: ListClusters is namespace-scoped and a cluster carries
+            // its own Ns, so the count is already qualified rather than reached by bare id.
             clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope, tenantId: _principal.TenantId).Count);
         }
 
