@@ -67,6 +67,12 @@ public sealed class PersistenceManager : IStorageProvider
         _basePath = basePath ?? Path.Combine(AppContext.BaseDirectory, "data");
         _debounceDelay = TimeSpan.FromMilliseconds(debounceMs);
         _logger = logger;
+
+        // Load-bearing for GetPersistedNamespaces, not merely a convenience for the first write:
+        // it is what makes "the data directory is not there" an anomaly rather than an ordinary
+        // first run, so that method can refuse instead of reporting an empty store. A failure here
+        // fails construction, which is the fail-closed answer — a PersistenceManager that never
+        // established its directory must not exist to be enumerated.
         Directory.CreateDirectory(_basePath);
     }
 
@@ -369,9 +375,9 @@ public sealed class PersistenceManager : IStorageProvider
     }
 
     /// <summary>
-    /// Get all namespace names from existing files on disk. A returned list means the directory was
-    /// read: an empty one is a data directory holding no namespace files, never a directory that
-    /// could not be listed.
+    /// Get all namespace names from existing files on disk. An empty list means one thing only:
+    /// <see cref="Directory.GetFiles(string, string)"/> ran to completion over the data directory and found no
+    /// namespace files. Every other outcome throws.
     ///
     /// An I/O failure throws rather than degrading to an empty list, matching the database
     /// providers. The two used to be the same value, and a caller cannot separate them by
@@ -380,16 +386,18 @@ public sealed class PersistenceManager : IStorageProvider
     /// duplicated id look unique, which is the fail-open answer to the tenant-wide duplicate test
     /// topology depends on.
     ///
-    /// A missing base directory is the one absence that stays an empty result: the constructor
-    /// creates it, so <see cref="Directory.Exists"/> returning false is a definite answer about a
-    /// path we are able to probe, not a failure to read one.
+    /// The absent directory is included in that, and no longer short-circuits to empty. An
+    /// <see cref="Directory.Exists"/> pre-check cannot tell a store that has no directory yet from
+    /// one whose directory has been moved, unmounted or had its ACL revoked underneath a running
+    /// process, and only the first of those is an empty store. The constructor removes the
+    /// ambiguity by creating the directory, so by the time anyone can reach this method the
+    /// never-created case cannot occur and an absence can only be the unavailable one — which
+    /// arrives here as the <see cref="DirectoryNotFoundException"/> from the listing itself and is
+    /// refused like any other failure to read.
     /// </summary>
     /// <exception cref="NamespaceEnumerationException">The data directory could not be listed.</exception>
     public IReadOnlyList<string> GetPersistedNamespaces()
     {
-        if (!Directory.Exists(_basePath))
-            return Array.Empty<string>();
-
         try
         {
             return Directory.GetFiles(_basePath, "*.json")

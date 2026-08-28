@@ -123,6 +123,33 @@ internal sealed class NamespaceStore
     private const int CandidateStripeCount = 64;
     private readonly object[] _candidateStripes =
         Enumerable.Range(0, CandidateStripeCount).Select(_ => new object()).ToArray();
+    // Monotonic per-tenant counter of AMBIGUITY-BOUNDARY crossings in the candidate index: an id
+    // gaining a second namespace of the tenant, or dropping back to one.
+    //
+    // It exists because attribution can change with no topology write at all. A same-id twin is an
+    // ordinary entry insert — it touches no edge and no cluster — yet every edge naming that id
+    // becomes unusable the moment it lands. A consumer that caches something derived from the
+    // ATTRIBUTABLE view therefore cannot detect the change by watching a graph revision, because
+    // the graph did not change; only the meaning of its bare ids did. This counter is the missing
+    // half of that freshness test.
+    //
+    // Only the CROSSING bumps, never every placement. Attribution is the predicate "this tenant
+    // holds the id in at most one namespace", so 0 -> 1 and 2 -> 3 change nothing any consumer can
+    // observe, while bumping on every track/untrack would invalidate every derived cache on every
+    // entry write — a cache invalidated by all writes is not a cache.
+    //
+    // The crossing is decidable exactly because both mutators already run under this key's stripe:
+    // publication and retirement are serialized per (tenant, id), so the bucket size read on either
+    // side of a mutation cannot interleave with another mutation of the same bucket.
+    //
+    // Tenant-wide rather than per-namespace, deliberately, and the cost is real: a crossing
+    // anywhere in the tenant invalidates that tenant's derived caches, not only the namespaces the
+    // crossing id occupies. Taken because attribution IS a tenant-scoped predicate and the consumer
+    // already keys freshness by tenant, so this composes with the graph revision beside it as one
+    // more long; and because a crossing requires an id to gain or lose a twin, which is rare enough
+    // that the extra rebuilds cost less than a per-namespace variant that has to decide, under the
+    // stripe, which namespaces a bucket named at the instant its size changed.
+    private readonly ConcurrentDictionary<string, long> _attributionRevisions = new();
     // BM25/HNSW sub-indexes are keyed by the composed partition-key STRING (see PartitionKey).
     private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
     private readonly ConcurrentDictionary<string, object> _loadLocks = new();
@@ -617,6 +644,35 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>
+    /// How many times an id in <paramref name="tenantId"/> has crossed the ambiguity boundary —
+    /// gained a second namespace, or dropped back to one. Zero before the first crossing.
+    ///
+    /// The value is meaningless in itself and is only ever COMPARED: a consumer records it beside
+    /// whatever it derived from attributable topology, and a later difference means at least one id
+    /// changed between attributable and unattributable, so the derivation must be rebuilt rather
+    /// than served.
+    ///
+    /// Deliberately does not <see cref="LoadAll"/>. Every crossing this process can observe is
+    /// produced by <see cref="TrackCandidate"/> / <see cref="UntrackCandidate"/>, and a lazy load
+    /// goes through them too (<see cref="LoadEntries"/> tracks every row it materializes), so the
+    /// counter is already current for everything resident. Loading belongs on the path that reads
+    /// the topology — which is where the completeness actually matters — not on the cheap read
+    /// that only asks whether anything moved.
+    /// </summary>
+    public long AttributionRevisionFor(string tenantId)
+        => _attributionRevisions.TryGetValue(tenantId, out var revision) ? revision : 0;
+
+    /// <summary>
+    /// Record one ambiguity-boundary crossing for a tenant. Called only from inside a candidate
+    /// stripe and only AFTER the bucket mutation that caused the crossing is published: a consumer
+    /// that observes the new counter must already be able to observe the placement it describes, or
+    /// it would rebuild over the pre-crossing state and stamp it with the post-crossing revision —
+    /// a stale derivation that never expires.
+    /// </summary>
+    private void BumpAttribution(string tenantId)
+        => _attributionRevisions.AddOrUpdate(tenantId, 1L, static (_, current) => current + 1);
+
+    /// <summary>
     /// The stripe that serializes publication and retirement for one candidate key. Hashing the
     /// whole key rather than the id alone keeps two tenants that legitimately share an id from
     /// colliding on the same stripe more often than chance.
@@ -641,7 +697,18 @@ internal sealed class NamespaceStore
             // post-write re-check can substitute for that: a retirement evaluates emptiness BEFORE
             // the write and unpublishes AFTER it, so the re-check passes and the placement is lost
             // anyway. That ordering is what the previous lock-free version could not close.
-            _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>())[ns] = 0;
+            var bucket = _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>());
+
+            // A crossing needs the bucket to have held exactly one namespace before this placement,
+            // so an empty one cannot produce it — and under the stripe an empty published bucket is
+            // precisely the one GetOrAdd just created, because retirement never leaves a live empty
+            // instance behind. Read before the add, and paired with TryAdd rather than the indexer
+            // so a re-upsert into a namespace the id already occupies is recognisably a no-op.
+            // Between them, the two ordinary write paths — first placement and re-placement — reach
+            // neither the size read nor the bump.
+            bool couldCross = !bucket.IsEmpty;
+            if (bucket.TryAdd(ns, 0) && couldCross && bucket.Count == 2)
+                BumpAttribution(tenantId);
         }
     }
 
@@ -659,9 +726,19 @@ internal sealed class NamespaceStore
             if (!_idCandidates.TryGetValue(key, out var bucket))
                 return;
 
-            bucket.TryRemove(ns, out _);
+            bool removed = bucket.TryRemove(ns, out _);
             if (!bucket.IsEmpty)
+            {
+                // Only a placement that was actually there can shrink the bucket, and a shrink
+                // lands on the boundary only when exactly one namespace is left — the move back
+                // from ambiguous to attributable. Emptying the bucket entirely (1 -> 0) crosses
+                // nothing — an id no entry answers to was never ambiguous — so the ordinary
+                // single-placement delete skips this branch for the retirement below and never
+                // pays the size read.
+                if (removed && bucket.Count == 1)
+                    BumpAttribution(tenantId);
                 return;
+            }
 
             // Plain TryRemove, not the value-matching overload used in RemoveNamespace. Under the
             // stripe no other thread can have published a different bucket for this key, so there

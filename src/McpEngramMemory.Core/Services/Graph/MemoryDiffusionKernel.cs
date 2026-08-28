@@ -21,8 +21,8 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///
 /// Construction. For namespace <c>ns</c>:
 /// 1. Snapshot entry ids in stable order from <see cref="CognitiveIndex.GetAllInNamespace(string)"/>.
-/// 2. Snapshot the edge list from <see cref="KnowledgeGraph.GetAllEdges()"/>, filter
-///    to edges whose endpoints are both in <c>ns</c> and whose relation is in
+/// 2. Snapshot the ATTRIBUTABLE edge list from <see cref="KnowledgeGraph.GetAllEdges(string)"/>,
+///    filter to edges whose endpoints are both in <c>ns</c> and whose relation is in
 ///    <see cref="PositiveRelations"/> (parent_child, cross_reference, similar_to,
 ///    elaborates, depends_on). The <c>contradicts</c> relation is excluded so the
 ///    weight matrix W stays non-negative and the Laplacian L = I - D^(-1/2) W D^(-1/2)
@@ -42,12 +42,18 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///    convert to the smallest eigenpairs of L via lambda_L = 1 - lambda_M and
 ///    sort ascending.
 ///
-/// Cache invalidation is revision-based: each cached basis records the
-/// <see cref="KnowledgeGraph.Revision"/> at the time of computation; any subsequent
-/// edge mutation increments the live revision, and the next <see cref="GetBasis"/>
-/// call detects the divergence and recomputes. Recomputation runs synchronously
-/// under a per-namespace lock — concurrent calls for the same namespace serialize,
-/// but different namespaces compute independently.
+/// Cache invalidation is revision-based on TWO revisions, and one of them is not
+/// about edges at all. <see cref="KnowledgeGraph.RevisionFor"/> says which edges
+/// exist; <see cref="CognitiveIndex.AttributionRevisionFor"/> says which of them are
+/// usable. A same-id twin inserted into another namespace of the tenant writes no
+/// edge, so the graph revision does not move — while every edge naming that id drops
+/// out of the attributable view. Watching only the graph revision therefore kept
+/// serving a basis whose edges the view no longer returns, which is the worst
+/// direction to be stale in: the retained copy is the one still holding somebody
+/// else's topology. Each cached basis records both revisions and
+/// <see cref="GetBasis"/> recomputes when either diverges. Recomputation runs
+/// synchronously under a per-namespace lock — concurrent calls for the same namespace
+/// serialize, but different namespaces compute independently.
 /// </summary>
 public class MemoryDiffusionKernel
 {
@@ -76,19 +82,31 @@ public class MemoryDiffusionKernel
     private readonly KnowledgeGraph _graph;
     private readonly ILogger<MemoryDiffusionKernel>? _logger;
 
-    private readonly ConcurrentDictionary<string, DiffusionBasis> _cache = new();
+    /// <summary>
+    /// A cached basis together with the attribution revision it was computed under.
+    ///
+    /// Carried here rather than on <see cref="DiffusionBasis"/> because the basis's own
+    /// <see cref="DiffusionBasis.GraphRevision"/> answers only half the freshness question —
+    /// which edges existed — and the half it omits is the one an entry write can change
+    /// without touching the graph at all.
+    /// </summary>
+    private readonly record struct CachedBasis(DiffusionBasis Basis, long AttributionRevision);
+
+    private readonly ConcurrentDictionary<string, CachedBasis> _cache = new();
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
     /// <summary>
-    /// Negative cache: namespaces whose basis computation threw, keyed by the
-    /// <see cref="KnowledgeGraph.Revision"/> at failure time. The eigensolver RNG
-    /// is seeded from <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is
-    /// deterministic per (namespace, revision) — re-running the expensive
-    /// eigensolve before the graph changes would repay the full cost for a
-    /// guaranteed-identical failure. Instead <see cref="GetBasis"/> rethrows a
-    /// cheap exception until the revision moves, which re-arms exactly one retry.
+    /// Negative cache: namespaces whose basis computation threw, keyed by the graph AND attribution
+    /// revisions at failure time. The eigensolver RNG is seeded from
+    /// <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is deterministic per
+    /// (namespace, revision) — re-running the expensive eigensolve before the inputs change would
+    /// repay the full cost for a guaranteed-identical failure. Instead <see cref="GetBasis"/>
+    /// rethrows a cheap exception until one of the revisions moves, which re-arms exactly one
+    /// retry. Attribution is in the key for the same reason it is in the positive cache: a twin
+    /// insert changes which edges the computation is handed while leaving the graph revision — and
+    /// so the RNG seed and the determinism argument — exactly where they were.
     /// </summary>
-    private readonly ConcurrentDictionary<string, (long Revision, string Message)> _failedRevisions = new();
+    private readonly ConcurrentDictionary<string, (long Revision, long AttributionRevision, string Message)> _failedRevisions = new();
 
     public MemoryDiffusionKernel(
         CognitiveIndex index,
@@ -102,29 +120,52 @@ public class MemoryDiffusionKernel
 
     /// <summary>
     /// Return the top-K diffusion basis for <paramref name="ns"/>, recomputing if
-    /// the cache is missing, stale (graph revision diverged), or has fewer
-    /// eigenpairs than requested. Returns <c>null</c> if the namespace is too
-    /// small or sparsely linked to qualify (see <see cref="MinimumNodesForSpectral"/>
-    /// and <see cref="MinimumEdgesForSpectral"/>) — callers should fall back to
-    /// non-spectral behavior in that case.
+    /// the cache is missing, stale (either the graph revision or the attribution
+    /// revision diverged), or has fewer eigenpairs than requested. Returns
+    /// <c>null</c> if the namespace is too small or sparsely linked to qualify (see
+    /// <see cref="MinimumNodesForSpectral"/> and <see cref="MinimumEdgesForSpectral"/>)
+    /// — callers should fall back to non-spectral behavior in that case.
+    ///
+    /// A namespace whose ids the tenant also holds elsewhere reaches that same
+    /// <c>null</c>, because none of its edges are attributable and the basis is built
+    /// from the attributable view alone. Deliberate, and deliberately spelled the same
+    /// way as too-small: a distinct answer would tell the caller that a twin exists in
+    /// a namespace it was never shown.
     ///
     /// Failure handling: if computation throws, the failure is negative-cached
-    /// per graph revision and cheaply rethrown until the graph changes, keeping
+    /// against both revisions and cheaply rethrown until one of them moves, keeping
     /// the failure visible to callers every cycle without repaying the
     /// eigensolve for a deterministic re-failure. Rethrowing (rather than
     /// returning <c>null</c>) is deliberate — <c>null</c> would be
     /// indistinguishable from a legitimate too-small-namespace bypass.
     /// </summary>
     public DiffusionBasis? GetBasis(string ns, string tenantId, int topK = DefaultTopK)
+        => GetCachedBasis(ns, tenantId, topK)?.Basis;
+
+    /// <summary>
+    /// <see cref="GetBasis"/> plus the attribution revision the returned basis was computed under,
+    /// which only <see cref="GetStats"/> needs — a caller cannot recover it from
+    /// <see cref="DiffusionBasis"/>, which records the graph revision alone.
+    /// </summary>
+    private CachedBasis? GetCachedBasis(string ns, string tenantId, int topK)
     {
         // Cache/lock/failure keys are the (tenant, ns) partition key so a tenant's basis never
         // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
         // legacy cache keys are unchanged.
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
+
+        // Both revisions are read BEFORE the data they describe is snapshotted, and this ordering
+        // is load-bearing rather than incidental. A mutation landing between the read and the
+        // snapshot leaves a recorded revision that is already behind, so the next call recomputes —
+        // wasteful and safe. Reading them after the snapshot inverts that: the basis would record a
+        // revision that already covers a change it does not contain, and nothing would ever
+        // recompute it.
         long currentRev = _graph.RevisionFor(tenantId);
+        long currentAttribution = _index.AttributionRevisionFor(tenantId);
+
         if (_cache.TryGetValue(pk, out var cached)
-            && cached.GraphRevision == currentRev
-            && (cached.TopK >= topK || cached.TopK >= cached.NodeCount))
+            && IsFresh(cached, currentRev, currentAttribution)
+            && (cached.Basis.TopK >= topK || cached.Basis.TopK >= cached.Basis.NodeCount))
         {
             // Either the cache has enough modes for the request, or it already
             // has the maximum possible (TopK was clamped to NodeCount). Either
@@ -132,21 +173,22 @@ public class MemoryDiffusionKernel
             return cached;
         }
 
-        if (_failedRevisions.TryGetValue(pk, out var failed) && failed.Revision == currentRev)
+        if (IsCachedFailure(pk, currentRev, currentAttribution, out var failed))
             throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
         var nsLock = _nsLocks.GetOrAdd(pk, _ => new object());
         lock (nsLock)
         {
             currentRev = _graph.RevisionFor(tenantId);
+            currentAttribution = _index.AttributionRevisionFor(tenantId);
             if (_cache.TryGetValue(pk, out cached)
-                && cached.GraphRevision == currentRev
-                && cached.TopK >= topK)
+                && IsFresh(cached, currentRev, currentAttribution)
+                && cached.Basis.TopK >= topK)
             {
                 return cached;
             }
 
-            if (_failedRevisions.TryGetValue(pk, out failed) && failed.Revision == currentRev)
+            if (IsCachedFailure(pk, currentRev, currentAttribution, out failed))
                 throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
             DiffusionBasis? built;
@@ -156,24 +198,48 @@ public class MemoryDiffusionKernel
             }
             catch (Exception ex)
             {
-                _failedRevisions[pk] = (currentRev, ex.Message);
+                _failedRevisions[pk] = (currentRev, currentAttribution, ex.Message);
                 _logger?.LogWarning(ex,
-                    "Diffusion basis computation failed for ns={Namespace} at revision {Revision}; caching failure until the graph changes.",
-                    ns, currentRev);
+                    "Diffusion basis computation failed for ns={Namespace} at graph revision {Revision} / attribution revision {AttributionRevision}; caching failure until one of them changes.",
+                    ns, currentRev, currentAttribution);
                 throw;
             }
 
             _failedRevisions.TryRemove(pk, out _);
             if (built is not null)
-                _cache[pk] = built;
-            else
-                _cache.TryRemove(pk, out _);
-            return built;
+            {
+                var entry = new CachedBasis(built, currentAttribution);
+                _cache[pk] = entry;
+                return entry;
+            }
+
+            _cache.TryRemove(pk, out _);
+            return null;
         }
     }
 
+    /// <summary>
+    /// A cached basis is usable only while BOTH of its inputs still hold: the same edges exist, and
+    /// the same ones are attributable. Either revision moving means the attributable edge view can
+    /// differ from the one the basis was built on, and a basis is not inspectable for which of its
+    /// edges came from where — so divergence is a rebuild, never a partial repair.
+    /// </summary>
+    private static bool IsFresh(CachedBasis cached, long graphRevision, long attributionRevision)
+        => cached.Basis.GraphRevision == graphRevision
+           && cached.AttributionRevision == attributionRevision;
+
+    private bool IsCachedFailure(
+        string pk, long graphRevision, long attributionRevision,
+        out (long Revision, long AttributionRevision, string Message) failed)
+        => _failedRevisions.TryGetValue(pk, out failed)
+           && failed.Revision == graphRevision
+           && failed.AttributionRevision == attributionRevision;
+
+    // "its inputs" rather than naming the attribution revision: this string reaches a principal, and
+    // the two revisions are now what re-arms a retry, so the wording has to cover both without
+    // introducing a term whose only meaning is "somebody else holds this id too".
     private static string FailureMessage(string ns, long rev, string inner) =>
-        $"Diffusion basis computation for namespace '{ns}' previously failed at graph revision {rev} and the graph has not changed since: {inner}";
+        $"Diffusion basis computation for namespace '{ns}' previously failed at graph revision {rev} and its inputs have not changed since: {inner}";
 
     /// <summary>
     /// Apply a per-mode spectral filter to a per-entry signal — the kernel's
@@ -226,12 +292,24 @@ public class MemoryDiffusionKernel
         return result;
     }
 
-    /// <summary>Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.</summary>
+    /// <summary>
+    /// Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.
+    ///
+    /// <c>Stale</c> reports the same predicate <see cref="GetBasis"/> acts on, and reporting only
+    /// the graph half of it would have been a lie of exactly the kind this round is about: a basis
+    /// left behind by a twin insert has an equal graph revision and is nonetheless unusable, so it
+    /// would have shown as fresh.
+    ///
+    /// The attribution revision itself stays OUT of the returned record, deliberately. This reply
+    /// reaches a principal, and a tenant-wide counter that ticks when someone mints a same-id twin
+    /// is an oracle for exactly the fact the guard exists to withhold. One boolean derived from it
+    /// is not: it moves for an ordinary edge write too.
+    /// </summary>
     public DiffusionStats? GetStats(string ns, string tenantId)
     {
-        var basis = GetBasis(ns, tenantId: tenantId, topK: DefaultTopK);
-        if (basis is null) return null;
-        bool stale = basis.GraphRevision != _graph.RevisionFor(tenantId);
+        if (GetCachedBasis(ns, tenantId, DefaultTopK) is not { } cached) return null;
+        var basis = cached.Basis;
+        bool stale = !IsFresh(cached, _graph.RevisionFor(tenantId), _index.AttributionRevisionFor(tenantId));
         return new DiffusionStats(
             ns,
             basis.NodeCount,
@@ -276,15 +354,24 @@ public class MemoryDiffusionKernel
 
         // Build symmetric sparse adjacency restricted to this namespace and positive relations.
         // First pass: collect candidate edge weights keyed by ordered (i,j) with i<j.
-        // The STORED view deliberately, not the attributable one. The attributable view withholds
-        // any edge whose endpoint id is duplicated elsewhere in the tenant, because a bare id there
-        // cannot be resolved to one entry. That does not apply here: both endpoints are immediately
-        // pinned to this namespace by `indexOf` below, and ids are unique within (tenant, ns), so
-        // the namespace itself supplies the attribution the bare id lacks. Nothing raw escapes —
-        // endpoints are converted to local matrix indices and never resolved or returned to a
-        // principal. Filtering here would silently empty the Laplacian for any deployment that
-        // reuses ids across namespaces, costing every one of them spectral retrieval.
-        var allEdges = _graph.GetStoredEdges(tenantId);
+        //
+        // The ATTRIBUTABLE view, and it must stay that way. A GraphEdge carries no namespace, so a
+        // stored edge between ids X and Y is only a claim about two BARE ids. If the tenant holds X
+        // in two namespaces, the edge is unattributable: an edge created between another
+        // principal's private twins is byte-identical to one created between the entries here, and
+        // nothing on it distinguishes them. The `indexOf` filter below does not close that — it
+        // proves only that entries bearing those ids exist in this namespace, which is a candidate
+        // interpretation of the ids, never proof of the edge's origin. Building the basis from
+        // unattributable edges therefore imports another principal's topology into this namespace's
+        // retrieval ranking, and it does so invisibly: the endpoints never surface, they just
+        // silently decide which of THIS namespace's entries get boosted together.
+        //
+        // ACCEPTED CONSEQUENCE, stated rather than hidden: a deployment that reuses ids across
+        // namespaces of one tenant loses its diffusion basis for the affected namespaces until
+        // endpoints become namespace-qualified (issue #19). That is the fail-CLOSED outcome and it
+        // is the correct one — the behaviour it replaces bought those namespaces a basis by
+        // disclosing topology across a boundary they were never shown.
+        var allEdges = _graph.GetAllEdges(tenantId);
         var weights = new Dictionary<(int Lo, int Hi), float>();
         int edgeCount = 0;
         foreach (var edge in allEdges)

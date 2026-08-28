@@ -22,10 +22,16 @@ namespace McpEngramMemory.Tests;
 /// this every cold caller ran its own directory walk or <c>SELECT DISTINCT</c>; "once per process"
 /// was true only of a store that was never opened concurrently.
 ///
-/// Both are driven through hand-rolled in-memory providers rather than a temp directory: the
-/// enumeration counter and the injected failure have to live inside the provider, and neither is
-/// reachable by pointing a real backend at a disk. The one test that does use disk exercises the
-/// JSON provider's genuine-emptiness answer, and takes a per-run GUID directory it deletes.
+/// The counting half is driven through hand-rolled in-memory providers rather than a temp
+/// directory: the enumeration counter and the injected failure have to live inside the provider,
+/// and neither is reachable by pointing a real backend at a disk.
+///
+/// The JSON provider — the default one — gets its own on-disk half, because there the failure is a
+/// property of a real directory and cannot be stubbed honestly. Its listing failure wears the same
+/// shape as an empty store twice over: a missing path is both what a never-created store looks like
+/// and what a moved, unmounted or ACL-revoked one looks like, and only a real directory taken away
+/// from a live provider tells those apart. Each of those tests takes a per-run GUID directory and
+/// deletes it.
 /// </summary>
 public class EnumerationIntegrityTests
 {
@@ -150,22 +156,122 @@ public class EnumerationIntegrityTests
     [Fact]
     public void JsonProvider_EmptyDataDirectoryListsEmpty_AndAPopulatedOneListsItsNamespaces()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"engram_enum_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        try
-        {
-            using var provider = new PersistenceManager(path, debounceMs: 50);
+        using var dir = new TempDataDirectory();
+        using var provider = new PersistenceManager(dir.Root, debounceMs: 50);
 
-            Assert.Empty(provider.GetPersistedNamespaces());
+        Assert.Empty(provider.GetPersistedNamespaces());
 
-            provider.SaveNamespaceSync("real", new NamespaceData { Entries = [Entry("e1", "real")] });
-            Assert.Equal(new[] { "real" }, provider.GetPersistedNamespaces());
-        }
-        finally
-        {
-            if (Directory.Exists(path))
-                Directory.Delete(path, recursive: true);
-        }
+        provider.SaveNamespaceSync("real", new NamespaceData { Entries = [Entry("e1", "real")] });
+        Assert.Equal(new[] { "real" }, provider.GetPersistedNamespaces());
+    }
+
+    /// <summary>
+    /// The other side of the decision the JSON provider has to make, and the reason its
+    /// <c>Directory.Exists</c> pre-check existed at all: a genuinely fresh store has no data
+    /// directory yet and must still boot. The constructor creates it, which is what makes the
+    /// first-run enumeration an ordinary successful one that finds nothing rather than a refusal —
+    /// and, in the same stroke, what makes a later absence unambiguously the unavailable case.
+    /// </summary>
+    [Fact]
+    public void JsonProvider_FirstRunWithNoDataDirectoryYet_EnumeratesSuccessfullyEmpty()
+    {
+        using var dir = new TempDataDirectory(create: false);
+        Assert.False(Directory.Exists(dir.Root));
+
+        using var provider = new PersistenceManager(dir.Root, debounceMs: 50);
+
+        Assert.True(Directory.Exists(dir.Root));
+        Assert.Empty(provider.GetPersistedNamespaces());
+    }
+
+    // ── An unavailable directory is not an empty one ──
+
+    /// <summary>
+    /// The reviewer's reproduction, against the default provider. A data directory that goes away
+    /// under a running process — moved aside here, an unmounted share or a revoked ACL in the field
+    /// — used to be answered by the <c>Directory.Exists</c> pre-check as an empty store: the exact
+    /// fail-open the database providers were fixed for, reached by a different shape. Absence has to
+    /// refuse while the directory is unavailable, and the recovered lookup has to see the namespace
+    /// again, because a completion published over the first answer would hide it for the life of the
+    /// process.
+    /// </summary>
+    [Fact]
+    public void JsonProvider_DataDirectoryTakenAway_RefusesToEnumerate_AndTheRestoredLookupSeesIt()
+    {
+        using var dir = new TempDataDirectory();
+        using var provider = new PersistenceManager(dir.Root, debounceMs: 50);
+        provider.SaveNamespaceSync("ns-a", new NamespaceData { Entries = [Entry("twin", "ns-a")] });
+
+        dir.MakeUnavailable();
+        Assert.Throws<NamespaceEnumerationException>(() => provider.GetPersistedNamespaces());
+
+        dir.Restore();
+        Assert.Equal(new[] { "ns-a" }, provider.GetPersistedNamespaces());
+    }
+
+    /// <summary>
+    /// The same outage stated as its security consequence rather than its availability one. Two of
+    /// the tenant's namespaces hold the same bare id, so the id is unattributable and topology must
+    /// fail closed on it. An enumeration that reported an unavailable directory as empty would leave
+    /// the persisted twin unseen and the count at 1 — an attributable id, free to be mutated through
+    /// the graph node it silently shares with the twin. Refusing during the outage and counting 2
+    /// after it is the only pair of answers that is never fail-open.
+    /// </summary>
+    [Fact]
+    public void JsonProvider_PersistedTwinHiddenByAnOutage_IsNeverCountedAsAUniqueId()
+    {
+        using var dir = new TempDataDirectory();
+        using var provider = new PersistenceManager(dir.Root, debounceMs: 50);
+        provider.SaveNamespaceSync("ns-a", new NamespaceData { Entries = [Entry("twin", "ns-a")] });
+        provider.SaveNamespaceSync("ns-b", new NamespaceData { Entries = [Entry("twin", "ns-b")] });
+        using var index = new CognitiveIndex(provider);
+
+        dir.MakeUnavailable();
+
+        // Neither 1 nor 0 — an id whose namespaces cannot be established is not attributable, and
+        // the count is exactly the predicate topology fails closed on.
+        Assert.Throws<NamespaceEnumerationException>(
+            () => { index.CountNamespacesContaining("twin", tenantId: Tenant); });
+
+        dir.Restore();
+        Assert.Equal(2, index.CountNamespacesContaining("twin", tenantId: Tenant));
+        // Ambiguous, so the bare-id get refuses rather than picking a twin.
+        Assert.Null(index.GetForTenant("twin", tenantId: Tenant));
+    }
+
+    /// <summary>
+    /// The completion ledger of <see cref="EnumerationIntegrityTests.FailedSweep_PublishesNoCompletion_AndASucceedingOneIsCached"/>,
+    /// carried to the default provider. Nothing is resident before the first sweep, so seeing both
+    /// namespaces after the recovery is itself the proof that the failed sweep published nothing and
+    /// the next caller went back to disk; a completion recorded over the failure would have left the
+    /// twin permanently invisible.
+    ///
+    /// The last step is the converse, and needs no counter to state it: a sweep that genuinely
+    /// enumerated is answered from the completion, so taking the directory away again is not even
+    /// noticed. A store that re-listed on every call would throw there instead.
+    /// </summary>
+    [Fact]
+    public void JsonProvider_FailedSweep_PublishesNoCompletion_AndASucceedingOneIsCached()
+    {
+        using var dir = new TempDataDirectory();
+        using var provider = new PersistenceManager(dir.Root, debounceMs: 50);
+        provider.SaveNamespaceSync("ns-a", new NamespaceData { Entries = [Entry("twin", "ns-a")] });
+        provider.SaveNamespaceSync("ns-b", new NamespaceData { Entries = [Entry("twin", "ns-b")] });
+        var store = StoreOver(provider);
+
+        dir.MakeUnavailable();
+        Assert.Throws<NamespaceEnumerationException>(() => store.LoadAll());
+        // The refusal came before any namespace was materialized, so the store is untouched rather
+        // than half-swept — there is no partial view for the next caller to mistake for a complete one.
+        Assert.Empty(store.GetCandidateNamespaces("twin", Tenant));
+
+        dir.Restore();
+        store.LoadAll();
+        AssertSameSet(["ns-a", "ns-b"], store.GetCandidateNamespaces("twin", Tenant));
+
+        dir.MakeUnavailable();
+        store.LoadAll();
+        AssertSameSet(["ns-a", "ns-b"], store.GetCandidateNamespaces("twin", Tenant));
     }
 
     // ── One enumeration for a cold burst ──
@@ -188,7 +294,7 @@ public class EnumerationIntegrityTests
     /// threads on a hill-climbing delay.
     /// </summary>
     [Fact]
-    public void ConcurrentColdCallers_ShareASingleEnumeration()
+    public async Task ConcurrentColdCallers_ShareASingleEnumeration()
     {
         const int callers = 4;
 
@@ -221,8 +327,17 @@ public class EnumerationIntegrityTests
         _ = provider.WaitForExpectedConcurrency(TimeSpan.FromSeconds(2));
         provider.ReleaseEnumerations();
 
-        Assert.True(Task.WaitAll(workers, TimeSpan.FromSeconds(30)),
-            "the cold callers did not finish; the sweep gate is likely deadlocked");
+        // Awaited rather than blocked on: this test parks every caller inside the provider gate, so
+        // a blocking wait here is the deadlock shape the analyzer refuses. Awaiting also surfaces a
+        // worker's own exception as itself instead of flattening it into a timed-out bool.
+        try
+        {
+            await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail("the cold callers did not finish; the sweep gate is likely deadlocked");
+        }
 
         Assert.Equal(1, provider.Enumerations);
 
@@ -231,6 +346,47 @@ public class EnumerationIntegrityTests
         // store, not just whatever the leader had materialized when it woke them.
         foreach (var result in seen)
             AssertSameSet(["ns-a", "ns-b"], result);
+    }
+
+    // ── Disk fixture ──
+
+    /// <summary>
+    /// A per-run data directory for the JSON provider, plus the outage the reviewer reproduced.
+    ///
+    /// The directory is MOVED aside rather than deleted, and that is the point of the fixture: the
+    /// entries have to still exist on the other side of the outage, because the finding is about a
+    /// persisted twin that a failed listing hides, not about one that was destroyed. Moving also
+    /// reproduces the real event faithfully — an unmounted share or a revoked ACL leaves the data
+    /// intact and only the listing impossible.
+    ///
+    /// Dispose removes both locations unconditionally, so an assertion that fails mid-outage still
+    /// cleans up the moved-away copy.
+    /// </summary>
+    private sealed class TempDataDirectory : IDisposable
+    {
+        private readonly string _away;
+
+        public string Root { get; }
+
+        public TempDataDirectory(bool create = true)
+        {
+            Root = Path.Combine(Path.GetTempPath(), $"engram_enum_{Guid.NewGuid():N}");
+            _away = Root + "_away";
+            if (create)
+                Directory.CreateDirectory(Root);
+        }
+
+        public void MakeUnavailable() => Directory.Move(Root, _away);
+
+        public void Restore() => Directory.Move(_away, Root);
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Root))
+                Directory.Delete(Root, recursive: true);
+            if (Directory.Exists(_away))
+                Directory.Delete(_away, recursive: true);
+        }
     }
 
     // ── Providers ──

@@ -35,6 +35,13 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// A number that counted attempts would be a number no edge in the graph answers to, and the
 /// background service, the tool that surfaces it, and every operator reading it would inherit the
 /// error.
+///
+/// The edge CAP is spent on accepted writes for the same reason, and that is a separate property
+/// from the count being honest. A candidate is screened for endpoint attribution before it takes a
+/// slot, because a slot spent on a write the graph will decline is a slot the next viable candidate
+/// never gets: a namespace whose highest-ranked pair happens to be unattributable would write
+/// nothing at all under a small cap, and — the scan being deterministic over unchanged entries —
+/// would write nothing again on every rescan, so it could never heal itself.
 /// </summary>
 public sealed class AutoLinkScanner
 {
@@ -53,6 +60,19 @@ public sealed class AutoLinkScanner
     /// nothing, which is the worse failure.
     /// </summary>
     public const int DefaultMaxScanEntries = 10_000;
+
+    /// <summary>
+    /// Spare candidate pairs requested beyond twice the edge cap.
+    ///
+    /// Two post-filters eat into the pool the detector returns — pairs that already have an edge,
+    /// and pairs whose endpoint cannot be attributed to a single entry — so the pool has to be
+    /// larger than the cap or the scan cannot fill the cap. A purely multiplicative slack vanishes
+    /// exactly where it is needed: twice a cap of 1 is ONE spare pair, so a single suppressed or
+    /// already-linked candidate empties the pool, and every deterministic rescan empties it the
+    /// same way. The additive term keeps a small cap workable; the multiplier still dominates at
+    /// large ones, where the detector's cost is what the pool is really bounding.
+    /// </summary>
+    private const int PairPoolSlack = 8;
 
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
@@ -77,7 +97,7 @@ public sealed class AutoLinkScanner
     /// </summary>
     /// <param name="ns">Namespace to scan.</param>
     /// <param name="threshold">Similarity threshold override; pass <c>threshold: null</c> to use the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>. Required so tenantId never sits behind a nullable slot an old positional call could silently shift into.</param>
-    /// <param name="maxNewEdges">Per-scan edge cap override; pass <c>maxNewEdges: null</c> for the default cap. Required for the same reason as <paramref name="threshold"/>.</param>
+    /// <param name="maxNewEdges">Per-scan cap on edges the graph ACCEPTS, not on candidates offered; pass <c>maxNewEdges: null</c> for the default cap. Required for the same reason as <paramref name="threshold"/>.</param>
     /// <param name="tenantId">Tenant partition to scan. Pass "" for the legacy partition.</param>
     /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
     public AutoLinkResult Scan(string ns, float? threshold, int? maxNewEdges,
@@ -118,25 +138,51 @@ public sealed class AutoLinkScanner
         float effectiveThreshold = threshold ?? 0.85f;
         int effectiveCap = maxNewEdges ?? 1000;
 
-        // Pull all pairs above threshold up to the cap. The detector's internal
-        // limit is `maxResults`; we ask for cap*2 pairs so post-filtering for
-        // already-existing edges has slack and we still hit our true cap.
-        var pairs = _duplicateDetector.FindDuplicates(candidates, effectiveThreshold, effectiveCap * 2);
+        // Pull pairs above threshold. The detector's `maxResults` bounds what is OFFERED, and the
+        // two post-filters below consume from that pool, so it is sized above the cap — see
+        // PairPoolSlack for why the slack cannot be purely multiplicative. Saturating rather than
+        // multiplying blind: an int.MaxValue cap doubled is a NEGATIVE maxResults, and a detector
+        // asked for a negative number of pairs returns none at all, which is the starvation this
+        // whole fix is about arriving by a different road.
+        int pairPool = effectiveCap > (int.MaxValue - PairPoolSlack) / 2
+            ? int.MaxValue
+            : (effectiveCap * 2) + PairPoolSlack;
+        var pairs = _duplicateDetector.FindDuplicates(candidates, effectiveThreshold, pairPool);
+
+        // Nothing above the threshold, so return before the topology guard is built: constructing it
+        // lists the tenant's namespaces, and a namespace with no candidate pair must not pay for a
+        // listing it would never consult. Same rule KnowledgeGraph applies to a node with no
+        // adjacency. The result is identical to what the loop below would have produced.
+        if (pairs.Count == 0)
+            return new AutoLinkResult(ns, candidates.Count, 0, 0, 0, false, notScanned);
 
         int skippedExisting = 0;
+        int refusedUnattributable = 0;
         bool hitCap = false;
 
-        // Proposed first, written once. Two reasons, and both are load-bearing.
+        // ONE sweep for the whole scan. Every question this loop asks about an id — is the tenant
+        // holding it in more than one namespace, does it already carry an attributable edge —
+        // resolves through CognitiveIndex, and a guard built per candidate re-lists the tenant's
+        // namespaces once per pair on a job that visits every namespace every six hours. The sweep
+        // judges each distinct id once and against one snapshot, so two candidates naming the same
+        // id can never disagree about it.
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
+
+        // Proposed first, written once. Three reasons, and all three are load-bearing.
         //
         // COST: KnowledgeGraph screens each endpoint against a listing of the tenant's namespaces,
         // and AddEdge builds that listing per call. Adding in a loop therefore re-lists — and so
-        // reloads the store — once per candidate edge, on a sweep that runs over every namespace
-        // every six hours. AddEdges builds one listing for the whole batch.
+        // reloads the store — once per candidate edge. AddEdges builds one listing for the batch.
         //
         // HONESTY: AddEdges reports what it actually wrote. An endpoint the tenant holds in two
         // namespaces names a node shared with an entry this sweep was never shown, so Core declines
         // it; counting the attempt would put a number in AutoLinkResult.EdgesCreated that no edge in
         // the graph answers to.
+        //
+        // CAP: only admissible candidates reach this list, so the cap bounds accepted writes rather
+        // than attempts. A refused candidate that consumed a slot would starve the viable candidate
+        // ranked behind it — permanently, since an unchanged namespace produces the same ranking on
+        // every rescan.
         var pending = new List<GraphEdge>();
         var proposed = new HashSet<(string Src, string Dst)>();
 
@@ -158,40 +204,76 @@ public sealed class AutoLinkScanner
             if (!proposed.Add((src, dst)))
                 continue;
 
-            if (HasAnyEdgeBetween(src, dst, tenantId))
+            var candidate = new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId);
+
+            // Screened as the EDGE that would be written, against the same predicate AddEdges will
+            // apply to it, and BEFORE the slot is taken — that ordering is the fix. A candidate the
+            // graph is going to decline must not spend a cap the next candidate could have used.
+            //
+            // Ahead of the existing-edge probe, not after it, and that is load-bearing beyond cost:
+            // EdgesSkippedExisting reaches a caller. Probing first would let an unattributable pair
+            // land in that count whenever a hidden edge happens to run between the two ids, and the
+            // count would then answer a question about a node the caller was never shown.
+            if (!guard.IsEdgeUsable(candidate))
+            {
+                refusedUnattributable++;
+                continue;
+            }
+
+            if (HasAnyEdgeBetween(src, dst, tenantId, guard))
             {
                 skippedExisting++;
                 continue;
             }
 
-            pending.Add(new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId));
+            pending.Add(candidate);
         }
 
         int created = pending.Count > 0 ? _graph.AddEdges(pending) : 0;
-        int refused = pending.Count - created;
+
+        // Normally zero now that candidates are pre-screened, and deliberately still measured. The
+        // scanner's sweep and the one inside AddEdges snapshot the tenant's namespaces at different
+        // moments, so a twin created in between makes the graph decline an edge this scan judged
+        // admissible — which is exactly the case that must fail closed. Kept apart from the
+        // pre-screen's refusals because a non-zero value here means a race, not an ambiguous id.
+        int declinedAtWrite = pending.Count - created;
 
         // The log MAY name refusals where a reply may not: this runs as background maintenance with
         // no caller, so the count cannot become an "a twin exists somewhere in your tenant" oracle —
         // and an operator debugging a namespace that stubbornly refuses to densify needs to be able
         // to tell suppression apart from a namespace with nothing similar in it. AutoLinkResult
         // carries no such field for the same reason inverted: it does reach a caller.
-        if (created > 0 || refused > 0)
+        if (created > 0 || refusedUnattributable > 0 || declinedAtWrite > 0)
         {
             _logger?.LogInformation(
-                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Skipped} skipped (existing edge), {Examined} pairs examined{CapNote}.",
-                ns, created, refused, skippedExisting, pairs.Count, hitCap ? " (hit cap)" : "");
+                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Declined} declined at write (endpoint became ambiguous mid-scan), {Skipped} skipped (existing edge), {Examined} pairs examined{CapNote}.",
+                ns, created, refusedUnattributable, declinedAtWrite, skippedExisting, pairs.Count,
+                hitCap ? " (hit cap)" : "");
         }
 
         return new AutoLinkResult(ns, candidates.Count, pairs.Count, created, skippedExisting, hitCap, notScanned);
     }
 
-    private bool HasAnyEdgeBetween(string a, string b, string tenantId)
+    /// <summary>
+    /// True when an ATTRIBUTABLE edge already runs between the two ids, in either direction and
+    /// under any relation — the pairs auto-link leaves alone.
+    ///
+    /// It reads the stored adjacency and applies the caller's sweep instead of calling
+    /// <see cref="KnowledgeGraph.GetEdgesForEntry"/>, which builds a fresh sweep per call: this runs
+    /// once per candidate pair, and a namespace listing per pair is precisely the cost a sweep
+    /// exists to avoid. The predicate applied is the one that method applies — an edge is usable
+    /// only when BOTH endpoints are attributable — so the answer is the attributable view's and not
+    /// the stored view's, and it stays that way even if a caller ever reaches here without having
+    /// pre-screened. Nothing read leaves this method: the only question put to the adjacency is
+    /// whether the far endpoint is an id already in hand, so no bare id is resolved or projected.
+    /// </summary>
+    private bool HasAnyEdgeBetween(string a, string b, string tenantId, TopologyGuard.Sweep guard)
     {
-        // GetEdgesForEntry returns both directions for a single entry. Cheaper
-        // to scan one entry's edges than fetch both and union.
-        var edges = _graph.GetEdgesForEntry(a, tenantId: tenantId);
+        // One node's adjacency covers both directions, so there is no need to fetch b's and union.
+        var edges = _graph.GetStoredEdgesForEntry(a, tenantId: tenantId);
         foreach (var edge in edges)
         {
+            if (!guard.IsEdgeUsable(edge)) continue;
             if ((edge.SourceId == a && edge.TargetId == b) ||
                 (edge.SourceId == b && edge.TargetId == a))
                 return true;

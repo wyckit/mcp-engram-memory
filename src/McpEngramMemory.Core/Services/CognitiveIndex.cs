@@ -194,6 +194,27 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>
+    /// How many times an id in <paramref name="tenantId"/> has crossed the ambiguity boundary —
+    /// gained a second namespace of the tenant, or dropped back to one.
+    ///
+    /// The freshness signal a cache of ATTRIBUTABLE topology needs and can get nowhere else.
+    /// Inserting a same-id twin is an ordinary entry write: it creates no edge and no cluster
+    /// membership, so
+    /// <see cref="McpEngramMemory.Core.Services.Graph.KnowledgeGraph.RevisionFor(string)"/> does not
+    /// move, while every edge naming that id has just stopped being usable. A consumer that watched
+    /// only the graph revision would keep serving a basis built from edges the attributable view no
+    /// longer returns — stale in the one direction that matters, since the stale copy is the one
+    /// that still contains another principal's topology.
+    ///
+    /// Compared, never interpreted: any difference from a recorded value means attribution moved
+    /// somewhere in the tenant and the derivation must be rebuilt. It discloses nothing on its own —
+    /// a tenant-wide change count naming no id, namespace or entry.
+    /// </summary>
+    /// <param name="tenantId">Required. "" is the legacy partition, not a wildcard.</param>
+    public long AttributionRevisionFor(string tenantId)
+        => _store.AttributionRevisionFor(Tenancy.Normalize(tenantId));
+
+    /// <summary>
     /// All distinct tenant ids in the store (includes the legacy tenant "" when legacy data exists).
     /// Loads every persisted namespace first so background maintenance can cover every tenant.
     /// </summary>

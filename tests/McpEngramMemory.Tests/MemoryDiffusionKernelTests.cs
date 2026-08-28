@@ -212,8 +212,13 @@ public class MemoryDiffusionKernelTests : IDisposable
     public void ParallelGetBasisAcrossNamespacesSucceeds()
     {
         const int nsCount = 10;
+        // Distinct ids per namespace: this test is about concurrent computation across namespaces,
+        // not about id collision. Sharing bare ids across all ten would make every endpoint
+        // ambiguous and every basis correctly null, so the test would pass or fail for a reason
+        // that has nothing to do with parallelism.
         for (int n = 0; n < nsCount; n++)
-            SeedClusteredGraph($"par_{n}", clusters: 4, perCluster: 8, withinDensity: 0.5f);
+            SeedClusteredGraph($"par_{n}", clusters: 4, perCluster: 8, withinDensity: 0.5f,
+                idPrefix: $"par{n}_");
 
         var bases = new DiffusionBasis?[nsCount];
         Parallel.For(0, nsCount, n =>
@@ -310,13 +315,27 @@ public class MemoryDiffusionKernelTests : IDisposable
     /// <paramref name="addBridges"/> is true, one weak edge is added between consecutive clusters
     /// to keep the graph connected.
     /// </summary>
-    private void SeedClusteredGraph(string ns, int clusters, int perCluster, float withinDensity, bool addBridges = true)
+    /// <summary>
+    /// Seed a clustered graph in one namespace.
+    ///
+    /// <paramref name="idPrefix"/> exists for the multi-namespace tests: entry ids are unique only
+    /// per (tenant, namespace), so seeding the same bare ids into several namespaces of one tenant
+    /// makes every one of them ambiguous, and the basis is built from the ATTRIBUTABLE edge view —
+    /// which withholds an edge whose endpoint id names more than one entry. A caller seeding several
+    /// namespaces therefore has to give them distinct ids, or it is exercising the fail-closed path
+    /// rather than the one it means to test. That path has its own coverage in
+    /// DiffusionAttributionTests.
+    /// </summary>
+    private void SeedClusteredGraph(string ns, int clusters, int perCluster, float withinDensity,
+        bool addBridges = true, string idPrefix = "")
     {
         var rng = new Random(12345);
+        string Id(int c, int i) => $"{idPrefix}c{c}_{i}";
+
         for (int c = 0; c < clusters; c++)
         {
             for (int i = 0; i < perCluster; i++)
-                _index.Upsert(new CognitiveEntry($"c{c}_{i}", new[] { (float)c, (float)i }, ns, $"cluster {c} member {i}"));
+                _index.Upsert(new CognitiveEntry(Id(c, i), new[] { (float)c, (float)i }, ns, $"cluster {c} member {i}"));
         }
 
         for (int c = 0; c < clusters; c++)
@@ -324,13 +343,13 @@ public class MemoryDiffusionKernelTests : IDisposable
             for (int i = 0; i < perCluster; i++)
                 for (int j = i + 1; j < perCluster; j++)
                     if (rng.NextDouble() < withinDensity)
-                        _graph.AddEdge(new GraphEdge($"c{c}_{i}", $"c{c}_{j}", "similar_to", 1.0f));
+                        _graph.AddEdge(new GraphEdge(Id(c, i), Id(c, j), "similar_to", 1.0f));
         }
 
         if (addBridges)
         {
             for (int c = 0; c + 1 < clusters; c++)
-                _graph.AddEdge(new GraphEdge($"c{c}_0", $"c{c + 1}_0", "cross_reference", 0.1f));
+                _graph.AddEdge(new GraphEdge(Id(c, 0), Id(c + 1, 0), "cross_reference", 0.1f));
         }
     }
 }
