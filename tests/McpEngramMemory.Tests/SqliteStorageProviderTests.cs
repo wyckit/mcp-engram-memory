@@ -291,7 +291,7 @@ public class SqliteStorageProviderTests : IDisposable
         var entry = new CognitiveEntry("idx-1", new[] { 1f, 0f }, "test", "hello");
         index.Upsert(entry);
 
-        var retrieved = index.Get("idx-1", "test");
+        var retrieved = index.Get("idx-1", "test", tenantId: "");
         Assert.NotNull(retrieved);
         Assert.Equal("hello", retrieved.Text);
     }
@@ -304,7 +304,7 @@ public class SqliteStorageProviderTests : IDisposable
         index.Upsert(new CognitiveEntry("s1", new[] { 1f, 0f }, "test", "alpha"));
         index.Upsert(new CognitiveEntry("s2", new[] { 0f, 1f }, "test", "beta"));
 
-        var results = index.Search(new[] { 1f, 0f }, "test", k: 1);
+        var results = index.Search(new[] { 1f, 0f }, "test", tenantId: "", k: 1);
         Assert.Single(results);
         Assert.Equal("s1", results[0].Id);
     }
@@ -323,7 +323,7 @@ public class SqliteStorageProviderTests : IDisposable
         using var provider2 = new SqliteStorageProvider(_testDbPath, debounceMs: 10);
         using var index2 = new CognitiveIndex(provider2);
 
-        var entry = index2.Get("p1", "persist");
+        var entry = index2.Get("p1", "persist", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("persisted entry", entry.Text);
     }

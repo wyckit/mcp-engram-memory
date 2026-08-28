@@ -22,7 +22,7 @@ public sealed class GovernedLearningToolsTests : IDisposable
         var embedding = new HashEmbeddingService();
         var registry = new NamespaceRegistry(index, embedding);
         var principal = new PrincipalContext("tenant-a", "alice");
-        registry.EnsureOwnership("project", "alice", principal.TenantId);
+        registry.EnsureOwnership("project", "alice", tenantId: principal.TenantId);
         index.Upsert(new CognitiveEntry("source-1", embedding.Embed("evidence"), "project",
             "The launch date is Tuesday.", "evidence", tenantId: principal.TenantId));
 
@@ -63,7 +63,7 @@ public sealed class GovernedLearningToolsTests : IDisposable
         var index = new CognitiveIndex(persistence);
         var embedding = new HashEmbeddingService();
         var registry = new NamespaceRegistry(index, embedding);
-        registry.EnsureOwnership("private", "alice", "tenant-a");
+        registry.EnsureOwnership("private", "alice", tenantId: "tenant-a");
         index.Upsert(new CognitiveEntry("source", embedding.Embed("secret"), "private", "secret",
             "evidence", tenantId: "tenant-a"));
         var principal = new PrincipalContext("tenant-a", AgentIdentity.DefaultAgentId);
@@ -77,7 +77,7 @@ public sealed class GovernedLearningToolsTests : IDisposable
         var result = await tools.PromoteKnowledge("claim", "private", "secret", ["source"]);
 
         Assert.Contains("authenticated, non-default principal", JsonSerializer.Serialize(result));
-        Assert.False(registry.HasAccess(AgentIdentity.DefaultAgentId, "private", "read", "tenant-a"));
+        Assert.False(registry.HasAccess(AgentIdentity.DefaultAgentId, "private", "read", tenantId: "tenant-a"));
     }
 
     public void Dispose()

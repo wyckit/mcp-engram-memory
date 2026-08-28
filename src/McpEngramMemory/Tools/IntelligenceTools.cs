@@ -54,13 +54,13 @@ public sealed class IntelligenceTools
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             : new HashSet<string> { "stm", "ltm" };
 
-        var raw = _index.FindDuplicates(ns, threshold, category, states, tenantId: _access.TenantId);
+        var raw = _index.FindDuplicates(ns, tenantId: _access.TenantId, threshold: threshold, category: category, includeStates: states);
 
         var pairs = new List<DuplicatePair>(raw.Count);
         foreach (var (idA, idB, sim) in raw)
         {
-            var a = _index.Get(idA, ns, _access.TenantId);
-            var b = _index.Get(idB, ns, _access.TenantId);
+            var a = _index.Get(idA, ns, tenantId: _access.TenantId);
+            var b = _index.Get(idB, ns, tenantId: _access.TenantId);
             if (a is null || b is null) continue;
 
             pairs.Add(new DuplicatePair(
@@ -69,7 +69,7 @@ public sealed class IntelligenceTools
                 sim));
         }
 
-        var scannedCount = _index.CountInNamespace(ns, _access.TenantId);
+        var scannedCount = _index.CountInNamespace(ns, tenantId: _access.TenantId);
         return new DuplicateDetectionResult(scannedCount, pairs, threshold);
     }
 
@@ -84,7 +84,7 @@ public sealed class IntelligenceTools
             return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
 
         // Part 1: Get explicit contradiction edges from the knowledge graph (this tenant)
-        var graphContradictions = _graph.GetContradictions(ns, _access.TenantId);
+        var graphContradictions = _graph.GetContradictions(ns, tenantId: _access.TenantId);
         var contradictions = new List<ContradictionInfo>();
         var knownPairs = new HashSet<(string, string)>();
 
@@ -132,7 +132,7 @@ public sealed class IntelligenceTools
             var resolved = new (CognitiveEntry? Entry, float Norm)[results.Count];
             for (int i = 0; i < results.Count; i++)
             {
-                var entry = _index.Get(results[i].Id, ns, _access.TenantId);
+                var entry = _index.Get(results[i].Id, ns, tenantId: _access.TenantId);
                 resolved[i] = (entry, entry is not null ? VectorMath.Norm(entry.Vector) : 0f);
             }
 
@@ -176,11 +176,11 @@ public sealed class IntelligenceTools
     {
         // Resolve the collapse's namespace before touching anything (within this tenant) - same
         // reply shape as a genuine miss for both "doesn't exist" and "exists but you can't touch it".
-        var ns = _scanner.GetCollapseRecordNs(collapseId, _access.TenantId);
+        var ns = _scanner.GetCollapseRecordNs(collapseId, tenantId: _access.TenantId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: No collapse record found for '{collapseId}'.";
 
-        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, _access.TenantId);
+        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(ns);
         return result;
@@ -192,7 +192,7 @@ public sealed class IntelligenceTools
         [Description("Namespace to list collapse history for.")] string ns)
     {
         if (!_access.CanRead(ns)) return Array.Empty<CollapseRecord>();
-        return _scanner.GetCollapseHistory(ns, _access.TenantId);
+        return _scanner.GetCollapseHistory(ns, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "merge_memories", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -204,11 +204,11 @@ public sealed class IntelligenceTools
     {
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
-        var keepEntry = _index.Get(keepId, ns, _access.TenantId);
+        var keepEntry = _index.Get(keepId, ns, tenantId: _access.TenantId);
         if (keepEntry is null)
             return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
 
-        var archiveEntry = _index.Get(archiveId, ns, _access.TenantId);
+        var archiveEntry = _index.Get(archiveId, ns, tenantId: _access.TenantId);
         if (archiveEntry is null)
             return $"Error: Entry '{archiveId}' not found in namespace '{ns}'.";
 
@@ -235,16 +235,16 @@ public sealed class IntelligenceTools
         _access.ClaimOnWrite(ns);
 
         // Transfer graph edges from archived entry to kept entry (within this tenant)
-        int edgesTransferred = _graph.TransferEdges(archiveId, keepId, _access.TenantId);
+        int edgesTransferred = _graph.TransferEdges(archiveId, keepId, tenantId: _access.TenantId);
 
         // Transfer cluster memberships
-        int clustersTransferred = _clusters.TransferMembership(archiveId, keepId, _access.TenantId);
+        int clustersTransferred = _clusters.TransferMembership(archiveId, keepId, tenantId: _access.TenantId);
 
         // Archive the duplicate via lifecycle engine
-        _lifecycle.PromoteMemory(archiveId, "archived", ns, _access.TenantId);
+        _lifecycle.PromoteMemory(archiveId, "archived", ns, tenantId: _access.TenantId);
 
         // Add traceability edge
-        _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to", 1.0f, null, _access.TenantId));
+        _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to", 1.0f, null, tenantId: _access.TenantId));
 
         return $"Merged '{archiveId}' into '{keepId}'. " +
                $"Transferred {edgesTransferred} edge(s), {clustersTransferred} cluster(s), " +

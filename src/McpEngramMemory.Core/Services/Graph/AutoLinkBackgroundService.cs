@@ -80,7 +80,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             // Skip system namespaces (sharing registry, etc.).
             if (ns.StartsWith('_')) { skippedCount++; continue; }
 
-            var config = _lifecycle.GetDecayConfig(ns, tenant);
+            var config = _lifecycle.GetDecayConfig(ns, tenantId: tenant);
             // No stored config means defaults — auto-link is on by default.
             if (config is not null && !config.EnableAutoLink)
             {

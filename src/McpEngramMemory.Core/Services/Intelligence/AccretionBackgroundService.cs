@@ -92,8 +92,8 @@ public sealed class AccretionBackgroundService : BackgroundService
                         var sw = Stopwatch.StartNew();
                         try
                         {
-                            var result = _scanner.ScanNamespace(ns,
-                                autoSummarize: true, clusters: _clusters, embedding: _embedding, tenantId: tenant);
+                            var result = _scanner.ScanNamespace(ns, tenantId: tenant,
+                                autoSummarize: true, clusters: _clusters, embedding: _embedding);
                             sw.Stop();
                             totalClusters += result.ClustersDetected;
                             totalEntriesProcessed += result.ScannedCount;

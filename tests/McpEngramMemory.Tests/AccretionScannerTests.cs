@@ -150,7 +150,7 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("b", new[] { 0.99f, 0.01f }, "test", lifecycleState: "stm"));
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f }, "test", lifecycleState: "stm"));
 
-        var result = _scanner.ScanNamespace("test");
+        var result = _scanner.ScanNamespace("test", tenantId: "");
         Assert.Equal(0, result.ScannedCount);
         Assert.Equal(0, result.ClustersDetected);
     }
@@ -164,7 +164,7 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var result = _scanner.ScanNamespace("test");
+        var result = _scanner.ScanNamespace("test", tenantId: "");
         Assert.Equal(4, result.ScannedCount);
         Assert.Equal(1, result.ClustersDetected);
         Assert.Single(result.NewCollapses);
@@ -182,7 +182,7 @@ public class AccretionScannerTests : IDisposable
         };
         _index.Upsert(summaryEntry);
 
-        var result = _scanner.ScanNamespace("test", minPoints: 1);
+        var result = _scanner.ScanNamespace("test", tenantId: "", minPoints: 1);
         // Summary node should be excluded from scan — only 2 entries scanned
         Assert.Equal(2, result.ScannedCount);
     }
@@ -195,12 +195,12 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var result1 = _scanner.ScanNamespace("test");
+        var result1 = _scanner.ScanNamespace("test", tenantId: "");
         Assert.Equal(1, result1.ClustersDetected);
         Assert.Single(result1.NewCollapses);
 
         // Scan again — same entries should not produce a new collapse
-        var result2 = _scanner.ScanNamespace("test");
+        var result2 = _scanner.ScanNamespace("test", tenantId: "");
         Assert.Equal(1, result2.ClustersDetected);
         Assert.Empty(result2.NewCollapses); // Already pending
     }
@@ -215,10 +215,10 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "ns1", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "ns1", lifecycleState: "ltm"));
 
-        _scanner.ScanNamespace("ns1");
+        _scanner.ScanNamespace("ns1", tenantId: "");
 
-        Assert.Single(_scanner.GetPendingCollapses("ns1"));
-        Assert.Empty(_scanner.GetPendingCollapses("ns2"));
+        Assert.Single(_scanner.GetPendingCollapses("ns1", tenantId: ""));
+        Assert.Empty(_scanner.GetPendingCollapses("ns2", tenantId: ""));
     }
 
     [Fact]
@@ -229,12 +229,12 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var scanResult = _scanner.ScanNamespace("test");
+        var scanResult = _scanner.ScanNamespace("test", tenantId: "");
         var collapseId = scanResult.NewCollapses[0].CollapseId;
 
         var result = _scanner.ExecuteCollapse(
             collapseId, "Summary of a, b, c, d", new[] { 0.99f, 0.01f, 0f },
-            _clusters, _lifecycle);
+            _clusters, _lifecycle, tenantId: "");
 
         Assert.Contains("Collapsed 4 entries", result);
 
@@ -256,7 +256,7 @@ public class AccretionScannerTests : IDisposable
     {
         var result = _scanner.ExecuteCollapse(
             "nonexistent", "summary", new[] { 1f, 0f },
-            _clusters, _lifecycle);
+            _clusters, _lifecycle, tenantId: "");
         Assert.StartsWith("Error:", result);
     }
 
@@ -268,7 +268,7 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var scanResult = _scanner.ScanNamespace("test");
+        var scanResult = _scanner.ScanNamespace("test", tenantId: "");
         var collapseId = scanResult.NewCollapses[0].CollapseId;
 
         // Simulate partial failure: one member disappears before collapse execution.
@@ -276,7 +276,7 @@ public class AccretionScannerTests : IDisposable
 
         var result = _scanner.ExecuteCollapse(
             collapseId, "Summary of a, b, c, d", new[] { 0.99f, 0.01f, 0f },
-            _clusters, _lifecycle);
+            _clusters, _lifecycle, tenantId: "");
 
         Assert.StartsWith("Error:", result);
         Assert.Contains("partially failed during archive step", result);
@@ -291,14 +291,14 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var scanResult = _scanner.ScanNamespace("test");
+        var scanResult = _scanner.ScanNamespace("test", tenantId: "");
         var collapseId = scanResult.NewCollapses[0].CollapseId;
 
         // First attempt fails because one member disappears.
         _index.Delete("d");
         var firstAttempt = _scanner.ExecuteCollapse(
             collapseId, "Summary of a, b, c, d", new[] { 0.99f, 0.01f, 0f },
-            _clusters, _lifecycle);
+            _clusters, _lifecycle, tenantId: "");
         Assert.StartsWith("Error:", firstAttempt);
         Assert.Equal(1, _scanner.PendingCount);
 
@@ -306,7 +306,7 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
         var secondAttempt = _scanner.ExecuteCollapse(
             collapseId, "Summary of a, b, c, d", new[] { 0.99f, 0.01f, 0f },
-            _clusters, _lifecycle);
+            _clusters, _lifecycle, tenantId: "");
 
         Assert.Contains("Collapsed 4 entries", secondAttempt);
         Assert.Equal(0, _scanner.PendingCount);
@@ -324,17 +324,17 @@ public class AccretionScannerTests : IDisposable
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("d", new[] { 0.97f, 0.03f, 0f }, "test", lifecycleState: "ltm"));
 
-        var scanResult = _scanner.ScanNamespace("test");
+        var scanResult = _scanner.ScanNamespace("test", tenantId: "");
         var collapseId = scanResult.NewCollapses[0].CollapseId;
 
-        var dismissResult = _scanner.DismissCollapse(collapseId);
+        var dismissResult = _scanner.DismissCollapse(collapseId, tenantId: "");
         Assert.Contains("Dismissed", dismissResult);
 
         // Pending count should be 0
         Assert.Equal(0, _scanner.PendingCount);
 
         // Subsequent scan should not detect these entries again
-        var scanResult2 = _scanner.ScanNamespace("test");
+        var scanResult2 = _scanner.ScanNamespace("test", tenantId: "");
         Assert.Equal(0, scanResult2.ScannedCount);
         Assert.Empty(scanResult2.NewCollapses);
     }
@@ -342,7 +342,7 @@ public class AccretionScannerTests : IDisposable
     [Fact]
     public void DismissCollapse_NonExistent_ReturnsError()
     {
-        var result = _scanner.DismissCollapse("nonexistent");
+        var result = _scanner.DismissCollapse("nonexistent", tenantId: "");
         Assert.StartsWith("Error:", result);
     }
 }

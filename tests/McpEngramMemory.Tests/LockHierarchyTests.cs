@@ -93,8 +93,8 @@ public class LockHierarchyTests : IDisposable
             gate.Set();
             await aTask;
 
-            Assert.NotNull(_index.Get("a-1", "ns-a"));
-            Assert.NotNull(_index.Get("b-1", "ns-b"));
+            Assert.NotNull(_index.Get("a-1", "ns-a", tenantId: ""));
+            Assert.NotNull(_index.Get("b-1", "ns-b", tenantId: ""));
         }
         finally
         {
@@ -130,7 +130,7 @@ public class LockHierarchyTests : IDisposable
             Assert.Equal(writers, _index.CountInNamespace("serial-ns"));
             Assert.Equal(writers, eventCount);
             for (int i = 0; i < writers; i++)
-                Assert.NotNull(_index.Get($"s-{i:D2}", "serial-ns"));
+                Assert.NotNull(_index.Get($"s-{i:D2}", "serial-ns", tenantId: ""));
         }
         finally
         {
@@ -162,7 +162,7 @@ public class LockHierarchyTests : IDisposable
             var sw = Stopwatch.StartNew();
             while (sw.Elapsed < TimeSpan.FromMilliseconds(500))
             {
-                var r = _index.Get("seed", "reader-ns");
+                var r = _index.Get("seed", "reader-ns", tenantId: "");
                 Assert.NotNull(r);
                 Interlocked.Increment(ref readerIterations);
             }
@@ -246,10 +246,10 @@ public class LockHierarchyTests : IDisposable
                         _index.Upsert(MakeEntry(id, ns, $"stress entry {id}"));
                         break;
                     case 2: // Search (20%)
-                        _index.Search(_embedding.Embed("stress entry"), ns, k: 3);
+                        _index.Search(_embedding.Embed("stress entry"), ns, tenantId: "", k: 3);
                         break;
                     case 3: // Get (20%)
-                        _index.Get(id, ns);
+                        _index.Get(id, ns, tenantId: "");
                         break;
                     case 4: // Delete (20%)
                         _index.Delete(id);
@@ -347,7 +347,7 @@ public class LockHierarchyTests : IDisposable
         // Count must stay at 1 — not 0, not negative.
         Assert.Equal(1, _index.Count);
         Assert.Equal(1, _index.CountInNamespace("orphan-ns-b"));
-        Assert.NotNull(_index.Get("X", "orphan-ns-b"));
+        Assert.NotNull(_index.Get("X", "orphan-ns-b", tenantId: ""));
         Assert.NotNull(_index.Get("X")); // resolves via locator
     }
 
@@ -373,7 +373,7 @@ public class LockHierarchyTests : IDisposable
         Assert.Throws<ObjectDisposedException>(() =>
             index.Upsert(MakeEntry("late", "primed-ns", "after dispose")));
         Assert.Throws<ObjectDisposedException>(() => index.CountInNamespace("primed-ns"));
-        Assert.Throws<ObjectDisposedException>(() => index.Get("primed", "primed-ns"));
+        Assert.Throws<ObjectDisposedException>(() => index.Get("primed", "primed-ns", tenantId: ""));
         Assert.Throws<ObjectDisposedException>(() => index.Delete("primed"));
         Assert.Throws<ObjectDisposedException>(() => index.GetAllInNamespace("primed-ns"));
 

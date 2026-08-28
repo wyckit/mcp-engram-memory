@@ -65,13 +65,13 @@ public class InvariantTests : IDisposable
         var entry = MakeEntry("c1");
         index.Upsert(entry);
         Assert.NotNull(index.Get("c1"));
-        Assert.NotNull(index.Get("c1", "test"));
+        Assert.NotNull(index.Get("c1", "test", tenantId: ""));
         Assert.Equal(1, index.Count);
 
         // Delete → Get returns null
         Assert.True(index.Delete("c1"));
         Assert.Null(index.Get("c1"));
-        Assert.Null(index.Get("c1", "test"));
+        Assert.Null(index.Get("c1", "test", tenantId: ""));
         Assert.Equal(0, index.Count);
 
         // Delete again → returns false
@@ -112,8 +112,8 @@ public class InvariantTests : IDisposable
         index.Upsert(MakeEntry("a1", ns: "alpha", v1: 1f, v2: 0f));
         index.Upsert(MakeEntry("b1", ns: "beta", v1: 1f, v2: 0f));
 
-        var alphaResults = index.Search(new[] { 1f, 0f }, "alpha", k: 10);
-        var betaResults = index.Search(new[] { 1f, 0f }, "beta", k: 10);
+        var alphaResults = index.Search(new[] { 1f, 0f }, "alpha", tenantId: "", k: 10);
+        var betaResults = index.Search(new[] { 1f, 0f }, "beta", tenantId: "", k: 10);
 
         Assert.Single(alphaResults);
         Assert.Equal("a1", alphaResults[0].Id);
@@ -133,8 +133,8 @@ public class InvariantTests : IDisposable
         index.Upsert(MakeEntry("shared-id", ns: "ns2"));
 
         // Both should exist independently
-        Assert.NotNull(index.Get("shared-id", "ns1"));
-        Assert.NotNull(index.Get("shared-id", "ns2"));
+        Assert.NotNull(index.Get("shared-id", "ns1", tenantId: ""));
+        Assert.NotNull(index.Get("shared-id", "ns2", tenantId: ""));
         Assert.Equal(1, index.CountInNamespace("ns1"));
         Assert.Equal(1, index.CountInNamespace("ns2"));
     }
@@ -221,7 +221,7 @@ public class InvariantTests : IDisposable
         Assert.Equal("reinserted", found.Text);
 
         // Searchable too
-        var results = index.Search(new[] { 1f, 0f }, "test", k: 1);
+        var results = index.Search(new[] { 1f, 0f }, "test", tenantId: "", k: 1);
         Assert.Single(results);
         Assert.Equal("reins", results[0].Id);
     }
@@ -266,7 +266,7 @@ public class InvariantTests : IDisposable
         using var provider2 = new SqliteStorageProvider(_sqlitePath, debounceMs: 10);
         using var index2 = new CognitiveIndex(provider2);
 
-        var loaded = index2.Get("rt1", "round-trip")!;
+        var loaded = index2.Get("rt1", "round-trip", tenantId: "")!;
         Assert.NotNull(loaded);
         Assert.Equal("rt1", loaded.Id);
         Assert.Equal(new[] { 0.5f, -0.3f, 1.0f }, loaded.Vector);
@@ -299,7 +299,7 @@ public class InvariantTests : IDisposable
         using var persistence2 = new PersistenceManager(_jsonPath, debounceMs: 10);
         using var index2 = new CognitiveIndex(persistence2);
 
-        var loaded = index2.Get("rt2", "round-trip")!;
+        var loaded = index2.Get("rt2", "round-trip", tenantId: "")!;
         Assert.NotNull(loaded);
         Assert.Equal("rt2", loaded.Id);
         Assert.Equal(new[] { 0.5f, -0.3f }, loaded.Vector);
@@ -331,10 +331,10 @@ public class InvariantTests : IDisposable
         using var provider2 = new SqliteStorageProvider(_sqlitePath, debounceMs: 10);
         using var index2 = new CognitiveIndex(provider2);
 
-        Assert.NotNull(index2.Get("iw1", "test"));
-        Assert.Equal("ltm", index2.Get("iw1", "test")!.LifecycleState);
-        Assert.Null(index2.Get("iw2", "test"));
-        Assert.NotNull(index2.Get("iw3", "test"));
+        Assert.NotNull(index2.Get("iw1", "test", tenantId: ""));
+        Assert.Equal("ltm", index2.Get("iw1", "test", tenantId: "")!.LifecycleState);
+        Assert.Null(index2.Get("iw2", "test", tenantId: ""));
+        Assert.NotNull(index2.Get("iw3", "test", tenantId: ""));
     }
 
     // ── Backend Equivalence ──
@@ -370,8 +370,8 @@ public class InvariantTests : IDisposable
         }
 
         // Search results should match
-        var jsonResults = _jsonIndex.Search(new[] { 3f, 1f }, "test", k: 3);
-        var sqliteResults = _sqliteIndex.Search(new[] { 3f, 1f }, "test", k: 3);
+        var jsonResults = _jsonIndex.Search(new[] { 3f, 1f }, "test", tenantId: "", k: 3);
+        var sqliteResults = _sqliteIndex.Search(new[] { 3f, 1f }, "test", tenantId: "", k: 3);
         Assert.Equal(jsonResults.Count, sqliteResults.Count);
         for (int i = 0; i < jsonResults.Count; i++)
             Assert.Equal(jsonResults[i].Id, sqliteResults[i].Id);

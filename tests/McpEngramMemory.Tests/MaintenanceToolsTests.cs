@@ -36,7 +36,7 @@ public class MaintenanceToolsTests : IDisposable
 
         // Rebuild with a different embedding service (different dimensions = different vectors)
         var newEmbedding = new HashEmbeddingService(dimensions: 8);
-        var (updated, skipped) = _index.RebuildEmbeddings("test-ns", newEmbedding);
+        var (updated, skipped) = _index.RebuildEmbeddings("test-ns", newEmbedding, tenantId: "");
 
         Assert.Equal(1, updated);
         Assert.Equal(0, skipped);
@@ -61,7 +61,7 @@ public class MaintenanceToolsTests : IDisposable
 
         var originalCreatedAt = _index.Get("e1")!.CreatedAt;
 
-        _index.RebuildEmbeddings("test-ns", new HashEmbeddingService(dimensions: 8));
+        _index.RebuildEmbeddings("test-ns", new HashEmbeddingService(dimensions: 8), tenantId: "");
 
         var rebuilt = _index.Get("e1")!;
         Assert.Equal("test-ns", rebuilt.Ns);
@@ -83,7 +83,7 @@ public class MaintenanceToolsTests : IDisposable
         _index.Upsert(new CognitiveEntry("e1", embedding.Embed("has text"), "test-ns", "has text"));
         _index.Upsert(new CognitiveEntry("e2", [1f, 0f, 0f, 0f], "test-ns")); // no text
 
-        var (updated, skipped) = _index.RebuildEmbeddings("test-ns", embedding);
+        var (updated, skipped) = _index.RebuildEmbeddings("test-ns", embedding, tenantId: "");
 
         Assert.Equal(1, updated);
         Assert.Equal(1, skipped);
@@ -93,7 +93,7 @@ public class MaintenanceToolsTests : IDisposable
     public void RebuildEmbeddings_EmptyNamespace_ReturnsZeros()
     {
         var embedding = new HashEmbeddingService(dimensions: 4);
-        var (updated, skipped) = _index.RebuildEmbeddings("empty-ns", embedding);
+        var (updated, skipped) = _index.RebuildEmbeddings("empty-ns", embedding, tenantId: "");
 
         Assert.Equal(0, updated);
         Assert.Equal(0, skipped);
@@ -107,7 +107,7 @@ public class MaintenanceToolsTests : IDisposable
             _index.Upsert(new CognitiveEntry($"e{i}", oldEmbed.Embed($"text {i}"), "bulk-ns", $"text {i}"));
 
         var newEmbed = new HashEmbeddingService(dimensions: 8);
-        var (updated, skipped) = _index.RebuildEmbeddings("bulk-ns", newEmbed);
+        var (updated, skipped) = _index.RebuildEmbeddings("bulk-ns", newEmbed, tenantId: "");
 
         Assert.Equal(10, updated);
         Assert.Equal(0, skipped);
@@ -125,9 +125,9 @@ public class MaintenanceToolsTests : IDisposable
         _index.Upsert(new CognitiveEntry("e2", embedding.Embed("deep learning AI"), "test-ns", "deep learning AI"));
 
         // Rebuild with same embedding (vectors should be identical, search still works)
-        _index.RebuildEmbeddings("test-ns", embedding);
+        _index.RebuildEmbeddings("test-ns", embedding, tenantId: "");
 
-        var results = _index.Search(embedding.Embed("machine learning"), "test-ns", 2, 0f);
+        var results = _index.Search(embedding.Embed("machine learning"), "test-ns", tenantId: "", k: 2, minScore: 0f);
         Assert.True(results.Count > 0);
         Assert.Equal("e1", results[0].Id);
     }
@@ -139,14 +139,14 @@ public class MaintenanceToolsTests : IDisposable
         _index.Upsert(new CognitiveEntry("e1", embedding.Embed("text"), "ns-a", "text"));
         _index.Upsert(new CognitiveEntry("e2", embedding.Embed("text"), "ns-b", "text"));
 
-        var originalVectorB = _index.Get("e2", "ns-b")!.Vector.ToArray();
+        var originalVectorB = _index.Get("e2", "ns-b", tenantId: "")!.Vector.ToArray();
 
         var newEmbed = new HashEmbeddingService(dimensions: 8);
-        _index.RebuildEmbeddings("ns-a", newEmbed);
+        _index.RebuildEmbeddings("ns-a", newEmbed, tenantId: "");
 
         // ns-a should be updated
         Assert.Equal(8, _index.Get("e1")!.Vector.Length);
         // ns-b should be untouched
-        Assert.Equal(4, _index.Get("e2", "ns-b")!.Vector.Length);
+        Assert.Equal(4, _index.Get("e2", "ns-b", tenantId: "")!.Vector.Length);
     }
 }

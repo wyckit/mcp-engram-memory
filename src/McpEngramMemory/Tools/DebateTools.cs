@@ -95,8 +95,8 @@ public sealed class DebateTools
                 {
                     try
                     {
-                        results = _index.Search(queryVector, expertNs, perExpertK, minScore,
-                            includeStates: states, tenantId: _access.TenantId);
+                        results = _index.Search(queryVector, expertNs, tenantId: _access.TenantId,
+                            k: perExpertK, minScore: minScore, includeStates: states);
                     }
                     catch (Exception ex)
                     {
@@ -292,7 +292,7 @@ public sealed class DebateTools
     private void CleanupFailedSession(string sessionId, string debateNs)
     {
         foreach (var entryId in _sessions.GetAllEntryIds(_access.TenantId, sessionId))
-            _index.Delete(entryId, debateNs, _access.TenantId);
+            _index.Delete(entryId, debateNs, tenantId: _access.TenantId);
 
         _sessions.RemoveSession(_access.TenantId, sessionId);
     }

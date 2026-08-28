@@ -132,8 +132,14 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Remove edges between two entries within a tenant, optionally filtered by relation.</summary>
-    public string RemoveEdges(string sourceId, string targetId, string? relation = null, string tenantId = "")
+    /// <summary>
+    /// Remove edges between two entries within a tenant, optionally filtered by relation
+    /// (pass <c>relation: null</c> for all relations; <c>tenantId: ""</c> targets the legacy partition).
+    /// All parameters are required: an optional tenant here silently fell back to the legacy
+    /// partition, and tenantId cannot jump ahead of <paramref name="relation"/> without an old
+    /// positional relation string rebinding into the tenant slot.
+    /// </summary>
+    public string RemoveEdges(string sourceId, string targetId, string? relation, string tenantId)
     {
         _lock.EnterWriteLock();
         try
@@ -157,8 +163,8 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Remove ALL edges referencing an entry within a tenant (cascade delete).</summary>
-    public int RemoveAllEdgesForEntry(string id, string tenantId = "")
+    /// <summary>Remove ALL edges referencing an entry within a tenant (cascade delete). Pass "" for the legacy partition.</summary>
+    public int RemoveAllEdgesForEntry(string id, string tenantId)
     {
         _lock.EnterWriteLock();
         try
@@ -197,8 +203,14 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitWriteLock(); }
     }
 
-    /// <summary>Get directly connected entries within a tenant.</summary>
-    public GetNeighborsResult GetNeighbors(string id, string? relation = null, string direction = "both", string tenantId = "")
+    /// <summary>
+    /// Get directly connected entries within a tenant. Pass <c>relation: null</c> for all relations,
+    /// <c>direction: "both"</c> for both directions, and <c>tenantId: ""</c> for the legacy partition.
+    /// All parameters are required: tenantId cannot jump ahead of the string-typed relation/direction
+    /// slots without an old positional call like <c>GetNeighbors(id, "supports")</c> silently binding
+    /// the relation into the tenant slot — the exact fail-open this shape exists to kill.
+    /// </summary>
+    public GetNeighborsResult GetNeighbors(string id, string? relation, string direction, string tenantId)
     {
         // Snapshot edge data under graph lock, then resolve entries outside the lock
         // to avoid lock-ordering issues with CognitiveIndex.
@@ -248,9 +260,13 @@ public sealed class KnowledgeGraph
         return new GetNeighborsResult(id, neighbors);
     }
 
-    /// <summary>Multi-hop graph traversal via BFS, scoped to a tenant.</summary>
-    public TraversalResult Traverse(string startId, int maxDepth = 2, string? relation = null,
-        float minWeight = 0f, int maxResults = 20, string tenantId = "")
+    /// <summary>
+    /// Multi-hop graph traversal via BFS, scoped to a tenant. Pass "" for the legacy partition.
+    /// tenantId sits directly after the identity parameter so a stale positional call fails
+    /// loudly (the old third argument was an int, which cannot convert to string).
+    /// </summary>
+    public TraversalResult Traverse(string startId, string tenantId, int maxDepth = 2, string? relation = null,
+        float minWeight = 0f, int maxResults = 20)
     {
         maxDepth = Math.Clamp(maxDepth, 1, 5);
 
@@ -310,8 +326,8 @@ public sealed class KnowledgeGraph
         return new TraversalResult(startId, resultEntries, resultEdges);
     }
 
-    /// <summary>Get all edges for an entry within a tenant (both directions).</summary>
-    public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id, string tenantId = "")
+    /// <summary>Get all edges for an entry within a tenant (both directions). Pass "" for the legacy partition.</summary>
+    public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id, string tenantId)
     {
         _lock.EnterUpgradeableReadLock();
         try
@@ -327,8 +343,8 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Get all edges with a 'contradicts' relation for entries in a namespace within a tenant.</summary>
-    public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns, string tenantId = "")
+    /// <summary>Get all edges with a 'contradicts' relation for entries in a namespace within a tenant. Pass "" for the legacy partition.</summary>
+    public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns, string tenantId)
     {
         List<GraphEdge> contradictEdges;
 
@@ -386,8 +402,8 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Transfer all edges from one entry to another within a tenant (for merge operations). Returns count transferred.</summary>
-    public int TransferEdges(string fromId, string toId, string tenantId = "")
+    /// <summary>Transfer all edges from one entry to another within a tenant (for merge operations). Returns count transferred. Pass "" for the legacy partition.</summary>
+    public int TransferEdges(string fromId, string toId, string tenantId)
     {
         _lock.EnterWriteLock();
         try
@@ -445,7 +461,7 @@ public sealed class KnowledgeGraph
 
     /// <summary>Resolve an entry id within a tenant: fast legacy locator for tenant "", tenant-scoped scan otherwise.</summary>
     private CognitiveEntry? ResolveEntry(string id, string tenantId)
-        => tenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId);
+        => tenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId: tenantId);
 
     private void AddEdgeInternal(GraphEdge edge)
     {

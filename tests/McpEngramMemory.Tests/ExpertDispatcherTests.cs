@@ -29,7 +29,7 @@ public class ExpertDispatcherTests : IDisposable
         Assert.Equal("security_engineer", result.ExpertId);
         Assert.Equal("expert_security_engineer", result.TargetNamespace);
 
-        var entry = _index.Get("security_engineer", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("security_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("ltm", entry!.LifecycleState);
         Assert.True(entry.IsSummaryNode);
@@ -155,12 +155,12 @@ public class ExpertDispatcherTests : IDisposable
     {
         _dispatcher.CreateExpert("ml_engineer", "Machine learning and deep learning specialist.");
 
-        var before = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace);
+        var before = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         int initialCount = before!.AccessCount;
 
         _dispatcher.RecordDispatch("ml_engineer");
 
-        var after = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace);
+        var after = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.Equal(initialCount + 1, after!.AccessCount);
     }
 
@@ -176,7 +176,7 @@ public class ExpertDispatcherTests : IDisposable
     {
         _dispatcher.CreateExpert("data_scientist", "A data scientist specializing in statistical modeling.");
 
-        var entry = _index.Get("data_scientist", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("data_scientist", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("expert_data_scientist", entry!.Metadata["targetNamespace"]);
     }

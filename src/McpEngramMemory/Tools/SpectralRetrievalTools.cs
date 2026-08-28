@@ -51,7 +51,7 @@ public sealed class SpectralRetrievalTools
         // Gather a broader candidate pool than the user wants returned, so the
         // reranker has enough material to redistribute scores meaningfully.
         var queryVector = _embedding.Embed(query);
-        var candidates = _index.Search(queryVector, ns, k * candidateMultiplier, minScore, tenantId: _access.TenantId);
+        var candidates = _index.Search(queryVector, ns, tenantId: _access.TenantId, k: k * candidateMultiplier, minScore: minScore);
 
         if (candidates.Count == 0) return Array.Empty<CognitiveSearchResult>();
 
@@ -59,7 +59,7 @@ public sealed class SpectralRetrievalTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, k, diffusionTime, _access.TenantId);
+        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, tenantId: _access.TenantId, topK: k, diffusionTime: diffusionTime);
 
         // Resolve the reranked ids back to full search results. Entries that
         // surfaced via spectral redistribution (weren't in the original
@@ -77,7 +77,7 @@ public sealed class SpectralRetrievalTools
             }
 
             // Entry surfaced spectrally; fetch it (within this tenant).
-            var entry = _index.Get(id, ns, _access.TenantId);
+            var entry = _index.Get(id, ns, tenantId: _access.TenantId);
             if (entry is null) continue;
             results.Add(new CognitiveSearchResult(
                 entry.Id, entry.Text, score, entry.LifecycleState,

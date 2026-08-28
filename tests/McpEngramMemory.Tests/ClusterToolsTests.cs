@@ -60,7 +60,7 @@ public class ClusterToolsTests : IDisposable
     {
         _tools.CreateCluster("c1", "test", "a,b", label: "my label");
 
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.NotNull(cluster);
         Assert.Equal("my label", cluster!.Label);
     }
@@ -76,7 +76,7 @@ public class ClusterToolsTests : IDisposable
         Assert.IsType<string>(result);
         Assert.Contains("Created", (string)result);
 
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.NotNull(cluster);
         Assert.Equal(2, cluster!.MemberCount);
     }
@@ -90,7 +90,7 @@ public class ClusterToolsTests : IDisposable
         var result = _tools.UpdateCluster("c1", addMemberIds: "b,c");
 
         Assert.Contains("Updated", result);
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.Equal(3, cluster!.MemberCount);
     }
 
@@ -101,7 +101,7 @@ public class ClusterToolsTests : IDisposable
         var result = _tools.UpdateCluster("c1", removeMemberIds: "b");
 
         Assert.Contains("Updated", result);
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.Equal(2, cluster!.MemberCount);
     }
 
@@ -112,7 +112,7 @@ public class ClusterToolsTests : IDisposable
         var result = _tools.UpdateCluster("c1", label: "new label");
 
         Assert.Contains("Updated", result);
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.Equal("new label", cluster!.Label);
     }
 

@@ -42,7 +42,7 @@ public static class TopologyCascade
         // One namespace listing for the whole sweep. Listing a tenant's namespaces loads every
         // persisted namespace, so re-listing per id would cost a full store reload per entry on an
         // operation that routinely spans hundreds of namespaces.
-        var namespaces = index.GetNamespaces(tenantId);
+        var namespaces = index.GetNamespaces(tenantId: tenantId);
 
         int edgesRemoved = 0;
         int skippedAmbiguous = 0;
@@ -57,7 +57,7 @@ public static class TopologyCascade
 
         foreach (var id in ids)
         {
-            int namespacesHoldingId = index.CountNamespacesContaining(id, tenantId, namespaces);
+            int namespacesHoldingId = index.CountNamespacesContaining(id, tenantId: tenantId, namespaces);
 
             // Nothing of this tenant's answers to this id, so there is no topology we can attribute
             // to it. Fail closed rather than removing edges we cannot tie to an entry.
@@ -72,12 +72,12 @@ public static class TopologyCascade
 
             if (apply)
             {
-                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId);
-                clusters.RemoveEntryFromAllClusters(id, tenantId);
+                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId: tenantId);
+                clusters.RemoveEntryFromAllClusters(id, tenantId: tenantId);
             }
             else
             {
-                foreach (var edge in graph.GetEdgesForEntry(id, tenantId))
+                foreach (var edge in graph.GetEdgesForEntry(id, tenantId: tenantId))
                     distinctEdges!.Add((edge.SourceId, edge.TargetId, edge.Relation));
             }
         }

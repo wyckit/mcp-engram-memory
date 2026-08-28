@@ -83,7 +83,7 @@ public class LiveSynthesisInferenceTests
         using var gen = new OnnxGenAiTextGenerator(dir);
         var engine = new SynthesisEngine(index, clusters, gen, "qwen2.5-0.5b", "qwen2.5-0.5b");
 
-        var result = await engine.SynthesizeNamespaceAsync(ns, query: "what backend decision was made and why");
+        var result = await engine.SynthesizeNamespaceAsync(ns, query: "what backend decision was made and why", tenantId: "");
 
         _out.WriteLine($">>>LIVE status: {result.Status}, entries: {result.EntriesProcessed}, chunks: {result.ChunksProcessed}");
         _out.WriteLine($">>>LIVE synthesis:\n{result.Synthesis}");

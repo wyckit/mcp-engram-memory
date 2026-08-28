@@ -62,7 +62,7 @@ public class ConsolidationTests : IDisposable
         for (int i = 0; i < isolatedCount; i++)
             _index.Get($"iso_{i}")!.ActivationEnergy = -1.0f;
 
-        var result = _lifecycle.RunConsolidationPass(ns);
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
 
         Assert.Equal(1, result.ProcessedNamespaces);
 
@@ -93,7 +93,7 @@ public class ConsolidationTests : IDisposable
         for (int i = 0; i < clusterSize; i++)
             _index.Get($"c_{i}")!.ActivationEnergy = -10.0f;
 
-        var result = _lifecycle.RunConsolidationPass(ns);
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
 
         Assert.Equal(1, result.ProcessedNamespaces);
         Assert.Equal(clusterSize, result.LtmToArchived);
@@ -119,7 +119,7 @@ public class ConsolidationTests : IDisposable
             _index.Get($"c_{i}")!.ActivationEnergy = 10.0f;
         _index.Get("c_0")!.ActivationEnergy = -2.0f;
 
-        var result = _lifecycle.RunConsolidationPass(ns);
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
 
         // The cold entry should still have been promoted because the cluster
         // mean drags its smoothed activation above the threshold.
@@ -146,7 +146,7 @@ public class ConsolidationTests : IDisposable
         foreach (var e in _index.GetAllInNamespace(ns))
             e.ActivationEnergy = 100f;
 
-        var result = _lifecycle.RunConsolidationPass(ns);
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
 
         Assert.Equal(0, result.ProcessedNamespaces);
         Assert.Equal(1, result.SkippedNamespaces);
@@ -168,7 +168,7 @@ public class ConsolidationTests : IDisposable
         foreach (var e in _index.GetAllInNamespace("no_kernel"))
             e.ActivationEnergy = 5.0f;
 
-        var result = lifecycleNoKernel.RunConsolidationPass("no_kernel");
+        var result = lifecycleNoKernel.RunConsolidationPass("no_kernel", tenantId: "");
 
         Assert.Equal(0, result.ProcessedNamespaces);
         Assert.Equal(0, result.StmToLtm);
@@ -189,12 +189,14 @@ public class ConsolidationTests : IDisposable
         foreach (var e in _index.GetAllInNamespace(ns))
             e.ActivationEnergy = 5.0f;
 
-        _lifecycle.SetDecayConfig(ns, decayRate: 0.1f);
+        _lifecycle.SetDecayConfig(ns, decayRate: 0.1f, reinforcementWeight: null,
+            stmThreshold: null, archiveThreshold: null, useSpectralDecay: null,
+            subdiffusiveExponent: null, tenantId: "");
         // Mutate the config directly since SetDecayConfig doesn't surface
         // EnableConsolidation yet — that's a follow-up if we want to expose it.
-        _lifecycle.GetDecayConfig(ns)!.EnableConsolidation = false;
+        _lifecycle.GetDecayConfig(ns, tenantId: "")!.EnableConsolidation = false;
 
-        var result = _lifecycle.RunConsolidationPass(ns);
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
         Assert.Equal(0, result.ProcessedNamespaces);
         Assert.Equal(1, result.SkippedNamespaces);
     }

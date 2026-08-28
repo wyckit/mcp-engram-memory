@@ -212,7 +212,7 @@ public class SqlServerStorageProviderTests : IDisposable
         using var provider2 = new SqlServerStorageProvider(_connectionString!, schema: _schema, debounceMs: 10);
         using var index2 = new CognitiveIndex(provider2);
 
-        var entry = index2.Get("p1", "persist");
+        var entry = index2.Get("p1", "persist", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("persisted entry", entry.Text);
     }

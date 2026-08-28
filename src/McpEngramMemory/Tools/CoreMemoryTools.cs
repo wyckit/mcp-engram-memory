@@ -61,10 +61,10 @@ public sealed class CoreMemoryTools
     // (cross_search), so share_namespace/unshare_namespace protected nothing.
 
     private bool CanRead(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
 
     private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, "write", tenantId: _principal.TenantId);
 
     /// <summary>
     /// Denial message for a read. Deliberately shaped like "not found" rather than "denied":
@@ -266,13 +266,13 @@ public sealed class CoreMemoryTools
         }
         else if (hybrid && text is not null)
         {
-            results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank,
-                tenantId: _principal.TenantId);
+            results = _index.HybridSearch(resolved, text, ns, tenantId: _principal.TenantId,
+                k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
         }
         else
         {
-            results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst,
-                tenantId: _principal.TenantId);
+            results = _index.Search(resolved, ns, tenantId: _principal.TenantId,
+                k: k, minScore: minScore, category: category, includeStates: states, summaryFirst: summaryFirst);
             if (rerank && text is not null && results.Count > 1)
                 results = _index.Rerank(text, results);
         }
@@ -287,13 +287,13 @@ public sealed class CoreMemoryTools
                 IReadOnlyList<CognitiveSearchResult> expandedResults;
                 if (hybrid)
                 {
-                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, k, minScore, category, states, rerank,
-                        tenantId: _principal.TenantId);
+                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, tenantId: _principal.TenantId,
+                        k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
                 }
                 else
                 {
-                    expandedResults = _index.Search(expandedVector, ns, k, minScore, category, states, summaryFirst,
-                        tenantId: _principal.TenantId);
+                    expandedResults = _index.Search(expandedVector, ns, tenantId: _principal.TenantId,
+                        k: k, minScore: minScore, category: category, includeStates: states, summaryFirst: summaryFirst);
                     if (rerank)
                         expandedResults = _index.Rerank(expandedText, expandedResults);
                 }
@@ -331,7 +331,8 @@ public sealed class CoreMemoryTools
             foreach (var result in results)
             {
                 // Graph neighbor expansion with edge-type-weighted scoring
-                var neighbors = _graph.GetNeighbors(result.Id, tenantId: _principal.TenantId);
+                var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
+                    tenantId: _principal.TenantId);
                 foreach (var neighbor in neighbors.Neighbors)
                 {
                     if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -356,10 +357,10 @@ public sealed class CoreMemoryTools
                 }
 
                 // Cluster expansion: include cluster peers of top results
-                var clusterIds = _clusters.GetClustersForEntry(result.Id, _principal.TenantId);
+                var clusterIds = _clusters.GetClustersForEntry(result.Id, tenantId: _principal.TenantId);
                 foreach (var clusterId in clusterIds)
                 {
-                    var clusterInfo = _clusters.GetCluster(clusterId, _principal.TenantId);
+                    var clusterInfo = _clusters.GetCluster(clusterId, tenantId: _principal.TenantId);
                     if (clusterInfo is null) continue;
 
                     // Include cluster summary node at high priority

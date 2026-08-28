@@ -115,7 +115,7 @@ public class MemoryDiffusionKernel
     /// returning <c>null</c>) is deliberate — <c>null</c> would be
     /// indistinguishable from a legitimate too-small-namespace bypass.
     /// </summary>
-    public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK, string tenantId = "")
+    public DiffusionBasis? GetBasis(string ns, string tenantId, int topK = DefaultTopK)
     {
         // Cache/lock/failure keys are the (tenant, ns) partition key so a tenant's basis never
         // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
@@ -152,7 +152,7 @@ public class MemoryDiffusionKernel
             DiffusionBasis? built;
             try
             {
-                built = ComputeBasis(ns, topK, currentRev, tenantId);
+                built = ComputeBasis(ns, topK, currentRev, tenantId: tenantId);
             }
             catch (Exception ex)
             {
@@ -192,9 +192,9 @@ public class MemoryDiffusionKernel
         string ns,
         IReadOnlyDictionary<string, float> signal,
         Func<float, float> modeFilter,
-        string tenantId = "")
+        string tenantId)
     {
-        var basis = GetBasis(ns, DefaultTopK, tenantId);
+        var basis = GetBasis(ns, tenantId: tenantId, topK: DefaultTopK);
         if (basis is null) return signal;
 
         int n = basis.NodeCount;
@@ -227,9 +227,9 @@ public class MemoryDiffusionKernel
     }
 
     /// <summary>Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.</summary>
-    public DiffusionStats? GetStats(string ns, string tenantId = "")
+    public DiffusionStats? GetStats(string ns, string tenantId)
     {
-        var basis = GetBasis(ns, DefaultTopK, tenantId);
+        var basis = GetBasis(ns, tenantId: tenantId, topK: DefaultTopK);
         if (basis is null) return null;
         bool stale = basis.GraphRevision != _graph.RevisionFor(tenantId);
         return new DiffusionStats(
@@ -245,7 +245,7 @@ public class MemoryDiffusionKernel
     }
 
     /// <summary>Drop the cached basis (and any negative-cached failure) for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
-    public void Invalidate(string ns, string tenantId = "")
+    public void Invalidate(string ns, string tenantId)
     {
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
         _cache.TryRemove(pk, out _);
@@ -259,7 +259,7 @@ public class MemoryDiffusionKernel
     /// namespace doesn't qualify. Virtual purely as a test seam so fault-isolation
     /// tests can inject deterministic failures — not intended as an extension point.
     /// </summary>
-    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId = "")
+    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId)
     {
         var entries = _index.GetAllInNamespace(ns, tenantId);
         if (entries.Count < MinimumNodesForSpectral)

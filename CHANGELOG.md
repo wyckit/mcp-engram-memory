@@ -2,7 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [Unreleased] (ship as 2.0.0 — see risks)
+
+### Changed — BREAKING
+
+- **`tenantId` is now required on all Core retrieval and scoping APIs** — 55 methods across
+  `CognitiveIndex`, `KnowledgeGraph`, `MemoryDiffusionKernel`, `AutoLinkScanner`, `AccretionScanner`,
+  `ClusterManager`, `LifecycleEngine`, `SpectralRetrievalReranker`, `NamespaceRegistry`,
+  `SpreadingActivationService`, and `SynthesisEngine`. The old `tenantId = ""` default was not a
+  sentinel: `""` is the legacy partition, a real readable/writable dataset, so a forgotten tenant
+  argument compiled clean and silently degraded to cross-tenant legacy scope (it did, twice —
+  `SynthesisEngine` and `DiffusionKernelWarmupService`, both caught in the PR #18 security review).
+  The compiler now finds every omission.
+  - **Migration:** recompile and, at each error, pass the tenant the call site already holds —
+    named: `tenantId: myTenant`, or `tenantId: ""` where legacy scope is the deliberate meaning.
+    Treat every `tenantId: ""` you add as a claim, not a fix.
+  - **Placement is anti-rebinding by construction.** Where optionals preceded `tenantId`, it moved
+    to just after the required parameters — but only into slots previously occupied by an
+    `int`/`float`/`bool`, so every pre-2.0 positional call fails to compile (type or
+    missing-argument error) instead of silently rebinding. On methods where a string or nullable
+    parameter sat in the way — `GetNeighbors`, `RemoveEdges`, `SearchMultiple`, `CreateCluster`,
+    `UpdateCluster`, `Scan`, `SetDecayConfig`, `PromoteMemory`, `ApplyFeedback`,
+    `SynthesizeNamespaceAsync`, `HasAccess` — those parameters became required instead, because
+    moving `tenantId` past them would have let old positional calls bind a relation, label, query,
+    or access level into the tenant slot: the exact bug class this release removes.
+  - `DeepRecall` keeps `resurrect` trailing and optional (defaults `true`; benchmark IR baselines
+    unchanged); `SynthesizeNamespaceAsync` keeps `ct` trailing and optional.
+    `PromoteMemory`/`ApplyFeedback` also lost their `ns` defaults — `ns: ""` / `ns: null` now
+    selects the legacy bare-id locator explicitly.
+  - `DiffusionKernelWarmupService` now warms every tenant's diffusion bases (previously only the
+    legacy partition was ever warmed — the second incident above).
+- **Bare-id resolution converged on `EntryAccessResolver`** in `link_memories`/`unlink_memories`,
+  `promote_memory`, `memory_feedback`, and `get_memory`'s edge filter. Legacy (single-tenant)
+  resolution changes from "whatever the global id→ns map happens to hold" to "unique match among
+  visible namespaces": an id that exists in more than one namespace now refuses to resolve (same
+  reply as not-found) rather than acting on an arbitrary twin, and for identified agents an
+  invisible same-id entry can no longer blank or hijack resolution of the one they may see.
+  Deployments with unique ids — the normal case — see no change; new tests pin the delta
+  deliberately.
+- Removed the incorrect comment in `CoreMemoryTools` claiming the graph/cluster DTOs carry no
+  namespace field (`CognitiveEntryInfo` always did); that mistaken belief is what spawned the
+  duplicate resolvers now removed.
 
 ## [1.6.0] - 2026-08-27
 

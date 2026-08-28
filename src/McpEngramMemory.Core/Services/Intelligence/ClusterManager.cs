@@ -18,6 +18,11 @@ namespace McpEngramMemory.Core.Services.Intelligence;
 /// un-normalized key agrees with the map only until the next reload, and an un-normalized filter
 /// never agrees with it at all. Normalizing at the boundary keeps one canonical form of the key.
 ///
+/// No member defaults its <c>tenantId</c>: <c>""</c> is the legacy partition — a real, populated
+/// dataset, not a sentinel — so a forgotten tenant argument must be a compile error rather than a
+/// silent cross-tenant read. Callers that mean the legacy partition say so with an explicit
+/// <c>tenantId: ""</c>.
+///
 /// Locking strategy:
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
 /// - Mutating methods use EnterWriteLock directly.
@@ -54,7 +59,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>Create a new cluster with initial members.</summary>
-    public string CreateCluster(string clusterId, string ns, IReadOnlyList<string> memberIds, string? label = null, string tenantId = "")
+    public string CreateCluster(string clusterId, string ns, IReadOnlyList<string> memberIds, string? label, string tenantId)
     {
         List<string> memberIdsCopy;
         // Key on the normalized tenant: SemanticCluster normalizes its own TenantId, and EnsureLoaded
@@ -92,8 +97,8 @@ public sealed class ClusterManager
     }
 
     /// <summary>Update cluster members and/or label.</summary>
-    public string UpdateCluster(string clusterId, IReadOnlyList<string>? addIds = null,
-        IReadOnlyList<string>? removeIds = null, string? label = null, string tenantId = "")
+    public string UpdateCluster(string clusterId, IReadOnlyList<string>? addIds,
+        IReadOnlyList<string>? removeIds, string? label, string tenantId)
     {
         List<string> memberIdsCopy;
         int memberCount;
@@ -145,7 +150,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>Store an LLM-generated summary as a searchable entry tied to a cluster.</summary>
-    public string StoreSummary(string clusterId, string summaryText, float[] summaryVector, string tenantId = "")
+    public string StoreSummary(string clusterId, string summaryText, float[] summaryVector, string tenantId)
     {
         // Get cluster info under cluster lock, then do CognitiveIndex upsert outside
         // to avoid lock-ordering deadlock.
@@ -182,7 +187,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>Get cluster details with members and summary.</summary>
-    public GetClusterResult? GetCluster(string clusterId, string tenantId = "")
+    public GetClusterResult? GetCluster(string clusterId, string tenantId)
     {
         // Snapshot cluster info under lock, resolve entries outside
         string? clusterLabel;
@@ -250,7 +255,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>List all clusters in a namespace within a tenant.</summary>
-    public IReadOnlyList<ClusterSummaryInfo> ListClusters(string ns, string tenantId = "")
+    public IReadOnlyList<ClusterSummaryInfo> ListClusters(string ns, string tenantId)
     {
         var tenant = Tenancy.Normalize(tenantId);
 
@@ -272,17 +277,14 @@ public sealed class ClusterManager
     /// Projection of <see cref="GetClusterMembershipsForEntry"/> so the membership predicate exists
     /// exactly once and the two views can never disagree about which clusters contain the entry.
     /// </summary>
-    public IReadOnlyList<string> GetClustersForEntry(string entryId, string tenantId = "")
-        => GetClusterMembershipsForEntry(entryId, tenantId).Select(m => m.ClusterId).ToList();
+    public IReadOnlyList<string> GetClustersForEntry(string entryId, string tenantId)
+        => GetClusterMembershipsForEntry(entryId, tenantId: tenantId).Select(m => m.ClusterId).ToList();
 
     /// <summary>
     /// Get all clusters within a tenant that contain a given entry, each paired with its own
     /// namespace. Clusters in one tenant are not all in one namespace, so a caller that has to
     /// authorize what it returns cannot do so from the cluster id alone; emitting the namespace the
     /// lookup already held is what lets it filter without re-resolving every cluster.
-    /// <paramref name="tenantId"/> deliberately carries no default: a tenant-scoped lookup that
-    /// silently falls back to the legacy <c>""</c> partition would read across tenants, so a
-    /// forgotten argument must be a compile error rather than a cross-tenant read.
     /// </summary>
     public IReadOnlyList<ClusterMembershipInfo> GetClusterMembershipsForEntry(string entryId, string tenantId)
     {
@@ -301,7 +303,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>Remove an entry from all clusters within a tenant (cascade delete).</summary>
-    public void RemoveEntryFromAllClusters(string entryId, string tenantId = "")
+    public void RemoveEntryFromAllClusters(string entryId, string tenantId)
     {
         // Phase 1: Remove member from this tenant's clusters, collect affected member lists
         var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
@@ -344,7 +346,7 @@ public sealed class ClusterManager
     }
 
     /// <summary>Transfer cluster memberships from one entry to another within a tenant (for merge). Returns clusters affected.</summary>
-    public int TransferMembership(string fromId, string toId, string tenantId = "")
+    public int TransferMembership(string fromId, string toId, string tenantId)
     {
         var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
         var tenant = Tenancy.Normalize(tenantId);

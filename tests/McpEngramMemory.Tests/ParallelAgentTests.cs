@@ -57,11 +57,11 @@ public class ParallelAgentTests : IDisposable
     public async Task ConcurrentShare_PreservesAllGrants()
     {
         const string ns = "shared-ns";
-        _registry.EnsureOwnership(ns, "owner-a");
+        _registry.EnsureOwnership(ns, "owner-a", tenantId: "");
 
         const int grantCount = 32;
         var tasks = Enumerable.Range(0, grantCount)
-            .Select(i => Task.Run(() => _registry.Share(ns, "owner-a", $"peer-{i:D2}", "read")))
+            .Select(i => Task.Run(() => _registry.Share(ns, "owner-a", $"peer-{i:D2}", "read", tenantId: "")))
             .ToArray();
 
         var results = await Task.WhenAll(tasks);
@@ -70,10 +70,10 @@ public class ParallelAgentTests : IDisposable
 
         // Every granted peer must still have access.
         for (int i = 0; i < grantCount; i++)
-            Assert.True(_registry.HasAccess($"peer-{i:D2}", ns), $"peer-{i:D2} lost its grant");
+            Assert.True(_registry.HasAccess($"peer-{i:D2}", ns, requiredLevel: "read", tenantId: ""), $"peer-{i:D2} lost its grant");
 
         // The owner's accessible-namespaces view must reflect ownership.
-        var owner = _registry.GetAccessibleNamespaces("owner-a");
+        var owner = _registry.GetAccessibleNamespaces("owner-a", tenantId: "");
         Assert.Contains(ns, owner.OwnedNamespaces);
     }
 
@@ -91,7 +91,7 @@ public class ParallelAgentTests : IDisposable
         var tasks = Enumerable.Range(0, callers).Select(i => Task.Run(() =>
         {
             start.Wait();
-            _registry.EnsureOwnership(ns, $"candidate-{i:D2}");
+            _registry.EnsureOwnership(ns, $"candidate-{i:D2}", tenantId: "");
         })).ToArray();
 
         start.Set();
@@ -99,7 +99,7 @@ public class ParallelAgentTests : IDisposable
 
         // Exactly one agent now owns the namespace; no grants leaked in.
         var ownerIds = Enumerable.Range(0, callers)
-            .Where(i => _registry.GetAccessibleNamespaces($"candidate-{i:D2}")
+            .Where(i => _registry.GetAccessibleNamespaces($"candidate-{i:D2}", tenantId: "")
                 .OwnedNamespaces.Contains(ns))
             .ToList();
         Assert.Single(ownerIds);
@@ -113,7 +113,7 @@ public class ParallelAgentTests : IDisposable
     public async Task ConcurrentCrossSearch_WithShareChurn_NoExceptions()
     {
         const string ns = "churn-ns";
-        _registry.EnsureOwnership(ns, "owner");
+        _registry.EnsureOwnership(ns, "owner", tenantId: "");
         _index.Upsert(MakeEntry("e1", ns, "churn test content about concurrency"));
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -123,8 +123,8 @@ public class ParallelAgentTests : IDisposable
             while (!cts.IsCancellationRequested)
             {
                 var peer = $"peer-{rng.Next(0, 8):D2}";
-                _registry.Share(ns, "owner", peer, "read");
-                _registry.Unshare(ns, "owner", peer);
+                _registry.Share(ns, "owner", peer, "read", tenantId: "");
+                _registry.Unshare(ns, "owner", peer, tenantId: "");
             }
         });
 
@@ -156,7 +156,7 @@ public class ParallelAgentTests : IDisposable
         var tasks = Enumerable.Range(0, agents).Select(a => Task.Run(() =>
         {
             var ns = $"agent-{a}-ns";
-            _registry.EnsureOwnership(ns, $"agent-{a}");
+            _registry.EnsureOwnership(ns, $"agent-{a}", tenantId: "");
             for (int i = 0; i < perAgent; i++)
                 _index.Upsert(MakeEntry($"a{a}-e{i:D3}", ns, $"agent {a} entry {i} about topic"));
         })).ToArray();
@@ -168,7 +168,7 @@ public class ParallelAgentTests : IDisposable
             var ns = $"agent-{a}-ns";
             Assert.Equal(perAgent, _index.CountInNamespace(ns));
             for (int i = 0; i < perAgent; i++)
-                Assert.NotNull(_index.Get($"a{a}-e{i:D3}", ns));
+                Assert.NotNull(_index.Get($"a{a}-e{i:D3}", ns, tenantId: ""));
         }
     }
 
@@ -181,8 +181,8 @@ public class ParallelAgentTests : IDisposable
     public async Task ParallelAgents_ConcurrentWritesToSharedNamespace_AllVisible()
     {
         const string ns = "team-ns";
-        _registry.EnsureOwnership(ns, "owner");
-        _registry.Share(ns, "owner", "peer", "write");
+        _registry.EnsureOwnership(ns, "owner", tenantId: "");
+        _registry.Share(ns, "owner", "peer", "write", tenantId: "");
 
         const int perAgent = 50;
         var ownerTask = Task.Run(() =>
@@ -229,7 +229,7 @@ public class ParallelAgentTests : IDisposable
     public async Task ConcurrentDuplicateIdInsert_NoTornWrite()
     {
         const string ns = "dup-ns";
-        _registry.EnsureOwnership(ns, "owner");
+        _registry.EnsureOwnership(ns, "owner", tenantId: "");
 
         const int rounds = 100;
         var tasks = new[] { "a", "b" }.Select(who => Task.Run(() =>
@@ -241,7 +241,7 @@ public class ParallelAgentTests : IDisposable
         await Task.WhenAll(tasks);
 
         Assert.Equal(1, _index.CountInNamespace(ns));
-        var survivor = _index.Get("same-id", ns);
+        var survivor = _index.Get("same-id", ns, tenantId: "");
         Assert.NotNull(survivor);
         Assert.StartsWith("writer ", survivor!.Text);
     }
@@ -258,8 +258,8 @@ public class ParallelAgentTests : IDisposable
     public async Task RealtimeSharing_ReaderObservesWriterEvent()
     {
         const string ns = "realtime-ns";
-        _registry.EnsureOwnership(ns, "writer");
-        _registry.Share(ns, "writer", "reader", "read");
+        _registry.EnsureOwnership(ns, "writer", tenantId: "");
+        _registry.Share(ns, "writer", "reader", "read", tenantId: "");
 
         var observed = new ConcurrentQueue<CognitiveEntry>();
         var signal = new SemaphoreSlim(0, int.MaxValue);
@@ -330,8 +330,8 @@ public class ParallelAgentTests : IDisposable
     public async Task RealtimeSharing_FanInFromMultipleWriters_NoDroppedEvents()
     {
         const string ns = "fanin-ns";
-        _registry.EnsureOwnership(ns, "owner");
-        _registry.Share(ns, "owner", "peer", "write");
+        _registry.EnsureOwnership(ns, "owner", tenantId: "");
+        _registry.Share(ns, "owner", "peer", "write", tenantId: "");
 
         const int perWriter = 40;
         var expected = new HashSet<string>(
@@ -381,7 +381,7 @@ public class ParallelAgentTests : IDisposable
     public async Task ConcurrentAccessCheck_ConsistentVisibility()
     {
         const string ns = "perm-ns";
-        _registry.EnsureOwnership(ns, "owner");
+        _registry.EnsureOwnership(ns, "owner", tenantId: "");
         _index.Upsert(MakeEntry("secret", ns, "confidential data about the project"));
 
         var tools = ToolsFor("outsider");
@@ -396,10 +396,10 @@ public class ParallelAgentTests : IDisposable
         Assert.True(beforeShare is string s0 && s0.StartsWith("Error: no accessible"),
             $"Outsider must be denied before any share; got: {beforeShare}");
 
-        _registry.Share(ns, "owner", "outsider", "read");
+        _registry.Share(ns, "owner", "outsider", "read", tenantId: "");
         Assert.IsType<CrossSearchResponse>(tools.CrossSearch(ns, "confidential data"));
 
-        _registry.Unshare(ns, "owner", "outsider");
+        _registry.Unshare(ns, "owner", "outsider", tenantId: "");
         var afterUnshare = tools.CrossSearch(ns, "confidential data");
         Assert.True(afterUnshare is string s1 && s1.StartsWith("Error: no accessible"),
             $"Outsider must be denied again after unshare; got: {afterUnshare}");
@@ -426,9 +426,9 @@ public class ParallelAgentTests : IDisposable
             var rng = new Random(42);
             while (!cts.IsCancellationRequested)
             {
-                _registry.Share(ns, "owner", "outsider", "read");
+                _registry.Share(ns, "owner", "outsider", "read", tenantId: "");
                 Thread.SpinWait(rng.Next(50, 200));
-                _registry.Unshare(ns, "owner", "outsider");
+                _registry.Unshare(ns, "owner", "outsider", tenantId: "");
                 Thread.SpinWait(rng.Next(50, 200));
             }
         });

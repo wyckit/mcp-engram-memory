@@ -166,13 +166,16 @@ public sealed class MrcrBenchmarkRunner
                 _index.Upsert(new CognitiveEntry(id, vector, ns, text, "mrcr-turn", lifecycleState: "ltm"));
             }
 
-            // 2. Hybrid search for the probe.
+            // 2. Hybrid search for the probe. The MRCR harness is single-tenant by design:
+            // its scratch namespaces live in the legacy ("") partition, so the explicit
+            // legacy tenant is the deliberate meaning here, not a forgotten default.
             var queryVector = _embedding.Embed(task.Probe);
             var retrieved = _index.Search(new SearchRequest
             {
                 Query = queryVector,
                 QueryText = task.Probe,
                 Namespace = ns,
+                TenantId = "",
                 K = options.TopK,
                 Hybrid = true,
                 Rerank = true
@@ -262,13 +265,15 @@ public sealed class MrcrBenchmarkRunner
             }
             else
             {
-                // 3. Fallback: hybrid top-K against the original probe text.
+                // 3. Fallback: hybrid top-K against the original probe text. Same as the
+                // hybrid path: the scratch namespace lives in the legacy ("") partition.
                 var queryVector = _embedding.Embed(task.Probe);
                 retrieved = _index.Search(new SearchRequest
                 {
                     Query = queryVector,
                     QueryText = task.Probe,
                     Namespace = ns,
+                    TenantId = "",
                     K = options.TopK,
                     Hybrid = true,
                     Rerank = true

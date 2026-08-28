@@ -368,10 +368,10 @@ public class CoreMemoryToolsTests : IDisposable
     {
         _tools.StoreMemory(id: "a", ns: "work", vector: new[] { 1f, 0f });
         _tools.StoreMemory(id: "b", ns: "work", vector: new[] { 0f, 1f });
-        _clusters.CreateCluster("c1", "work", new[] { "a", "b" });
+        _clusters.CreateCluster("c1", "work", new[] { "a", "b" }, label: null, tenantId: "");
 
         _tools.DeleteMemory("a");
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         Assert.Equal(1, cluster!.MemberCount);
     }
 }

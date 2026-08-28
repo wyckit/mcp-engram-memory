@@ -37,7 +37,7 @@ public sealed class GraphTools
     /// </summary>
     private string? DenyIfCannotWrite(string id)
     {
-        var entry = _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
+        var entry = _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId: _access.TenantId);
         if (entry is null || !_access.CanWrite(entry.Ns))
             return $"Error: Entry '{id}' not found.";
         return null;
@@ -54,7 +54,7 @@ public sealed class GraphTools
     {
         try
         {
-            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata, _access.TenantId);
+            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata, tenantId: _access.TenantId);
             return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.AddEdge(edge);
         }
         catch (ArgumentException ex)
@@ -71,7 +71,7 @@ public sealed class GraphTools
         [Description("Specific relation to remove (null = all).")] string? relation = null)
     {
         return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId)
-            ?? _graph.RemoveEdges(sourceId, targetId, relation, _access.TenantId);
+            ?? _graph.RemoveEdges(sourceId, targetId, relation, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "get_neighbors", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -81,7 +81,7 @@ public sealed class GraphTools
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
-        var result = _graph.GetNeighbors(id, relation, direction, _access.TenantId);
+        var result = _graph.GetNeighbors(id, relation, direction, tenantId: _access.TenantId);
 
         // Edges are tenant-scoped but span namespaces, so a neighbor can live in a namespace this
         // caller may not read. Filter, don't deny: the id the caller passed in is already known to
@@ -99,7 +99,7 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
-        var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults, _access.TenantId);
+        var result = _graph.Traverse(startId, tenantId: _access.TenantId, maxDepth: maxDepth, relation: relation, minWeight: minWeight, maxResults: maxResults);
 
         // The start entry itself is included in Entries, so it must be filtered too -
         // otherwise a caller could learn the text of an unreadable entry just by naming it

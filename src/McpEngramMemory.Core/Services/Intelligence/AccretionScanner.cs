@@ -54,14 +54,13 @@ public sealed class AccretionScanner
     /// without archiving members (GraphRAG-style hierarchical summaries).
     /// </summary>
     public AccretionScanResult ScanNamespace(
-        string ns, float epsilon = 0.15f, int minPoints = 3,
+        string ns, string tenantId, float epsilon = 0.15f, int minPoints = 3,
         bool autoSummarize = false, ClusterManager? clusters = null,
         IEmbeddingService? embedding = null,
-        int maxScanEntries = DefaultMaxScanEntries,
-        string tenantId = "")
+        int maxScanEntries = DefaultMaxScanEntries)
     {
         // Get all LTM entries in the (tenant, namespace) partition (outside _lock — uses _index's own lock)
-        var allEntries = _index.GetAllInNamespace(ns, tenantId);
+        var allEntries = _index.GetAllInNamespace(ns, tenantId: tenantId);
         var ltmEntries = allEntries
             .Where(e => e.LifecycleState == "ltm" && !e.IsSummaryNode)
             .ToList();
@@ -103,12 +102,12 @@ public sealed class AccretionScanner
                 var memberIds = cluster.Select(e => e.Id).ToList();
 
                 // Skip if this exact set of members already has a pending collapse (within this tenant)
-                if (IsAlreadyPending(memberIds, tenantId))
+                if (IsAlreadyPending(memberIds, tenantId: tenantId))
                     continue;
 
                 var centroid = ComputeCentroid(cluster);
                 var collapseId = $"collapse:{ns}:{Guid.NewGuid():N}";
-                var collapse = new PendingCollapse(collapseId, ns, memberIds, centroid, tenantId);
+                var collapse = new PendingCollapse(collapseId, ns, memberIds, centroid, tenantId: tenantId);
                 _pendingCollapses[collapseId] = collapse;
 
                 // Build member previews from the entries we already have (no _index call needed)
@@ -143,16 +142,16 @@ public sealed class AccretionScanner
                 var clusterId = $"auto:{ns}:{MemberSetFingerprint(memberIds)}";
 
                 // Check if cluster already exists for these members (within this tenant)
-                if (HasExistingCluster(clusters, ns, memberIds, tenantId))
+                if (HasExistingCluster(clusters, ns, memberIds, tenantId: tenantId))
                     continue;
 
                 var summaryText = AutoSummarizer.GenerateSummary(cluster);
                 var summaryVector = embedding.Embed(summaryText);
 
-                var createResult = clusters.CreateCluster(clusterId, ns, memberIds, "Auto-summarized", tenantId);
+                var createResult = clusters.CreateCluster(clusterId, ns, memberIds, "Auto-summarized", tenantId: tenantId);
                 if (createResult.StartsWith("Error:")) continue;
 
-                var summaryId = clusters.StoreSummary(clusterId, summaryText, summaryVector, tenantId);
+                var summaryId = clusters.StoreSummary(clusterId, summaryText, summaryVector, tenantId: tenantId);
                 if (summaryId.StartsWith("Error:")) continue;
 
                 autoSummaries.Add(new AutoSummaryInfo(clusterId, summaryId, memberIds.Count));
@@ -166,7 +165,7 @@ public sealed class AccretionScanner
     /// Resolve the namespace of a pending collapse by id, without resolving its members.
     /// Used by callers that need to namespace-gate a collapse before acting on it.
     /// </summary>
-    public string? GetPendingCollapseNs(string collapseId, string tenantId = "")
+    public string? GetPendingCollapseNs(string collapseId, string tenantId)
     {
         _lock.EnterReadLock();
         try
@@ -183,7 +182,7 @@ public sealed class AccretionScanner
     /// Resolve the namespace of a recorded collapse by id, without resolving its members.
     /// Used by callers that need to namespace-gate a collapse reversal before acting on it.
     /// </summary>
-    public string? GetCollapseRecordNs(string collapseId, string tenantId = "")
+    public string? GetCollapseRecordNs(string collapseId, string tenantId)
     {
         _lock.EnterUpgradeableReadLock();
         try
@@ -197,7 +196,7 @@ public sealed class AccretionScanner
     }
 
     /// <summary>Get all pending (non-dismissed) collapses for a namespace.</summary>
-    public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(string ns, string tenantId = "")
+    public IReadOnlyList<PendingCollapseInfo> GetPendingCollapses(string ns, string tenantId)
     {
         // Snapshot collapse data under _lock, then resolve entries via _index outside
         List<(string collapseId, string collapseNs, List<string> memberIds, int memberCount, DateTimeOffset detectedAt)> snapshot;
@@ -219,7 +218,7 @@ public sealed class AccretionScanner
             var previews = new List<CognitiveEntryInfo>();
             foreach (var memberId in memberIds)
             {
-                var entry = _index.Get(memberId, collapseNs, tenantId);
+                var entry = _index.Get(memberId, collapseNs, tenantId: tenantId);
                 if (entry is not null)
                     previews.Add(new CognitiveEntryInfo(entry.Id, entry.Text, entry.Ns, entry.Category, entry.LifecycleState));
             }
@@ -234,7 +233,7 @@ public sealed class AccretionScanner
     /// </summary>
     public string ExecuteCollapse(
         string collapseId, string summaryText, float[] summaryVector,
-        ClusterManager clusters, LifecycleEngine lifecycle, string tenantId = "")
+        ClusterManager clusters, LifecycleEngine lifecycle, string tenantId)
     {
         PendingCollapse collapse;
 
@@ -251,7 +250,7 @@ public sealed class AccretionScanner
 
         // Create cluster (in the collapse's tenant)
         var clusterId = $"accretion:{collapseId.Replace("collapse:", "")}";
-        var createResult = clusters.CreateCluster(clusterId, collapse.Ns, collapse.MemberIds, "Auto-accreted cluster", tenantId);
+        var createResult = clusters.CreateCluster(clusterId, collapse.Ns, collapse.MemberIds, "Auto-accreted cluster", tenantId: tenantId);
         if (createResult.StartsWith("Error:"))
         {
             if (!createResult.Contains("already exists"))
@@ -259,7 +258,7 @@ public sealed class AccretionScanner
         }
 
         // Store summary
-        var summaryId = clusters.StoreSummary(clusterId, summaryText, summaryVector, tenantId);
+        var summaryId = clusters.StoreSummary(clusterId, summaryText, summaryVector, tenantId: tenantId);
         if (summaryId.StartsWith("Error:"))
             return summaryId;
 
@@ -267,7 +266,7 @@ public sealed class AccretionScanner
         var previousStates = new Dictionary<string, string>();
         foreach (var memberId in collapse.MemberIds)
         {
-            var entry = _index.Get(memberId, collapse.Ns, tenantId);
+            var entry = _index.Get(memberId, collapse.Ns, tenantId: tenantId);
             if (entry is not null)
                 previousStates[memberId] = entry.LifecycleState;
         }
@@ -276,7 +275,7 @@ public sealed class AccretionScanner
         var archiveErrors = new List<string>();
         foreach (var memberId in collapse.MemberIds)
         {
-            var promoteResult = lifecycle.PromoteMemory(memberId, "archived", collapse.Ns, tenantId);
+            var promoteResult = lifecycle.PromoteMemory(memberId, "archived", collapse.Ns, tenantId: tenantId);
             if (promoteResult.StartsWith("Error:"))
                 archiveErrors.Add($"{memberId}: {promoteResult}");
         }
@@ -302,7 +301,7 @@ public sealed class AccretionScanner
     }
 
     /// <summary>Dismiss a pending collapse and mark its members to skip in future scans.</summary>
-    public string DismissCollapse(string collapseId, string tenantId = "")
+    public string DismissCollapse(string collapseId, string tenantId)
     {
         _lock.EnterWriteLock();
         try
@@ -325,7 +324,7 @@ public sealed class AccretionScanner
     /// delete the summary entry, and remove the cluster.
     /// </summary>
     public string UndoCollapse(
-        string collapseId, LifecycleEngine lifecycle, ClusterManager clusters, string tenantId = "")
+        string collapseId, LifecycleEngine lifecycle, ClusterManager clusters, string tenantId)
     {
         CollapseRecord record;
         _lock.EnterUpgradeableReadLock();
@@ -341,7 +340,7 @@ public sealed class AccretionScanner
         var restoreErrors = new List<string>();
         foreach (var (memberId, previousState) in record.PreviousStates)
         {
-            var result = lifecycle.PromoteMemory(memberId, previousState, record.Ns, tenantId);
+            var result = lifecycle.PromoteMemory(memberId, previousState, record.Ns, tenantId: tenantId);
             if (result.StartsWith("Error:"))
                 restoreErrors.Add($"{memberId}: {result}");
         }
@@ -350,10 +349,10 @@ public sealed class AccretionScanner
             return $"Error: Uncollapse '{collapseId}' partially failed during restore. Details: {string.Join(" | ", restoreErrors)}";
 
         // Delete the summary entry (tenant-scoped)
-        _index.Delete(record.SummaryEntryId, record.Ns, tenantId);
+        _index.Delete(record.SummaryEntryId, record.Ns, tenantId: tenantId);
 
         // Remove the cluster (by removing all members then the cluster itself is emptied)
-        clusters.UpdateCluster(record.ClusterId, removeIds: record.MemberIds, tenantId: tenantId);
+        clusters.UpdateCluster(record.ClusterId, addIds: null, removeIds: record.MemberIds, label: null, tenantId: tenantId);
 
         // Remove the collapse record and persist
         _lock.EnterWriteLock();
@@ -368,7 +367,7 @@ public sealed class AccretionScanner
     }
 
     /// <summary>Get all recorded collapse records for a namespace.</summary>
-    public IReadOnlyList<CollapseRecord> GetCollapseHistory(string ns, string tenantId = "")
+    public IReadOnlyList<CollapseRecord> GetCollapseHistory(string ns, string tenantId)
     {
         _lock.EnterUpgradeableReadLock();
         try
@@ -552,10 +551,10 @@ public sealed class AccretionScanner
 
     private static bool HasExistingCluster(ClusterManager clusters, string ns, List<string> memberIds, string tenantId)
     {
-        var existing = clusters.ListClusters(ns, tenantId);
+        var existing = clusters.ListClusters(ns, tenantId: tenantId);
         foreach (var cluster in existing)
         {
-            var detail = clusters.GetCluster(cluster.ClusterId, tenantId);
+            var detail = clusters.GetCluster(cluster.ClusterId, tenantId: tenantId);
             if (detail is null) continue;
             var existingIds = detail.Members.Select(m => m.Id).ToHashSet();
             if (existingIds.SetEquals(memberIds))

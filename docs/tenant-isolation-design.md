@@ -1,11 +1,14 @@
 # Tenant Isolation Design (decision 3b)
 
-Status: **Phase 1 implemented** (storage/model) · **Phase 2 implemented** (index/search/store) · **Phase 3 implemented** (graph/intelligence/lifecycle/diffusion) — see §5
+Status: **Phase 1 implemented** (storage/model) · **Phase 2 implemented** (index/search/store) · **Phase 3 implemented** (graph/intelligence/lifecycle/diffusion) — see §5 · **Explicit-tenant contract (2.0)**: the fail-open `tenantId = ""` defaults are removed — see §4.2
 
 This document describes the introduction of a first-class `tenant_id` into the Engram
-storage layer. The overriding constraint is **backward compatibility**: `mcp-engram-memory`
-is a shared library used by Conductor *and* by non-Conductor consumers, so every existing
-single-tenant caller must keep working with zero code changes.
+storage layer. The overriding constraint *during the phased rollout* was **backward
+compatibility**: `mcp-engram-memory` is a shared library used by Conductor *and* by
+non-Conductor consumers, so every existing single-tenant caller kept working with zero code
+changes. As of 2.0 that constraint is deliberately traded away on the Core API surface:
+`tenantId` is required everywhere (§4.2), because the compatibility default proved to be a
+fail-open hazard rather than a convenience.
 
 ---
 
@@ -125,14 +128,37 @@ pins stay FROZEN** — tenancy is a *filter* applied around them, never a change
 
 ### 4.2 API additions / changes
 
-| Method | Phase 2 behavior |
+> **Superseded (2.0): `tenantId` is required, never defaulted.** Phase 2 originally threaded
+> tenancy through as a trailing `string tenantId = ""` optional on every scoped API. That default
+> was retired: `""` is not a sentinel — it is the *legacy partition*, a real readable/writable
+> dataset — so a forgotten tenant argument compiled clean and silently degraded to cross-tenant
+> legacy scope. It did exactly that twice in production (`SynthesisEngine.ChunkMemories`,
+> `DiffusionKernelWarmupService`). The explicit-tenant contract is now:
+>
+> * Every tenant-scoped Core API takes a **required** `tenantId`. A missing tenant is a compile
+>   error (CS7036/CS1503), never a silent fallback.
+> * `tenantId` sits with the required parameters — placed so that no pre-change positional call
+>   can rebind a string, nullable, or reference argument into the tenant slot. Where a string or
+>   nullable optional stood in the way (`GetNeighbors`, `HasAccess`, `CreateCluster`,
+>   `UpdateCluster`, `SetDecayConfig`, `PromoteMemory`, `ApplyFeedback`, `SearchMultiple`,
+>   `Scan`, `RemoveEdges`, `SynthesizeNamespaceAsync`), that parameter became required rather
+>   than letting `tenantId` jump over it.
+> * Call sites pass the tenant **named** (`tenantId: _access.TenantId`). A literal `tenantId: ""`
+>   is an explicit, greppable claim that the call deliberately targets the legacy partition.
+> * The invariant is CI-greppable: `grep -rn 'string tenantId = ""' src/` must return **zero
+>   matches**.
+>
+> The table below is retained as the Phase 2 historical record; read each `tenantId = ""` as
+> "now a required `tenantId` parameter — pass `""` explicitly for the legacy partition".
+
+| Method | Phase 2 behavior (historical; defaults since removed) |
 |--------|------------------|
 | `Upsert(CognitiveEntry entry)` | Honors `entry.TenantId`. In-memory index is keyed by `(tenantId, ns, id)`; the entry is only visible within its tenant. |
-| `Get(string id, string ns)` | Add an optional `string tenantId = ""` overload/param. Scoped to that tenant; default `""` = legacy tenant only. |
+| `Get(string id, string ns)` | Gains a `string tenantId` parameter (originally optional, now required). Scoped to that tenant; `""` = legacy tenant only. |
 | `Get(string id)` (global) | Under tenancy, resolves **only within the legacy `""` tenant** unless a tenant is supplied. A global id-probe must never fall through to another tenant's entry — this is what makes cross-tenant id-probing impossible. |
-| `Delete(string id)` | Keep existing legacy-tenant semantics; **add `Delete(string id, string ns, string tenantId = "")`** that deletes the tenant-scoped row. The storage `ScheduleDeleteEntry` gains a tenant parameter (or a tenant-aware overload) so deletes target `(tenant_id, ns, id)`. |
-| `HybridSearch(...)` | Add `string tenantId = ""`. Candidate set is pre-filtered to the tenant *before* RRF/rerank; scoring math is untouched. |
-| `SearchMultiple(...)` | Add `string tenantId = ""`, applied to every namespace fanned out. Cross-namespace, still single-tenant per call. |
+| `Delete(string id)` | Keep existing legacy-tenant semantics; **add `Delete(string id, string ns, string tenantId)`** (tenant now required) that deletes the tenant-scoped row. The storage `ScheduleDeleteEntry` gains a tenant parameter (or a tenant-aware overload) so deletes target `(tenant_id, ns, id)`. |
+| `HybridSearch(...)` | Gains a required `string tenantId`. Candidate set is pre-filtered to the tenant *before* RRF/rerank; scoring math is untouched. |
+| `SearchMultiple(...)` | Gains a required `string tenantId`, applied to every namespace fanned out. Cross-namespace, still single-tenant per call. |
 
 ### 4.3 Storage-provider additions for Phase 2
 

@@ -197,7 +197,7 @@ public class MultiAgentToolsTests : IDisposable
     {
         var agent = new AgentIdentity("agent-owner");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
-        _registry.EnsureOwnership("myns", "agent-owner");
+        _registry.EnsureOwnership("myns", "agent-owner", tenantId: "");
 
         var result = tools.ShareNamespace("myns", "agent-reader", "read") as ShareResult;
 
@@ -231,7 +231,7 @@ public class MultiAgentToolsTests : IDisposable
     {
         var agent = new AgentIdentity("agent-owner");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
-        _registry.EnsureOwnership("myns", "agent-owner");
+        _registry.EnsureOwnership("myns", "agent-owner", tenantId: "");
 
         // First share, then unshare
         tools.ShareNamespace("myns", "agent-reader", "read");
@@ -255,11 +255,11 @@ public class MultiAgentToolsTests : IDisposable
     public void ListShared_ReturnsOnlySharedByOthers()
     {
         // agent-owner owns a namespace and shares it with agent-lister
-        _registry.EnsureOwnership("shared-ns", "agent-owner");
-        _registry.Share("shared-ns", "agent-owner", "agent-lister", "read");
+        _registry.EnsureOwnership("shared-ns", "agent-owner", tenantId: "");
+        _registry.Share("shared-ns", "agent-owner", "agent-lister", "read", tenantId: "");
 
         // agent-lister owns its own namespace (should NOT appear)
-        _registry.EnsureOwnership("own-ns", "agent-lister");
+        _registry.EnsureOwnership("own-ns", "agent-lister", tenantId: "");
 
         var agent = new AgentIdentity("agent-lister");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);

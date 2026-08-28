@@ -38,7 +38,7 @@ public sealed class ClusterTools
         try
         {
             var ids = memberIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            return _clusters.CreateCluster(clusterId, ns, ids, label, _access.TenantId);
+            return _clusters.CreateCluster(clusterId, ns, ids, label, tenantId: _access.TenantId);
         }
         catch (Exception ex)
         {
@@ -57,13 +57,13 @@ public sealed class ClusterTools
         // Cluster ownership isn't known until the cluster itself is resolved (within this tenant).
         // Same reply shape as a genuine miss - a distinct denial would confirm the cluster exists in
         // a namespace this caller cannot see.
-        var clusterNs = _clusters.GetCluster(clusterId, _access.TenantId)?.Namespace;
+        var clusterNs = _clusters.GetCluster(clusterId, tenantId: _access.TenantId)?.Namespace;
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
         var addIds = addMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var removeIds = removeMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        return _clusters.UpdateCluster(clusterId, addIds, removeIds, label, _access.TenantId);
+        return _clusters.UpdateCluster(clusterId, addIds, removeIds, label, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "store_cluster_summary", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -73,7 +73,7 @@ public sealed class ClusterTools
         [Description("Generated summary text.")] string summaryText,
         [Description("Embedding of the summary.")] float[]? summaryVector = null)
     {
-        var clusterNs = _clusters.GetCluster(clusterId, _access.TenantId)?.Namespace;
+        var clusterNs = _clusters.GetCluster(clusterId, tenantId: _access.TenantId)?.Namespace;
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
@@ -81,7 +81,7 @@ public sealed class ClusterTools
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        var result = _clusters.StoreSummary(clusterId, summaryText, resolved, _access.TenantId);
+        var result = _clusters.StoreSummary(clusterId, summaryText, resolved, tenantId: _access.TenantId);
         if (result.StartsWith("Error:")) return result;
 
         _access.ClaimOnWrite(clusterNs);
@@ -93,7 +93,7 @@ public sealed class ClusterTools
     public object GetCluster(
         [Description("Cluster ID.")] string clusterId)
     {
-        var result = _clusters.GetCluster(clusterId, _access.TenantId);
+        var result = _clusters.GetCluster(clusterId, tenantId: _access.TenantId);
         if (result is null || !_access.CanRead(result.Namespace))
             return $"Cluster '{clusterId}' not found.";
 
@@ -109,6 +109,6 @@ public sealed class ClusterTools
         [Description("Namespace.")] string ns)
     {
         if (!_access.CanRead(ns)) return Array.Empty<ClusterSummaryInfo>();
-        return _clusters.ListClusters(ns, _access.TenantId);
+        return _clusters.ListClusters(ns, tenantId: _access.TenantId);
     }
 }

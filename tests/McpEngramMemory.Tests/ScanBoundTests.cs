@@ -59,7 +59,7 @@ public class ScanBoundTests : IDisposable
         Seed(50, "big", "stm");
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
 
-        var result = scanner.Scan("big", maxScanEntries: 20);
+        var result = scanner.Scan("big", threshold: null, maxNewEdges: null, tenantId: "", maxScanEntries: 20);
 
         Assert.Equal(20, result.ScannedEntries);
         Assert.Equal(30, result.EntriesNotScanned);
@@ -71,7 +71,7 @@ public class ScanBoundTests : IDisposable
         Seed(10, "small", "stm");
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
 
-        var result = scanner.Scan("small", maxScanEntries: 20);
+        var result = scanner.Scan("small", threshold: null, maxNewEdges: null, tenantId: "", maxScanEntries: 20);
 
         Assert.Equal(10, result.ScannedEntries);
         Assert.Equal(0, result.EntriesNotScanned);
@@ -84,7 +84,7 @@ public class ScanBoundTests : IDisposable
         Seed(50, "bigltm", "ltm");
         var scanner = new AccretionScanner(_index);
 
-        var result = scanner.ScanNamespace("bigltm", maxScanEntries: 20);
+        var result = scanner.ScanNamespace("bigltm", tenantId: "", maxScanEntries: 20);
 
         Assert.Equal(20, result.ScannedCount);
         Assert.Equal(30, result.EntriesNotScanned);
@@ -96,7 +96,7 @@ public class ScanBoundTests : IDisposable
         Seed(10, "smallltm", "ltm");
         var scanner = new AccretionScanner(_index);
 
-        var result = scanner.ScanNamespace("smallltm", maxScanEntries: 20);
+        var result = scanner.ScanNamespace("smallltm", tenantId: "", maxScanEntries: 20);
 
         Assert.Equal(10, result.ScannedCount);
         Assert.Equal(0, result.EntriesNotScanned);

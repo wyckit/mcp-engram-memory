@@ -263,7 +263,7 @@ public class DebateToolsTests : IDisposable
             "Compare approaches", ["expert-a", "expert-b"], "alice-map-session"));
         var debateNs = DebateSessionManager.GetDebateNamespace("alice-map-session");
 
-        Assert.False(_registry.HasAccess("bob", debateNs, "write"));
+        Assert.False(_registry.HasAccess("bob", debateNs, "write", tenantId: LegacyTenant));
         int before = _graph.EdgeCount;
         var denied = bob.MapDebateGraph("alice-map-session",
             [new DebateEdge(panel.Perspectives[0].NodeAlias, panel.Perspectives[1].NodeAlias, "contradicts", 0.9f)]);
@@ -327,7 +327,7 @@ public class DebateToolsTests : IDisposable
         Assert.True(resolved.ArchivedCount >= 1);
 
         // Verify consensus entry stored as LTM
-        var consensus = _index.Get("consensus-full-pipeline", "decisions");
+        var consensus = _index.Get("consensus-full-pipeline", "decisions", tenantId: LegacyTenant);
         Assert.NotNull(consensus);
         Assert.Equal("ltm", consensus.LifecycleState);
         Assert.Equal("We decided to go with approach A.", consensus.Text);
@@ -370,10 +370,10 @@ public class DebateToolsTests : IDisposable
 
         var message = Assert.IsType<string>(denied);
         Assert.Contains("not found", message);
-        Assert.Null(_index.Get("consensus-alice-resolve-session", "bob-decisions"));
+        Assert.Null(_index.Get("consensus-alice-resolve-session", "bob-decisions", tenantId: LegacyTenant));
         Assert.True(_sessions.HasSession(LegacyTenant, "alice-resolve-session"));
         Assert.All(_sessions.GetAllEntryIds(LegacyTenant, "alice-resolve-session"), id =>
-            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace)?.LifecycleState));
+            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace, tenantId: LegacyTenant)?.LifecycleState));
 
         var allowed = alice.ResolveDebate(
             "alice-resolve-session", winningNode, "Alice's consensus", "alice-decisions");
@@ -419,9 +419,9 @@ public class DebateToolsTests : IDisposable
         // ...and the destructive half: nothing of A's moved.
         Assert.True(_sessions.HasSession(TenantA, sessionId));
         Assert.Equal(tenantAEntryIds, _sessions.GetAllEntryIds(TenantA, sessionId));
-        Assert.Null(_index.Get($"consensus-{sessionId}", "tenant-b-decisions", TenantB));
+        Assert.Null(_index.Get($"consensus-{sessionId}", "tenant-b-decisions", tenantId: TenantB));
         Assert.All(tenantAEntryIds, id =>
-            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace, TenantA)?.LifecycleState));
+            Assert.NotEqual("archived", _index.Get(id, panel.DebateNamespace, tenantId: TenantA)?.LifecycleState));
 
         // Over-correction control: the owning tenant still resolves its own session.
         var owner = Assert.IsType<ResolveDebateResult>(tenantA.ResolveDebate(
@@ -501,8 +501,8 @@ public class DebateToolsTests : IDisposable
         Assert.Equal(collidingId, panelB.Perspectives[0].EntryId);
         Assert.Equal(panelA.DebateNamespace, panelB.DebateNamespace);
 
-        var storedForA = _index.Get(collidingId, panelA.DebateNamespace, TenantA);
-        var storedForB = _index.Get(collidingId, panelB.DebateNamespace, TenantB);
+        var storedForA = _index.Get(collidingId, panelA.DebateNamespace, tenantId: TenantA);
+        var storedForB = _index.Get(collidingId, panelB.DebateNamespace, tenantId: TenantB);
         Assert.NotNull(storedForA);
         Assert.NotNull(storedForB);
         Assert.Contains("GraphQL", storedForA.Text ?? "");
@@ -556,7 +556,7 @@ public class DebateToolsTests : IDisposable
         Assert.Equal("decisions", resolved.ConsensusNamespace);
 
         // Verify final state
-        var consensus = _index.Get("consensus-e2e-test", "decisions");
+        var consensus = _index.Get("consensus-e2e-test", "decisions", tenantId: LegacyTenant);
         Assert.NotNull(consensus);
         Assert.Equal("ltm", consensus.LifecycleState);
         Assert.False(_sessions.HasSession(LegacyTenant, "e2e-test"));

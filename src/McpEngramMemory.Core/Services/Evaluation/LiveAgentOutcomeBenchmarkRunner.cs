@@ -204,7 +204,10 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
         AgentOutcomeTask task,
         float[] queryVector)
     {
-        var results = _index.Search(queryVector, seeded.Namespace, task.K, minScore: task.MinScore);
+        // The live agent-outcome harness is single-tenant by design: its isolated seeded
+        // namespaces live in the legacy ("") partition, so the explicit legacy tenant is the
+        // deliberate meaning here, not a forgotten default.
+        var results = _index.Search(queryVector, seeded.Namespace, tenantId: "", k: task.K, minScore: task.MinScore);
         var contextIds = ToCanonicalIds(results.Select(r => r.Id), seeded.LocalToCanonical);
         return BuildPromptContext(contextIds, seedById);
     }
@@ -224,6 +227,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             Query = queryVector,
             QueryText = task.QueryText,
             Namespace = seeded.Namespace,
+            TenantId = "",
             K = task.K,
             MinScore = task.MinScore,
             Hybrid = useHybrid,
@@ -235,6 +239,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             results = _lifecycle.DeepRecall(
                 queryVector,
                 seeded.Namespace,
+                tenantId: "",
                 k: task.K,
                 minScore: task.MinScore,
                 resurrectionThreshold: 0.7f,
@@ -339,7 +344,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
     private void CleanupSeededNamespace(SeededNamespace seeded)
     {
         foreach (var localId in seeded.LocalIds)
-            _graph.RemoveAllEdgesForEntry(localId);
+            _graph.RemoveAllEdgesForEntry(localId, tenantId: "");
 
         _index.DeleteAllInNamespace(seeded.Namespace);
     }
@@ -877,7 +882,7 @@ public sealed class LiveAgentOutcomeBenchmarkRunner
             if (localToCanonical.TryGetValue(result.Id, out var canonical) && seenCanonical.Add(canonical))
                 canonicalIds.Add(canonical);
 
-            var neighbors = _graph.GetNeighbors(result.Id);
+            var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both", tenantId: "");
             foreach (var neighbor in neighbors.Neighbors)
             {
                 if (neighbor.Entry.LifecycleState == "archived") continue;

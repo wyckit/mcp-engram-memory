@@ -54,9 +54,9 @@ public class KnowledgeGraphTests : IDisposable
     {
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("a", "b", "elaborates"));
-        _graph.RemoveEdges("a", "b", "similar_to");
+        _graph.RemoveEdges("a", "b", "similar_to", tenantId: "");
 
-        var neighbors = _graph.GetNeighbors("a", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "outgoing", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal("elaborates", neighbors.Neighbors[0].Edge.Relation);
     }
@@ -66,9 +66,9 @@ public class KnowledgeGraphTests : IDisposable
     {
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("a", "b", "elaborates"));
-        _graph.RemoveEdges("a", "b");
+        _graph.RemoveEdges("a", "b", relation: null, tenantId: "");
 
-        var neighbors = _graph.GetNeighbors("a", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "outgoing", tenantId: "");
         Assert.Empty(neighbors.Neighbors);
     }
 
@@ -77,7 +77,7 @@ public class KnowledgeGraphTests : IDisposable
     {
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("c", "a", "depends_on"));
-        int removed = _graph.RemoveAllEdgesForEntry("a");
+        int removed = _graph.RemoveAllEdgesForEntry("a", tenantId: "");
         Assert.Equal(2, removed);
         Assert.Equal(0, _graph.EdgeCount);
     }
@@ -88,7 +88,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("c", "a", "depends_on"));
 
-        var neighbors = _graph.GetNeighbors("a");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "both", tenantId: "");
         Assert.Equal(2, neighbors.Neighbors.Count);
     }
 
@@ -98,7 +98,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("c", "a", "depends_on"));
 
-        var neighbors = _graph.GetNeighbors("a", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "outgoing", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal("b", neighbors.Neighbors[0].Entry.Id);
     }
@@ -109,7 +109,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("c", "a", "depends_on"));
 
-        var neighbors = _graph.GetNeighbors("a", direction: "incoming");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "incoming", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal("c", neighbors.Neighbors[0].Entry.Id);
     }
@@ -120,7 +120,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("a", "c", "depends_on"));
 
-        var neighbors = _graph.GetNeighbors("a", relation: "similar_to", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: "similar_to", direction: "outgoing", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal("b", neighbors.Neighbors[0].Entry.Id);
     }
@@ -131,7 +131,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("b", "c", "similar_to"));
 
-        var result = _graph.Traverse("a", maxDepth: 2);
+        var result = _graph.Traverse("a", tenantId: "", maxDepth: 2);
         Assert.Equal(3, result.Entries.Count); // a, b, c
         Assert.Equal(2, result.Edges.Count);
     }
@@ -142,7 +142,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("b", "c", "similar_to"));
 
-        var result = _graph.Traverse("a", maxDepth: 1);
+        var result = _graph.Traverse("a", tenantId: "", maxDepth: 1);
         Assert.Equal(2, result.Entries.Count); // a, b only
     }
 
@@ -152,7 +152,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to", weight: 0.3f));
         _graph.AddEdge(new GraphEdge("a", "c", "similar_to", weight: 0.8f));
 
-        var result = _graph.Traverse("a", maxDepth: 1, minWeight: 0.5f);
+        var result = _graph.Traverse("a", tenantId: "", maxDepth: 1, minWeight: 0.5f);
         Assert.Equal(2, result.Entries.Count); // a, c (b filtered out)
     }
 
@@ -162,7 +162,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("b", "a", "similar_to"));
 
-        var result = _graph.Traverse("a", maxDepth: 3);
+        var result = _graph.Traverse("a", tenantId: "", maxDepth: 3);
         Assert.Equal(2, result.Entries.Count); // a, b only (no cycle)
     }
 
@@ -172,7 +172,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("c", "a", "depends_on"));
 
-        var edges = _graph.GetEdgesForEntry("a");
+        var edges = _graph.GetEdgesForEntry("a", tenantId: "");
         Assert.Equal(2, edges.Count);
     }
 
@@ -183,17 +183,17 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "c", "depends_on"));
         _graph.AddEdge(new GraphEdge("c", "a", "elaborates"));
 
-        int transferred = _graph.TransferEdges("a", "b");
+        int transferred = _graph.TransferEdges("a", "b", tenantId: "");
 
         // a->c and c->a should now be b->c and c->b
         Assert.Equal(2, transferred);
 
-        var bEdges = _graph.GetEdgesForEntry("b");
+        var bEdges = _graph.GetEdgesForEntry("b", tenantId: "");
         Assert.Contains(bEdges, e => e.SourceId == "b" && e.TargetId == "c" && e.Relation == "depends_on");
         Assert.Contains(bEdges, e => e.SourceId == "c" && e.TargetId == "b" && e.Relation == "elaborates");
 
         // a should have no edges left
-        var aEdges = _graph.GetEdgesForEntry("a");
+        var aEdges = _graph.GetEdgesForEntry("a", tenantId: "");
         Assert.Empty(aEdges);
     }
 
@@ -204,7 +204,7 @@ public class KnowledgeGraphTests : IDisposable
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
         _graph.AddEdge(new GraphEdge("a", "c", "depends_on"));
 
-        int transferred = _graph.TransferEdges("a", "b");
+        int transferred = _graph.TransferEdges("a", "b", tenantId: "");
 
         // Only a->c should transfer (a->b skipped as it would become b->b)
         Assert.Equal(1, transferred);
@@ -213,7 +213,7 @@ public class KnowledgeGraphTests : IDisposable
     [Fact]
     public void TransferEdges_NoEdges_ReturnsZero()
     {
-        int transferred = _graph.TransferEdges("a", "b");
+        int transferred = _graph.TransferEdges("a", "b", tenantId: "");
         Assert.Equal(0, transferred);
     }
 

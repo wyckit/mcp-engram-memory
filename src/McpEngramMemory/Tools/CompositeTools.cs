@@ -190,13 +190,13 @@ public sealed class CompositeTools
         {
             var states = new HashSet<string> { "stm", "ltm" };
             IReadOnlyList<CognitiveSearchResult> results = hybrid
-                ? _index.HybridSearch(vector, query, ns, k, minScore, rerank: rerank,
-                    tenantId: _access.TenantId)
+                ? _index.HybridSearch(vector, query, ns, tenantId: _access.TenantId,
+                    k: k, minScore: minScore, rerank: rerank)
                 : (rerank
-                    ? _index.Rerank(query, _index.Search(vector, ns, k * 2, minScore,
-                        summaryFirst: summaryFirst, tenantId: _access.TenantId)).Take(k).ToList()
-                    : _index.Search(vector, ns, k, minScore, summaryFirst: summaryFirst,
-                        tenantId: _access.TenantId));
+                    ? _index.Rerank(query, _index.Search(vector, ns, tenantId: _access.TenantId,
+                        k: k * 2, minScore: minScore, summaryFirst: summaryFirst)).Take(k).ToList()
+                    : _index.Search(vector, ns, tenantId: _access.TenantId,
+                        k: k, minScore: minScore, summaryFirst: summaryFirst));
 
             // Expand with graph neighbors
             var expanded = expandGraph
@@ -214,8 +214,8 @@ public sealed class CompositeTools
                 // gate goes on the mutation and not on the call: a read-only grantee gets the
                 // same rows, scores and order, and only the reported LifecycleState changes —
                 // to the truth, since nothing was promoted.
-                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f,
-                    tenantId: _access.TenantId, resurrect: _access.CanWrite(ns));
+                var deepResults = _lifecycle.DeepRecall(vector, ns, tenantId: _access.TenantId,
+                    k: k, minScore: 0.3f, resurrectionThreshold: 0.7f, resurrect: _access.CanWrite(ns));
                 if (deepResults.Count > results.Count ||
                     (deepResults.Count > 0 && (results.Count == 0 || deepResults[0].Score > results[0].Score)))
                 {
@@ -256,10 +256,10 @@ public sealed class CompositeTools
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
                 IReadOnlyList<CognitiveSearchResult> expertResults = hybrid
-                    ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace, k, minScore,
-                        rerank: rerank, tenantId: _access.TenantId)
-                    : _index.Search(vector, bestExpert.TargetNamespace, k, minScore,
-                        summaryFirst: summaryFirst, tenantId: _access.TenantId);
+                    ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace,
+                        tenantId: _access.TenantId, k: k, minScore: minScore, rerank: rerank)
+                    : _index.Search(vector, bestExpert.TargetNamespace, tenantId: _access.TenantId,
+                        k: k, minScore: minScore, summaryFirst: summaryFirst);
 
                 foreach (var r in expertResults)
                     _index.RecordAccess(r.Id, bestExpert.TargetNamespace, _access.TenantId);
@@ -446,7 +446,8 @@ public sealed class CompositeTools
 
         foreach (var result in results)
         {
-            var neighbors = _graph.GetNeighbors(result.Id, tenantId: _access.TenantId);
+            var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
+                tenantId: _access.TenantId);
             foreach (var neighbor in neighbors.Neighbors)
             {
                 if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -510,7 +511,7 @@ public sealed class CompositeTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3, tenantId: _access.TenantId);
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, tenantId: _access.TenantId, topK: k * 3);
 
         var output = new List<CognitiveSearchResult>(k);
         foreach (var (id, score) in reranked)
@@ -625,7 +626,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
+                var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (fullClusterSeen.Contains(n.Entry.Id)) continue;
@@ -633,7 +634,7 @@ public sealed class CompositeTools
                     queue.Enqueue(n.Entry.Id);
 
                     if (seen.Contains(n.Entry.Id)) continue;
-                    var entry = _index.Get(n.Entry.Id, ns, _access.TenantId);
+                    var entry = _index.Get(n.Entry.Id, ns, tenantId: _access.TenantId);
                     if (entry is null) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
@@ -675,7 +676,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
+                var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (!candidateIds.Contains(n.Entry.Id)) continue;

@@ -46,7 +46,7 @@ public class OnnxGenAiTextGeneratorTests
 
         // Exercises the new backend-injection constructor.
         var engine = new SynthesisEngine(index, clusters, generator, "qwen2.5-0.5b", "qwen2.5-0.5b");
-        var result = await engine.SynthesizeNamespaceAsync("work");
+        var result = await engine.SynthesizeNamespaceAsync("work", query: null, tenantId: "");
 
         // Unavailable backend surfaces as a descriptive error result, not an exception.
         Assert.Equal("error", result.Status);

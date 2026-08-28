@@ -42,7 +42,7 @@ public sealed class LifecycleTools
         if (existing is null || !_access.CanWrite(existing.Ns))
             return $"Error: Entry '{id}' not found.";
 
-        var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, _access.TenantId);
+        var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(existing.Ns);
         return result;
@@ -78,8 +78,9 @@ public sealed class LifecycleTools
         // Auto-resurrection is a write that this tool performs on the caller's behalf, so it is
         // gated separately - a read-only grantee gets the same rows, scores and order, and only
         // the reported LifecycleState differs, because nothing was actually moved to STM.
-        return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold,
-            queryText: text, hybrid: hybrid, rerank: rerank, tenantId: _access.TenantId,
+        return _lifecycle.DeepRecall(resolved, ns, tenantId: _access.TenantId,
+            k: k, minScore: minScore, resurrectionThreshold: resurrectionThreshold,
+            queryText: text, hybrid: hybrid, rerank: rerank,
             resurrect: _access.CanWrite(ns));
     }
 
@@ -98,7 +99,7 @@ public sealed class LifecycleTools
         // only a config hint and may point elsewhere, which would spuriously fail resolution).
         // Legacy callers keep the original behavior (null ns -> bare id lookup, default thresholds).
         string? feedbackNs = _access.TenantId.Length == 0 ? ns : existing.Ns;
-        var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, _access.TenantId);
+        var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, tenantId: _access.TenantId);
         if (result is null)
             return $"Error: Entry '{id}' not found.";
 
@@ -113,14 +114,15 @@ public sealed class LifecycleTools
         [Description("Below this, STM demotes to LTM (default: 2.0).")] float stmThreshold = 2.0f,
         [Description("Below this, LTM archives (default: -5.0).")] float archiveThreshold = -5.0f)
     {
-        return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
-            tenantId: _access.TenantId);
+        return _lifecycle.RunDecayCycle(ns, tenantId: _access.TenantId,
+            decayRate: decayRate, reinforcementWeight: reinforcementWeight,
+            stmThreshold: stmThreshold, archiveThreshold: archiveThreshold);
     }
 
     public ConsolidationResult RunConsolidation(
         [Description("Namespace to consolidate, or '*' for every non-system namespace.")] string ns)
     {
-        return _lifecycle.RunConsolidationPass(ns, _access.TenantId);
+        return _lifecycle.RunConsolidationPass(ns, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "configure_decay", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
@@ -140,7 +142,7 @@ public sealed class LifecycleTools
             return NamespaceAccess.WriteDenied(ns);
 
         var config = _lifecycle.SetDecayConfig(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
-            useSpectralDecay, subdiffusiveExponent, _access.TenantId);
+            useSpectralDecay, subdiffusiveExponent, tenantId: _access.TenantId);
         return config;
     }
 

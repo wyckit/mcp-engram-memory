@@ -68,14 +68,14 @@ public sealed class AutoLinkScanner
     /// pairs that don't already have any edge between them.
     /// </summary>
     /// <param name="ns">Namespace to scan.</param>
-    /// <param name="threshold">Optional override for the similarity threshold; defaults to the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>.</param>
-    /// <param name="maxNewEdges">Optional override for the per-scan edge cap.</param>
+    /// <param name="threshold">Similarity threshold override; pass <c>threshold: null</c> to use the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>. Required so tenantId never sits behind a nullable slot an old positional call could silently shift into.</param>
+    /// <param name="maxNewEdges">Per-scan edge cap override; pass <c>maxNewEdges: null</c> for the default cap. Required for the same reason as <paramref name="threshold"/>.</param>
+    /// <param name="tenantId">Tenant partition to scan. Pass "" for the legacy partition.</param>
     /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
-    /// <param name="tenantId">Tenant partition to scan; "" is the legacy tenant.</param>
-    public AutoLinkResult Scan(string ns, float? threshold = null, int? maxNewEdges = null,
-        int maxScanEntries = DefaultMaxScanEntries, string tenantId = "")
+    public AutoLinkResult Scan(string ns, float? threshold, int? maxNewEdges,
+        string tenantId, int maxScanEntries = DefaultMaxScanEntries)
     {
-        var entries = _index.GetAllInNamespace(ns, tenantId);
+        var entries = _index.GetAllInNamespace(ns, tenantId: tenantId);
         var nonSummary = new List<CognitiveEntry>(entries.Count);
         foreach (var e in entries)
             if (!e.IsSummaryNode && e.Vector.Length > 0) nonSummary.Add(e);
@@ -155,7 +155,7 @@ public sealed class AutoLinkScanner
     {
         // GetEdgesForEntry returns both directions for a single entry. Cheaper
         // to scan one entry's edges than fetch both and union.
-        var edges = _graph.GetEdgesForEntry(a, tenantId);
+        var edges = _graph.GetEdgesForEntry(a, tenantId: tenantId);
         foreach (var edge in edges)
         {
             if ((edge.SourceId == a && edge.TargetId == b) ||

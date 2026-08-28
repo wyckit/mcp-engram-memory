@@ -59,7 +59,7 @@ public class CompositeToolsTests : IDisposable
         Assert.Contains("stored", result.Actions);
 
         // Verify entry exists in index
-        var entry = _index.Get("test-1", "myns");
+        var entry = _index.Get("test-1", "myns", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("This is a test memory about SIMD operations", entry!.Text);
     }
@@ -97,7 +97,7 @@ public class CompositeToolsTests : IDisposable
     {
         _tools.Remember("cat-test", "myns", "Architecture decision for data layer", category: "architecture");
 
-        var entry = _index.Get("cat-test", "myns");
+        var entry = _index.Get("cat-test", "myns", tenantId: "");
         Assert.Equal("architecture", entry!.Category);
     }
 
@@ -106,7 +106,7 @@ public class CompositeToolsTests : IDisposable
     {
         _tools.Remember("ltm-test", "myns", "Stable architecture pattern", lifecycleState: "ltm");
 
-        var entry = _index.Get("ltm-test", "myns");
+        var entry = _index.Get("ltm-test", "myns", tenantId: "");
         Assert.Equal("ltm", entry!.LifecycleState);
     }
 
@@ -169,7 +169,7 @@ public class CompositeToolsTests : IDisposable
         Assert.Contains("stored as ltm lesson", result.Actions);
 
         // Verify it's stored as LTM
-        var entry = _index.Get(result.Id, "myns");
+        var entry = _index.Get(result.Id, "myns", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("ltm", entry!.LifecycleState);
         Assert.Equal("lesson", entry.Category);
@@ -251,7 +251,7 @@ public class CompositeToolsTests : IDisposable
         Assert.NotNull(result);
         Assert.Equal("stored", result!.Status);
 
-        var entry = _index.Get("meta-array", "myns");
+        var entry = _index.Get("meta-array", "myns", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("[\"a\",\"b\"]", entry!.Metadata["artifacts"]);
         Assert.Equal("claude", entry.Metadata["author"]);
@@ -270,7 +270,7 @@ public class CompositeToolsTests : IDisposable
         Assert.NotNull(result);
         Assert.Equal("stored", result!.Status);
 
-        var entry = _index.Get("meta-object", "myns");
+        var entry = _index.Get("meta-object", "myns", tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("{\"depth\":3,\"enabled\":true}", entry!.Metadata["config"]);
     }

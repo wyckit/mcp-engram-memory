@@ -50,8 +50,8 @@ public class CognitiveIndexTenantTests : IDisposable
         _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
         _index.Upsert(Entry("shared", new[] { 0f, 1f }, "work", TenantB, text: "bravo"));
 
-        var a = _index.Get("shared", "work", TenantA);
-        var b = _index.Get("shared", "work", TenantB);
+        var a = _index.Get("shared", "work", tenantId: TenantA);
+        var b = _index.Get("shared", "work", tenantId: TenantB);
 
         Assert.NotNull(a);
         Assert.NotNull(b);
@@ -72,8 +72,8 @@ public class CognitiveIndexTenantTests : IDisposable
         // Overwrite only tenant A's entry.
         _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA, text: "updated-a"));
 
-        Assert.Equal("updated-a", _index.Get("shared", "work", TenantA)!.Text);
-        Assert.Equal("original-b", _index.Get("shared", "work", TenantB)!.Text);
+        Assert.Equal("updated-a", _index.Get("shared", "work", tenantId: TenantA)!.Text);
+        Assert.Equal("original-b", _index.Get("shared", "work", tenantId: TenantB)!.Text);
     }
 
     [Fact]
@@ -135,8 +135,8 @@ public class CognitiveIndexTenantTests : IDisposable
     {
         _index.Upsert(Entry("only-a", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
 
-        Assert.Null(_index.Get("only-a", "work", TenantB));   // wrong tenant
-        Assert.Null(_index.Get("only-a", "work"));            // legacy tenant
+        Assert.Null(_index.Get("only-a", "work", tenantId: TenantB)); // wrong tenant
+        Assert.Null(_index.Get("only-a", "work", tenantId: ""));      // legacy tenant
         Assert.Null(_index.Get("only-a"));                    // global (legacy-only) resolver
     }
 
@@ -160,8 +160,8 @@ public class CognitiveIndexTenantTests : IDisposable
     {
         _index.Upsert(Entry("x", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
 
-        Assert.False(_index.Delete("x", "other", TenantA)); // right tenant, wrong ns
-        Assert.NotNull(_index.Get("x", "work", TenantA));   // still present
+        Assert.False(_index.Delete("x", "other", tenantId: TenantA)); // right tenant, wrong ns
+        Assert.NotNull(_index.Get("x", "work", tenantId: TenantA));   // still present
     }
 
     [Fact]
@@ -169,8 +169,8 @@ public class CognitiveIndexTenantTests : IDisposable
     {
         _index.Upsert(Entry("x", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
 
-        Assert.False(_index.Delete("x", "work", TenantB)); // right ns, wrong tenant
-        Assert.NotNull(_index.Get("x", "work", TenantA));  // still present
+        Assert.False(_index.Delete("x", "work", tenantId: TenantB)); // right ns, wrong tenant
+        Assert.NotNull(_index.Get("x", "work", tenantId: TenantA));  // still present
     }
 
     [Fact]
@@ -179,11 +179,11 @@ public class CognitiveIndexTenantTests : IDisposable
         _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
         _index.Upsert(Entry("shared", new[] { 0f, 1f }, "work", TenantB, text: "bravo"));
 
-        Assert.True(_index.Delete("shared", "work", TenantA));
+        Assert.True(_index.Delete("shared", "work", tenantId: TenantA));
 
-        Assert.Null(_index.Get("shared", "work", TenantA));      // gone
-        Assert.NotNull(_index.Get("shared", "work", TenantB));   // untouched
-        Assert.Equal("bravo", _index.Get("shared", "work", TenantB)!.Text);
+        Assert.Null(_index.Get("shared", "work", tenantId: TenantA));      // gone
+        Assert.NotNull(_index.Get("shared", "work", tenantId: TenantB));   // untouched
+        Assert.Equal("bravo", _index.Get("shared", "work", tenantId: TenantB)!.Text);
     }
 
     [Fact]
@@ -196,9 +196,9 @@ public class CognitiveIndexTenantTests : IDisposable
         // Global (tenant-less) delete only reaches the legacy entry.
         Assert.True(_index.Delete("shared"));
 
-        Assert.Null(_index.Get("shared"));                     // legacy gone
-        Assert.Null(_index.Get("shared", "work"));             // legacy gone
-        Assert.NotNull(_index.Get("shared", "work", TenantA)); // tenant A untouched
+        Assert.Null(_index.Get("shared"));                              // legacy gone
+        Assert.Null(_index.Get("shared", "work", tenantId: ""));        // legacy gone
+        Assert.NotNull(_index.Get("shared", "work", tenantId: TenantA)); // tenant A untouched
     }
 
     // ── Global tenant-less APIs resolve strictly within the legacy tenant ──
@@ -224,7 +224,7 @@ public class CognitiveIndexTenantTests : IDisposable
 
         Assert.Null(_index.Get("only-a"));
         Assert.False(_index.Delete("only-a"));
-        Assert.NotNull(_index.Get("only-a", "work", TenantA)); // reachable only via explicit tenant
+        Assert.NotNull(_index.Get("only-a", "work", tenantId: TenantA)); // reachable only via explicit tenant
     }
 
     [Fact]
@@ -233,10 +233,10 @@ public class CognitiveIndexTenantTests : IDisposable
         _index.Upsert(Entry("legacy", new[] { 1f, 0f }, "work", "", text: "legacy"));
         _index.Upsert(Entry("tenant", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
 
-        // No-tenant search sees only the legacy entry.
+        // The explicit legacy partition ("") sees only the legacy entry.
         var legacy = _index.Search(new SearchRequest
         {
-            Query = new[] { 1f, 0f }, Namespace = "work", K = 10
+            Query = new[] { 1f, 0f }, Namespace = "work", K = 10, TenantId = ""
         });
 
         Assert.Single(legacy);
@@ -258,9 +258,9 @@ public class CognitiveIndexTenantTests : IDisposable
         using var persistence2 = new PersistenceManager(_testDataPath, debounceMs: 50);
         using var index2 = new CognitiveIndex(persistence2);
 
-        Assert.Equal("alpha", index2.Get("shared", "work", TenantA)!.Text);
-        Assert.Equal("bravo", index2.Get("shared", "work", TenantB)!.Text);
-        Assert.Equal("legacy", index2.Get("shared", "work")!.Text);
+        Assert.Equal("alpha", index2.Get("shared", "work", tenantId: TenantA)!.Text);
+        Assert.Equal("bravo", index2.Get("shared", "work", tenantId: TenantB)!.Text);
+        Assert.Equal("legacy", index2.Get("shared", "work", tenantId: "")!.Text);
         Assert.Equal("legacy", index2.Get("shared")!.Text); // global resolver → legacy only
     }
 
@@ -275,8 +275,8 @@ public class CognitiveIndexTenantTests : IDisposable
             Entry("shared", new[] { 0f, 1f }, "work", TenantB, text: "bravo"),
         });
 
-        Assert.Equal("alpha", _index.Get("shared", "work", TenantA)!.Text);
-        Assert.Equal("bravo", _index.Get("shared", "work", TenantB)!.Text);
+        Assert.Equal("alpha", _index.Get("shared", "work", tenantId: TenantA)!.Text);
+        Assert.Equal("bravo", _index.Get("shared", "work", tenantId: TenantB)!.Text);
     }
 
     // Bulk reads, discovery and lifecycle counts stay inside one tenant.
@@ -337,7 +337,7 @@ public class CognitiveIndexTenantTests : IDisposable
 
         Assert.Equal(partitionSize, _index.CountInNamespace("work", TenantB));
         Assert.Equal("bravo partition document 7",
-            _index.Get("shared-007", "work", TenantB)!.Text);
+            _index.Get("shared-007", "work", tenantId: TenantB)!.Text);
         var tenantBResults = _index.Search(new SearchRequest
         {
             Query = new[] { 0f, 1f }, QueryText = "bravo partition", Namespace = "work",
@@ -352,7 +352,7 @@ public class CognitiveIndexTenantTests : IDisposable
         Assert.Equal(0, index2.CountInNamespace("work", TenantA));
         Assert.Equal(partitionSize, index2.CountInNamespace("work", TenantB));
         Assert.Equal("bravo partition document 7",
-            index2.Get("shared-007", "work", TenantB)!.Text);
+            index2.Get("shared-007", "work", tenantId: TenantB)!.Text);
     }
 
     [Fact]
@@ -361,21 +361,21 @@ public class CognitiveIndexTenantTests : IDisposable
         _index.Upsert(Entry("shared", new[] { 1f, 0f }, "work", TenantA, text: "alpha"));
         _index.Upsert(Entry("shared", new[] { 0f, 1f }, "work", TenantB, text: "bravo"));
 
-        int tenantBAccessCount = _index.Get("shared", "work", TenantB)!.AccessCount;
+        int tenantBAccessCount = _index.Get("shared", "work", tenantId: TenantB)!.AccessCount;
         _index.RecordAccess("shared", "work", TenantA);
-        Assert.Equal(2, _index.Get("shared", "work", TenantA)!.AccessCount);
-        Assert.Equal(tenantBAccessCount, _index.Get("shared", "work", TenantB)!.AccessCount);
+        Assert.Equal(2, _index.Get("shared", "work", tenantId: TenantA)!.AccessCount);
+        Assert.Equal(tenantBAccessCount, _index.Get("shared", "work", tenantId: TenantB)!.AccessCount);
 
         Assert.True(_index.SetLifecycleState("shared", "ltm", "work", TenantA));
-        Assert.Equal("ltm", _index.Get("shared", "work", TenantA)!.LifecycleState);
-        Assert.Equal("stm", _index.Get("shared", "work", TenantB)!.LifecycleState);
+        Assert.Equal("ltm", _index.Get("shared", "work", tenantId: TenantA)!.LifecycleState);
+        Assert.Equal("stm", _index.Get("shared", "work", tenantId: TenantB)!.LifecycleState);
 
         Assert.True(_index.SetActivationEnergyAndState(
             "shared", 4.5f, "archived", "work", TenantA));
-        Assert.Equal(4.5f, _index.Get("shared", "work", TenantA)!.ActivationEnergy);
-        Assert.Equal("archived", _index.Get("shared", "work", TenantA)!.LifecycleState);
-        Assert.Equal(0f, _index.Get("shared", "work", TenantB)!.ActivationEnergy);
-        Assert.Equal("stm", _index.Get("shared", "work", TenantB)!.LifecycleState);
+        Assert.Equal(4.5f, _index.Get("shared", "work", tenantId: TenantA)!.ActivationEnergy);
+        Assert.Equal("archived", _index.Get("shared", "work", tenantId: TenantA)!.LifecycleState);
+        Assert.Equal(0f, _index.Get("shared", "work", tenantId: TenantB)!.ActivationEnergy);
+        Assert.Equal("stm", _index.Get("shared", "work", tenantId: TenantB)!.LifecycleState);
     }
 
     [Fact]
@@ -389,11 +389,11 @@ public class CognitiveIndexTenantTests : IDisposable
         Assert.Equal("unique-a", _index.GetForTenant("unique", TenantA)!.Text);
         Assert.Null(_index.GetForTenant("duplicate", TenantA));
         Assert.False(_index.DeleteForTenant("duplicate", TenantA));
-        Assert.NotNull(_index.Get("duplicate", "work", TenantA));
-        Assert.NotNull(_index.Get("duplicate", "personal", TenantA));
+        Assert.NotNull(_index.Get("duplicate", "work", tenantId: TenantA));
+        Assert.NotNull(_index.Get("duplicate", "personal", tenantId: TenantA));
 
         Assert.True(_index.DeleteForTenant("unique", TenantA));
-        Assert.Null(_index.Get("unique", "work", TenantA));
-        Assert.Equal("unique-b", _index.Get("unique", "work", TenantB)!.Text);
+        Assert.Null(_index.Get("unique", "work", tenantId: TenantA));
+        Assert.Equal("unique-b", _index.Get("unique", "work", tenantId: TenantB)!.Text);
     }
 }

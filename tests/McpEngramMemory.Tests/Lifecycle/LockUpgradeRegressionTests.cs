@@ -166,7 +166,7 @@ public class LockUpgradeRegressionTests : IDisposable
             // Run multiple passes so the maintenance work overlaps with writers.
             for (int pass = 0; pass < 3; pass++)
             {
-                try { _lifecycle.RunConsolidationPass("ns-a"); }
+                try { _lifecycle.RunConsolidationPass("ns-a", tenantId: ""); }
                 catch (InvalidOperationException) { /* eigensolver numerical noise under concurrent load — not a deadlock */ }
             }
         });
@@ -266,7 +266,7 @@ public class LockUpgradeRegressionTests : IDisposable
         {
             startGate.Wait();
             for (int pass = 0; pass < 4; pass++)
-                _lifecycle.RunDecayCycle("ns-decay-a");
+                _lifecycle.RunDecayCycle("ns-decay-a", tenantId: "");
         });
 
         var bLatencies = new ConcurrentBag<long>();
@@ -327,7 +327,7 @@ public class LockUpgradeRegressionTests : IDisposable
         {
             startGate.Wait();
             for (int i = 0; i < 3; i++)
-                scanner.Scan("ns-autolink");
+                scanner.Scan("ns-autolink", threshold: null, maxNewEdges: null, tenantId: "");
         });
 
         var latencies = new ConcurrentBag<long>();
@@ -401,7 +401,7 @@ public class LockUpgradeRegressionTests : IDisposable
         {
             startGate.Wait();
             for (int i = 0; i < 2; i++)
-                accretion.ScanNamespace("ns-accretion", epsilon: 0.15f, minPoints: 3);
+                accretion.ScanNamespace("ns-accretion", tenantId: "", epsilon: 0.15f, minPoints: 3);
         });
 
         var bLatencies = new ConcurrentBag<long>();
@@ -476,10 +476,10 @@ public class LockUpgradeRegressionTests : IDisposable
 
         var maintenance = new[]
         {
-            MaintenanceLoop(() => { _lifecycle.RunDecayCycle("stress-a"); return true; }),
-            MaintenanceLoop(() => { _lifecycle.RunConsolidationPass("stress-a"); return true; }),
-            MaintenanceLoop(() => { autoLink.Scan("stress-b"); return true; }),
-            MaintenanceLoop(() => { accretion.ScanNamespace("stress-b"); return true; }),
+            MaintenanceLoop(() => { _lifecycle.RunDecayCycle("stress-a", tenantId: ""); return true; }),
+            MaintenanceLoop(() => { _lifecycle.RunConsolidationPass("stress-a", tenantId: ""); return true; }),
+            MaintenanceLoop(() => { autoLink.Scan("stress-b", threshold: null, maxNewEdges: null, tenantId: ""); return true; }),
+            MaintenanceLoop(() => { accretion.ScanNamespace("stress-b", tenantId: ""); return true; }),
         };
 
         // Foreground writers to both namespaces

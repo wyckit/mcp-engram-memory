@@ -55,7 +55,7 @@ public sealed class ConsolidationBackgroundService : BackgroundService
                 int promotions = 0, archivals = 0;
                 foreach (var tenant in _lifecycle.GetAllTenants())
                 {
-                    var result = _lifecycle.RunConsolidationPass("*", tenant);
+                    var result = _lifecycle.RunConsolidationPass("*", tenantId: tenant);
                     entriesProcessed += result.ProcessedEntries;
                     promotions += result.StmToLtm;
                     archivals += result.LtmToArchived;

@@ -35,9 +35,9 @@ public sealed class SpreadingActivationService
     /// </summary>
     /// <param name="id">The accessed memory's ID.</param>
     /// <param name="ns">The namespace of the accessed memory.</param>
+    /// <param name="tenantId">Tenant whose graph/cluster structures to traverse. Pass "" for the legacy partition.</param>
     /// <param name="baseEnergy">Base energy to propagate (default 1.0).</param>
-    /// <param name="tenantId">Tenant whose graph/cluster structures to traverse; "" is the legacy tenant.</param>
-    public SpreadingResult PropagateAccess(string id, string ns, float baseEnergy = 1.0f, string tenantId = "")
+    public SpreadingResult PropagateAccess(string id, string ns, string tenantId, float baseEnergy = 1.0f)
     {
         // An id alone is not an identity — ids are unique only per (tenant, namespace). Topology
         // (graph adjacency, cluster membership) hands back bare ids, so every target is accumulated
@@ -78,7 +78,7 @@ public sealed class SpreadingActivationService
     private bool ApplyBoost(string targetId, string targetNs, float boost, string tenantId)
         => tenantId.Length == 0
             ? _index.BoostActivationEnergy(targetId, targetNs, boost)
-            : _index.BoostActivationEnergy(targetId, targetNs, boost, tenantId);
+            : _index.BoostActivationEnergy(targetId, targetNs, boost, tenantId: tenantId);
 
     /// <summary>
     /// Recursive graph-based energy propagation with fan-out attenuation and depth cutoff.
@@ -88,7 +88,7 @@ public sealed class SpreadingActivationService
         if (depth >= MaxPropagationDepth || energy < MinPropagationThreshold)
             return;
 
-        var neighborsResult = _graph.GetNeighbors(id, tenantId: tenantId);
+        var neighborsResult = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: tenantId);
         int nodeDegree = neighborsResult.Neighbors.Count;
 
         foreach (var neighbor in neighborsResult.Neighbors)
@@ -115,11 +115,11 @@ public sealed class SpreadingActivationService
     /// </summary>
     private void PropagateCluster(string id, float baseEnergy, Dictionary<(string Ns, string Id), float> boosted, string tenantId)
     {
-        var clusterIds = _clusters.GetClustersForEntry(id, tenantId);
+        var clusterIds = _clusters.GetClustersForEntry(id, tenantId: tenantId);
 
         foreach (var clusterId in clusterIds)
         {
-            var clusterInfo = _clusters.GetCluster(clusterId, tenantId);
+            var clusterInfo = _clusters.GetCluster(clusterId, tenantId: tenantId);
             if (clusterInfo is null) continue;
 
             // Boost cluster summary node (full boost). A CognitiveSearchResult carries no namespace,

@@ -74,7 +74,12 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
             // the failure per graph revision, so subsequent sweeps rethrow cheaply.
             try
             {
-                var basis = _kernel.GetBasis(ns);
+                // KNOWN GAP (tracked follow-up to issue #20): this sweep still enumerates the
+                // legacy no-tenant namespace list, so only the legacy partition ("") gets
+                // pre-warmed — tenant-scoped bases warm lazily on first read instead. The fix
+                // is a per-tenant sweep (GetAllTenants -> GetNamespaces(tenant) -> GetBasis),
+                // deferred so this commit stays purely mechanical.
+                var basis = _kernel.GetBasis(ns, tenantId: "");
                 if (basis is not null) warmed++;
                 else bypassed++;
             }

@@ -53,9 +53,13 @@ public sealed class SynthesisEngine
     /// Synthesize all memories in a namespace into a dense summary.
     /// Uses map-reduce: chunks memories → maps each to a summary → reduces summaries into synthesis.
     /// </summary>
+    // tenantId sits ahead of the optional block (and query lost its default) so that no
+    // pre-change positional call can rebind a query string into the tenant slot: old calls now
+    // fail with a missing-argument or type error instead of silently re-scoping to the legacy
+    // "" partition. Callers without a focus query pass `query: null`; `ct` stays optional and last.
     public async Task<SynthesisResult> SynthesizeNamespaceAsync(
-        string ns, string? query = null, int maxEntries = 200,
-        string tenantId = "", CancellationToken ct = default)
+        string ns, string? query, string tenantId, int maxEntries = 200,
+        CancellationToken ct = default)
     {
         // 1. Check backend availability (Ollama daemon or in-process ONNX model).
         bool available = await _generator.IsAvailableAsync(_mapModel, ct);
@@ -74,7 +78,7 @@ public sealed class SynthesisEngine
         }
 
         // 2. Gather memories (within this tenant)
-        var entries = _index.GetAllInNamespace(ns, tenantId)
+        var entries = _index.GetAllInNamespace(ns, tenantId: tenantId)
             .Where(e => !e.IsSummaryNode && e.LifecycleState is "stm" or "ltm")
             .OrderByDescending(e => e.AccessCount)
             .ThenByDescending(e => e.ActivationEnergy)
@@ -86,7 +90,7 @@ public sealed class SynthesisEngine
                 Error: "No active memories found in namespace.");
 
         // 3. Chunk memories (prefer cluster boundaries)
-        var chunks = ChunkMemories(entries, ns, tenantId);
+        var chunks = ChunkMemories(entries, ns, tenantId: tenantId);
 
         // 4. Map phase: summarize each chunk in parallel
         var mapChannel = Channel.CreateBounded<MemoryChunk>(ChannelCapacity);
@@ -149,10 +153,10 @@ public sealed class SynthesisEngine
         var assigned = new HashSet<string>();
 
         // First pass: group by cluster membership
-        var clusterList = _clusters.ListClusters(ns, tenantId);
+        var clusterList = _clusters.ListClusters(ns, tenantId: tenantId);
         foreach (var clusterInfo in clusterList)
         {
-            var cluster = _clusters.GetCluster(clusterInfo.ClusterId, tenantId);
+            var cluster = _clusters.GetCluster(clusterInfo.ClusterId, tenantId: tenantId);
             if (cluster is null) continue;
 
             // Bare-id member match is safe here precisely because both sides are now pinned to the

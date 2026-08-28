@@ -315,11 +315,11 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>
     /// Get an entry by ID within a specific namespace and tenant. Per-partition read lock.
-    /// The optional <paramref name="tenantId"/> defaults to the legacy tenant (""), so existing
-    /// two-argument callers resolve exactly within the legacy partition as before. An id that
-    /// exists only under a different tenant returns null — cross-tenant id-probing is impossible.
+    /// <paramref name="tenantId"/> is required — pass "" to resolve within the legacy partition.
+    /// An id that exists only under a different tenant returns null — cross-tenant id-probing
+    /// is impossible.
     /// </summary>
-    public CognitiveEntry? Get(string id, string ns, string tenantId = "")
+    public CognitiveEntry? Get(string id, string ns, string tenantId)
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
@@ -375,7 +375,7 @@ public sealed class CognitiveIndex : IDisposable
 
         foreach (var ns in namespaceSnapshot ?? GetNamespaces(tenantId))
         {
-            var candidate = Get(id, ns, tenantId);
+            var candidate = Get(id, ns, tenantId: tenantId);
             if (candidate is null)
                 continue;
             if (++found == 2)
@@ -427,9 +427,9 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>
     /// Delete an entry scoped to a specific (tenant, ns) partition. Returns false when the entry is
     /// not present in exactly that partition — including when the id exists only under a different
-    /// tenant or a different namespace. The default tenant ("") targets the legacy partition.
+    /// tenant or a different namespace. Pass "" to target the legacy partition.
     /// </summary>
-    public bool Delete(string id, string ns, string tenantId = "")
+    public bool Delete(string id, string ns, string tenantId)
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
@@ -468,7 +468,7 @@ public sealed class CognitiveIndex : IDisposable
     public bool DeleteForTenant(string id, string tenantId)
     {
         var matchNamespace = ScanForTenant(id, tenantId, namespaceSnapshot: null).Ns;
-        return matchNamespace is not null && Delete(id, matchNamespace, tenantId);
+        return matchNamespace is not null && Delete(id, matchNamespace, tenantId: tenantId);
     }
 
     // ── Search ──
@@ -598,11 +598,14 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.</summary>
+    /// <summary>
+    /// Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.
+    /// <paramref name="tenantId"/> is required and sits directly after the namespace so the
+    /// tenant-qualified identity reads first; pass "" for the legacy partition.
+    /// </summary>
     public IReadOnlyList<CognitiveSearchResult> Search(
-        float[] query, string ns, int k = 5, float minScore = 0f,
-        string? category = null, HashSet<string>? includeStates = null, bool summaryFirst = false,
-        string tenantId = "")
+        float[] query, string ns, string tenantId, int k = 5, float minScore = 0f,
+        string? category = null, HashSet<string>? includeStates = null, bool summaryFirst = false)
         => Search(new SearchRequest
         {
             Query = query, Namespace = ns, K = k, MinScore = minScore,
@@ -611,14 +614,14 @@ public sealed class CognitiveIndex : IDisposable
         });
 
     /// <summary>
-    /// Hybrid search combining vector + BM25 via Reciprocal Rank Fusion. The optional
-    /// <paramref name="tenantId"/> scopes the search to a tenant partition (default "" = legacy
+    /// Hybrid search combining vector + BM25 via Reciprocal Rank Fusion. The required
+    /// <paramref name="tenantId"/> scopes the search to a tenant partition ("" = legacy
     /// tenant, i.e. identical to the pre-tenant behavior). RRF fusion parameters are unchanged.
     /// </summary>
     public IReadOnlyList<CognitiveSearchResult> HybridSearch(
-        float[] query, string queryText, string ns, int k = 5, float minScore = 0f,
+        float[] query, string queryText, string ns, string tenantId, int k = 5, float minScore = 0f,
         string? category = null, HashSet<string>? includeStates = null,
-        bool rerank = false, int rrfK = 60, string tenantId = "")
+        bool rerank = false, int rrfK = 60)
         => Search(new SearchRequest
         {
             Query = query, QueryText = queryText, Namespace = ns, K = k, MinScore = minScore,
@@ -631,10 +634,10 @@ public sealed class CognitiveIndex : IDisposable
         string queryText, IReadOnlyList<CognitiveSearchResult> results)
         => _reranker.Rerank(queryText, results);
 
-    /// <summary>Search ALL states including archived (for deep_recall).</summary>
+    /// <summary>Search ALL states including archived (for deep_recall). Pass tenantId "" for the legacy partition.</summary>
     public IReadOnlyList<CognitiveSearchResult> SearchAllStates(
-        float[] query, string ns, int k = 10, float minScore = 0.3f,
-        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "")
+        float[] query, string ns, string tenantId, int k = 10, float minScore = 0.3f,
+        string? queryText = null, bool hybrid = false, bool rerank = false)
         => Search(new SearchRequest
         {
             Query = query, Namespace = ns, K = k, MinScore = minScore,
@@ -645,13 +648,17 @@ public sealed class CognitiveIndex : IDisposable
     /// <summary>
     /// Search across multiple namespaces and merge results using Reciprocal Rank Fusion.
     /// Returns results annotated with their source namespace.
+    /// <paramref name="queryText"/> is required-but-nullable rather than defaulted: tenantId may
+    /// not jump over a string slot (an old positional query text would silently bind as the
+    /// tenant), so callers without text pass <c>queryText: null</c> explicitly.
+    /// <paramref name="tenantId"/> is required; pass "" for the legacy partition.
     /// </summary>
     public IReadOnlyList<Models.CrossSearchResult> SearchMultiple(
-        float[] query, IReadOnlyList<string> namespaces, string? queryText = null,
+        float[] query, IReadOnlyList<string> namespaces, string? queryText, string tenantId,
         int k = 5, float minScore = 0f, string? category = null,
         HashSet<string>? includeStates = null, bool hybrid = false,
         bool rerank = false, int rrfK = 60, bool summaryFirst = false,
-        bool diversity = false, float diversityLambda = 0.5f, string tenantId = "")
+        bool diversity = false, float diversityLambda = 0.5f)
     {
         if (namespaces.Count == 0)
             return Array.Empty<Models.CrossSearchResult>();
@@ -686,7 +693,7 @@ public sealed class CognitiveIndex : IDisposable
             }
             else if (hybrid && queryText is not null)
             {
-                nsResults = HybridSearch(query, queryText, ns, k, minScore, category, includeStates, rerank, rrfK, tenantId);
+                nsResults = HybridSearch(query, queryText, ns, tenantId: tenantId, k, minScore, category, includeStates, rerank, rrfK);
             }
             else
             {
@@ -733,9 +740,9 @@ public sealed class CognitiveIndex : IDisposable
 
     // ── Duplicate Detection (delegated to DuplicateDetector) ──
 
-    /// <summary>Find near-duplicates for a single entry within its namespace (O(N) scan).</summary>
+    /// <summary>Find near-duplicates for a single entry within its namespace (O(N) scan). Pass tenantId "" for the legacy partition.</summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicatesForEntry(
-        string ns, string entryId, float threshold = 0.95f, string tenantId = "")
+        string ns, string entryId, string tenantId, float threshold = 0.95f)
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
@@ -753,10 +760,10 @@ public sealed class CognitiveIndex : IDisposable
         finally { nsLock.ExitReadLock(); }
     }
 
-    /// <summary>Find near-duplicate entries within a namespace by pairwise cosine similarity.</summary>
+    /// <summary>Find near-duplicate entries within a namespace by pairwise cosine similarity. Pass tenantId "" for the legacy partition.</summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
-        string ns, float threshold = 0.95f, string? category = null,
-        HashSet<string>? includeStates = null, int maxResults = 100, string tenantId = "")
+        string ns, string tenantId, float threshold = 0.95f, string? category = null,
+        HashSet<string>? includeStates = null, int maxResults = 100)
     {
         if (threshold < 0f || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), "Threshold must be between 0 and 1.");
@@ -1211,8 +1218,8 @@ public sealed class CognitiveIndex : IDisposable
         }
     }
 
-    /// <summary>Re-embed all entries in a namespace. Per-namespace write lock.</summary>
-    public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding, string tenantId = "")
+    /// <summary>Re-embed all entries in a namespace. Per-namespace write lock. Pass tenantId "" for the legacy partition.</summary>
+    public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding, string tenantId)
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);

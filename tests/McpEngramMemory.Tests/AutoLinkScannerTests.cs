@@ -59,7 +59,7 @@ public class AutoLinkScannerTests : IDisposable
             _index.Upsert(new CognitiveEntry($"f_{f}", RandomUnit(rng, dim), ns, $"filler {f}"));
 
         var edgesBefore = _graph.EdgeCount;
-        var result = _scanner.Scan(ns, threshold: 0.85f);
+        var result = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: null, tenantId: "");
         var edgesAfter = _graph.EdgeCount;
 
         Assert.True(result.EdgesCreated >= pairs,
@@ -69,7 +69,7 @@ public class AutoLinkScannerTests : IDisposable
         // Each planted pair should now have an edge between them.
         for (int p = 0; p < pairs; p++)
         {
-            var neighbors = _graph.GetNeighbors($"a_{p}", direction: "both");
+            var neighbors = _graph.GetNeighbors($"a_{p}", relation: null, direction: "both", tenantId: "");
             Assert.Contains(neighbors.Neighbors, n => n.Entry.Id == $"b_{p}");
         }
     }
@@ -98,14 +98,14 @@ public class AutoLinkScannerTests : IDisposable
         // Manual contradicts edge between x and y.
         _graph.AddEdge(new GraphEdge("x", "y", "contradicts", 1.0f));
 
-        var result = _scanner.Scan(ns, threshold: 0.85f);
+        var result = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: null, tenantId: "");
 
         // Pair (x, y) should appear in pairsExamined but be skipped.
         Assert.True(result.PairsExamined >= 1);
         Assert.True(result.EdgesSkippedExisting >= 1);
 
         // No similar_to edge between x and y should exist.
-        var xEdges = _graph.GetEdgesForEntry("x");
+        var xEdges = _graph.GetEdgesForEntry("x", tenantId: "");
         Assert.DoesNotContain(xEdges, e => e.Relation == "similar_to" && (e.TargetId == "y" || e.SourceId == "y"));
     }
 
@@ -132,11 +132,11 @@ public class AutoLinkScannerTests : IDisposable
         for (int f = 0; f < 30; f++)
             _index.Upsert(new CognitiveEntry($"f_{f}", RandomUnit(rng, dim), ns));
 
-        var first = _scanner.Scan(ns, threshold: 0.85f);
+        var first = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: null, tenantId: "");
         var edgesAfterFirst = _graph.EdgeCount;
         Assert.True(first.EdgesCreated >= 4);
 
-        var second = _scanner.Scan(ns, threshold: 0.85f);
+        var second = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: null, tenantId: "");
         var edgesAfterSecond = _graph.EdgeCount;
 
         Assert.Equal(0, second.EdgesCreated);
@@ -166,7 +166,7 @@ public class AutoLinkScannerTests : IDisposable
             _index.Upsert(new CognitiveEntry($"b_{p}", noisy, ns));
         }
 
-        var result = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: 3);
+        var result = _scanner.Scan(ns, threshold: 0.85f, maxNewEdges: 3, tenantId: "");
 
         Assert.True(result.EdgesCreated <= 3, $"Expected cap of 3, got {result.EdgesCreated}.");
         Assert.True(result.HitMaxEdgeCap);
@@ -178,11 +178,11 @@ public class AutoLinkScannerTests : IDisposable
     [Fact]
     public void EmptyOrTinyNamespaceNoOps()
     {
-        var result0 = _scanner.Scan("nonexistent", threshold: 0.85f);
+        var result0 = _scanner.Scan("nonexistent", threshold: 0.85f, maxNewEdges: null, tenantId: "");
         Assert.Equal(0, result0.EdgesCreated);
 
         _index.Upsert(new CognitiveEntry("solo", new[] { 1f, 0f, 0f }, "tiny", "lone"));
-        var result1 = _scanner.Scan("tiny", threshold: 0.85f);
+        var result1 = _scanner.Scan("tiny", threshold: 0.85f, maxNewEdges: null, tenantId: "");
         Assert.Equal(0, result1.EdgesCreated);
     }
 

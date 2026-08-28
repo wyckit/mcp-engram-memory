@@ -74,7 +74,7 @@ public class RegressionTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "test"));
-        _clusters.CreateCluster("c1", "test", new[] { "a", "b" }, "my cluster");
+        _clusters.CreateCluster("c1", "test", new[] { "a", "b" }, "my cluster", tenantId: "");
 
         _persistence.Flush();
 
@@ -93,7 +93,7 @@ public class RegressionTests : IDisposable
     public void DecayCycle_ChangesArePersistedViaCognitiveIndex()
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
-        _lifecycle.RunDecayCycle("test", decayRate: 100f, stmThreshold: 100f);
+        _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, stmThreshold: 100f);
 
         // The state change should be reflected in the index
         var entry = _index.Get("a");
@@ -107,7 +107,8 @@ public class RegressionTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
 
-        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        // resurrect stays omitted so it keeps its default (true) — the resurrection path is the behaviour under test.
+        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         // The returned result should reflect the new state
         Assert.Single(results);
@@ -135,7 +136,7 @@ public class RegressionTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "test"));
-        _clusters.CreateCluster("c1", "test", new[] { "a", "b" });
+        _clusters.CreateCluster("c1", "test", new[] { "a", "b" }, label: null, tenantId: "");
 
         var spreading = new SpreadingActivationService(_index, _graph, _clusters);
         var tools = new CoreMemoryTools(_index, new PhysicsEngine(), new StubEmbeddingService(), new MetricsCollector(), _graph, new QueryExpander(), spreading, _clusters, new NamespaceRegistry(_index, new StubEmbeddingService()), AgentIdentity.Default);
@@ -143,7 +144,7 @@ public class RegressionTests : IDisposable
         // Run StoreSummary and DeleteMemory concurrently — should not deadlock.
         var tasks = new[]
         {
-            Task.Run(() => _clusters.StoreSummary("c1", "summary text", new[] { 0.5f, 0.5f })),
+            Task.Run(() => _clusters.StoreSummary("c1", "summary text", new[] { 0.5f, 0.5f }, tenantId: "")),
             Task.Run(() => tools.DeleteMemory("b"))
         };
 
@@ -183,13 +184,13 @@ public class RegressionTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "test"));
-        _clusters.CreateCluster("c1", "test", new[] { "a", "b" });
-        _clusters.StoreSummary("c1", "summary", new[] { 0.5f, 0.5f });
+        _clusters.CreateCluster("c1", "test", new[] { "a", "b" }, label: null, tenantId: "");
+        _clusters.StoreSummary("c1", "summary", new[] { 0.5f, 0.5f }, tenantId: "");
 
         // Access a member (but don't modify content)
         _index.RecordAccess("a");
 
-        var cluster = _clusters.GetCluster("c1");
+        var cluster = _clusters.GetCluster("c1", tenantId: "");
         // Should NOT be stale just because a member was accessed
         Assert.False(cluster!.IsStale);
     }
@@ -199,7 +200,7 @@ public class RegressionTests : IDisposable
     public void GetPersistedNamespaces_ExcludesClusterFile()
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test"));
-        _clusters.CreateCluster("c1", "test", new[] { "a" });
+        _clusters.CreateCluster("c1", "test", new[] { "a" }, label: null, tenantId: "");
         _persistence.Flush();
 
         var namespaces = _persistence.GetPersistedNamespaces();

@@ -102,7 +102,7 @@ public class AdminToolsTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "work", "entry a"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "work", "entry b"));
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to"));
-        _clusters.CreateCluster("c1", "work", new[] { "a", "b" });
+        _clusters.CreateCluster("c1", "work", new[] { "a", "b" }, label: null, tenantId: "");
 
         var result = _tools.GetMemory("a");
         Assert.IsType<GetMemoryResult>(result);
@@ -124,7 +124,7 @@ public class AdminToolsTests : IDisposable
         _index.Upsert(new CognitiveEntry("l1", new[] { 1f, 1f }, "work", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("a1", new[] { 0.5f, 0.5f }, "work", lifecycleState: "archived"));
         _graph.AddEdge(new GraphEdge("s1", "s2", "similar_to"));
-        _clusters.CreateCluster("c1", "work", new[] { "s1", "s2" });
+        _clusters.CreateCluster("c1", "work", new[] { "s1", "s2" }, label: null, tenantId: "");
 
         var stats = _tools.CognitiveStats();
 
@@ -200,7 +200,7 @@ public class AdminToolsTests : IDisposable
         _index.Upsert(entry2);
 
         _graph.AddEdge(new GraphEdge("d1", "d2", "similar_to"));
-        _clusters.CreateCluster("dc1", "active-debate-456", new[] { "d1", "d2" });
+        _clusters.CreateCluster("dc1", "active-debate-456", new[] { "d1", "d2" }, label: null, tenantId: "");
 
         var result = await _tools.PurgeDebates(maxAgeHours: 24, dryRun: false);
         var purgeResult = Assert.IsType<PurgeDebatesResult>(result);

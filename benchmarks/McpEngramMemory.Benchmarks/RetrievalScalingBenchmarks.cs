@@ -96,7 +96,7 @@ public class RetrievalScalingBenchmarks
         // Warm the HNSW index (built lazily on first search) and prepare query inputs.
         _queryText = SyntheticText(EntryCount / 2);
         _queryVector = _embedding.Embed(_queryText);
-        _ = _index.Search(_queryVector, Ns, k: 10);
+        _ = _index.Search(_queryVector, Ns, tenantId: "", k: 10);
     }
 
     [GlobalCleanup]
@@ -118,7 +118,7 @@ public class RetrievalScalingBenchmarks
     /// <summary>Vector-only k-NN search via the HNSW index (approximate nearest neighbor).</summary>
     [Benchmark(Description = "Vector (HNSW) k=10")]
     public IReadOnlyList<CognitiveSearchResult> VectorSearch()
-        => _index.Search(_queryVector, Ns, k: 10);
+        => _index.Search(_queryVector, Ns, tenantId: "", k: 10);
 
     /// <summary>BM25 keyword-only ranking over the namespace inverted index.</summary>
     [Benchmark(Description = "BM25 k=10")]
@@ -128,12 +128,12 @@ public class RetrievalScalingBenchmarks
     /// <summary>Full hybrid search: HNSW candidates + BM25, fused via Reciprocal Rank Fusion.</summary>
     [Benchmark(Description = "Hybrid RRF k=10")]
     public IReadOnlyList<CognitiveSearchResult> HybridSearch()
-        => _index.HybridSearch(_queryVector, _queryText, Ns, k: 10);
+        => _index.HybridSearch(_queryVector, _queryText, Ns, tenantId: "", k: 10);
 
     /// <summary>Graph 1-hop expansion: resolve all direct neighbors of a seed entry.</summary>
     [Benchmark(Description = "Graph 1-hop neighbors")]
     public GetNeighborsResult GraphOneHop()
-        => _graph.GetNeighbors(_graphSeedId);
+        => _graph.GetNeighbors(_graphSeedId, relation: null, direction: "both", tenantId: "");
 
     /// <summary>Deterministic, lexically varied document text for entry <paramref name="i"/>.</summary>
     private static string SyntheticText(int i)

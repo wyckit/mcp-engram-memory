@@ -51,9 +51,9 @@ public sealed class AdminTools
             new PrincipalContext(string.Empty, agent.AgentId), statusTracker) { }
 
     private bool CanRead(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
     private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, "write", tenantId: _principal.TenantId);
 
     [McpServerTool(Name = "get_memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
@@ -74,7 +74,7 @@ public sealed class AdminTools
         // to a private endpoint discloses that endpoint's ID, relationship, and metadata
         // even when its entry body is protected. Project the edge set through the same
         // entry-level read policy as the primary object.
-        var edges = _graph.GetEdgesForEntry(id, _principal.TenantId)
+        var edges = _graph.GetEdgesForEntry(id, tenantId: _principal.TenantId)
             .Where(edge => CanReadEndpoint(edge.SourceId) && CanReadEndpoint(edge.TargetId))
             .ToList();
         // Cluster membership is the same kind of disclosure as an edge: a cluster id names a
@@ -82,7 +82,7 @@ public sealed class AdminTools
         // entry was grouped with content they cannot read. Membership is deliberately allowed
         // to span namespaces, so the gate is the cluster's OWN namespace — CanRead(m.Ns), the
         // same predicate ClusterTools.GetCluster applies — not equality with entry.Ns.
-        var clusterIds = _clusters.GetClusterMembershipsForEntry(id, _principal.TenantId)
+        var clusterIds = _clusters.GetClusterMembershipsForEntry(id, tenantId: _principal.TenantId)
             .Where(m => CanRead(m.Ns))
             .Select(m => m.ClusterId)
             .ToList();
@@ -143,7 +143,7 @@ public sealed class AdminTools
                 .ToHashSet();
             edgeCount = _graph.GetAllEdges(_principal.TenantId).Count(edge =>
                 visibleIds.Contains(edge.SourceId) && visibleIds.Contains(edge.TargetId));
-            clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope, _principal.TenantId).Count);
+            clusterCount = scopedNamespaces.Sum(scope => _clusters.ListClusters(scope, tenantId: _principal.TenantId).Count);
         }
 
         // A store with hundreds of namespaces returns a list that dominates the caller's

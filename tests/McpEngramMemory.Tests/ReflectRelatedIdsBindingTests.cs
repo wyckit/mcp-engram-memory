@@ -112,7 +112,7 @@ public class ReflectRelatedIdsBindingTests : IDisposable
         Assert.NotNull(result);
         Assert.Equal("stored", result!.Status);
         Assert.Contains(result.Actions, a => a.Contains("seed-a"));
-        Assert.Contains(_graph.GetEdgesForEntry(result.Id),
+        Assert.Contains(_graph.GetEdgesForEntry(result.Id, tenantId: ""),
             e => e.TargetId == "seed-a" && e.Relation == "elaborates");
     }
 

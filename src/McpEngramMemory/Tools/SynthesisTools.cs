@@ -38,7 +38,7 @@ public sealed class SynthesisTools
         if (!_access.CanRead(ns))
             return new SynthesisResult("empty", null, 0, 0, "", "");
 
-        var result = await _synthesis.SynthesizeNamespaceAsync(ns, query, maxEntries, _access.TenantId, cancellationToken);
+        var result = await _synthesis.SynthesizeNamespaceAsync(ns, query, tenantId: _access.TenantId, maxEntries: maxEntries, ct: cancellationToken);
         return result;
     }
 }

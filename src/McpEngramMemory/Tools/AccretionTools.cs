@@ -35,7 +35,7 @@ public sealed class AccretionTools
         [Description("Namespace to check for pending collapses.")] string ns)
     {
         if (!_access.CanRead(ns)) return Array.Empty<PendingCollapseInfo>();
-        return _scanner.GetPendingCollapses(ns, _access.TenantId);
+        return _scanner.GetPendingCollapses(ns, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "collapse_cluster", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -47,7 +47,7 @@ public sealed class AccretionTools
     {
         // Resolve first (within this tenant): same reply shape as a genuine miss for both
         // "doesn't exist" and "exists but you can't touch it".
-        var ns = _scanner.GetPendingCollapseNs(collapseId, _access.TenantId);
+        var ns = _scanner.GetPendingCollapseNs(collapseId, tenantId: _access.TenantId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: Collapse '{collapseId}' not found.";
 
@@ -55,7 +55,7 @@ public sealed class AccretionTools
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        var result = _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, _lifecycle, _access.TenantId);
+        var result = _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, _lifecycle, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(ns);
         return result;
@@ -66,11 +66,11 @@ public sealed class AccretionTools
     public string DismissCollapse(
         [Description("The pending collapse ID to dismiss.")] string collapseId)
     {
-        var ns = _scanner.GetPendingCollapseNs(collapseId, _access.TenantId);
+        var ns = _scanner.GetPendingCollapseNs(collapseId, tenantId: _access.TenantId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: Collapse '{collapseId}' not found.";
 
-        return _scanner.DismissCollapse(collapseId, _access.TenantId);
+        return _scanner.DismissCollapse(collapseId, tenantId: _access.TenantId);
     }
 
     public AccretionScanResult TriggerAccretionScan(
@@ -79,8 +79,9 @@ public sealed class AccretionTools
         [Description("DBSCAN minimum cluster size (default: 3).")] int minPoints = 3,
         [Description("Auto-generate extractive summaries for detected clusters without archiving members (default: false).")] bool autoSummarize = false)
     {
-        return _scanner.ScanNamespace(ns, epsilon, minPoints,
-            autoSummarize, autoSummarize ? _clusters : null, autoSummarize ? _embedding : null,
-            tenantId: _access.TenantId);
+        return _scanner.ScanNamespace(ns, tenantId: _access.TenantId,
+            epsilon: epsilon, minPoints: minPoints, autoSummarize: autoSummarize,
+            clusters: autoSummarize ? _clusters : null,
+            embedding: autoSummarize ? _embedding : null);
     }
 }

@@ -67,7 +67,7 @@ public class StandardProfileAclTests : IDisposable
         // Alice owns the namespace; ownership is what makes any later check meaningful,
         // after the first identified write atomically claims the empty namespace.
         _index.Upsert(new CognitiveEntry("alice-secret", _embedding.Embed(Secret), AliceNs, Secret));
-        _registry.EnsureOwnership(AliceNs, "alice");
+        _registry.EnsureOwnership(AliceNs, "alice", tenantId: "");
     }
 
     public void Dispose()
@@ -159,7 +159,7 @@ public class StandardProfileAclTests : IDisposable
         var result = bob.LinkMemories("bob-entry", "alice-secret", "similar_to");
 
         Assert.DoesNotContain("Linked", Json(result));
-        Assert.Empty(_graph.GetEdgesForEntry("alice-secret"));
+        Assert.Empty(_graph.GetEdgesForEntry("alice-secret", tenantId: ""));
     }
 
     [Fact]
@@ -195,14 +195,14 @@ public class StandardProfileAclTests : IDisposable
         // here by its SOURCE; its TARGET is Alice's private entry, which the gate said nothing
         // about and which the tool previously handed straight back.
         _index.Upsert(new CognitiveEntry("bob-claim", _embedding.Embed("bobs claim"), BobNs, "bobs claim"));
-        _registry.EnsureOwnership(BobNs, "bob");
+        _registry.EnsureOwnership(BobNs, "bob", tenantId: "");
         _graph.AddEdge(new GraphEdge("bob-claim", "alice-secret", "contradicts", 0.9f));
 
         // A second namespace Bob owns, with content but no contradiction edge at all: the
         // genuine "there is nothing to report here" reply, used as the indistinguishability
         // reference below.
         _index.Upsert(new CognitiveEntry("bob-quiet-note", _embedding.Embed("unrelated"), BobQuietNs, "unrelated note"));
-        _registry.EnsureOwnership(BobQuietNs, "bob");
+        _registry.EnsureOwnership(BobQuietNs, "bob", tenantId: "");
 
         var bob = IntelligenceAs("bob");
 
@@ -232,7 +232,7 @@ public class StandardProfileAclTests : IDisposable
         // write first, since the caller's own entry is usually the source - still leaks here.
         // Both directions need covering or the fix is half a fix.
         _index.Upsert(new CognitiveEntry("bob-claim", _embedding.Embed("bobs claim"), BobNs, "bobs claim"));
-        _registry.EnsureOwnership(BobNs, "bob");
+        _registry.EnsureOwnership(BobNs, "bob", tenantId: "");
         _graph.AddEdge(new GraphEdge("alice-secret", "bob-claim", "contradicts", 0.9f));
 
         var bob = IntelligenceAs("bob");
@@ -257,7 +257,7 @@ public class StandardProfileAclTests : IDisposable
         // resolved entry, not sameness of namespace, and this test is what tells those apart.
         _index.Upsert(new CognitiveEntry(
             "alice-note", _embedding.Embed("rotated"), AliceOtherNs, "the launch code was rotated"));
-        _registry.EnsureOwnership(AliceOtherNs, "alice");
+        _registry.EnsureOwnership(AliceOtherNs, "alice", tenantId: "");
         _graph.AddEdge(new GraphEdge("alice-secret", "alice-note", "contradicts", 0.9f));
 
         var alice = IntelligenceAs("alice");
@@ -289,7 +289,7 @@ public class StandardProfileAclTests : IDisposable
         _index.Upsert(new CognitiveEntry(
             "alice-archived", _embedding.Embed(ArchivedSecret), AliceNs, ArchivedSecret,
             lifecycleState: "archived"));
-        _registry.Share(AliceNs, "alice", "bob", "read");
+        _registry.Share(AliceNs, "alice", "bob", "read", tenantId: "");
 
         var bob = LifecycleAs("bob");
 
@@ -306,6 +306,6 @@ public class StandardProfileAclTests : IDisposable
         // ...and nothing actually moved. This is the assertion the fix exists for: the uniform
         // stub embedding scores this entry at 1.0, well over the 0.5 resurrection threshold, so
         // before the fix the read-only grantee flipped Alice's archived entry to stm.
-        Assert.Equal("archived", _index.Get("alice-archived", AliceNs)!.LifecycleState);
+        Assert.Equal("archived", _index.Get("alice-archived", AliceNs, tenantId: "")!.LifecycleState);
     }
 }

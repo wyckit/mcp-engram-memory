@@ -103,7 +103,7 @@ public class ModelSpeedComparisonTests
 
         var engine = new SynthesisEngine(index, clusters, gen, name, name);
         sw.Restart();
-        var result = await engine.SynthesizeNamespaceAsync(ns, query: "what backend decision was made and why");
+        var result = await engine.SynthesizeNamespaceAsync(ns, query: "what backend decision was made and why", tenantId: "");
         sw.Stop();
 
         if (Directory.Exists(dataPath)) Directory.Delete(dataPath, true);

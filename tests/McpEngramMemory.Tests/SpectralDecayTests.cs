@@ -67,16 +67,18 @@ public class SpectralDecayTests : IDisposable
         var snapshots = SnapshotEntries(ns);
 
         // ── Run 1: spectral OFF ─────────────────────────────────────────────────
-        _lifecycle.SetDecayConfig(ns, decayRate: 0.1f, useSpectralDecay: false);
-        _lifecycle.RunDecayCycle(ns, useStoredConfig: true);
+        _lifecycle.SetDecayConfig(ns, decayRate: 0.1f, reinforcementWeight: null, stmThreshold: null,
+            archiveThreshold: null, useSpectralDecay: false, subdiffusiveExponent: null, tenantId: "");
+        _lifecycle.RunDecayCycle(ns, tenantId: "", useStoredConfig: true);
         var pointwiseAE = ReadActivationEnergies(ns);
 
         // ── Reset entry state ───────────────────────────────────────────────────
         RestoreEntries(snapshots);
 
         // ── Run 2: spectral ON, alpha=1 (standard heat kernel) ──────────────────
-        _lifecycle.SetDecayConfig(ns, useSpectralDecay: true, subdiffusiveExponent: 1.0f);
-        _lifecycle.RunDecayCycle(ns, useStoredConfig: true);
+        _lifecycle.SetDecayConfig(ns, decayRate: null, reinforcementWeight: null, stmThreshold: null,
+            archiveThreshold: null, useSpectralDecay: true, subdiffusiveExponent: 1.0f, tenantId: "");
+        _lifecycle.RunDecayCycle(ns, tenantId: "", useStoredConfig: true);
         var spectralAE = ReadActivationEnergies(ns);
 
         // The backdated node should retain more activation under spectral diffusion
@@ -118,10 +120,11 @@ public class SpectralDecayTests : IDisposable
 
         // Construct a fresh LifecycleEngine WITHOUT a diffusion kernel.
         var lifecycleNoKernel = new LifecycleEngine(_index, _persistence, diffusion: null);
-        lifecycleNoKernel.SetDecayConfig(ns, decayRate: 0.1f, useSpectralDecay: true);
+        lifecycleNoKernel.SetDecayConfig(ns, decayRate: 0.1f, reinforcementWeight: null, stmThreshold: null,
+            archiveThreshold: null, useSpectralDecay: true, subdiffusiveExponent: null, tenantId: "");
 
         // Should not throw; pointwise debt is applied.
-        var result = lifecycleNoKernel.RunDecayCycle(ns, useStoredConfig: true);
+        var result = lifecycleNoKernel.RunDecayCycle(ns, tenantId: "", useStoredConfig: true);
         Assert.Equal(32, result.ProcessedCount);
         Assert.True(_index.Get("c_0")!.ActivationEnergy < -10f,
             "Without a diffusion kernel, pointwise debt should land directly on the backdated node.");

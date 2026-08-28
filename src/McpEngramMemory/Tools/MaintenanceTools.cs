@@ -36,7 +36,7 @@ public sealed class MaintenanceTools
         // "*" spans every namespace in the caller's tenant - only rewrite vectors in the ones this
         // caller may write to. A single explicit ns that fails the check simply rebuilds
         // nothing, same shape as "namespace has no entries".
-        var namespaces = (ns == "*" ? _index.GetNamespaces(_access.TenantId) : new[] { ns })
+        var namespaces = (ns == "*" ? _index.GetNamespaces(tenantId: _access.TenantId) : new[] { ns })
             .Where(_access.CanWrite)
             .ToList();
 
@@ -45,7 +45,7 @@ public sealed class MaintenanceTools
 
         foreach (var namespaceName in namespaces)
         {
-            var (updated, skipped) = _index.RebuildEmbeddings(namespaceName, _embedding, _access.TenantId);
+            var (updated, skipped) = _index.RebuildEmbeddings(namespaceName, _embedding, tenantId: _access.TenantId);
             results.Add(new RebuildNamespaceResult(namespaceName, updated, skipped));
             totalUpdated += updated;
             totalSkipped += skipped;
@@ -61,7 +61,7 @@ public sealed class MaintenanceTools
     public object CompressionStats(
         [Description("Namespace to inspect ('*' for all, default: '*').")] string ns = "*")
     {
-        var namespaces = (ns == "*" ? _index.GetNamespaces(_access.TenantId) : new[] { ns })
+        var namespaces = (ns == "*" ? _index.GetNamespaces(tenantId: _access.TenantId) : new[] { ns })
             .Where(_access.CanRead)
             .ToList();
 
@@ -71,8 +71,8 @@ public sealed class MaintenanceTools
 
         foreach (var namespaceName in namespaces)
         {
-            var entries = _index.GetAllInNamespace(namespaceName, _access.TenantId);
-            var (stm, ltm, archived) = _index.GetStateCounts(namespaceName, _access.TenantId);
+            var entries = _index.GetAllInNamespace(namespaceName, tenantId: _access.TenantId);
+            var (stm, ltm, archived) = _index.GetStateCounts(namespaceName, tenantId: _access.TenantId);
 
             int quantizedCount = ltm + archived; // LTM and archived entries are quantized
             int dims = entries.Count > 0 ? entries[0].Vector.Length : _embedding.Dimensions;
