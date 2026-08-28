@@ -133,6 +133,40 @@ public static class TopologyGuard
             _memo[id] = safe;
             return safe;
         }
+
+        /// <summary>
+        /// THE INVARIANT, and the only predicate a topology site should be reaching for: an edge is
+        /// usable — readable, writable, transferable, traversable, boostable — only when BOTH of
+        /// its endpoints are attributable.
+        ///
+        /// Stated about the EDGE rather than about an operation's arguments, because four review
+        /// rounds were spent rediscovering that those are different sets. An edge is a claim about
+        /// two nodes, and whichever one the caller named, the other is disclosed (its id, and
+        /// through resolution its text and namespace) or rewritten (its adjacency list) exactly the
+        /// same. Guarding the arguments left <c>TransferEdges</c> rewriting an edge whose third
+        /// endpoint was shared, and left a safe seed handing back an edge that pointed into a node
+        /// two entries answer to. Testing the edge removes the place where the far endpoint could
+        /// be forgotten.
+        /// </summary>
+        public bool IsEdgeUsable(GraphEdge edge)
+            => edge is not null && IsTopologySafe(edge.SourceId) && IsTopologySafe(edge.TargetId);
+
+        /// <summary>
+        /// The memoized answer alone: false for an id this sweep has not already judged.
+        ///
+        /// For the one situation that has to re-check while holding the graph's write lock. The
+        /// full test resolves through <see cref="CognitiveIndex"/>, and taking the index's locks
+        /// under the graph's would let the two be acquired in opposite orders — so a re-check asks
+        /// only what the sweep already knows and treats anything it does not know as unsafe. An
+        /// endpoint that appeared between the snapshot and the lock is precisely the case that must
+        /// fail closed.
+        /// </summary>
+        public bool IsKnownSafe(string id)
+            => !string.IsNullOrWhiteSpace(id) && _memo.TryGetValue(id, out var safe) && safe;
+
+        /// <inheritdoc cref="IsKnownSafe"/>
+        public bool IsEdgeKnownUsable(GraphEdge edge)
+            => edge is not null && IsKnownSafe(edge.SourceId) && IsKnownSafe(edge.TargetId);
     }
 }
 
@@ -148,11 +182,22 @@ public static class TopologyGuard
 ///
 /// Bare-id attribution: within one tenant an id is not an identity — entries are identified by
 /// (tenant, namespace, id) — so an id the tenant holds in two namespaces names ONE node shared by
-/// two entries. Every method here that creates or moves an edge, and the traversal that walks
-/// them, therefore consults <see cref="TopologyGuard"/> first and declines the ambiguous id. The
-/// guard is enforced here rather than at each tool because it is ACL-blind and so needs no
-/// principal: putting it at the boundary is what makes it impossible for a new writer to forget.
-/// <see cref="RemoveAllEdgesForEntry"/> is the one deliberate exception — see its remarks.
+/// two entries. The rule every method here applies is
+/// <see cref="TopologyGuard.Sweep.IsEdgeUsable"/>: an edge is usable only when BOTH of its
+/// endpoints are attributable, tested per edge rather than per argument. Guarding the ids an
+/// operation happens to NAME is what failed repeatedly — the transferred edge's third endpoint and
+/// the neighbor behind a safe seed are both nodes no argument mentions, and both are disclosed or
+/// rewritten all the same.
+///
+/// The guard is enforced here rather than at each tool because it is ACL-blind and so needs no
+/// principal: putting it at the boundary is what makes it impossible for a new reader or writer to
+/// forget. Consumers that only consume topology — spreading activation, recall expansion, the
+/// diffusion kernel, the visualizer — need no guard of their own precisely because the edges they
+/// are handed have already passed it.
+///
+/// The <c>GetStored*</c> pair is the deliberate exception, and it is not a hole: those return the
+/// stored bytes for persistence and diagnostics, are never projected to a principal, and carry no
+/// resolution step that could turn a bare id into somebody else's entry.
 ///
 /// Locking strategy:
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
@@ -218,9 +263,31 @@ public sealed class KnowledgeGraph
     ///
     /// An endpoint whose id names more than one of the tenant's namespaces is refused: the edge
     /// would land on a node shared with a twin the caller was never shown. The refusal reads as an
-    /// ordinary miss so it cannot be told apart from an endpoint that does not exist.
+    /// ordinary miss so it cannot be told apart from an endpoint that does not exist — which is
+    /// also why a caller that needs to KNOW whether the edge landed must use
+    /// <see cref="TryAddEdge"/> rather than inspect this string.
     /// </summary>
     public string AddEdge(GraphEdge edge)
+    {
+        TryAddEdge(edge, out var reply);
+        return reply;
+    }
+
+    /// <summary>
+    /// As <see cref="AddEdge"/>, but says whether the edge was actually written.
+    ///
+    /// The boolean is the point. <see cref="AddEdge"/> answers with a sentence, so a caller that
+    /// counts calls counts refusals as successes — which is exactly how the background auto-link
+    /// sweep reported edges it had never created. Parsing the sentence would be worse: the refusal
+    /// is deliberately byte-identical to a genuine miss, so it is not a distinguishable token.
+    ///
+    /// <paramref name="reply"/> stays the caller-visible string, and stays indistinguishable
+    /// between "endpoint absent", "endpoint not writable" and "endpoint shared with a twin you
+    /// cannot see". Only the in-process caller learns the difference, and only as one bit it must
+    /// not forward: reporting "1 of 3 skipped as ambiguous" to a principal would rebuild the
+    /// existence oracle this whole mechanism exists to close.
+    /// </summary>
+    public bool TryAddEdge(GraphEdge edge, out string reply)
     {
         ArgumentNullException.ThrowIfNull(edge);
 
@@ -228,10 +295,16 @@ public sealed class KnowledgeGraph
         // which holds its own locks, and this class's rule is that index work happens outside the
         // graph lock so the two can never be acquired in opposite orders.
         var guard = TopologyGuard.ForSweep(_index, edge.TenantId);
-        if (!guard.IsTopologySafe(edge.SourceId))
-            return TopologyGuard.Unattributable(edge.SourceId);
-        if (!guard.IsTopologySafe(edge.TargetId))
-            return TopologyGuard.Unattributable(edge.TargetId);
+        if (!guard.IsEdgeUsable(edge))
+        {
+            // Named after the endpoint that failed, so the reply matches what a caller naming that
+            // same id alone would get. Source first, arbitrarily but consistently — the two
+            // refusals are the same sentence with a different id in it, and a caller who can tell
+            // WHICH endpoint was refused learns nothing it did not already supply.
+            reply = TopologyGuard.Unattributable(
+                guard.IsTopologySafe(edge.SourceId) ? edge.TargetId : edge.SourceId);
+            return false;
+        }
 
         _lock.EnterWriteLock();
         try
@@ -251,9 +324,10 @@ public sealed class KnowledgeGraph
             Interlocked.Increment(ref _revision);
             BumpTenant(edge.TenantId);
             ScheduleSaveEdges();
-            return edge.Relation == "cross_reference"
+            reply = edge.Relation == "cross_reference"
                 ? $"Linked '{edge.SourceId}' <-> '{edge.TargetId}' (cross_reference, bidirectional)."
                 : $"Linked '{edge.SourceId}' -> '{edge.TargetId}' ({edge.Relation}).";
+            return true;
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -277,7 +351,7 @@ public sealed class KnowledgeGraph
         {
             if (!sweeps.TryGetValue(edge.TenantId, out var guard))
                 sweeps[edge.TenantId] = guard = TopologyGuard.ForSweep(_index, edge.TenantId);
-            if (guard.IsTopologySafe(edge.SourceId) && guard.IsTopologySafe(edge.TargetId))
+            if (guard.IsEdgeUsable(edge))
                 admitted.Add(edge);
         }
 
@@ -322,6 +396,12 @@ public sealed class KnowledgeGraph
     /// namespaces is declined: the edge being named hangs off a node the caller's twin shares with
     /// an entry they cannot see. The refusal reuses the no-such-edge reply verbatim rather than
     /// inventing a second one, so "nothing to remove" and "declined to guess" are one answer.
+    ///
+    /// Testing the two arguments IS the edge test here, and that is worth stating because it is
+    /// what fails elsewhere: every edge this touches runs between exactly
+    /// <paramref name="sourceId"/> and <paramref name="targetId"/>, so there is no third endpoint
+    /// for the argument test to miss. Contrast <see cref="TransferEdges"/>, where there is one on
+    /// every edge.
     /// </summary>
     public string RemoveEdges(string sourceId, string targetId, string? relation, string tenantId)
     {
@@ -360,39 +440,77 @@ public sealed class KnowledgeGraph
     /// Remove ALL edges referencing an entry within a tenant (cascade delete). Pass "" for the
     /// legacy partition.
     ///
-    /// Deliberately NOT guarded here, unlike every other mutator on this class. Its sanctioned
-    /// caller is <see cref="TopologyCascade"/>, which applies the identical
-    /// <see cref="TopologyGuard"/> predicate once per sweep against a single namespace listing;
-    /// re-testing here would re-list the tenant per swept entry and turn a namespace purge into one
-    /// full store reload per entry. The guard is not weaker for living one frame up — it is the
-    /// same predicate — but a new caller of this primitive must go through TopologyCascade rather
-    /// than call it raw.
+    /// It used to be the one unguarded mutator, on the argument that its sanctioned caller
+    /// (<see cref="TopologyCascade"/>) already tested the id being swept. That covered the id this
+    /// method NAMES and nothing else: every edge it deletes also rewrites the adjacency list of an
+    /// endpoint at the other end, and that endpoint is named by no argument. So the same edge-level
+    /// rule applies here — an incident edge is deleted only when both of its endpoints are
+    /// attributable, which subsumes the caller's test of <paramref name="id"/> as the special case
+    /// where the shared endpoint is the swept one.
+    ///
+    /// The retained edges dangle once the entry is gone, and that is the intended outcome rather
+    /// than a leak: a dangling edge is an already-tolerated graph state, every read path resolves
+    /// its endpoints and drops what it cannot find, and the alternative is stripping an edge off a
+    /// node that belongs to an entry nobody authorized us to touch.
+    ///
+    /// It also keeps <see cref="TopologyCascade"/>'s dry run honest. The preview counts through
+    /// <see cref="GetEdgesForEntry"/>, which applies this same edge test, so a preview and the
+    /// purge it previews can no longer report different figures.
+    ///
+    /// Call the <c>guard</c> overload from a sweep over many entries: one namespace listing and one
+    /// memo for the whole purge instead of one per entry.
     /// </summary>
     public int RemoveAllEdgesForEntry(string id, string tenantId)
+        => RemoveAllEdgesForEntry(id, tenantId, TopologyGuard.ForSweep(_index, tenantId));
+
+    /// <inheritdoc cref="RemoveAllEdgesForEntry(string, string)"/>
+    public int RemoveAllEdgesForEntry(string id, string tenantId, TopologyGuard.Sweep guard)
     {
+        ArgumentNullException.ThrowIfNull(guard);
+
+        // Snapshot the incident edges under the read lock, judge them after releasing it, then
+        // delete exactly the ones that passed. The judgement resolves through CognitiveIndex, so it
+        // cannot happen inside the graph lock; deleting a precomputed set rather than a whole
+        // adjacency list is what lets the two phases be separated safely — an edge that appeared in
+        // between is simply not in the set, so it survives rather than being deleted unexamined.
+        List<GraphEdge> outgoing, incoming;
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            EnsureLoaded();
+            outgoing = _outgoing.TryGetValue((tenantId, id), out var o) ? o.ToList() : new List<GraphEdge>();
+            incoming = _incoming.TryGetValue((tenantId, id), out var i) ? i.ToList() : new List<GraphEdge>();
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+
+        var removableOut = outgoing.Where(guard.IsEdgeUsable).ToList();
+        var removableIn = incoming.Where(guard.IsEdgeUsable).ToList();
+        if (removableOut.Count == 0 && removableIn.Count == 0)
+            return 0;
+
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
             int removed = 0;
-            var key = (tenantId, id);
 
-            // Remove outgoing edges and their incoming references
-            if (_outgoing.TryGetValue(key, out var outEdges))
+            // Matched on (endpoint, relation) rather than by dropping the whole list: the list now
+            // has survivors in it. AddEdgeInternal keeps (source, target, relation) unique, so each
+            // match is the one edge meant.
+            foreach (var edge in removableOut)
             {
-                foreach (var edge in outEdges)
-                    RemoveMatching(_incoming, (tenantId, edge.TargetId), e => e.SourceId == id);
-                removed += outEdges.Count;
-                _outgoing.Remove(key);
+                removed += RemoveMatching(_outgoing, (tenantId, id),
+                    e => e.TargetId == edge.TargetId && e.Relation == edge.Relation);
+                RemoveMatching(_incoming, (tenantId, edge.TargetId),
+                    e => e.SourceId == id && e.Relation == edge.Relation);
             }
 
-            // Remove incoming edges and their outgoing references
-            if (_incoming.TryGetValue(key, out var inEdges))
+            foreach (var edge in removableIn)
             {
-                foreach (var edge in inEdges)
-                    RemoveMatching(_outgoing, (tenantId, edge.SourceId), e => e.TargetId == id);
-                removed += inEdges.Count;
-                _incoming.Remove(key);
+                removed += RemoveMatching(_incoming, (tenantId, id),
+                    e => e.SourceId == edge.SourceId && e.Relation == edge.Relation);
+                RemoveMatching(_outgoing, (tenantId, edge.SourceId),
+                    e => e.TargetId == id && e.Relation == edge.Relation);
             }
 
             if (removed > 0)
@@ -414,13 +532,15 @@ public sealed class KnowledgeGraph
     /// slots without an old positional call like <c>GetNeighbors(id, "supports")</c> silently binding
     /// the relation into the tenant slot — the exact fail-open this shape exists to kill.
     ///
-    /// Unguarded here, unlike <see cref="Traverse"/>, and the asymmetry is about cost rather than
-    /// principle: this is called once per search hit inside the recall expansion loops, and each of
-    /// those already holds a <see cref="TopologyGuard.Sweep"/> for its whole result set. Building a
-    /// second sweep per call would re-list the tenant — and so reload the store — once per hit.
-    /// One hop is also containable from outside: the caller sees each neighbor's own id and
-    /// namespace and can drop an unattributable one, which a multi-hop walk cannot do because by
-    /// then it has already used the shared node to find things.
+    /// Every returned edge has passed <see cref="TopologyGuard.Sweep.IsEdgeUsable"/>, which covers
+    /// the seed and the far endpoint together. This used to be left to the caller on the argument
+    /// that one hop is containable from outside — and it was not: spreading activation consumes
+    /// this raw, and a safe seed with an edge into a shared node was enough to move a private
+    /// entry's activation energy. The filter belongs to whoever hands out the edge.
+    ///
+    /// The sweep is built only when there is adjacency to judge, and after the graph lock has been
+    /// released — it resolves through <see cref="CognitiveIndex"/>, which has its own lock, and a
+    /// node with no edges must not pay for a namespace listing it will not consult.
     /// </summary>
     public GetNeighborsResult GetNeighbors(string id, string? relation, string direction, string tenantId)
     {
@@ -460,10 +580,19 @@ public sealed class KnowledgeGraph
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
+        if (edgesToResolve.Count == 0)
+            return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
+
         // Resolve entries outside graph lock (CognitiveIndex has its own lock), scoped to the tenant.
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
         var neighbors = new List<NeighborResult>();
         foreach (var (edge, resolveId) in edgesToResolve)
         {
+            // Ahead of the resolve, not after it. Resolution of an ambiguous bare id is what turns
+            // a shared node into "whichever twin this caller can read", so an edge filtered
+            // afterwards has already been given a face that does not belong to it.
+            if (!guard.IsEdgeUsable(edge)) continue;
+
             var entry = ResolveEntry(resolveId, tenantId);
             if (entry is not null)
                 neighbors.Add(new NeighborResult(edge, ToEntryInfo(entry)));
@@ -538,11 +667,11 @@ public sealed class KnowledgeGraph
                     if (visited.Contains(edge.TargetId)) continue;
 
                     // The stop, and it has to be here — ahead of the edge, the resolve and the
-                    // enqueue. An ambiguous target is a node two entries share, so neither the
-                    // edge reaching it, the entry it resolves to, nor anything beyond it is
-                    // attributable to the entry this walk is about. Not marked visited: it was
+                    // enqueue. An edge with an unattributable endpoint reaches a node two entries
+                    // share, so neither the edge, the entry it resolves to, nor anything beyond it
+                    // is attributable to the entry this walk is about. Not marked visited: it was
                     // never visited, and the sweep memoizes so a second path costs nothing.
-                    if (!guard.IsTopologySafe(edge.TargetId)) continue;
+                    if (!guard.IsEdgeUsable(edge)) continue;
 
                     visited.Add(edge.TargetId);
                     resultEdges.Add(edge);
@@ -560,8 +689,36 @@ public sealed class KnowledgeGraph
         return new TraversalResult(startId, resultEntries, resultEdges);
     }
 
-    /// <summary>Get all edges for an entry within a tenant (both directions). Pass "" for the legacy partition.</summary>
+    /// <summary>
+    /// The attributable edges incident to an entry within a tenant, both directions. Pass "" for
+    /// the legacy partition.
+    ///
+    /// An edge is withheld unless BOTH endpoints are attributable, so a safe id whose edge points
+    /// into a node two entries share hands back nothing for that edge. The far endpoint is the half
+    /// that matters here: an edge carries the other endpoint's id, relation, weight and metadata,
+    /// and every consumer of this list either shows those to a principal or resolves the bare id
+    /// into an entry.
+    /// </summary>
     public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id, string tenantId)
+    {
+        var stored = GetStoredEdgesForEntry(id, tenantId);
+        if (stored.Count == 0)
+            return stored;
+
+        // Built after the lock, and only when there is something to judge — see GetNeighbors.
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
+        return stored.Where(guard.IsEdgeUsable).ToList();
+    }
+
+    /// <summary>
+    /// The STORED adjacency of one node, endpoint attribution NOT applied — what is on disk rather
+    /// than what is attributable.
+    ///
+    /// For persistence, diagnostics, and tests that have to observe that a suppressed edge really
+    /// is still there. Never project this to a principal and never resolve its endpoint ids into
+    /// entries: those two steps are exactly what <see cref="GetEdgesForEntry"/> exists to gate.
+    /// </summary>
+    public IReadOnlyList<GraphEdge> GetStoredEdgesForEntry(string id, string tenantId)
     {
         _lock.EnterUpgradeableReadLock();
         try
@@ -577,7 +734,11 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Get all edges with a 'contradicts' relation for entries in a namespace within a tenant. Pass "" for the legacy partition.</summary>
+    /// <summary>
+    /// Get all attributable 'contradicts' edges touching a namespace within a tenant. Pass "" for
+    /// the legacy partition. An edge with an unattributable endpoint is withheld before either
+    /// endpoint is resolved — this is the one read that hands back whole ENTRIES for both ends.
+    /// </summary>
     public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns, string tenantId)
     {
         List<GraphEdge> contradictEdges;
@@ -594,10 +755,19 @@ public sealed class KnowledgeGraph
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
+        if (contradictEdges.Count == 0)
+            return Array.Empty<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
+
         // Resolve entries outside graph lock (scoped to tenant), filter to namespace
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
         var results = new List<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
         foreach (var edge in contradictEdges)
         {
+            // This method resolves BOTH endpoints and hands the entries back, so an unattributable
+            // endpoint here discloses a whole entry rather than just an id — and a "contradicts"
+            // edge is a claim about the pair, which is meaningless if one half is the wrong twin.
+            if (!guard.IsEdgeUsable(edge)) continue;
+
             var source = ResolveEntry(edge.SourceId, tenantId);
             var target = ResolveEntry(edge.TargetId, tenantId);
 
@@ -609,7 +779,12 @@ public sealed class KnowledgeGraph
         return results;
     }
 
-    /// <summary>Get all edges across every tenant (for persistence).</summary>
+    /// <summary>
+    /// Every stored edge across every tenant, for persistence. Attribution is per-tenant and there
+    /// is no tenant here to attribute within, so this one is raw by construction — which is safe
+    /// only because it is never projected to a principal and never resolves an id into an entry.
+    /// A caller that has a tenant wants <see cref="GetAllEdges(string)"/>.
+    /// </summary>
     public IReadOnlyList<GraphEdge> GetAllEdges()
     {
         _lock.EnterUpgradeableReadLock();
@@ -621,8 +796,31 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    /// <summary>Get all edges belonging to one tenant (for per-tenant graph derivations, e.g. diffusion).</summary>
+    /// <summary>
+    /// The attributable edges of one tenant, for per-tenant graph derivations (diffusion,
+    /// visualization, tallies).
+    ///
+    /// Edges with an unattributable endpoint are withheld. A derivation is a read like any other:
+    /// the diffusion kernel turns this list into a basis that BOOSTS the entries it names, and the
+    /// visualizer draws the endpoint ids straight into its reply — so an edge into a shared node
+    /// moves or reveals an entry belonging to somebody the caller was never shown.
+    /// </summary>
     public IReadOnlyList<GraphEdge> GetAllEdges(string tenantId)
+    {
+        var stored = GetStoredEdges(tenantId);
+        if (stored.Count == 0)
+            return stored;
+
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
+        return stored.Where(guard.IsEdgeUsable).ToList();
+    }
+
+    /// <summary>
+    /// The STORED edges of one tenant, endpoint attribution NOT applied.
+    /// Same contract as <see cref="GetStoredEdgesForEntry"/>: diagnostics and tests only, never
+    /// projected to a principal and never resolved into entries.
+    /// </summary>
+    public IReadOnlyList<GraphEdge> GetStoredEdges(string tenantId)
     {
         _lock.EnterUpgradeableReadLock();
         try
@@ -641,9 +839,17 @@ public sealed class KnowledgeGraph
     /// Returns count transferred. Pass "" for the legacy partition.
     ///
     /// This is the widest bare-id write in the class — it rewires and then DELETES a whole node's
-    /// adjacency — so either endpoint being ambiguous refuses the transfer outright rather than
-    /// moving what it can. Returning 0 is what a merge of two entries with no edges already
-    /// reports, so the caller's own reply stays truthful without becoming a signal.
+    /// adjacency — and <paramref name="fromId"/> and <paramref name="toId"/> are not the only nodes
+    /// it touches. Every incident edge has a THIRD endpoint, and rewriting <c>from -&gt; far</c>
+    /// into <c>to -&gt; far</c> mutates <c>far</c>'s adjacency list as surely as it mutates the two
+    /// named ones. So the precondition is the edge-level rule over every incident edge in both
+    /// directions, not a test of the two arguments.
+    ///
+    /// ALL OR NOTHING. Skipping just the offending edges would leave the merge half-applied — some
+    /// of the archived entry's topology moved, some still hanging off a node that is about to be
+    /// abandoned — which is a correctness problem on top of the disclosure. Returning 0 is what a
+    /// merge of two edgeless entries already reports, so the caller's reply stays truthful without
+    /// becoming a signal; the count of what was declined must never reach a principal.
     /// </summary>
     public int TransferEdges(string fromId, string toId, string tenantId)
     {
@@ -651,10 +857,42 @@ public sealed class KnowledgeGraph
         if (!guard.IsTopologySafe(fromId) || !guard.IsTopologySafe(toId))
             return 0;
 
+        // Snapshot every incident edge and judge it before any mutation. The judgement resolves
+        // through CognitiveIndex, so it cannot run under the graph lock; EnsureLoaded here is what
+        // makes the re-check below meaningful, because it guarantees the write phase is not the
+        // first thing to pull persisted edges into memory.
+        List<GraphEdge> incident;
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            EnsureLoaded();
+            incident = new List<GraphEdge>();
+            if (_outgoing.TryGetValue((tenantId, fromId), out var outSnapshot))
+                incident.AddRange(outSnapshot);
+            if (_incoming.TryGetValue((tenantId, fromId), out var inSnapshot))
+                incident.AddRange(inSnapshot);
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+
+        foreach (var edge in incident)
+            if (!guard.IsEdgeUsable(edge))
+                return 0;
+
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
+
+            // Re-checked under the write lock against what the sweep already decided, because the
+            // pre-check ran without it. An edge that arrived in between names an endpoint this
+            // sweep has never judged, and judging it here would take the index's locks under the
+            // graph's — so an unknown endpoint aborts instead. Fail closed: 0, nothing mutated.
+            foreach (var dict in new[] { _outgoing, _incoming })
+                if (dict.TryGetValue((tenantId, fromId), out var current))
+                    foreach (var edge in current)
+                        if (!guard.IsEdgeKnownUsable(edge))
+                            return 0;
+
             int transferred = 0;
             var fromKey = (tenantId, fromId);
 

@@ -13,6 +13,35 @@ namespace McpEngramMemory.Core.Services;
 internal readonly record struct NsKey(string Tenant, string Ns);
 
 /// <summary>
+/// Raised by a storage provider that could not establish which namespaces are persisted.
+///
+/// It exists because success and failure used to be the same value: every provider caught its
+/// listing error and returned an empty list, which is exactly what a store with nothing in it
+/// returns. A caller cannot distinguish those by inspecting the result, so the only way to make the
+/// distinction impossible to miss is to make failure a control-flow event.
+///
+/// The consequence is a security one before it is an availability one. A namespace that fails to
+/// list is a namespace whose entries are invisible, and an invisible persisted twin makes a
+/// duplicated id look unique — so the ACL-blind, tenant-wide duplicate test that topology must fail
+/// closed on passes instead. "Could not enumerate" therefore has to reach the caller as a refusal,
+/// never as "there is nothing there".
+///
+/// This type is public because it escapes public provider methods; a caller that cannot name it
+/// cannot catch it. The message deliberately carries no backend detail — no SQL, no path, no
+/// namespace name — and the provider keeps the cause as <see cref="Exception.InnerException"/> and
+/// logs it. It is also raised uniformly for every id and every principal, so it is not an oracle:
+/// it says the store could not be listed, never anything about whether some entry exists.
+/// </summary>
+public sealed class NamespaceEnumerationException : Exception
+{
+    /// <summary>Wrap the backend failure that prevented the namespace listing.</summary>
+    public NamespaceEnumerationException(Exception innerException)
+        : base("Failed to enumerate persisted namespaces.", innerException)
+    {
+    }
+}
+
+/// <summary>
 /// Manages tenant + namespace-partitioned storage of cognitive entries with lazy loading from disk.
 /// Partitions are keyed by <see cref="NsKey"/> = (tenant, ns); the legacy tenant is <c>""</c>, so
 /// for every pre-tenant (no-tenant) caller the partition key is exactly the namespace and behavior
@@ -58,6 +87,19 @@ internal sealed class NamespaceStore
     // never-swept state.
     private long _namespaceSetGeneration;
     private long _loadedGeneration = -1;
+    // Single-flight gate for the full sweep. Cold callers queue here so N of them pay ONE
+    // enumeration rather than N: the leader sweeps and publishes, and each waiter's re-check under
+    // the gate then finds the completion already covering it and returns without touching the
+    // provider. Only the cold path reaches this — a warm LoadAll returns on two atomic reads taken
+    // above the lock, allocating nothing and blocking nobody.
+    //
+    // Lock ordering, and why this cannot deadlock: the gate is strictly OUTERMOST of the two locks
+    // NamespaceStore takes. LoadAll acquires it and then EnsureLoaded's per-namespace load lock
+    // beneath it, and EnsureLoaded never calls LoadAll, so the reverse edge does not exist.
+    // CognitiveIndex's per-partition ReaderWriterLockSlim sits above both and never inverts either:
+    // every LoadAll caller resolves before taking a partition lock, and nothing reachable from this
+    // gate acquires one.
+    private readonly object _sweepLock = new();
     // LEGACY-ONLY reverse index: id → ns. Only legacy-tenant ("") entries are tracked here so the
     // global id-based operations resolve strictly within the legacy tenant.
     private readonly ConcurrentDictionary<string, string> _idToNamespace = new();
@@ -279,7 +321,13 @@ internal sealed class NamespaceStore
     /// <summary>Total legacy-tenant entries across all namespaces. O(1) atomic read — safe without a lock.</summary>
     public int TotalCount => (int)Interlocked.Read(ref _totalCountApprox);
 
-    /// <summary>Get all known namespace names (loaded + persisted), tenant-independent.</summary>
+    /// <summary>
+    /// Get all known namespace names (loaded + persisted), tenant-independent. A provider that
+    /// cannot list throws through rather than silently degrading to the resident namespaces only —
+    /// a truncated list here reads exactly like a smaller store, which is the confusion this
+    /// contract exists to prevent.
+    /// </summary>
+    /// <exception cref="NamespaceEnumerationException">The persisted namespaces could not be listed.</exception>
     public IReadOnlyList<string> GetNamespaceNames()
     {
         var persisted = _persistence.GetPersistedNamespaces();
@@ -380,21 +428,55 @@ internal sealed class NamespaceStore
     ///
     /// Concurrency: the generation is read BEFORE the sweep and republished after it, so an un-load
     /// landing mid-sweep leaves an already-stale generation recorded and the next caller sweeps
-    /// again. Two threads arriving cold may both sweep; EnsureLoaded is idempotent, so that costs
-    /// one redundant enumeration and nothing else.
+    /// again. Cold callers are single-flighted through <see cref="_sweepLock"/>: the first one
+    /// enumerates while the rest queue, and each of those then re-checks and returns on the
+    /// completion the leader published, so a cold burst of N callers costs one enumeration rather
+    /// than N. The warm path never takes the lock.
+    ///
+    /// Failure: an enumeration that throws propagates, and completion is NOT published. That is the
+    /// deliberate choice between the two ways to be wrong here. Degrading — swallowing the error and
+    /// carrying on over whatever was listed — would hand the caller a store that could not be read
+    /// dressed as a store with nothing in it, and a bare id whose twin lives in an unlisted
+    /// namespace then reads back as unique, which is the fail-OPEN answer to the tenant-wide
+    /// duplicate test. Refusing costs availability on a path that was already broken and keeps
+    /// "I could not establish the namespace set" from being spelled the same way as "there is
+    /// nothing there". Waiters are never handed a poisoned success: the only thing they observe is
+    /// the published generation, and a failed sweep publishes nothing, so the next caller in the
+    /// queue retries the enumeration itself.
     /// </summary>
+    /// <exception cref="NamespaceEnumerationException">
+    /// The storage provider could not list the persisted namespaces. The cache is left unpublished,
+    /// so a later call retries rather than serving an empty sweep.
+    /// </exception>
     public void LoadAll()
     {
-        long generation = Interlocked.Read(ref _namespaceSetGeneration);
-        if (Interlocked.Read(ref _loadedGeneration) == generation)
+        // Warm path: two atomic reads, no allocation, no lock, no queueing behind anyone. This is a
+        // fast-path test only — the generation that gets published is the one re-read under the gate.
+        if (Interlocked.Read(ref _namespaceSetGeneration) == Interlocked.Read(ref _loadedGeneration))
             return;
 
-        foreach (var ns in _persistence.GetPersistedNamespaces())
-            EnsureLoaded(ns);
+        lock (_sweepLock)
+        {
+            // Re-read under the gate rather than trusting the pre-check above it: while we queued,
+            // the leader may have completed the very sweep we were about to duplicate. Reading the
+            // generation here (not before the lock) is also what keeps the published value honest —
+            // it is the generation this sweep actually runs under.
+            long generation = Interlocked.Read(ref _namespaceSetGeneration);
+            if (Interlocked.Read(ref _loadedGeneration) == generation)
+                return;
 
-        // Exchange rather than a plain store: it fences the sweep ahead of the publication, so no
-        // other thread can observe the completion before the namespaces it vouches for are loaded.
-        Interlocked.Exchange(ref _loadedGeneration, generation);
+            // Publication is the line AFTER the loop, so a throw from either the enumeration or a
+            // namespace load leaves _loadedGeneration untouched and the next caller sweeps again.
+            // Marking an incomplete sweep complete is the one outcome that must never happen: it
+            // would make a persisted twin permanently invisible to the ambiguity test.
+            foreach (var ns in _persistence.GetPersistedNamespaces())
+                EnsureLoaded(ns);
+
+            // Exchange rather than a plain store: it fences the sweep ahead of the publication, so
+            // no other thread can observe the completion before the namespaces it vouches for are
+            // loaded.
+            Interlocked.Exchange(ref _loadedGeneration, generation);
+        }
     }
 
     /// <summary>

@@ -144,7 +144,7 @@ public class BareIdTopologyIsolationTests : IDisposable
         BobStores("bob-note", "bob's follow-up note");
         Assert.False(_registry.HasAccess("bob", AlicePrivateNs, "write", tenantId: ""));
 
-        var before = Json(_graph.GetEdgesForEntry(VictimId, tenantId: ""));
+        var before = Json(_graph.GetStoredEdgesForEntry(VictimId, tenantId: ""));
         var bob = Graph("bob");
 
         // Bob resolves "victim-id" to an entry he genuinely owns, so entry-scoped authorization
@@ -164,8 +164,8 @@ public class BareIdTopologyIsolationTests : IDisposable
 
         // Alice's edge set is byte-for-byte what it was: nothing added, nothing removed, and the
         // relation/weight/metadata she set are intact.
-        Assert.Equal(before, Json(_graph.GetEdgesForEntry(VictimId, tenantId: "")));
-        var surviving = Assert.Single(_graph.GetEdgesForEntry(VictimId, tenantId: ""));
+        Assert.Equal(before, Json(_graph.GetStoredEdgesForEntry(VictimId, tenantId: "")));
+        var surviving = Assert.Single(_graph.GetStoredEdgesForEntry(VictimId, tenantId: ""));
         Assert.Equal(AliceIndexNote, surviving.TargetId);
         Assert.Equal("elaborates", surviving.Relation);
     }
@@ -199,7 +199,7 @@ public class BareIdTopologyIsolationTests : IDisposable
 
         // Control on the same call: Alice's node really does carry that topology, so the emptiness
         // above is suppression and not an empty fixture.
-        Assert.NotEmpty(_graph.GetEdgesForEntry(VictimId, tenantId: ""));
+        Assert.NotEmpty(_graph.GetStoredEdgesForEntry(VictimId, tenantId: ""));
         Assert.NotEmpty(_clusters.GetClustersForEntry(VictimId, tenantId: ""));
     }
 
@@ -245,7 +245,7 @@ public class BareIdTopologyIsolationTests : IDisposable
 
         // Control on the same fixture: the edge really is on that node, so the emptiness above is
         // suppression and not an empty graph.
-        Assert.NotEmpty(_graph.GetEdgesForEntry(AliceIndexNote, tenantId: ""));
+        Assert.NotEmpty(_graph.GetStoredEdgesForEntry(AliceIndexNote, tenantId: ""));
     }
 
     [Fact]

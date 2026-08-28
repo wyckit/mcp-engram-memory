@@ -276,7 +276,15 @@ public class MemoryDiffusionKernel
 
         // Build symmetric sparse adjacency restricted to this namespace and positive relations.
         // First pass: collect candidate edge weights keyed by ordered (i,j) with i<j.
-        var allEdges = _graph.GetAllEdges(tenantId);
+        // The STORED view deliberately, not the attributable one. The attributable view withholds
+        // any edge whose endpoint id is duplicated elsewhere in the tenant, because a bare id there
+        // cannot be resolved to one entry. That does not apply here: both endpoints are immediately
+        // pinned to this namespace by `indexOf` below, and ids are unique within (tenant, ns), so
+        // the namespace itself supplies the attribution the bare id lacks. Nothing raw escapes —
+        // endpoints are converted to local matrix indices and never resolved or returned to a
+        // principal. Filtering here would silently empty the Laplacian for any deployment that
+        // reuses ids across namespaces, costing every one of them spectral retrieval.
+        var allEdges = _graph.GetStoredEdges(tenantId);
         var weights = new Dictionary<(int Lo, int Hi), float>();
         int edgeCount = 0;
         foreach (var edge in allEdges)

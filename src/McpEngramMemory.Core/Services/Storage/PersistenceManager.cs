@@ -369,19 +369,46 @@ public sealed class PersistenceManager : IStorageProvider
     }
 
     /// <summary>
-    /// Get all namespace names from existing files on disk.
+    /// Get all namespace names from existing files on disk. A returned list means the directory was
+    /// read: an empty one is a data directory holding no namespace files, never a directory that
+    /// could not be listed.
+    ///
+    /// An I/O failure throws rather than degrading to an empty list, matching the database
+    /// providers. The two used to be the same value, and a caller cannot separate them by
+    /// inspection — so the full-load sweep would mark itself complete over a failed listing and
+    /// leave persisted entries invisible for the life of the process. An invisible twin makes a
+    /// duplicated id look unique, which is the fail-open answer to the tenant-wide duplicate test
+    /// topology depends on.
+    ///
+    /// A missing base directory is the one absence that stays an empty result: the constructor
+    /// creates it, so <see cref="Directory.Exists"/> returning false is a definite answer about a
+    /// path we are able to probe, not a failure to read one.
     /// </summary>
+    /// <exception cref="NamespaceEnumerationException">The data directory could not be listed.</exception>
     public IReadOnlyList<string> GetPersistedNamespaces()
     {
         if (!Directory.Exists(_basePath))
             return Array.Empty<string>();
 
-        return Directory.GetFiles(_basePath, "*.json")
-            .Where(f => !f.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
-            .Select(Path.GetFileNameWithoutExtension)
-            .Where(n => n != null && !n.StartsWith("_") && !n.StartsWith("__"))
-            .Select(n => n!)
-            .ToList();
+        try
+        {
+            return Directory.GetFiles(_basePath, "*.json")
+                .Where(f => !f.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
+                .Select(Path.GetFileNameWithoutExtension)
+                .Where(n => n != null && !n.StartsWith("_") && !n.StartsWith("__"))
+                .Select(n => n!)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            // Catching broadly, like the database providers do, so the boundary raises exactly one
+            // type whatever the backend failed with — a caller that has to enumerate the ways a
+            // directory walk can fail is back to being able to miss one. Logged here with the path
+            // and rethrown without it, so a caller-visible error cannot disclose the data
+            // directory's location.
+            _logger?.LogWarning(ex, "Error listing namespace files under '{BasePath}'", _basePath);
+            throw new NamespaceEnumerationException(ex);
+        }
     }
 
     /// <summary>

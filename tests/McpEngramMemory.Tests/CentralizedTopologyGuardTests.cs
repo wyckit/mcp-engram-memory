@@ -209,7 +209,7 @@ public class CentralizedTopologyGuardTests : IDisposable
             new Dictionary<string, string> { ["note"] = AliceEdgeSecret }, tenantId: ""));
         _clusters.CreateCluster(aliceClusterId, AlicePrivateNs, new[] { archiveId }, "alice's grouping", tenantId: "");
 
-        var edgesBefore = Json(_graph.GetEdgesForEntry(archiveId, tenantId: ""));
+        var edgesBefore = Json(_graph.GetStoredEdgesForEntry(archiveId, tenantId: ""));
         var membershipBefore = Json(_clusters.GetClusterMembershipsForEntry(archiveId, tenantId: ""));
         // Name the payload at stake, so the byte-equality below is a statement about Alice's
         // relation, weight and metadata and not just about a list staying the same length.
@@ -240,7 +240,7 @@ public class CentralizedTopologyGuardTests : IDisposable
         Assert.DoesNotContain(AliceEdgeSecret, reply);
 
         // THE PROPERTY: Alice's topology is byte-for-byte what it was.
-        Assert.Equal(edgesBefore, Json(_graph.GetEdgesForEntry(archiveId, tenantId: "")));
+        Assert.Equal(edgesBefore, Json(_graph.GetStoredEdgesForEntry(archiveId, tenantId: "")));
         Assert.Equal(membershipBefore, Json(_clusters.GetClusterMembershipsForEntry(archiveId, tenantId: "")));
 
         // Nothing was hung off the shared node in the other direction either — the traceability
@@ -310,7 +310,7 @@ public class CentralizedTopologyGuardTests : IDisposable
 
         // Control on the same fixture: the chain really is in the graph, so this is a stop and not
         // an empty traversal.
-        Assert.Equal(2, _graph.GetAllEdges(tenantId: "").Count);
+        Assert.Equal(2, _graph.GetStoredEdges(tenantId: "").Count);
     }
 
     // ── 5. OVER-CORRECTION CONTROLS: no duplicate anywhere, everything still works ──

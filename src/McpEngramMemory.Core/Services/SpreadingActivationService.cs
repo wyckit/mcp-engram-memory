@@ -7,6 +7,27 @@ namespace McpEngramMemory.Core.Services;
 /// Implements Collins &amp; Loftus spreading activation for graph-coupled energy transfer.
 /// When a memory is accessed, activation energy propagates to graph neighbors and cluster peers,
 /// pre-warming related memories for anticipatory retrieval.
+///
+/// This is a multi-hop WALK that WRITES, and it runs with no principal of its own, so the bare-id
+/// attribution rule applies to it in full. Graph adjacency and cluster membership are keyed
+/// (tenant, id) with no namespace, so an id the tenant holds in two namespaces names ONE node and
+/// ONE membership bucket shared by two entries: reaching either one reaches whatever hangs off a
+/// twin nobody showed this walk, and the boost that lands there is a write on a stranger's entry,
+/// observable afterwards in that entry's retrieval ordering.
+///
+/// Almost all of that is enforced at the boundary rather than here, and this class deliberately does
+/// NOT restate it. <see cref="KnowledgeGraph.GetNeighbors"/> applies
+/// <see cref="Graph.TopologyGuard.Sweep.IsEdgeUsable"/> to every edge it hands back, so no hop can
+/// cross an unattributable node; <see cref="ClusterManager.GetCluster"/> withholds an
+/// unattributable member and an unattributable summary from its own projection. A second copy of
+/// either test here would refuse nothing extra and would be one more place to keep in step.
+///
+/// ONE test is genuinely this class's, and it is the entry point.
+/// <see cref="ClusterManager.GetClustersForEntry"/> is unscreened by design — it answers "which
+/// clusters hold THIS id" and discloses no member but the one named — and its contract puts the
+/// gate on whoever supplies the id. That is this class, so <see cref="PropagateAccess"/> gates its
+/// root before asking. See <see cref="Graph.TopologyGuard"/> for why the test is ACL-blind, why an
+/// id no entry answers to is safe, and what one bit the suppression costs.
 /// </summary>
 public sealed class SpreadingActivationService
 {
@@ -46,6 +67,22 @@ public sealed class SpreadingActivationService
         // from merging their energy into whichever namespace was discovered first.
         var boosted = new Dictionary<(string Ns, string Id), float>();
 
+        // The root is the one id this class must judge itself, because the cluster phase enters
+        // membership through GetClustersForEntry, which is unscreened by contract and expects its
+        // caller to have gated the id. When the tenant holds this id in two namespaces the
+        // membership bucket is shared with an entry nobody showed this walk, so the clusters it
+        // reports are not necessarily the accessed entry's — and pre-warming their peers would push
+        // energy into a stranger's neighbourhood.
+        //
+        // The single-id overload, not a sweep: exactly one id is tested here (the hops and the
+        // cluster members are judged at the boundary), and this overload probes the candidate index
+        // for that id rather than listing the tenant's namespaces.
+        //
+        // Reaching nothing is exactly what an entry with no topology already reports, so failing
+        // closed is not a signal about what else exists.
+        if (!TopologyGuard.IsSafe(_index, id, tenantId))
+            return new SpreadingResult(id, 0, 0, 0f);
+
         // Phase 1: Graph-based spreading activation (within the caller's tenant)
         PropagateGraph(id, baseEnergy, depth: 0, boosted, tenantId);
 
@@ -82,13 +119,24 @@ public sealed class SpreadingActivationService
 
     /// <summary>
     /// Recursive graph-based energy propagation with fan-out attenuation and depth cutoff.
+    ///
+    /// No topology test of its own, and that is the boundary fix working rather than an omission.
+    /// <see cref="KnowledgeGraph.GetNeighbors"/> withholds any edge whose far endpoint is
+    /// unattributable, so an ambiguous intermediate is not merely absent from the boosts — it is
+    /// absent from the adjacency this walk recurses into, which is the half that matters. A node
+    /// crossed and then filtered has already led the walk to a twin's descendants.
     /// </summary>
-    private void PropagateGraph(string id, float energy, int depth, Dictionary<(string Ns, string Id), float> boosted, string tenantId)
+    private void PropagateGraph(string id, float energy, int depth, Dictionary<(string Ns, string Id), float> boosted,
+        string tenantId)
     {
         if (depth >= MaxPropagationDepth || energy < MinPropagationThreshold)
             return;
 
         var neighborsResult = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: tenantId);
+
+        // Degree is the ADMITTED neighbour count, which is the only one available here and also the
+        // right one: attenuating by a fan-out that included withheld edges would make the
+        // suppression readable off the energy the survivors received.
         int nodeDegree = neighborsResult.Neighbors.Count;
 
         foreach (var neighbor in neighborsResult.Neighbors)
@@ -105,13 +153,21 @@ public sealed class SpreadingActivationService
             Accumulate(boosted, neighborNs, neighborId, boost);
 
             // Recursive spread at reduced energy. The bare id is correct here: graph adjacency is
-            // keyed (tenant, id) with no namespace dimension, so there is nothing else to pass.
+            // keyed (tenant, id) with no namespace dimension, so there is nothing else to pass — and
+            // this id already passed the edge test that admitted it, so it names one entry.
             PropagateGraph(neighborId, boost * RecursiveDecay, depth + 1, boosted, tenantId);
         }
     }
 
     /// <summary>
     /// Cluster-based pre-warming: accessing any member activates cluster summary and top peers.
+    ///
+    /// No topology test of its own, and both halves of that are load-bearing. The bare id it enters
+    /// by is <paramref name="id"/>, which <see cref="PropagateAccess"/> gated precisely because
+    /// <see cref="ClusterManager.GetClustersForEntry"/> does not. Every peer and summary it boosts
+    /// then arrives through <see cref="ClusterManager.GetCluster"/>, whose projection withholds
+    /// anything it cannot attribute to one entry — so a second copy of that predicate here would be
+    /// one more place to keep in step with Core for no additional refusal.
     /// </summary>
     private void PropagateCluster(string id, float baseEnergy, Dictionary<(string Ns, string Id), float> boosted, string tenantId)
     {

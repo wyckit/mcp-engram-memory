@@ -275,6 +275,21 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         }
     }
 
+    /// <summary>
+    /// Every namespace with at least one persisted row. A returned list means the query ran: an
+    /// empty one is a store with no namespaces, never a store that could not be read.
+    ///
+    /// This throws where the other read paths log and degrade, and the asymmetry is deliberate. A
+    /// failed <see cref="LoadNamespace"/> yields one unreadable namespace, and the caller can still
+    /// tell that namespace apart from the rest. A failed listing yields an empty set that is
+    /// indistinguishable from an empty database, and every downstream caller reads it as fact: the
+    /// full-load sweep would mark itself complete over it, leaving persisted entries invisible for
+    /// the life of the process. Invisible entries are not merely missing — an unlisted twin makes a
+    /// duplicated id look unique, so the tenant-wide duplicate test that topology fails closed on
+    /// passes instead. A transient failover, which is routine on this backend, is exactly the case
+    /// that must not be recorded as an empty store.
+    /// </summary>
+    /// <exception cref="NamespaceEnumerationException">The listing query failed.</exception>
     public IReadOnlyList<string> GetPersistedNamespaces()
     {
         try
@@ -292,8 +307,11 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         }
         catch (Exception ex)
         {
+            // Logged here with the full backend detail and rethrown without it: the wrapper's
+            // message reaches callers, and a SqlException's — which can name the server and the
+            // schema — does not.
             _logger?.LogWarning(ex, "Error listing namespaces from SQL Server");
-            return Array.Empty<string>();
+            throw new NamespaceEnumerationException(ex);
         }
     }
 

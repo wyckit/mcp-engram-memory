@@ -27,6 +27,14 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// similar_to. A per-scan edge cap (configurable via <see cref="DecayConfig"/>)
 /// bounds the cost on dense namespaces; subsequent scans pick up where the cap
 /// left off.
+///
+/// <see cref="AutoLinkResult.EdgesCreated"/> is the count the GRAPH accepted, never the count this
+/// scan offered. The two differ: this sweep runs with no principal and no namespace of its own, so
+/// it can propose an edge whose endpoint id names two of the tenant's namespaces, and Core declines
+/// that endpoint because the node it would land on is shared with an entry nobody showed the sweep.
+/// A number that counted attempts would be a number no edge in the graph answers to, and the
+/// background service, the tool that surfaces it, and every operator reading it would inherit the
+/// error.
 /// </summary>
 public sealed class AutoLinkScanner
 {
@@ -115,13 +123,26 @@ public sealed class AutoLinkScanner
         // already-existing edges has slack and we still hit our true cap.
         var pairs = _duplicateDetector.FindDuplicates(candidates, effectiveThreshold, effectiveCap * 2);
 
-        int created = 0;
         int skippedExisting = 0;
         bool hitCap = false;
 
+        // Proposed first, written once. Two reasons, and both are load-bearing.
+        //
+        // COST: KnowledgeGraph screens each endpoint against a listing of the tenant's namespaces,
+        // and AddEdge builds that listing per call. Adding in a loop therefore re-lists — and so
+        // reloads the store — once per candidate edge, on a sweep that runs over every namespace
+        // every six hours. AddEdges builds one listing for the whole batch.
+        //
+        // HONESTY: AddEdges reports what it actually wrote. An endpoint the tenant holds in two
+        // namespaces names a node shared with an entry this sweep was never shown, so Core declines
+        // it; counting the attempt would put a number in AutoLinkResult.EdgesCreated that no edge in
+        // the graph answers to.
+        var pending = new List<GraphEdge>();
+        var proposed = new HashSet<(string Src, string Dst)>();
+
         foreach (var (idA, idB, sim) in pairs)
         {
-            if (created >= effectiveCap)
+            if (pending.Count >= effectiveCap)
             {
                 hitCap = true;
                 break;
@@ -131,21 +152,34 @@ public sealed class AutoLinkScanner
             // re-scans deterministic — we always try to add the same edge object.
             var (src, dst) = string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
 
+            // At most one edge per unordered pair. The graph REPLACES a same source/target/relation
+            // edge rather than appending one, so a pair offered twice would be counted twice and
+            // stored once — the precise discrepancy this count exists to rule out.
+            if (!proposed.Add((src, dst)))
+                continue;
+
             if (HasAnyEdgeBetween(src, dst, tenantId))
             {
                 skippedExisting++;
                 continue;
             }
 
-            _graph.AddEdge(new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId));
-            created++;
+            pending.Add(new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId));
         }
 
-        if (created > 0)
+        int created = pending.Count > 0 ? _graph.AddEdges(pending) : 0;
+        int refused = pending.Count - created;
+
+        // The log MAY name refusals where a reply may not: this runs as background maintenance with
+        // no caller, so the count cannot become an "a twin exists somewhere in your tenant" oracle —
+        // and an operator debugging a namespace that stubbornly refuses to densify needs to be able
+        // to tell suppression apart from a namespace with nothing similar in it. AutoLinkResult
+        // carries no such field for the same reason inverted: it does reach a caller.
+        if (created > 0 || refused > 0)
         {
             _logger?.LogInformation(
-                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Skipped} skipped (existing edge), {Examined} pairs examined{CapNote}.",
-                ns, created, skippedExisting, pairs.Count, hitCap ? " (hit cap)" : "");
+                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Skipped} skipped (existing edge), {Examined} pairs examined{CapNote}.",
+                ns, created, refused, skippedExisting, pairs.Count, hitCap ? " (hit cap)" : "");
         }
 
         return new AutoLinkResult(ns, candidates.Count, pairs.Count, created, skippedExisting, hitCap, notScanned);

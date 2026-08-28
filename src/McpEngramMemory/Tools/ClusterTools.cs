@@ -97,8 +97,23 @@ public sealed class ClusterTools
         if (result is null || !_access.CanRead(result.Namespace))
             return $"Cluster '{clusterId}' not found.";
 
-        // Members can live outside the cluster's own namespace if they were added by id, so filter
-        // them independently against the caller's read access.
+        // Two independent tests stand between a stored membership and this reply, and only one of
+        // them belongs at the tool.
+        //
+        // ATTRIBUTION is settled in Core. Membership is keyed (tenant, id) with no namespace, so an
+        // id the tenant holds in two namespaces names ONE bucket shared by two entries;
+        // ClusterManager's projection therefore withholds such a member before it ever reaches here.
+        // That test is ACL-blind and could not be made at this layer even if it were repeated: the
+        // twin that makes the bucket shared is exactly the one this caller cannot see, and the bare
+        // id resolves to whichever twin the locator picks — quite possibly the CALLER'S OWN readable
+        // one, which would then be presented as a member of somebody else's cluster and pass every
+        // check below.
+        //
+        // ACCESS is genuinely this tool's, because it is the only layer that has a principal. A
+        // member that survived Core's projection is attributable to exactly one entry, so its
+        // Namespace is authoritative and CanRead on it means what it says. The filter is not implied
+        // by the read check on the cluster above: members added by id can live outside the cluster's
+        // own namespace.
         var visibleMembers = result.Members.Where(m => _access.CanRead(m.Namespace)).ToList();
         return result with { Members = visibleMembers };
     }
