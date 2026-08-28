@@ -236,14 +236,19 @@ public class NamespaceCleanupTests : IDisposable
         var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
         var stale = DateTimeOffset.UtcNow.AddHours(-48);
 
-        // "shared" is held by BOTH the stale debate namespace and a live one inside tenant t1.
+        // "shared" ends up held by BOTH the stale debate namespace and a live one inside tenant t1.
         // Graph adjacency is keyed by (tenant, bare id), so the single edge below is reachable
         // from either entry and nothing at the cascade level can attribute it to one of them.
-        SeedTenantEntry("shared", debateNs, "debate copy", stale);
+        //
+        // Seed order matters and mirrors how this state actually arises: the edge is written while
+        // the id is still UNIQUE, and the collision appears afterwards. Writing it the other way
+        // round would be refused outright — topology writes fail closed on a tenant-wide duplicate —
+        // so a seed that created both twins first would be testing an unreachable state.
         SeedTenantEntry("shared", LiveNs, "live copy");
         SeedTenantEntry("live-anchor", LiveNs, "live anchor");
         _graph.AddEdge(new GraphEdge("shared", "live-anchor", "similar_to", tenantId: PurgeTenant));
         Assert.Single(_graph.GetEdgesForEntry("shared", tenantId: PurgeTenant));
+        SeedTenantEntry("shared", debateNs, "debate copy", stale);
 
         var result = Assert.IsType<PurgeDebatesResult>(
             await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));
@@ -277,13 +282,14 @@ public class NamespaceCleanupTests : IDisposable
         var stale = DateTimeOffset.UtcNow.AddHours(-48);
 
         // Same ambiguity as above, but the topology at risk is cluster membership, which is keyed
-        // by (tenant, bare id) for exactly the same reason.
-        SeedTenantEntry("shared", debateNs, "debate copy", stale);
+        // by (tenant, bare id) for exactly the same reason — and seeded in the same order, for the
+        // same reason: membership is established while the id is unique, and the twin arrives after.
         SeedTenantEntry("shared", LiveNs, "live copy");
         SeedTenantEntry("live-anchor", LiveNs, "live anchor");
         _clusters.CreateCluster("live-cluster", LiveNs, new[] { "shared", "live-anchor" },
             "live cluster", tenantId: PurgeTenant);
         Assert.Equal(2, _clusters.GetCluster("live-cluster", tenantId: PurgeTenant)!.MemberCount);
+        SeedTenantEntry("shared", debateNs, "debate copy", stale);
 
         var result = Assert.IsType<PurgeDebatesResult>(
             await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));

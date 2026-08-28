@@ -176,9 +176,11 @@ public sealed class CognitiveIndex : IDisposable
     /// candidate index is exact only over partitions materialized in this process.
     /// Dropping the load would turn a namespace nothing has touched into a silent miss — or worse,
     /// leave an ambiguous id looking unique because only one twin happened to be resident, which
-    /// is precisely the arbitrary-twin outcome the ambiguity rule exists to refuse. The saving
-    /// being banked is the probing, not the loading: after the first call each EnsureLoaded is a
-    /// dictionary hit, while each probe removed was a lock acquisition.
+    /// is precisely the arbitrary-twin outcome the ambiguity rule exists to refuse. Keeping it is
+    /// nearly free after the first call: <c>NamespaceStore.LoadAll</c> records that its
+    /// sweep completed and thereafter returns on two atomic reads, so a resolution enumerates the
+    /// storage provider once per process rather than once per lookup. Both halves of the old cost
+    /// are gone — the per-namespace probes and the namespace-count scaling of the load.
     ///
     /// Returns namespaces, never entries, so it discloses nothing on its own — the caller still
     /// applies its own access predicate before looking inside any of them.
@@ -384,10 +386,11 @@ public sealed class CognitiveIndex : IDisposable
     /// The namespaces actually probed come from <see cref="GetNamespacesContaining"/>, so the cost
     /// is one or two partition reads rather than one per namespace the tenant owns.
     ///
-    /// Pass <paramref name="namespaceSnapshot"/> when guarding a sweep of many ids. Omitting it
-    /// re-lists the tenant's namespaces per call, and that listing loads every persisted namespace
-    /// — which turns a cascade over one namespace's entries into one full store reload per entry.
-    /// A supplied snapshot still restricts the walk to the namespaces it names.
+    /// Pass <paramref name="namespaceSnapshot"/> to bound which namespaces the count is willing to
+    /// consider — a sweep that has already listed them says so rather than re-listing per id. It is
+    /// no longer a defence against a full store reload per entry, because
+    /// <c>NamespaceStore.LoadAll</c> now caches its completion; what it still does, and what
+    /// callers depend on, is restrict the walk to the namespaces it names.
     /// </summary>
     public int CountNamespacesContaining(
         string id, string tenantId, IReadOnlyList<string>? namespaceSnapshot = null)
@@ -409,9 +412,9 @@ public sealed class CognitiveIndex : IDisposable
         // dropping it changes no outcome — only the number of partitions touched.
         //
         // A caller-supplied snapshot means the caller has ALREADY listed the tenant's namespaces,
-        // and that listing is what loads every persisted namespace, so the index is complete
-        // without reloading here. That is the entire reason the parameter exists: it keeps a sweep
-        // over one namespace's entries from triggering a full store reload per entry.
+        // and that listing is what loaded every persisted namespace, so the index is complete
+        // without routing through GetNamespacesContaining here. The snapshot is a restriction the
+        // caller chose to impose, not a performance escape hatch — LoadAll no longer re-enumerates.
         IReadOnlyList<string> candidates = namespaceSnapshot is null
             ? GetNamespacesContaining(id, tenant)
             : _store.GetCandidateNamespaces(id, tenant);

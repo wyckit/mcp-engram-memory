@@ -24,7 +24,13 @@ namespace McpEngramMemory.Tests;
 /// through <see cref="EntryAccessResolver"/> is ACL-filtered by design and so cannot see the twin
 /// that makes the node shared — it authorizes the entry it found and then the operation touches a
 /// node that also belongs to an entry it was never shown. Authorize object A, act on object B.
-/// Topology sites therefore add the ACL-BLIND tenant-wide test in <see cref="BareIdTopology"/>.
+/// Topology sites therefore add the ACL-BLIND tenant-wide test in
+/// <see cref="McpEngramMemory.Core.Services.Graph.TopologyGuard"/>.
+///
+/// These tests drive the TOOL surface, which is what they are for: they pin the caller-visible
+/// reply, and the reply is the part the tool decides. That the predicate itself now lives in Core
+/// is pinned separately by CentralizedTopologyGuardTests, which drives the writers with no tool in
+/// the path at all.
 ///
 /// Every principal here is genuinely IDENTIFIED. <c>NamespaceRegistry.HasAccess</c> short-circuits
 /// <c>AgentIdentity.Default</c> to unrestricted, so a default-agent version of these tests would
@@ -211,6 +217,35 @@ public class BareIdTopologyIsolationTests : IDisposable
         Assert.Empty(bob.GetNeighbors(VictimId).Neighbors);
         Assert.DoesNotContain(AliceIndexNote, suppressed);
         Assert.Equal(genuineMiss.Replace(MissingId, VictimId, StringComparison.Ordinal), suppressed);
+    }
+
+    /// <summary>
+    /// The half a safe seed does not buy. Bob may read <see cref="AliceSharedNs"/>, so
+    /// <see cref="AliceIndexNote"/> is a legitimate seed for him and it is unique in the tenant —
+    /// the seed test opens, correctly. The incoming edge hanging off it is ALICE'S, and its far
+    /// endpoint is the shared id. Once Bob owns a twin of that id the legacy locator resolves the
+    /// endpoint into HIS namespace, the read filter passes it, and Alice's edge comes back to him
+    /// with her relation, weight and metadata attached to his own entry. This is a payload leak,
+    /// not the one accepted bit, which is why the neighbor is filtered and not merely the seed.
+    /// </summary>
+    [Fact]
+    public void GetNeighbors_OnASafeSeed_WithholdsAnEdgeWhoseFarEndpointIsAmbiguous()
+    {
+        BobCreatesTheTwin();
+        var bob = Graph("bob");
+
+        var neighbors = bob.GetNeighbors(AliceIndexNote);
+
+        Assert.Empty(neighbors.Neighbors);
+        // Emptiness alone would also pass against a reply that leaked the same facts elsewhere,
+        // so pin the payload: Alice's edge metadata and the id her edge names.
+        var json = Json(neighbors);
+        Assert.DoesNotContain(AliceEdgeSecret, json);
+        Assert.DoesNotContain(VictimId, json);
+
+        // Control on the same fixture: the edge really is on that node, so the emptiness above is
+        // suppression and not an empty graph.
+        Assert.NotEmpty(_graph.GetEdgesForEntry(AliceIndexNote, tenantId: ""));
     }
 
     [Fact]

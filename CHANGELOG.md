@@ -37,7 +37,9 @@ All notable changes to this project will be documented in this file.
     every identified tenant and left them paying a foreground eigendecomposition on first use.
     Fault isolation stays on the partition now that a tenant loop wraps the namespace loop:
     neither a failing basis nor an unreadable tenant's namespace enumeration aborts the sweep for
-    the partitions after it, and each warning names both tenant and namespace. Tenant discovery
+    the partitions after it. A per-partition warning names both tenant and namespace; a failure to
+    enumerate a tenant's namespaces at all can only name the tenant, since no namespace has been
+    established at that point. Tenant discovery
     costs a full `NamespaceStore.LoadAll` that the old no-tenant enumeration did not pay; it is
     idempotent per namespace, and it runs on the background thread after the existing 5s startup
     delay, so the startup path is unaffected.

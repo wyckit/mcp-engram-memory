@@ -195,6 +195,28 @@ public sealed class IntelligenceTools
         return _scanner.GetCollapseHistory(ns, tenantId: _access.TenantId);
     }
 
+    /// <summary>
+    /// Merge two entries the caller can write in one namespace.
+    ///
+    /// Two different objects are touched here and they are authorized differently. The ENTRY work
+    /// - metadata union, access-count roll-up, archival - is namespace-qualified through
+    /// <c>_index.Get(id, ns, tenant)</c> and the <c>CanWrite(ns)</c> gate above it, so it can only
+    /// ever land on the two entries the caller named in the namespace they hold.
+    ///
+    /// The TOPOLOGY work is not namespace-qualified and cannot be: graph adjacency and cluster
+    /// membership are keyed (tenant, bare id), so <c>TransferEdges</c>/<c>TransferMembership</c>
+    /// reach every same-id entry in the tenant. That is what let a caller who created writable
+    /// twins of two ids rewire another principal's private graph through this tool. The fix is not
+    /// a gate here: <see cref="KnowledgeGraph"/> and <see cref="ClusterManager"/> now decline an
+    /// ambiguous bare id themselves, so this path is covered along with every other writer.
+    ///
+    /// Deliberately no tool-level refusal on top of that. Refusing the whole merge when an id is
+    /// ambiguous would deny a caller a legitimate, correctly-authorized operation on their OWN two
+    /// entries merely because someone else in the tenant happens to hold the same id - and it
+    /// would announce that fact. The reply stays honest instead by reporting the counts Core
+    /// actually returned: a merge that moved no topology says it moved none, which is exactly what
+    /// merging two unlinked entries has always said.
+    /// </summary>
     [McpServerTool(Name = "merge_memories", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Merge two duplicate entries into one. Keeps first entry's vector, combines metadata/access counts, transfers edges and clusters, archives the second. Use after detect_duplicates.")]
     public string MergeMemories(
@@ -234,16 +256,20 @@ public sealed class IntelligenceTools
         _index.Upsert(updated);
         _access.ClaimOnWrite(ns);
 
-        // Transfer graph edges from archived entry to kept entry (within this tenant)
+        // Transfer graph edges from archived entry to kept entry (within this tenant). Both counts
+        // below are whatever Core actually did, never what was attempted - that is what keeps the
+        // reply truthful when an ambiguous id made the transfer a no-op.
         int edgesTransferred = _graph.TransferEdges(archiveId, keepId, tenantId: _access.TenantId);
 
         // Transfer cluster memberships
         int clustersTransferred = _clusters.TransferMembership(archiveId, keepId, tenantId: _access.TenantId);
 
-        // Archive the duplicate via lifecycle engine
+        // Archive the duplicate via lifecycle engine. Namespace-qualified, so it reaches only the
+        // caller's own entry even when the id is held elsewhere in the tenant.
         _lifecycle.PromoteMemory(archiveId, "archived", ns, tenantId: _access.TenantId);
 
-        // Add traceability edge
+        // Add traceability edge. Not reported either way: the reply never claims this edge, so a
+        // refusal here stays invisible rather than becoming a "a twin exists" signal.
         _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to", 1.0f, null, tenantId: _access.TenantId));
 
         return $"Merged '{archiveId}' into '{keepId}'. " +

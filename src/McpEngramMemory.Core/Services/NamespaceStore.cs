@@ -50,6 +50,14 @@ internal sealed class NamespaceStore
     // Loaded tracking + load locks are keyed by NAMESPACE (the persistence unit): one LoadNamespace
     // call materializes every tenant's rows for that ns and buckets them into the right partition.
     private readonly ConcurrentDictionary<string, bool> _loadedNamespaces = new();
+    // Completion tracking for LoadAll. _namespaceSetGeneration is bumped whenever a namespace is
+    // un-loaded — the only in-process event that can make "every persisted namespace has been
+    // materialized" stop being true — and _loadedGeneration records the generation the last sweep
+    // that ran to completion started under. Monotonic, so a completion recorded against an older
+    // generation can never be mistaken for a current one; -1 because generation 0 is the initial,
+    // never-swept state.
+    private long _namespaceSetGeneration;
+    private long _loadedGeneration = -1;
     // LEGACY-ONLY reverse index: id → ns. Only legacy-tenant ("") entries are tracked here so the
     // global id-based operations resolve strictly within the legacy tenant.
     private readonly ConcurrentDictionary<string, string> _idToNamespace = new();
@@ -58,9 +66,21 @@ internal sealed class NamespaceStore
     // several namespaces of one tenant, and a bare-id resolver that saw only one of them would
     // call an ambiguous id unique and then act on an arbitrary twin. Keyed by value tuple so
     // equality is structural and ordinal, and valued by a ConcurrentDictionary used as a set
-    // because the BCL has no concurrent set: both halves stay lock-free, which is what lets the
-    // per-partition write locks above stay the only locks on the hot path.
+    // because the BCL has no concurrent set, so a lookup never blocks a placement or vice versa.
     private readonly ConcurrentDictionary<(string Tenant, string Id), ConcurrentDictionary<string, byte>> _idCandidates = new();
+    // Publishing a bucket and retiring an emptied one are the one pair that must not interleave: a
+    // retirement decides on emptiness and then unpublishes that instance, and a placement written
+    // into the same instance in between is left live but unreachable. That is not merely a lost
+    // entry — an id occupying two namespaces then reads back as occupying one, so the tenant-wide
+    // duplicate test that topology fails closed on passes instead. The two are therefore serialized
+    // per (tenant, id) by these stripes, while lookups stay lock-free and unaffected. Striping
+    // rather than a lock object per key because a per-key lock would itself need the
+    // publish/retire protocol it exists to provide. 64 is deliberately modest: the critical section
+    // is two dictionary operations, so a hash collision between unrelated ids costs almost nothing,
+    // and the array is allocated once per store.
+    private const int CandidateStripeCount = 64;
+    private readonly object[] _candidateStripes =
+        Enumerable.Range(0, CandidateStripeCount).Select(_ => new object()).ToArray();
     // BM25/HNSW sub-indexes are keyed by the composed partition-key STRING (see PartitionKey).
     private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
     private readonly ConcurrentDictionary<string, object> _loadLocks = new();
@@ -189,6 +209,18 @@ internal sealed class NamespaceStore
         var key = new NsKey(string.Empty, ns);
         RemoveNamespace(key);
         _loadedNamespaces.TryRemove(ns, out _);
+
+        // Un-load first, invalidate second, and never the other way round. LoadAll reads the
+        // generation before its sweep, so bumping after the un-load guarantees that any completion
+        // published by a sweep which ran with this namespace already gone carries a generation the
+        // next caller will reject. Bumping first would let such a sweep read the NEW generation,
+        // find the namespace still marked loaded, and then publish a completion that our removal
+        // falsifies a moment later — a namespace persisted but permanently unmaterialized, which is
+        // the stale MISS the candidate index must never serve.
+        //
+        // The NsKey overload deliberately does not bump: it empties a partition but leaves the
+        // namespace loaded, so "every persisted namespace has been materialized" still holds.
+        Interlocked.Increment(ref _namespaceSetGeneration);
     }
 
     /// <summary>
@@ -324,11 +356,45 @@ internal sealed class NamespaceStore
         }
     }
 
-    /// <summary>Load all persisted namespaces from disk.</summary>
+    /// <summary>
+    /// Materialize every persisted namespace, then remember that it was done.
+    ///
+    /// The enumeration is the expensive half and it is what the cache removes: a directory listing
+    /// for the JSON provider, a <c>SELECT DISTINCT ns</c> for the database ones, paid on every call,
+    /// while the <see cref="EnsureLoaded"/> that follows is a dictionary hit for everything already
+    /// resident. Every bare-id resolution reaches this method (see
+    /// <see cref="GetCandidateNamespaces"/>), so leaving the enumeration uncached puts one storage
+    /// round trip on a lookup that otherwise touches only memory — the end-to-end scaling the
+    /// candidate index was supposed to remove.
+    ///
+    /// Caching is exactly as complete as re-sweeping, for this process. A namespace persisted BY
+    /// this process was materialized before it could be written — the write paths call
+    /// <see cref="EnsureLoaded"/> under the partition write lock before creating the partition — so
+    /// it is already resident and already in the candidate index without any sweep. The one
+    /// in-process event that falsifies the claim is un-loading a namespace, and
+    /// <see cref="RemoveNamespace(string)"/> reports that by bumping the generation. A namespace
+    /// another PROCESS creates is not discovered, but that boundary already existed: EnsureLoaded
+    /// never re-reads a namespace it has loaded, so another process's rows in any known namespace
+    /// were already invisible, and one server process per data directory is the documented
+    /// supported topology.
+    ///
+    /// Concurrency: the generation is read BEFORE the sweep and republished after it, so an un-load
+    /// landing mid-sweep leaves an already-stale generation recorded and the next caller sweeps
+    /// again. Two threads arriving cold may both sweep; EnsureLoaded is idempotent, so that costs
+    /// one redundant enumeration and nothing else.
+    /// </summary>
     public void LoadAll()
     {
+        long generation = Interlocked.Read(ref _namespaceSetGeneration);
+        if (Interlocked.Read(ref _loadedGeneration) == generation)
+            return;
+
         foreach (var ns in _persistence.GetPersistedNamespaces())
             EnsureLoaded(ns);
+
+        // Exchange rather than a plain store: it fences the sweep ahead of the publication, so no
+        // other thread can observe the completion before the namespaces it vouches for are loaded.
+        Interlocked.Exchange(ref _loadedGeneration, generation);
     }
 
     /// <summary>
@@ -451,6 +517,11 @@ internal sealed class NamespaceStore
     /// <see cref="LoadAll"/>). Returning a stale-but-superset answer would be tolerable — every
     /// caller re-reads the partition to confirm — but a stale MISS would not, which is why every
     /// path that can move an id between partitions maintains this index.
+    ///
+    /// The lookup itself takes no lock and still cannot miss a placement that is live for the whole
+    /// call: a bucket is unpublished only while empty and only under its stripe, so the instance
+    /// read here cannot have been retired while it still held the placement, and no bucket
+    /// published afterwards can hold one that already existed when this read began.
     /// </summary>
     public IReadOnlyList<string> GetCandidateNamespaces(string entryId, string tenantId)
     {
@@ -464,49 +535,59 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>
-    /// Add one placement to the candidate index. Lock-free, and safe against a concurrent
-    /// <see cref="UntrackCandidate"/> for the same id in a DIFFERENT namespace — which genuinely
-    /// races, because those two run under two different per-partition write locks.
+    /// The stripe that serializes publication and retirement for one candidate key. Hashing the
+    /// whole key rather than the id alone keeps two tenants that legitimately share an id from
+    /// colliding on the same stripe more often than chance.
+    /// </summary>
+    private object CandidateStripe((string Tenant, string Id) key)
+        => _candidateStripes[key.GetHashCode() & (CandidateStripeCount - 1)];
+
+    /// <summary>
+    /// Add one placement to the candidate index, under this key's stripe so it cannot interleave
+    /// with a retirement of the same key. Placements for other keys, and every lookup, run
+    /// unblocked; a concurrent <see cref="UntrackCandidate"/> for the same id in a DIFFERENT
+    /// namespace genuinely races, because those two run under two different per-partition write
+    /// locks and nothing above this serializes them.
     /// </summary>
     private void TrackCandidate(string entryId, string ns, string tenantId)
     {
         var key = (tenantId, entryId);
-        while (true)
+        lock (CandidateStripe(key))
         {
-            var bucket = _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>());
-            bucket[ns] = 0;
-
-            // Re-read what is published. UntrackCandidate retires a bucket it observed empty, and
-            // that can land between our GetOrAdd and our write — stranding this namespace in a
-            // dictionary no lookup can reach. A missing candidate is a silently wrong resolution
-            // (the worst outcome here), so we republish instead. The loop can only repeat while
-            // another thread keeps retiring buckets for this same id, and each retirement it
-            // observes is a real concurrent delete.
-            if (_idCandidates.TryGetValue(key, out var published) && ReferenceEquals(published, bucket))
-                return;
+            // Fetching the bucket and writing into it is one atomic step against a retirement, so
+            // the instance written here is still the published one when the stripe is released. No
+            // post-write re-check can substitute for that: a retirement evaluates emptiness BEFORE
+            // the write and unpublishes AFTER it, so the re-check passes and the placement is lost
+            // anyway. That ordering is what the previous lock-free version could not close.
+            _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>())[ns] = 0;
         }
     }
 
     /// <summary>
     /// Remove one placement from the candidate index, retiring the bucket once it is empty so a
-    /// store that churns ids does not retain a dictionary per id ever seen.
+    /// store that churns ids does not retain a dictionary per id ever seen. Retirement is the whole
+    /// reason the stripe exists: emptiness has to still hold at the moment the instance is
+    /// unpublished, and only mutual exclusion with <see cref="TrackCandidate"/> makes it hold.
     /// </summary>
     private void UntrackCandidate(string entryId, string ns, string tenantId)
     {
         var key = (tenantId, entryId);
-        if (!_idCandidates.TryGetValue(key, out var bucket))
-            return;
+        lock (CandidateStripe(key))
+        {
+            if (!_idCandidates.TryGetValue(key, out var bucket))
+                return;
 
-        bucket.TryRemove(ns, out _);
-        if (!bucket.IsEmpty)
-            return;
+            bucket.TryRemove(ns, out _);
+            if (!bucket.IsEmpty)
+                return;
 
-        // The KeyValuePair overload again, for the same reason as in RemoveNamespace: only the
-        // exact instance observed empty is unpublished, so a racing TrackCandidate that already
-        // published a fresh bucket keeps it. The reverse interleaving — our removal landing after
-        // that thread's write — is closed by the republish check in TrackCandidate.
-        _idCandidates.TryRemove(
-            new KeyValuePair<(string Tenant, string Id), ConcurrentDictionary<string, byte>>(key, bucket));
+            // Plain TryRemove, not the value-matching overload used in RemoveNamespace. Under the
+            // stripe no other thread can have published a different bucket for this key, so there
+            // is nothing left for a value match to protect — and it never protected the case that
+            // mattered, since the observed instance and the instance a racing placement just wrote
+            // into are the same object.
+            _idCandidates.TryRemove(key, out _);
+        }
     }
 
     // ── HNSW Index Management (keyed by composed partition key) ──
