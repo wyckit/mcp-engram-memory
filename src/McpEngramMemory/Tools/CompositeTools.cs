@@ -33,15 +33,14 @@ public sealed class CompositeTools
     private readonly ExpertDispatcher _dispatcher;
     private readonly MetricsCollector _metrics;
     private readonly SpectralRetrievalReranker _spectral;
-    private readonly NamespaceRegistry _registry;
-    private readonly IPrincipalContext _principal;
+    private readonly NamespaceAccess _access;
 
     [ActivatorUtilitiesConstructor]
     public CompositeTools(
         CognitiveIndex index, IEmbeddingService embedding, KnowledgeGraph graph,
         LifecycleEngine lifecycle, ExpertDispatcher dispatcher, MetricsCollector metrics,
         SpectralRetrievalReranker spectral,
-        NamespaceRegistry registry, IPrincipalContext principal)
+        NamespaceAccess access)
     {
         _index = index;
         _embedding = embedding;
@@ -50,24 +49,31 @@ public sealed class CompositeTools
         _dispatcher = dispatcher;
         _metrics = metrics;
         _spectral = spectral;
-        _registry = registry;
-        _principal = principal;
+        _access = access;
     }
 
+    /// <summary>Compatibility constructor for in-process hosts compiled against the v1 API.</summary>
     public CompositeTools(
         CognitiveIndex index, IEmbeddingService embedding, KnowledgeGraph graph,
         LifecycleEngine lifecycle, ExpertDispatcher dispatcher, MetricsCollector metrics,
         SpectralRetrievalReranker spectral,
         NamespaceRegistry registry, AgentIdentity agent)
-        : this(index, embedding, graph, lifecycle, dispatcher, metrics, spectral, registry,
-            new PrincipalContext(string.Empty, agent.AgentId)) { }
+        : this(index, embedding, graph, lifecycle, dispatcher, metrics, spectral,
+            new NamespaceAccess(registry, agent)) { }
 
-    private bool CanRead(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
-    private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
-    private static string WriteDenied(string ns) =>
-        $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
+    /// <summary>
+    /// Resolve a link target named by the caller, then authorize it at the verb we are about
+    /// to perform on it. An id reaching us in <c>relatedIds</c> carries no namespace, so it has
+    /// to be resolved before it can be checked, and the resolution itself only considers
+    /// namespaces this principal may write — an invisible namespace must neither win the
+    /// resolution nor make it ambiguous, or "your link silently did nothing" becomes a signal
+    /// that a private twin of that id exists. <paramref name="preferredNs"/> is the namespace
+    /// the caller is already authorized for, so a same-id entry elsewhere in the tenant can
+    /// neither hijack the link nor blank it. Write access, not read, matches
+    /// <c>GraphTools.LinkMemories</c>, which requires it on both endpoints.
+    /// </summary>
+    private CognitiveEntry? ResolveLinkTarget(string targetId, string preferredNs) =>
+        EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
 
     [McpServerTool(Name = "remember", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Save a new memory with automatic duplicate detection and graph linking — the default way to store anything. Don't use `store_memory` directly unless you need to supply a raw embedding vector or skip duplicate checking.")]
@@ -82,7 +88,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(id)) return "Error: id must not be empty.";
         if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
         if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
-        if (!CanWrite(ns)) return WriteDenied(ns);
+        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("remember");
         var state = lifecycleState ?? "stm";
@@ -96,7 +102,7 @@ public sealed class CompositeTools
 
         // 2. Check for near-duplicates BEFORE storing (search by vector similarity)
         var existing = _index.Search(vector, ns, k: 3, minScore: 0.90f,
-            tenantId: _principal.TenantId);
+            tenantId: _access.TenantId);
         var highDup = existing.FirstOrDefault(r => r.Score >= 0.95f && r.Id != id && !r.IsSummaryNode);
         if (highDup is not null)
         {
@@ -109,14 +115,14 @@ public sealed class CompositeTools
 
         // 3. Store the entry
         var entry = new CognitiveEntry(id, vector, ns, text, category,
-            MetadataNormalizer.Normalize(metadata), state, tenantId: _principal.TenantId);
+            MetadataNormalizer.Normalize(metadata), state, tenantId: _access.TenantId);
         _index.Upsert(entry);
-        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
+        _access.ClaimOnWrite(ns);
         actions.Add("stored");
 
         // 4. Find related memories and auto-link (use pre-store search results + fresh search)
         var related = existing.Count > 0 ? existing : _index.Search(
-            vector, ns, k: 5, minScore: 0.65f, tenantId: _principal.TenantId);
+            vector, ns, k: 5, minScore: 0.65f, tenantId: _access.TenantId);
         var links = new List<string>();
         foreach (var result in related)
         {
@@ -125,11 +131,8 @@ public sealed class CompositeTools
             if (result.Score < 0.65f) continue;
 
             var relation = result.Score >= 0.85f ? "similar_to" : "cross_reference";
-            if (_principal.TenantId.Length == 0)
-            {
-                _graph.AddEdge(new GraphEdge(id, result.Id, relation));
-                links.Add($"{result.Id} ({relation}, {result.Score:F3})");
-            }
+            _graph.AddEdge(new GraphEdge(id, result.Id, relation, tenantId: _access.TenantId));
+            links.Add($"{result.Id} ({relation}, {result.Score:F3})");
         }
 
         if (links.Count > 0)
@@ -179,7 +182,7 @@ public sealed class CompositeTools
         {
 
         // Strategy 1: If namespace provided, search directly with optional hybrid + graph expansion
-        if (ns is not null && !CanRead(ns))
+        if (ns is not null && !_access.CanRead(ns))
             return new RecallResult("direct", ns, new List<CognitiveSearchResult>(),
                 $"No accessible memories in namespace '{ns}'.");
 
@@ -188,25 +191,31 @@ public sealed class CompositeTools
             var states = new HashSet<string> { "stm", "ltm" };
             IReadOnlyList<CognitiveSearchResult> results = hybrid
                 ? _index.HybridSearch(vector, query, ns, k, minScore, rerank: rerank,
-                    tenantId: _principal.TenantId)
+                    tenantId: _access.TenantId)
                 : (rerank
                     ? _index.Rerank(query, _index.Search(vector, ns, k * 2, minScore,
-                        summaryFirst: summaryFirst, tenantId: _principal.TenantId)).Take(k).ToList()
+                        summaryFirst: summaryFirst, tenantId: _access.TenantId)).Take(k).ToList()
                     : _index.Search(vector, ns, k, minScore, summaryFirst: summaryFirst,
-                        tenantId: _principal.TenantId));
+                        tenantId: _access.TenantId));
 
             // Expand with graph neighbors
-            var expanded = expandGraph && _principal.TenantId.Length == 0
+            var expanded = expandGraph
                 ? ExpandWithGraph(results, states)
                 : results;
 
             // Fallback FIRST: if hybrid produced poor scores, swap in deep_recall
             // before spectral re-ranking. Otherwise spectral runs on the low-score
             // expansion and gets discarded when fallback overrides it.
-            if (_principal.TenantId.Length == 0 &&
-                (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f)))
+            if (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f))
             {
-                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f);
+                // DeepRecall resurrects high-scoring archived entries to STM as a side effect of
+                // reading them, so the fallback carries a write on a path the caller only ever
+                // asked to read on. CanRead legitimately authorizes seeing archived text, so the
+                // gate goes on the mutation and not on the call: a read-only grantee gets the
+                // same rows, scores and order, and only the reported LifecycleState changes —
+                // to the truth, since nothing was promoted.
+                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f,
+                    tenantId: _access.TenantId, resurrect: _access.CanWrite(ns));
                 if (deepResults.Count > results.Count ||
                     (deepResults.Count > 0 && (results.Count == 0 || deepResults[0].Score > results[0].Score)))
                 {
@@ -219,20 +228,19 @@ public sealed class CompositeTools
             // with (post-graph-expansion or post-deep_recall fallback). Restricted
             // to entries already in the candidate pool for Specific mode; Broad
             // mode applies a cluster-dominance-gated max-neighbor boost.
-            if (_principal.TenantId.Length == 0)
-                expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
+            expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
 
             // Record access for actually-returned entries (after spectral
             // re-ranking, since that may have reshaped the top-K).
             var finalResults = expanded.Take(k).ToList();
             foreach (var r in finalResults)
-                _index.RecordAccess(r.Id, ns, _principal.TenantId);
+                _index.RecordAccess(r.Id, ns, _access.TenantId);
 
             return new RecallResult(strategy, ns, finalResults);
         }
 
         // Strategy 2: No namespace — auto-route via expert dispatcher
-        var (status, experts) = _principal.IsLegacyUnisolated
+        var (status, experts) = _access.IsLegacyUnisolated
             ? _dispatcher.Route(vector, topK: 3, threshold: 0.7f)
             : ("needs_expert", (IReadOnlyList<ExpertMatch>)Array.Empty<ExpertMatch>());
 
@@ -242,19 +250,19 @@ public sealed class CompositeTools
             // candidate the current principal may read; if none is accessible, fall
             // through to the already-filtered broadcast path without revealing that a
             // private expert namespace exists.
-            var bestExpert = experts.FirstOrDefault(e => CanRead(e.TargetNamespace));
+            var bestExpert = experts.FirstOrDefault(e => _access.CanRead(e.TargetNamespace));
             if (bestExpert is not null)
             {
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
                 IReadOnlyList<CognitiveSearchResult> expertResults = hybrid
                     ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace, k, minScore,
-                        rerank: rerank, tenantId: _principal.TenantId)
+                        rerank: rerank, tenantId: _access.TenantId)
                     : _index.Search(vector, bestExpert.TargetNamespace, k, minScore,
-                        summaryFirst: summaryFirst, tenantId: _principal.TenantId);
+                        summaryFirst: summaryFirst, tenantId: _access.TenantId);
 
                 foreach (var r in expertResults)
-                    _index.RecordAccess(r.Id, bestExpert.TargetNamespace, _principal.TenantId);
+                    _index.RecordAccess(r.Id, bestExpert.TargetNamespace, _access.TenantId);
 
                 return new RecallResult("expert_routed", bestExpert.TargetNamespace, expertResults.ToList(),
                     $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})");
@@ -265,12 +273,12 @@ public sealed class CompositeTools
         var allResults = new List<CognitiveSearchResult>();
         // The broadcast path searches the entire store, so without a filter it is the widest
         // possible read: one call returns hits from every namespace regardless of ownership.
-        var namespaces = _index.GetNamespaces(_principal.TenantId).Where(CanRead).ToList();
+        var namespaces = _index.GetNamespaces(_access.TenantId).Where(_access.CanRead).ToList();
         foreach (var searchNs in namespaces)
         {
             if (searchNs.StartsWith("_system") || searchNs.StartsWith("active-debate")) continue;
             var nsResults = _index.Search(vector, searchNs, k: 3, minScore: minScore,
-                tenantId: _principal.TenantId);
+                tenantId: _access.TenantId);
             allResults.AddRange(nsResults);
         }
 
@@ -295,7 +303,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(topic)) return "Error: topic must not be empty.";
         if (!StringListNormalizer.TryNormalize(relatedIds, nameof(relatedIds), out var relatedIdList, out var relatedIdsError))
             return $"Error: {relatedIdsError}";
-        if (!CanWrite(ns)) return WriteDenied(ns);
+        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("reflect");
         var actions = new List<string>();
@@ -310,7 +318,7 @@ public sealed class CompositeTools
         var vector = _embedding.Embed(prefix + text);
 
         var existing = _index.Search(vector, ns, k: 3, minScore: 0.85f,
-            category: "lesson", tenantId: _principal.TenantId);
+            category: "lesson", tenantId: _access.TenantId);
         if (existing.Count > 0 && existing[0].Score >= 0.92f)
         {
             return new ReflectResult("duplicate_warning", id, ns,
@@ -322,28 +330,42 @@ public sealed class CompositeTools
         // 3. Store as LTM lesson
         var entry = new CognitiveEntry(id, vector, ns, text, "lesson",
             new Dictionary<string, string> { ["topic"] = topic },
-            lifecycleState: "ltm", tenantId: _principal.TenantId);
+            lifecycleState: "ltm", tenantId: _access.TenantId);
         _index.Upsert(entry);
-        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
+        _access.ClaimOnWrite(ns);
         actions.Add("stored as ltm lesson");
 
-        // 4. Auto-link to explicitly referenced memories
+        // 4. Auto-link to explicitly referenced memories. These ids come from the caller, not
+        // from a search inside an already-authorized namespace, so each one is resolved and
+        // authorized before an edge is drawn to it (see ResolveLinkTarget).
         if (relatedIdList is { Length: > 0 })
         {
+            int skipped = 0;
             foreach (var relatedId in relatedIdList)
             {
-                if (_principal.TenantId.Length == 0 &&
-                    _index.GetForTenant(relatedId, _principal.TenantId) is not null)
+                if (relatedId == id) continue;
+
+                if (ResolveLinkTarget(relatedId, ns) is null)
                 {
-                    _graph.AddEdge(new GraphEdge(id, relatedId, "elaborates"));
-                    actions.Add($"linked to {relatedId}");
+                    skipped++;
+                    continue;
                 }
+
+                _graph.AddEdge(new GraphEdge(id, relatedId, "elaborates", tenantId: _access.TenantId));
+                actions.Add($"linked to {relatedId}");
             }
+
+            // Reported as one count, never per id and never with a reason. Saying which id was
+            // skipped — or distinguishing "not found" from "you may not link that" — would let a
+            // caller probe for ids in namespaces it cannot see, which is the same existence
+            // oracle a distinct denial reply creates for a namespace.
+            if (skipped > 0)
+                actions.Add($"{skipped} related id(s) skipped (not found or not linkable)");
         }
 
         // 5. Auto-link to semantically related memories
         var related = _index.Search(vector, ns, k: 5, minScore: 0.7f,
-            tenantId: _principal.TenantId);
+            tenantId: _access.TenantId);
         int autoLinked = 0;
         foreach (var r in related)
         {
@@ -352,18 +374,15 @@ public sealed class CompositeTools
             if (relatedIdList is not null && relatedIdList.Contains(r.Id)) continue;
             if (r.Score < 0.7f) continue;
 
-            if (_principal.TenantId.Length == 0)
-            {
-                _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference"));
-                autoLinked++;
-            }
+            _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference", tenantId: _access.TenantId));
+            autoLinked++;
         }
         if (autoLinked > 0)
             actions.Add($"auto-linked to {autoLinked} related memor{(autoLinked == 1 ? "y" : "ies")}");
 
         // 6. Search for past reflections to surface patterns
         var pastReflections = _index.Search(vector, ns, k: 3, minScore: 0.6f,
-            category: "lesson", tenantId: _principal.TenantId)
+            category: "lesson", tenantId: _access.TenantId)
             .Where(r => r.Id != id)
             .ToList();
 
@@ -385,11 +404,11 @@ public sealed class CompositeTools
     {
         using var timer = _metrics.StartTimer("get_context_block");
 
-        if (!CanRead(ns))
+        if (!_access.CanRead(ns))
             return NamespaceAccess.ReadDenied(ns);
 
         // Get all LTM entries (these are the most stable memories worth caching)
-        var allEntries = _index.GetAllInNamespace(ns, _principal.TenantId);
+        var allEntries = _index.GetAllInNamespace(ns, _access.TenantId);
         var stableEntries = allEntries
             .Where(e => e.LifecycleState == "ltm" && e.AccessCount >= minAccessCount && !e.IsSummaryNode)
             .OrderBy(e => e.Id) // Deterministic ordering by ID — critical for cache stability
@@ -403,7 +422,7 @@ public sealed class CompositeTools
             e.Metadata.Count > 0 ? e.Metadata : null)).ToList();
 
         // Build header with namespace metadata (also stable)
-        var (stm, ltm, archived) = _index.GetStateCounts(ns, _principal.TenantId);
+        var (stm, ltm, archived) = _index.GetStateCounts(ns, _access.TenantId);
 
         return new ContextBlockResult(
             ns,
@@ -427,12 +446,12 @@ public sealed class CompositeTools
 
         foreach (var result in results)
         {
-            var neighbors = _graph.GetNeighbors(result.Id);
+            var neighbors = _graph.GetNeighbors(result.Id, tenantId: _access.TenantId);
             foreach (var neighbor in neighbors.Neighbors)
             {
                 if (existingIds.Contains(neighbor.Entry.Id)) continue;
                 if (!states.Contains(neighbor.Entry.LifecycleState)) continue;
-                if (!CanRead(neighbor.Entry.Namespace)) continue;
+                if (!_access.CanRead(neighbor.Entry.Namespace)) continue;
 
                 existingIds.Add(neighbor.Entry.Id);
                 expanded.Add(new CognitiveSearchResult(
@@ -491,7 +510,7 @@ public sealed class CompositeTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3);
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3, tenantId: _access.TenantId);
 
         var output = new List<CognitiveSearchResult>(k);
         foreach (var (id, score) in reranked)
@@ -606,7 +625,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (fullClusterSeen.Contains(n.Entry.Id)) continue;
@@ -614,7 +633,7 @@ public sealed class CompositeTools
                     queue.Enqueue(n.Entry.Id);
 
                     if (seen.Contains(n.Entry.Id)) continue;
-                    var entry = _index.Get(n.Entry.Id, ns);
+                    var entry = _index.Get(n.Entry.Id, ns, _access.TenantId);
                     if (entry is null) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
@@ -656,7 +675,7 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both");
+                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (!candidateIds.Contains(n.Entry.Id)) continue;

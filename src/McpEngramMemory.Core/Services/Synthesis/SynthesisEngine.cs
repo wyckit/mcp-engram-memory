@@ -55,7 +55,7 @@ public sealed class SynthesisEngine
     /// </summary>
     public async Task<SynthesisResult> SynthesizeNamespaceAsync(
         string ns, string? query = null, int maxEntries = 200,
-        CancellationToken ct = default)
+        string tenantId = "", CancellationToken ct = default)
     {
         // 1. Check backend availability (Ollama daemon or in-process ONNX model).
         bool available = await _generator.IsAvailableAsync(_mapModel, ct);
@@ -73,8 +73,8 @@ public sealed class SynthesisEngine
                        "For the in-process ONNX backend: stage the model dir or set SYNTHESIS_ONNX_MODEL_DIR.");
         }
 
-        // 2. Gather memories
-        var entries = _index.GetAllInNamespace(ns)
+        // 2. Gather memories (within this tenant)
+        var entries = _index.GetAllInNamespace(ns, tenantId)
             .Where(e => !e.IsSummaryNode && e.LifecycleState is "stm" or "ltm")
             .OrderByDescending(e => e.AccessCount)
             .ThenByDescending(e => e.ActivationEnergy)
@@ -86,7 +86,7 @@ public sealed class SynthesisEngine
                 Error: "No active memories found in namespace.");
 
         // 3. Chunk memories (prefer cluster boundaries)
-        var chunks = ChunkMemories(entries, ns);
+        var chunks = ChunkMemories(entries, ns, tenantId);
 
         // 4. Map phase: summarize each chunk in parallel
         var mapChannel = Channel.CreateBounded<MemoryChunk>(ChannelCapacity);
@@ -136,19 +136,28 @@ public sealed class SynthesisEngine
             ChunkSummaries: summaries.Select(s => s.Summary).ToList());
     }
 
-    /// <summary>Chunk memories respecting cluster boundaries where possible.</summary>
-    private List<MemoryChunk> ChunkMemories(List<CognitiveEntry> entries, string ns)
+    /// <summary>
+    /// Chunk memories respecting cluster boundaries where possible.
+    /// <paramref name="tenantId"/> is deliberately declared without a default: the entries were
+    /// already gathered from one tenant partition, and a forgotten argument here would silently
+    /// re-scope the cluster lookups to the legacy ("") partition — a real, populated dataset, not
+    /// a sentinel — leaking another tenant's cluster labels into this tenant's prompts.
+    /// </summary>
+    private List<MemoryChunk> ChunkMemories(List<CognitiveEntry> entries, string ns, string tenantId)
     {
         var chunks = new List<MemoryChunk>();
         var assigned = new HashSet<string>();
 
         // First pass: group by cluster membership
-        var clusterList = _clusters.ListClusters(ns);
+        var clusterList = _clusters.ListClusters(ns, tenantId);
         foreach (var clusterInfo in clusterList)
         {
-            var cluster = _clusters.GetCluster(clusterInfo.ClusterId);
+            var cluster = _clusters.GetCluster(clusterInfo.ClusterId, tenantId);
             if (cluster is null) continue;
 
+            // Bare-id member match is safe here precisely because both sides are now pinned to the
+            // same (tenant, ns): `entries` came from GetAllInNamespace(ns, tenantId) and the cluster
+            // was resolved in the same partition, so an id collides only with its own entry.
             var clusterEntries = entries
                 .Where(e => cluster.Members.Any(m => m.Id == e.Id) && assigned.Add(e.Id))
                 .ToList();

@@ -42,8 +42,6 @@ public sealed class SpectralRetrievalTools
         [Description("Heat-kernel diffusion time t. Larger = stronger smoothing toward cluster means. Default 1.0.")] float diffusionTime = 1.0f,
         [Description("Candidate-pool multiplier on top-K. Default 5; larger pools give the reranker more material but cost more.")] int candidateMultiplier = 5)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return Array.Empty<CognitiveSearchResult>();
         if (!_access.CanRead(ns)) return Array.Empty<CognitiveSearchResult>();
 
         var parsedMode = ParseMode(mode);
@@ -53,7 +51,7 @@ public sealed class SpectralRetrievalTools
         // Gather a broader candidate pool than the user wants returned, so the
         // reranker has enough material to redistribute scores meaningfully.
         var queryVector = _embedding.Embed(query);
-        var candidates = _index.Search(queryVector, ns, k * candidateMultiplier, minScore);
+        var candidates = _index.Search(queryVector, ns, k * candidateMultiplier, minScore, tenantId: _access.TenantId);
 
         if (candidates.Count == 0) return Array.Empty<CognitiveSearchResult>();
 
@@ -61,7 +59,7 @@ public sealed class SpectralRetrievalTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, k, diffusionTime);
+        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, k, diffusionTime, _access.TenantId);
 
         // Resolve the reranked ids back to full search results. Entries that
         // surfaced via spectral redistribution (weren't in the original
@@ -78,8 +76,8 @@ public sealed class SpectralRetrievalTools
                 continue;
             }
 
-            // Entry surfaced spectrally; fetch it.
-            var entry = _index.Get(id, ns);
+            // Entry surfaced spectrally; fetch it (within this tenant).
+            var entry = _index.Get(id, ns, _access.TenantId);
             if (entry is null) continue;
             results.Add(new CognitiveSearchResult(
                 entry.Id, entry.Text, score, entry.LifecycleState,

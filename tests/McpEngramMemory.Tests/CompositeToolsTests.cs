@@ -39,7 +39,10 @@ public class CompositeToolsTests : IDisposable
         _metrics = new MetricsCollector();
         _diffusion = new MemoryDiffusionKernel(_index, _graph);
         _spectral = new SpectralRetrievalReranker(_diffusion);
-        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral, new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
+        // Default (unrestricted) principal — same identity this fixture has always used, so
+        // every existing assertion keeps its current meaning.
+        var access = new NamespaceAccess(new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
+        _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral, access);
     }
 
     // ── remember tests ──

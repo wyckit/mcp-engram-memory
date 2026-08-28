@@ -218,11 +218,12 @@ Identity is also host-owned. `IPrincipalContext` carries tenant and principal cl
 server bootstraps it from `MEMORY_TENANT_ID` and `AGENT_ID`, which are process configuration rather
 than authentication. Empty tenant + default agent is explicit legacy-unisolated mode.
 
-Tenant-aware memory CRUD is implemented. The cognitive graph, clusters, lifecycle support data,
-collapse history, and diffusion caches still use global bare IDs, so affected standard/full tools
-fail closed for non-empty tenants. This is containment, not full tenant-qualified graph support.
-See [Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and
-[Security](SECURITY.md).
+Multi-tenancy is full. Memory CRUD and search — and now the cognitive graph, clusters, lifecycle,
+collapse history, diffusion/spectral retrieval, intelligence, maintenance, synthesis, and
+visualization — are all tenant-partitioned: a tenant sees and mutates only its own data, and graph
+edges never cross tenants (cross-namespace association within a tenant is preserved). Legacy
+empty-tenant deployments are byte-for-byte unchanged. See
+[Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and [Security](SECURITY.md).
 
 ## AI Assistant Setup
 

@@ -29,32 +29,29 @@ public sealed class MemoryDiffusionTools
         [Description("Number of eigenpairs to retain (default 96). Higher = finer multi-scale resolution at higher compute cost.")] int topK = MemoryDiffusionKernel.DefaultTopK,
         [Description("Drop any cached basis and recompute from scratch.")] bool force = false)
     {
-        if (_access.RequiresTenantQualifiedStructures) return null;
         // Nullable return already models "nothing here" (below spectral threshold), so a
         // denied write reuses that same shape rather than a distinct error.
         if (!_access.CanWrite(ns)) return null;
 
-        if (force) _kernel.Invalidate(ns);
-        _ = _kernel.GetBasis(ns, topK);
-        return _kernel.GetStats(ns);
+        if (force) _kernel.Invalidate(ns, _access.TenantId);
+        _ = _kernel.GetBasis(ns, topK, _access.TenantId);
+        return _kernel.GetStats(ns, _access.TenantId);
     }
 
     [McpServerTool(Name = "diffusion_stats", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Diagnostics for the cached diffusion basis of a namespace, without forcing recomputation if absent.")]
     public DiffusionStats? DiffusionStats(
         [Description("Namespace to inspect.")] string ns) =>
-        !_access.RequiresTenantQualifiedStructures && _access.CanRead(ns) ? _kernel.GetStats(ns) : null;
+        _access.CanRead(ns) ? _kernel.GetStats(ns, _access.TenantId) : null;
 
     [McpServerTool(Name = "invalidate_diffusion", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Drop the cached diffusion basis for a namespace. Use after manual graph surgery or if you suspect drift.")]
     public string InvalidateDiffusion(
         [Description("Namespace to invalidate.")] string ns)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
-        _kernel.Invalidate(ns);
+        _kernel.Invalidate(ns, _access.TenantId);
         return $"Invalidated diffusion basis for namespace '{ns}'.";
     }
 }

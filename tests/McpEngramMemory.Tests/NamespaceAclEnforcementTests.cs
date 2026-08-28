@@ -70,13 +70,22 @@ public class NamespaceAclEnforcementTests : IDisposable
     private AdminTools Admin(string agentId, string tenantId = "") => new(
         _index, _graph, _clusters, _persistence, _registry, new PrincipalContext(tenantId, agentId));
 
+    // CompositeTools now takes the shared NamespaceAccess guard rather than a registry plus a
+    // principal, so that "did this tool check?" is answerable from its constructor alone.
     private CompositeTools Composite(string agentId, string tenantId = "") => new(
         _index, _embedding, _graph,
         new LifecycleEngine(_index, _persistence),
         new ExpertDispatcher(_index, _embedding),
         new MetricsCollector(),
         new SpectralRetrievalReranker(new MemoryDiffusionKernel(_index, _graph)),
-        _registry, new PrincipalContext(tenantId, agentId));
+        new NamespaceAccess(_registry, new PrincipalContext(tenantId, agentId)));
+
+    private static string Json(object? value) => System.Text.Json.JsonSerializer.Serialize(value);
+
+    /// <summary>Parse a relatedIds wire payload the way the MCP client would put it on the wire.</summary>
+    private static System.Text.Json.JsonElement RelatedIds(params string[] ids) =>
+        System.Text.Json.JsonDocument.Parse(
+            System.Text.Json.JsonSerializer.Serialize(ids)).RootElement;
 
     /// <summary>Alice writes a secret, which also claims ownership of the namespace.</summary>
     private void AliceStoresSecret()
@@ -333,5 +342,200 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "default-ns"));
         Assert.False(_registry.HasAccess("someone-else", "default-ns"),
             "identified principals must not take over legacy content; ownership requires an administrative migration");
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────────────────
+    // Authorize the object you touch, at the verb you perform.
+    //
+    // Everything below drives the tools as Bob, an honestly-identified second agent, for the
+    // reason this whole fixture exists: NamespaceRegistry.HasAccess short-circuits the DEFAULT
+    // agent to unrestricted access, so a test written with AgentIdentity.Default cannot observe
+    // an ACL failure at all and would pass identically with the fix reverted.
+    // ────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void GetMemory_FiltersClusterIdsInUnreadableNamespaces()
+    {
+        AliceStoresSecret();
+        const string bobNs = "bob-work";
+        const string bobArchiveNs = "bob-archive";
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            "bob-public", bobNs, "launch checklist"));
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            "bob-older", bobArchiveNs, "last quarter's checklist"));
+
+        // Cluster membership is deliberately allowed to span namespaces, so a cluster that
+        // LIVES in Alice's private namespace can legitimately contain a public entry of Bob's.
+        // Returning its id is the same class of disclosure as an edge to a private endpoint,
+        // one level of indirection out: it names a grouping Bob cannot read and tells him his
+        // own entry was filed alongside content he cannot see.
+        _clusters.CreateCluster("alice-topic-cluster", AliceNs, ["alice-secret", "bob-public"]);
+        // Same-namespace membership, the ordinary case.
+        _clusters.CreateCluster("bob-topic-cluster", bobNs, ["bob-public"]);
+        // Over-correction control: a cluster in a DIFFERENT namespace that Bob can read. The
+        // gate is CanRead(cluster.Ns) — the predicate ClusterTools.GetCluster already applies —
+        // and not equality with entry.Ns. Filtering on equality would pass the exploit assertion
+        // below while silently deleting cross-namespace clustering for everyone.
+        _clusters.CreateCluster("bob-crossns-cluster", bobArchiveNs, ["bob-public", "bob-older"]);
+
+        var result = Assert.IsType<GetMemoryResult>(Admin("bob").GetMemory("bob-public"));
+
+        Assert.DoesNotContain("alice-topic-cluster", result.ClusterIds);
+        Assert.DoesNotContain("alice-topic-cluster", Json(result));
+        Assert.Contains("bob-topic-cluster", result.ClusterIds);
+        Assert.Contains("bob-crossns-cluster", result.ClusterIds);
+        Assert.Equal(2, result.ClusterIds.Count);
+    }
+
+    [Fact]
+    public void Reflect_DoesNotLinkToOrRevealAnotherAgentsEntry()
+    {
+        AliceStoresSecret();
+
+        // The same reflection run twice, differing in exactly one input: the probe names an id
+        // that really exists in a namespace Bob may not write, the control names an id that
+        // exists nowhere in the store. Two namespaces because the uniform stub embedding makes
+        // every lesson a 1.0-similarity duplicate of every other, which would divert the second
+        // run into the duplicate_warning branch and destroy the comparison.
+        const string probeNs = "bob-probe";
+        const string controlNs = "bob-control";
+
+        var probe = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the retro found a missing rollback step", probeNs, "oracle-check",
+            relatedIds: RelatedIds("alice-secret")));
+        var control = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the retro found a missing rollback step", controlNs, "oracle-check",
+            relatedIds: RelatedIds("no-such-entry-anywhere")));
+
+        // (a) No edge was drawn. relatedIds arrive as bare ids with no namespace attached, so
+        // linking without resolving-then-authorizing writes an edge onto an object the caller
+        // was never entitled to touch.
+        Assert.Empty(_graph.GetEdgesForEntry("alice-secret"));
+        Assert.Empty(_graph.GetEdgesForEntry(probe.Id));
+
+        // (b) The two replies are identical once the namespace this test itself varied is
+        // normalized away. THIS EQUALITY IS THE SECURITY PROPERTY. Asserting merely that the
+        // link was refused would still pass against an implementation that answers "not
+        // linkable" for one id and "not found" for the other — which turns reflect into an
+        // existence oracle over every namespace Bob cannot see, one id per call.
+        Assert.Equal(
+            Json(control).Replace(controlNs, "<ns>", StringComparison.Ordinal),
+            Json(probe).Replace(probeNs, "<ns>", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Reflect_StillLinksToAnEntryTheCallerOwns()
+    {
+        // Over-correction control: the fix authorizes the link target, it does not remove
+        // relatedIds linking. If this reddens, resolution has been made to fail closed on
+        // everything rather than on what the caller may not write.
+        AliceStoresSecret();
+        const string bobNs = "bob-work";
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            "bob-note", bobNs, "launch checklist"));
+
+        var result = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the checklist needed a rollback step", bobNs, "own-link",
+            relatedIds: RelatedIds("bob-note")));
+
+        Assert.Equal("stored", result.Status);
+        Assert.Contains("linked to bob-note", result.Actions);
+        Assert.DoesNotContain(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
+        Assert.Contains(_graph.GetEdgesForEntry(result.Id),
+            e => e.TargetId == "bob-note" && e.Relation == "elaborates");
+    }
+
+    [Fact]
+    public void Reflect_LinksOwnEntryEvenWhenTheSameIdExistsInAPrivateNamespace()
+    {
+        // An id is not an identity — entries are identified by (tenant, namespace, id) and ids
+        // are unique only per (tenant, namespace). So a bare relatedId can name several entries
+        // at once, and how the resolver breaks that tie is itself a disclosure channel.
+        const string sharedId = "postmortem-notes";
+        const string bobNs = "bob-work";
+        const string bobArchiveNs = "bob-archive";
+
+        Assert.Contains("Stored entry", Core("alice").StoreMemory(
+            sharedId, AliceNs, "alice's private postmortem"));
+        Assert.False(_registry.HasAccess("bob", AliceNs, "write"));
+
+        // A second twin Bob CAN write. Without the preferredNs short-circuit the resolution is
+        // ambiguous among namespaces Bob is entitled to and collapses to null, so a legitimate
+        // link silently disappears; with it, the namespace the call site is already authorized
+        // for wins. Alice's invisible twin must contribute neither a match nor an ambiguity
+        // signal — "your link did nothing" would otherwise announce that a private twin exists.
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            sharedId, bobArchiveNs, "bob's older copy"));
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            sharedId, bobNs, "bob's working copy"));
+
+        var result = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the postmortem missed the rollback step", bobNs, "twin-id",
+            relatedIds: RelatedIds(sharedId)));
+
+        Assert.Equal("stored", result.Status);
+        Assert.Contains($"linked to {sharedId}", result.Actions);
+        Assert.DoesNotContain(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
+        Assert.Contains(_graph.GetEdgesForEntry(result.Id),
+            e => e.TargetId == sharedId && e.Relation == "elaborates");
+    }
+
+    [Fact]
+    public void Recall_ByReadOnlyGrantee_DoesNotResurrectOwnersArchivedEntry()
+    {
+        const string archiveNs = "alice-cold-storage";
+        SeedAlicesArchivedNote(archiveNs, grantBobLevel: "read");
+
+        // recall is the DEFAULT verb of the minimal profile, so this is the path a real
+        // deployment actually hits. With nothing live in the namespace the hybrid pass returns
+        // nothing and recall falls back to deep_recall, which promotes high-scoring archived
+        // entries back to stm as a side effect of reading them — a write carried on a path the
+        // caller only ever asked to read on.
+        var result = Assert.IsType<RecallResult>(
+            Composite("bob").Recall("cold storage rollback retrospective", ns: archiveNs));
+
+        // The mutating path really was reached; without this the assertions below are vacuous.
+        Assert.Equal("deep_recall", result.Strategy);
+        Assert.NotEmpty(result.Results);
+
+        // Read access legitimately authorizes seeing archived text, so the ROWS are not
+        // withheld — only the write is. A read-only grantee gets the same rows, scores and
+        // order, and the only thing that changes is that the reported state is the truth.
+        Assert.Contains("cold storage rollback retrospective", Json(result));
+        Assert.All(result.Results, r => Assert.Equal("archived", r.LifecycleState));
+        Assert.Equal("archived", _index.Get("alice-archived-note", archiveNs)?.LifecycleState);
+    }
+
+    [Fact]
+    public void Recall_ByWriteGrantee_StillResurrectsArchivedEntry()
+    {
+        // Over-correction control: the gate is on the caller's write permission, not on the
+        // resurrection feature. A grantee who may write still gets the promotion, so the fix
+        // cannot have been implemented by simply passing resurrect:false everywhere.
+        const string archiveNs = "alice-cold-storage";
+        SeedAlicesArchivedNote(archiveNs, grantBobLevel: "write");
+
+        var result = Assert.IsType<RecallResult>(
+            Composite("bob").Recall("cold storage rollback retrospective", ns: archiveNs));
+
+        Assert.Equal("deep_recall", result.Strategy);
+        Assert.NotEmpty(result.Results);
+        Assert.All(result.Results, r => Assert.Equal("stm", r.LifecycleState));
+        Assert.Equal("stm", _index.Get("alice-archived-note", archiveNs)?.LifecycleState);
+    }
+
+    /// <summary>
+    /// Alice owns a namespace whose only entry is archived, shared with Bob at the given level.
+    /// Nothing live in it, so recall's hybrid pass comes back empty and the deep_recall
+    /// fallback — the one that mutates — is guaranteed to run.
+    /// </summary>
+    private void SeedAlicesArchivedNote(string archiveNs, string grantBobLevel)
+    {
+        Assert.Contains("Stored entry", Core("alice").StoreMemory(
+            "alice-archived-note", archiveNs, "cold storage rollback retrospective",
+            lifecycleState: "archived"));
+        Assert.Equal("shared", _registry.Share(archiveNs, "alice", "bob", grantBobLevel).Status);
+        Assert.True(_registry.HasAccess("bob", archiveNs));
+        Assert.Equal(grantBobLevel == "write", _registry.HasAccess("bob", archiveNs, "write"));
     }
 }

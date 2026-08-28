@@ -86,10 +86,17 @@ public sealed class CognitiveEntry
             throw new ArgumentException(
                 $"Namespace must be at most {MaxNamespaceLength} characters (got {ns.Length}).", nameof(ns));
 
+        // The namespace is concatenated with the tenant into a single storage partition key, so a
+        // control character in it could forge a key that resolves to another tenant's partition.
+        // Rejected here, on the way in, for the same reason as the length limit above.
+        Tenancy.ValidatePartitionComponent(ns, nameof(ns));
+
         Id = id;
         Vector = (float[])vector.Clone();
         Ns = ns;
-        TenantId = NormalizeTenant(tenantId);
+        // Single normalizer for every tenant-scoped model; it validates the trimmed value as a
+        // partition component, so the tenant half of the key gets the same guarantee as ns above.
+        TenantId = Tenancy.Normalize(tenantId);
         Text = text;
         Category = category;
         Metadata = metadata is not null ? new Dictionary<string, string>(metadata) : new();
@@ -122,7 +129,11 @@ public sealed class CognitiveEntry
         Id = id;
         Vector = vector;
         Ns = ns;
-        TenantId = NormalizeTenant(tenantId);
+        // Read path: normalize only, never validate — for the same reason MaxNamespaceLength is
+        // enforced on ingest only. Tightening a tenant rule must never make already-stored data
+        // unloadable. Tenancy.Normalize is deliberately NOT used here: it rejects over-long and
+        // control-character tenants, and that rejection belongs on the way in, not on the way out.
+        TenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
         Text = text;
         Category = category;
         Metadata = metadata ?? new();
@@ -136,7 +147,6 @@ public sealed class CognitiveEntry
         Keywords = keywords;
     }
 
-    /// <summary>Maximum length of a tenant identifier (matches the storage column width).</summary>
     /// <summary>
     /// Maximum namespace length, enforced on ingest only.
     ///
@@ -154,22 +164,10 @@ public sealed class CognitiveEntry
     /// </summary>
     public const int MaxNamespaceLength = 128;
 
-    public const int MaxTenantIdLength = 64;
-
     /// <summary>
-    /// Normalizes a tenant identifier: null/whitespace collapses to the legacy empty-string
-    /// tenant, otherwise the value is trimmed. Throws when the value exceeds
-    /// <see cref="MaxTenantIdLength"/> so tenant keys never silently truncate.
+    /// Maximum length of a tenant identifier (matches the storage column width). Retained as an
+    /// alias of <see cref="Tenancy.MaxTenantIdLength"/> for source compatibility — the limit itself
+    /// lives with the normalizer that enforces it, so the two can never disagree.
     /// </summary>
-    private static string NormalizeTenant(string? tenantId)
-    {
-        if (string.IsNullOrWhiteSpace(tenantId))
-            return string.Empty;
-
-        var trimmed = tenantId.Trim();
-        if (trimmed.Length > MaxTenantIdLength)
-            throw new ArgumentException(
-                $"TenantId must be at most {MaxTenantIdLength} characters.", nameof(tenantId));
-        return trimmed;
-    }
+    public const int MaxTenantIdLength = Tenancy.MaxTenantIdLength;
 }

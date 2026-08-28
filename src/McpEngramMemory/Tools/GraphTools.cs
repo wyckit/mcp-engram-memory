@@ -8,6 +8,10 @@ namespace McpEngramMemory.Tools;
 
 /// <summary>
 /// MCP tools for knowledge graph operations: link, unlink, neighbors, traverse.
+///
+/// Every operation is scoped to the caller's tenant (<see cref="NamespaceAccess.TenantId"/>): edges
+/// are created, queried, and traversed within that tenant only, so a tenant can never see or touch
+/// another tenant's graph. The legacy tenant ("") behaves exactly as before.
 /// </summary>
 [McpServerToolType]
 public sealed class GraphTools
@@ -28,12 +32,12 @@ public sealed class GraphTools
     /// <summary>
     /// Access check for an edge endpoint reached by id. Graph edges carry no namespace of
     /// their own, so the only way to know whether a caller may touch one is to resolve the
-    /// entry at each end and check its namespace. Same reply shape as a genuine miss - a
-    /// distinct denial would confirm the id exists in a namespace the caller cannot see.
+    /// entry (within the caller's tenant) and check its namespace. Same reply shape as a genuine
+    /// miss - a distinct denial would confirm the id exists in a namespace the caller cannot see.
     /// </summary>
     private string? DenyIfCannotWrite(string id)
     {
-        var entry = _index.Get(id);
+        var entry = _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
         if (entry is null || !_access.CanWrite(entry.Ns))
             return $"Error: Entry '{id}' not found.";
         return null;
@@ -48,11 +52,9 @@ public sealed class GraphTools
         [Description("Edge weight 0.0-1.0 (default: 1.0).")] float weight = 1.0f,
         [Description("Optional edge metadata.")] Dictionary<string, string>? metadata = null)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         try
         {
-            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata);
+            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata, _access.TenantId);
             return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.AddEdge(edge);
         }
         catch (ArgumentException ex)
@@ -68,9 +70,8 @@ public sealed class GraphTools
         [Description("Edge destination entry ID.")] string targetId,
         [Description("Specific relation to remove (null = all).")] string? relation = null)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
-        return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.RemoveEdges(sourceId, targetId, relation);
+        return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId)
+            ?? _graph.RemoveEdges(sourceId, targetId, relation, _access.TenantId);
     }
 
     [McpServerTool(Name = "get_neighbors", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -80,14 +81,11 @@ public sealed class GraphTools
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
-        var result = _graph.GetNeighbors(id, relation, direction);
+        var result = _graph.GetNeighbors(id, relation, direction, _access.TenantId);
 
-        // Edges are global and carry no namespace, so a neighbor can live anywhere -
-        // including a namespace this caller may not read. Filter, don't deny: the id the
-        // caller passed in is already known to them, so only the resolved neighbors need
-        // to be hidden.
+        // Edges are tenant-scoped but span namespaces, so a neighbor can live in a namespace this
+        // caller may not read. Filter, don't deny: the id the caller passed in is already known to
+        // them, so only the resolved neighbors need to be hidden.
         var visible = result.Neighbors.Where(n => _access.CanRead(n.Entry.Namespace)).ToList();
         return new GetNeighborsResult(result.Id, visible);
     }
@@ -101,9 +99,7 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
-        var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults);
+        var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults, _access.TenantId);
 
         // The start entry itself is included in Entries, so it must be filtered too -
         // otherwise a caller could learn the text of an unreadable entry just by naming it
@@ -122,8 +118,8 @@ public sealed class GraphTools
         [Description("Cosine-similarity threshold above which a pair gets a similar_to edge. Default 0.85 (clear semantic neighbors but not duplicates).")] float threshold = 0.85f,
         [Description("Per-scan safety cap on new edges. Default 1000.")] int maxNewEdges = 1000)
     {
-        if (_access.RequiresTenantQualifiedStructures)
+        if (!_access.CanWrite(ns))
             return new AutoLinkResult(ns, 0, 0, 0, 0, false);
-        return _autoLink.Scan(ns, threshold, maxNewEdges);
+        return _autoLink.Scan(ns, threshold, maxNewEdges, tenantId: _access.TenantId);
     }
 }

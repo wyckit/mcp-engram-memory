@@ -71,10 +71,11 @@ public sealed class AutoLinkScanner
     /// <param name="threshold">Optional override for the similarity threshold; defaults to the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>.</param>
     /// <param name="maxNewEdges">Optional override for the per-scan edge cap.</param>
     /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
+    /// <param name="tenantId">Tenant partition to scan; "" is the legacy tenant.</param>
     public AutoLinkResult Scan(string ns, float? threshold = null, int? maxNewEdges = null,
-        int maxScanEntries = DefaultMaxScanEntries)
+        int maxScanEntries = DefaultMaxScanEntries, string tenantId = "")
     {
-        var entries = _index.GetAllInNamespace(ns);
+        var entries = _index.GetAllInNamespace(ns, tenantId);
         var nonSummary = new List<CognitiveEntry>(entries.Count);
         foreach (var e in entries)
             if (!e.IsSummaryNode && e.Vector.Length > 0) nonSummary.Add(e);
@@ -130,13 +131,13 @@ public sealed class AutoLinkScanner
             // re-scans deterministic — we always try to add the same edge object.
             var (src, dst) = string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
 
-            if (HasAnyEdgeBetween(src, dst))
+            if (HasAnyEdgeBetween(src, dst, tenantId))
             {
                 skippedExisting++;
                 continue;
             }
 
-            _graph.AddEdge(new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f)));
+            _graph.AddEdge(new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId));
             created++;
         }
 
@@ -150,11 +151,11 @@ public sealed class AutoLinkScanner
         return new AutoLinkResult(ns, candidates.Count, pairs.Count, created, skippedExisting, hitCap, notScanned);
     }
 
-    private bool HasAnyEdgeBetween(string a, string b)
+    private bool HasAnyEdgeBetween(string a, string b, string tenantId)
     {
         // GetEdgesForEntry returns both directions for a single entry. Cheaper
         // to scan one entry's edges than fetch both and union.
-        var edges = _graph.GetEdgesForEntry(a);
+        var edges = _graph.GetEdgesForEntry(a, tenantId);
         foreach (var edge in edges)
         {
             if ((edge.SourceId == a && edge.TargetId == b) ||

@@ -294,14 +294,14 @@ public class LifecycleFaultIsolationTests : IDisposable
             _failingNs = failingNs;
         }
 
-        protected override DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision)
+        protected override DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId = "")
         {
             if (ns == _failingNs)
             {
                 ComputeAttempts++;
                 throw new InvalidOperationException("Q after final power iteration: column 0 has norm^2 0.5, expected 1.");
             }
-            return base.ComputeBasis(ns, topK, graphRevision);
+            return base.ComputeBasis(ns, topK, graphRevision, tenantId);
         }
     }
 }

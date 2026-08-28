@@ -64,7 +64,9 @@ public sealed class DebateTools
         if (!_access.CanWrite(debateNs))
             return SessionUnavailable(sessionId);
 
-        if (!_sessions.TryCreateSession(sessionId))
+        // Session state is keyed by (tenant, sessionId), so two tenants picking the same sessionId
+        // get independent sessions rather than one shared alias table.
+        if (!_sessions.TryCreateSession(_access.TenantId, sessionId))
             return $"Error: Session '{sessionId}' already exists. Use a new sessionId or call resolve_debate first.";
 
         // Bind the volatile session to the same ACL boundary as its persisted nodes.
@@ -72,7 +74,7 @@ public sealed class DebateTools
         _access.ClaimOnWrite(debateNs);
         if (!_access.CanWrite(debateNs))
         {
-            _sessions.RemoveSession(sessionId);
+            _sessions.RemoveSession(_access.TenantId, sessionId);
             return SessionUnavailable(sessionId);
         }
 
@@ -116,7 +118,7 @@ public sealed class DebateTools
                         category: "debate-perspective", tenantId: _access.TenantId);
                     _index.Upsert(coldEntry);
 
-                    int alias = _sessions.RegisterNode(sessionId, coldStartId);
+                    int alias = _sessions.RegisterNode(_access.TenantId, sessionId, coldStartId);
                     perspectives.Add(new ExpertPerspective(alias, expertNs, coldStartId, coldStartText, 0f, false));
                     continue;
                 }
@@ -137,7 +139,7 @@ public sealed class DebateTools
                         }, tenantId: _access.TenantId);
                     _index.Upsert(debateEntry);
 
-                    int alias = _sessions.RegisterNode(sessionId, debateEntryId);
+                    int alias = _sessions.RegisterNode(_access.TenantId, sessionId, debateEntryId);
                     perspectives.Add(new ExpertPerspective(alias, expertNs, debateEntryId, result.Text, result.Score, true));
                 }
             }
@@ -170,7 +172,7 @@ public sealed class DebateTools
         string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
         if (!_access.CanWrite(debateNs))
             return SessionNotFound(sessionId);
-        if (!_sessions.HasSession(sessionId))
+        if (!_sessions.HasSession(_access.TenantId, sessionId))
             return SessionNotFound(sessionId);
 
         var edgeDetails = new List<string>();
@@ -178,8 +180,8 @@ public sealed class DebateTools
 
         foreach (var debateEdge in edges)
         {
-            var sourceId = _sessions.ResolveAlias(sessionId, debateEdge.SourceNode);
-            var targetId = _sessions.ResolveAlias(sessionId, debateEdge.TargetNode);
+            var sourceId = _sessions.ResolveAlias(_access.TenantId, sessionId, debateEdge.SourceNode);
+            var targetId = _sessions.ResolveAlias(_access.TenantId, sessionId, debateEdge.TargetNode);
 
             if (sourceId is null)
             {
@@ -198,14 +200,12 @@ public sealed class DebateTools
                     ["debateSessionId"] = sessionId,
                     ["sourceAlias"] = debateEdge.SourceNode.ToString(),
                     ["targetAlias"] = debateEdge.TargetNode.ToString()
-                }));
+                }, _access.TenantId));
             edgeDetails.Add($"[Node {debateEdge.SourceNode}] --({debateEdge.Relation}, w={debateEdge.Weight})--> [Node {debateEdge.TargetNode}]");
         }
 
-        // Batch-add all edges in a single lock acquisition
-        int created = graphEdges.Count > 0 && _access.TenantId.Length == 0
-            ? _graph.AddEdges(graphEdges)
-            : 0;
+        // Batch-add all edges in a single lock acquisition (within the caller's tenant)
+        int created = graphEdges.Count > 0 ? _graph.AddEdges(graphEdges) : 0;
 
         return new MapDebateGraphResult(sessionId, created, edgeDetails);
     }
@@ -235,10 +235,10 @@ public sealed class DebateTools
             return NamespaceAccess.WriteDenied(targetNamespace);
 
         // Resolve winning node atomically (also validates session exists)
-        var winningEntryId = _sessions.ResolveAlias(sessionId, winningNode);
+        var winningEntryId = _sessions.ResolveAlias(_access.TenantId, sessionId, winningNode);
         if (winningEntryId is null)
         {
-            return _sessions.HasSession(sessionId)
+            return _sessions.HasSession(_access.TenantId, sessionId)
                 ? $"Error: Winning node {winningNode} not found in session '{sessionId}'."
                 : SessionNotFound(sessionId);
         }
@@ -260,17 +260,16 @@ public sealed class DebateTools
 
         // 2. Link winning node to consensus (parent_child)
         var parentEdge = new GraphEdge(winningEntryId, consensusId, "parent_child", 1.0f,
-            new Dictionary<string, string> { ["debateSessionId"] = sessionId });
-        if (_access.TenantId.Length == 0)
-            _graph.AddEdge(parentEdge);
+            new Dictionary<string, string> { ["debateSessionId"] = sessionId }, _access.TenantId);
+        _graph.AddEdge(parentEdge);
 
         // 3. Archive all debate nodes in a single lock acquisition
-        var allDebateEntryIds = _sessions.GetAllEntryIds(sessionId);
+        var allDebateEntryIds = _sessions.GetAllEntryIds(_access.TenantId, sessionId);
         int archivedCount = _index.SetLifecycleStateBatch(
             allDebateEntryIds, "archived", debateNs, _access.TenantId);
 
         // 4. Clean up session state
-        _sessions.RemoveSession(sessionId);
+        _sessions.RemoveSession(_access.TenantId, sessionId);
 
         return new ResolveDebateResult(
             sessionId, consensusId, targetNamespace, winningEntryId,
@@ -292,9 +291,9 @@ public sealed class DebateTools
 
     private void CleanupFailedSession(string sessionId, string debateNs)
     {
-        foreach (var entryId in _sessions.GetAllEntryIds(sessionId))
+        foreach (var entryId in _sessions.GetAllEntryIds(_access.TenantId, sessionId))
             _index.Delete(entryId, debateNs, _access.TenantId);
 
-        _sessions.RemoveSession(sessionId);
+        _sessions.RemoveSession(_access.TenantId, sessionId);
     }
 }

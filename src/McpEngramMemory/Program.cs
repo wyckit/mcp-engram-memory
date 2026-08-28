@@ -133,7 +133,20 @@ builder.Services.AddSingleton(sp => new SynthesisEngine(
 // historical configuration shape, but they are deployment inputs, not authentication:
 // a transport host with real auth should supply its own request-scoped IPrincipalContext.
 // Empty tenant + default agent is the explicit legacy-unisolated compatibility mode.
-var tenantId = Environment.GetEnvironmentVariable("MEMORY_TENANT_ID") ?? string.Empty;
+// Normalize the raw environment value here rather than leaning on PrincipalContext to do it on the
+// way past. PrincipalContext normalizes as well — it must, since it is the boundary every host
+// crosses — but only this site knows the value came from MEMORY_TENANT_ID, and a configuration
+// fault named at startup is far cheaper to diagnose than the same rejection surfacing as an opaque
+// tool-call error once the server is live.
+string tenantId;
+try
+{
+    tenantId = Tenancy.Normalize(Environment.GetEnvironmentVariable("MEMORY_TENANT_ID"));
+}
+catch (ArgumentException ex)
+{
+    throw new InvalidOperationException($"MEMORY_TENANT_ID is not a valid tenant id: {ex.Message}", ex);
+}
 var agentId = Environment.GetEnvironmentVariable("AGENT_ID") ?? AgentIdentity.DefaultAgentId;
 if (!string.IsNullOrWhiteSpace(tenantId) && agentId == AgentIdentity.DefaultAgentId)
 {

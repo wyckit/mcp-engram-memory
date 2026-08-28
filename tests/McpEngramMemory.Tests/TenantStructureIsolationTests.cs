@@ -1,3 +1,4 @@
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
@@ -13,9 +14,12 @@ using McpEngramMemory.Tools;
 namespace McpEngramMemory.Tests;
 
 /// <summary>
-/// Adversarial coverage for structures that still use global bare entry IDs. A tenant-scoped
-/// principal must fail closed even when same-id entries exist in both tenant and legacy
-/// partitions; the explicit legacy-unisolated principal remains the compatibility control.
+/// Cross-tenant isolation for the graph, cluster, lifecycle, intelligence, diffusion, maintenance,
+/// synthesis, and visualization surfaces. The fixture seeds COLLIDING partitions — the same (ns, id)
+/// pairs exist in both the legacy tenant and tenant-a, with different content, edges, and clusters —
+/// and every test asserts that a tenant principal operates on, and sees, only its own partition,
+/// while the legacy principal is entirely unaffected. This is the behavior that replaced the old
+/// fail-closed containment.
 /// </summary>
 public sealed class TenantStructureIsolationTests : IDisposable
 {
@@ -44,132 +48,145 @@ public sealed class TenantStructureIsolationTests : IDisposable
         _lifecycle = new LifecycleEngine(_index);
         _scanner = new AccretionScanner(_index);
         _registry = new NamespaceRegistry(_index, _embedding);
+        SeedCollidingPartitions();
+    }
+
+    private NamespaceAccess Tenant() => Access(new PrincipalContext(TenantId, "alice"));
+    private NamespaceAccess Legacy() => Access(PrincipalContext.LegacyUnisolated);
+
+    [Fact]
+    public void Graph_NeighborsAndLinks_AreIsolatedPerTenant()
+    {
+        var autoLink = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
+        var tenantGraph = new GraphTools(_graph, autoLink, _index, Tenant());
+        var legacyGraph = new GraphTools(_graph, autoLink, _index, Legacy());
+
+        // Each tenant resolves EntryA's neighbor through its own edge, to its own entry text.
+        var tn = Assert.Single(tenantGraph.GetNeighbors(EntryA).Neighbors);
+        Assert.Equal("tenant beta", tn.Entry.Text);
+        Assert.Equal("depends_on", tn.Edge.Relation);
+
+        var ln = Assert.Single(legacyGraph.GetNeighbors(EntryA).Neighbors);
+        Assert.Equal("legacy beta", ln.Entry.Text);
+        Assert.Equal("similar_to", ln.Edge.Relation);
+
+        // A tenant link adds an edge to the tenant partition only; the legacy graph is untouched.
+        int legacyEdgesBefore = _graph.GetAllEdges("").Count;
+        Assert.StartsWith("Linked", tenantGraph.LinkMemories(EntryB, EntryA, "elaborates"));
+        Assert.Equal(legacyEdgesBefore, _graph.GetAllEdges("").Count);
+        Assert.Contains(_graph.GetAllEdges(TenantId), e => e.Relation == "elaborates");
     }
 
     [Fact]
-    public async Task TenantPrincipal_CannotReadOrMutateAnyLegacyBareIdStructure()
+    public void Clusters_AreIsolatedPerTenant()
     {
-        SeedCollidingPartitions();
-        var tenantAccess = Access(new PrincipalContext(TenantId, "alice"));
-        var legacyAccess = Access(PrincipalContext.LegacyUnisolated);
+        var tenantClusters = new ClusterTools(_clusters, _embedding, Tenant());
+        var legacyClusters = new ClusterTools(_clusters, _embedding, Legacy());
 
-        var autoLink = new AutoLinkScanner(_index, _graph, new DuplicateDetector());
-        var tenantGraph = new GraphTools(_graph, autoLink, _index, tenantAccess);
-        var legacyGraph = new GraphTools(_graph, autoLink, _index, legacyAccess);
-        var edgeCount = _graph.EdgeCount;
+        // Each tenant sees only its own cluster in the shared namespace.
+        var tenantList = Assert.Single(tenantClusters.ListClusters(Ns));
+        Assert.Equal("tenant-cluster", tenantList.ClusterId);
+        var legacyList = Assert.Single(legacyClusters.ListClusters(Ns));
+        Assert.Equal("global-cluster", legacyList.ClusterId);
 
-        Assert.Empty(tenantGraph.GetNeighbors(EntryA).Neighbors);
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantGraph.LinkMemories(EntryB, EntryA, "depends_on"));
-        Assert.Equal(edgeCount, _graph.EdgeCount);
-        var legacyNeighbors = legacyGraph.GetNeighbors(EntryA);
-        Assert.Single(legacyNeighbors.Neighbors);
-        Assert.Equal("legacy beta", legacyNeighbors.Neighbors[0].Entry.Text);
-
-        var tenantClusters = new ClusterTools(_clusters, _embedding, tenantAccess);
-        var legacyClusters = new ClusterTools(_clusters, _embedding, legacyAccess);
+        // The other tenant's cluster id is not found — same shape as a genuine miss.
         Assert.Equal("Cluster 'global-cluster' not found.", tenantClusters.GetCluster("global-cluster"));
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantClusters.UpdateCluster("global-cluster", label: "tenant rewrite"));
-        Assert.Equal("legacy cluster", _clusters.GetCluster("global-cluster")?.Label);
+
+        var tenantCluster = Assert.IsType<GetClusterResult>(tenantClusters.GetCluster("tenant-cluster"));
+        Assert.All(tenantCluster.Members, m => Assert.StartsWith("tenant", m.Text));
         var legacyCluster = Assert.IsType<GetClusterResult>(legacyClusters.GetCluster("global-cluster"));
-        Assert.Equal(2, legacyCluster.MemberCount);
-        Assert.All(legacyCluster.Members, member => Assert.StartsWith("legacy", member.Text));
+        Assert.All(legacyCluster.Members, m => Assert.StartsWith("legacy", m.Text));
+    }
 
-        var tenantLifecycle = new LifecycleTools(_lifecycle, _embedding, _index, tenantAccess);
-        var legacyLifecycle = new LifecycleTools(_lifecycle, _embedding, _index, legacyAccess);
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantLifecycle.PromoteMemory(EntryA, "ltm"));
-        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<CognitiveSearchResult>>(
-            tenantLifecycle.DeepRecall(Ns, vector: [1f, 0f], minScore: 0f)));
+    [Fact]
+    public void Lifecycle_PromoteMemory_IsolatesPerTenant()
+    {
+        var tenantLifecycle = new LifecycleTools(_lifecycle, _embedding, _index, Tenant());
+
+        // Promoting the tenant's EntryA moves only the tenant copy; the legacy copy stays STM.
+        Assert.Contains("stm -> ltm", tenantLifecycle.PromoteMemory(EntryA, "ltm"));
+        Assert.Equal("ltm", _index.Get(EntryA, Ns, TenantId)?.LifecycleState);
         Assert.Equal("stm", _index.Get(EntryA, Ns)?.LifecycleState);
-        Assert.Equal("stm", _index.Get(EntryA, Ns, TenantId)?.LifecycleState);
-        Assert.Contains("stm -> ltm", legacyLifecycle.PromoteMemory(EntryA, "ltm"));
-        Assert.Equal("ltm", _index.Get(EntryA, Ns)?.LifecycleState);
-        Assert.Equal("stm", _index.Get(EntryA, Ns, TenantId)?.LifecycleState);
+    }
 
-        var tenantIntelligence = Intelligence(tenantAccess);
-        var legacyIntelligence = Intelligence(legacyAccess);
-        var tenantDuplicates = Assert.IsType<DuplicateDetectionResult>(
-            tenantIntelligence.DetectDuplicates(Ns, threshold: 0.9f));
-        Assert.Equal(0, tenantDuplicates.ScannedCount);
-        Assert.Empty(tenantDuplicates.Duplicates);
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantIntelligence.MergeMemories(EntryA, EntryB, Ns));
+    [Fact]
+    public void Intelligence_DetectAndMerge_IsolatePerTenant()
+    {
+        var tenantIntel = Intelligence(Tenant());
+
+        // Duplicate detection scans only the tenant's two entries.
+        var dupes = Assert.IsType<DuplicateDetectionResult>(tenantIntel.DetectDuplicates(Ns, threshold: 0.9f));
+        Assert.Equal(2, dupes.ScannedCount);
+
+        // Merge archives the tenant's EntryB and transfers its tenant edge; legacy EntryB is untouched.
+        Assert.StartsWith("Merged", tenantIntel.MergeMemories(EntryA, EntryB, Ns));
+        Assert.Equal("archived", _index.Get(EntryB, Ns, TenantId)?.LifecycleState);
         Assert.Equal("stm", _index.Get(EntryB, Ns)?.LifecycleState);
-        Assert.Equal(edgeCount, _graph.EdgeCount);
-        var legacyDuplicates = Assert.IsType<DuplicateDetectionResult>(
-            legacyIntelligence.DetectDuplicates(Ns, threshold: 0.9f));
-        Assert.Equal(2, legacyDuplicates.ScannedCount);
-        Assert.NotEmpty(legacyDuplicates.Duplicates);
+        // The legacy A->B edge still exists after a tenant-side merge.
+        Assert.Contains(_graph.GetAllEdges(""), e => e.SourceId == EntryA && e.TargetId == EntryB);
+    }
 
+    [Fact]
+    public void Diffusion_GuardLifted_TenantInvalidateSucceeds()
+    {
         var kernel = new MemoryDiffusionKernel(_index, _graph);
-        var tenantDiffusion = new MemoryDiffusionTools(kernel, tenantAccess);
-        var legacyDiffusion = new MemoryDiffusionTools(kernel, legacyAccess);
-        Assert.Null(tenantDiffusion.ComputeDiffusionBasis(Ns));
-        Assert.Null(tenantDiffusion.DiffusionStats(Ns));
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantDiffusion.InvalidateDiffusion(Ns));
-        Assert.Contains("Invalidated", legacyDiffusion.InvalidateDiffusion(Ns));
+        var tenantDiffusion = new MemoryDiffusionTools(kernel, Tenant());
+        // The operation no longer fails closed for a tenant; it runs and reports success.
+        Assert.Contains("Invalidated", tenantDiffusion.InvalidateDiffusion(Ns));
+    }
 
-        var reranker = new SpectralRetrievalReranker(kernel);
-        var tenantSpectral = new SpectralRetrievalTools(_index, _embedding, reranker, tenantAccess);
-        var legacySpectral = new SpectralRetrievalTools(_index, _embedding, reranker, legacyAccess);
-        Assert.Empty(tenantSpectral.SpectralRecall("alpha", Ns, mode: "none", minScore: 0f));
-        var legacySpectralResults = legacySpectral.SpectralRecall(
-            "alpha", Ns, mode: "none", minScore: 0f);
-        Assert.Equal(2, legacySpectralResults.Count);
-        Assert.All(legacySpectralResults, result => Assert.StartsWith("legacy", result.Text));
-
-        var originalLegacyVector = _index.Get(EntryA, Ns)!.Vector.ToArray();
-        var originalTenantVector = _index.Get(EntryA, Ns, TenantId)!.Vector.ToArray();
+    [Fact]
+    public void Maintenance_RebuildEmbeddings_IsolatesPerTenant()
+    {
+        var legacyVectorBefore = _index.Get(EntryA, Ns)!.Vector.ToArray();
         var tenantMaintenance = new MaintenanceTools(
-            _index, new ReembeddingService(), new MetricsCollector(), tenantAccess);
-        var legacyMaintenance = new MaintenanceTools(
-            _index, new ReembeddingService(), new MetricsCollector(), legacyAccess);
-        Assert.Equal(NamespaceAccess.TenantStructureUnavailable,
-            tenantMaintenance.RebuildEmbeddings(Ns));
-        Assert.Equal(originalLegacyVector, _index.Get(EntryA, Ns)!.Vector);
-        Assert.Equal(originalTenantVector, _index.Get(EntryA, Ns, TenantId)!.Vector);
-        var tenantCompression = Assert.IsType<CompressionStatsResult>(
-            tenantMaintenance.CompressionStats(Ns));
-        Assert.Equal(0, tenantCompression.TotalEntries);
-        var legacyCompression = Assert.IsType<CompressionStatsResult>(
-            legacyMaintenance.CompressionStats(Ns));
-        Assert.Equal(2, legacyCompression.TotalEntries);
-        var rebuilt = Assert.IsType<RebuildEmbeddingsResult>(legacyMaintenance.RebuildEmbeddings(Ns));
-        Assert.Equal(2, rebuilt.TotalUpdated);
-        Assert.Equal(3, _index.Get(EntryA, Ns)!.Vector.Length);
-        Assert.Equal(2, _index.Get(EntryA, Ns, TenantId)!.Vector.Length);
+            _index, new ReembeddingService(), new MetricsCollector(), Tenant());
 
+        var rebuilt = Assert.IsType<RebuildEmbeddingsResult>(tenantMaintenance.RebuildEmbeddings(Ns));
+        Assert.Equal(2, rebuilt.TotalUpdated);
+
+        // Tenant vectors were re-embedded (dim 3); legacy vectors are byte-for-byte unchanged.
+        Assert.Equal(3, _index.Get(EntryA, Ns, TenantId)!.Vector.Length);
+        Assert.Equal(legacyVectorBefore, _index.Get(EntryA, Ns)!.Vector);
+    }
+
+    [Fact]
+    public async Task Synthesis_RunsOverTenantPartition()
+    {
         var generator = new RecordingTextGenerator();
         var synthesis = new SynthesisEngine(_index, _clusters, generator);
-        var tenantSynthesis = new SynthesisTools(synthesis, tenantAccess);
-        var legacySynthesis = new SynthesisTools(synthesis, legacyAccess);
-        var tenantSynthesisResult = Assert.IsType<SynthesisResult>(
-            await tenantSynthesis.SynthesizeMemories(Ns));
-        Assert.Equal("empty", tenantSynthesisResult.Status);
-        Assert.Equal(0, generator.AvailabilityCalls);
-        var legacySynthesisResult = Assert.IsType<SynthesisResult>(
-            await legacySynthesis.SynthesizeMemories(Ns));
-        Assert.Equal("synthesized", legacySynthesisResult.Status);
-        Assert.True(generator.AvailabilityCalls > 0);
+        var tenantSynthesis = new SynthesisTools(synthesis, Tenant());
 
-        var tenantVisualization = new VisualizationTools(_index, _graph, _clusters, tenantAccess);
-        var legacyVisualization = new VisualizationTools(_index, _graph, _clusters, legacyAccess);
-        var tenantSnapshot = tenantVisualization.GetGraphSnapshot(Ns, includeArchived: true);
-        Assert.Empty(tenantSnapshot.Nodes);
-        Assert.Empty(tenantSnapshot.Edges);
-        Assert.Empty(tenantSnapshot.Clusters);
-        var legacySnapshot = legacyVisualization.GetGraphSnapshot(Ns, includeArchived: true);
-        Assert.Equal(2, legacySnapshot.Nodes.Count);
-        Assert.Single(legacySnapshot.Edges);
-        Assert.Single(legacySnapshot.Clusters);
-        Assert.All(legacySnapshot.Nodes, node => Assert.StartsWith("legacy", node.Text));
+        var result = Assert.IsType<SynthesisResult>(await tenantSynthesis.SynthesizeMemories(Ns));
+        Assert.Equal("synthesized", result.Status);
+        Assert.True(generator.AvailabilityCalls > 0);
     }
 
     [Fact]
-    public async Task TenantAdminPurge_DeletesTenantEntriesWithoutTouchingGlobalGraphOrClusters()
+    public void Visualization_Snapshot_IsolatesPerTenant()
+    {
+        var tenantViz = new VisualizationTools(_index, _graph, _clusters, Tenant());
+        var legacyViz = new VisualizationTools(_index, _graph, _clusters, Legacy());
+
+        var tenantSnapshot = tenantViz.GetGraphSnapshot(Ns, includeArchived: true);
+        Assert.Equal(2, tenantSnapshot.Nodes.Count);
+        Assert.All(tenantSnapshot.Nodes, n => Assert.StartsWith("tenant", n.Text));
+        Assert.Single(tenantSnapshot.Edges);
+        Assert.Equal("depends_on", tenantSnapshot.Edges[0].Relation);
+        Assert.Single(tenantSnapshot.Clusters);
+        Assert.Equal("tenant-cluster", tenantSnapshot.Clusters[0].ClusterId);
+
+        var legacySnapshot = legacyViz.GetGraphSnapshot(Ns, includeArchived: true);
+        Assert.Equal(2, legacySnapshot.Nodes.Count);
+        Assert.All(legacySnapshot.Nodes, n => Assert.StartsWith("legacy", n.Text));
+        Assert.Single(legacySnapshot.Edges);
+        Assert.Equal("similar_to", legacySnapshot.Edges[0].Relation);
+        Assert.Single(legacySnapshot.Clusters);
+        Assert.Equal("global-cluster", legacySnapshot.Clusters[0].ClusterId);
+    }
+
+    [Fact]
+    public async Task TenantAdminPurge_DeletesTenantEntriesWithoutTouchingLegacyGraphOrClusters()
     {
         const string debateNs = "active-debate-stale";
         const string debateA = "debate-a";
@@ -178,16 +195,25 @@ public sealed class TenantStructureIsolationTests : IDisposable
 
         var legacyA = Entry(debateA, debateNs, "legacy debate a");
         var legacyB = Entry(debateB, debateNs, "legacy debate b");
-        var tenantA = Entry(debateA, debateNs, "tenant debate a", TenantId);
+        var tenantAe = Entry(debateA, debateNs, "tenant debate a", TenantId);
+        var tenantBe = Entry(debateB, debateNs, "tenant debate b", TenantId);
         legacyA.CreatedAt = stale;
         legacyB.CreatedAt = stale;
-        tenantA.CreatedAt = stale;
+        tenantAe.CreatedAt = stale;
+        tenantBe.CreatedAt = stale;
         _index.Upsert(legacyA);
         _index.Upsert(legacyB);
-        _index.Upsert(tenantA);
+        _index.Upsert(tenantAe);
+        _index.Upsert(tenantBe);
         _registry.EnsureOwnership(debateNs, "alice", TenantId);
+
+        // Legacy graph + cluster.
         _graph.AddEdge(new GraphEdge(debateA, debateB, "supports"));
         _clusters.CreateCluster("debate-cluster", debateNs, [debateA, debateB]);
+        // Tenant graph + cluster over the SAME ids, so the purge cascade must clean up the tenant's
+        // own edges/memberships (not the legacy ones).
+        _graph.AddEdge(new GraphEdge(debateA, debateB, "opposes", 1f, null, TenantId));
+        _clusters.CreateCluster("tenant-debate-cluster", debateNs, [debateA, debateB], null, TenantId);
 
         var tenantAdmin = new AdminTools(
             _index, _graph, _clusters, _persistence, _registry,
@@ -196,27 +222,230 @@ public sealed class TenantStructureIsolationTests : IDisposable
             await tenantAdmin.PurgeDebates(maxAgeHours: 24, dryRun: false));
 
         Assert.Equal(1, tenantResult.NamespacesAffected);
-        Assert.Equal(1, tenantResult.TotalEntriesRemoved);
-        Assert.Equal(0, tenantResult.TotalEdgesRemoved);
+        Assert.Equal(2, tenantResult.TotalEntriesRemoved);
+        Assert.True(tenantResult.TotalEdgesRemoved >= 1);
         Assert.Null(_index.Get(debateA, debateNs, TenantId));
         Assert.NotNull(_index.Get(debateA, debateNs));
-        Assert.Equal(1, _graph.EdgeCount);
+        // The tenant's own edge and cluster membership were cascaded away by the tenant purge...
+        Assert.DoesNotContain(_graph.GetAllEdges(TenantId), e => e.Relation == "opposes");
+        Assert.Empty(_clusters.GetClustersForEntry(debateA, TenantId));
+        // ...while the legacy graph/cluster are untouched.
+        Assert.Contains(_graph.GetAllEdges(""), e => e.SourceId == debateA && e.TargetId == debateB && e.Relation == "supports");
         Assert.Contains("debate-cluster", _clusters.GetClustersForEntry(debateA));
-
-        var legacyAdmin = new AdminTools(
-            _index, _graph, _clusters, _persistence, _registry,
-            PrincipalContext.LegacyUnisolated);
-        var legacyResult = Assert.IsType<PurgeDebatesResult>(
-            await legacyAdmin.PurgeDebates(maxAgeHours: 24, dryRun: false));
-
-        Assert.Equal(1, legacyResult.NamespacesAffected);
-        Assert.Equal(2, legacyResult.TotalEntriesRemoved);
-        Assert.Equal(1, legacyResult.TotalEdgesRemoved);
-        Assert.Null(_index.Get(debateA, debateNs));
-        Assert.Null(_index.Get(debateB, debateNs));
-        Assert.Equal(0, _graph.EdgeCount);
-        Assert.Empty(_clusters.GetClustersForEntry(debateA));
     }
+
+    // ── Partition-key forgery ──
+
+    /// <summary>
+    /// A partition key is composed as <c>tenant + PartitionSeparator + ns</c>, and for the legacy
+    /// tenant it is the bare namespace. So a LEGACY caller that names the namespace
+    /// <c>"tenant-a" + U+001F + "shared-structure"</c> composes byte-for-byte the same key as
+    /// (tenant-a, shared-structure) — no ACL involved, because the legacy default agent has
+    /// unrestricted access. That aliases the tenant's BM25/HNSW sub-indexes, its per-partition
+    /// lock, and its persisted snapshot; <c>DeleteAllInNamespace</c> reaches
+    /// <c>NamespaceStore.RemoveNamespace</c> and clears all three.
+    ///
+    /// Composition is now validated, so every one of those entry points refuses the forged
+    /// component instead of silently addressing another partition.
+    /// </summary>
+    [Fact]
+    public void PartitionKey_SeparatorInNamespace_CannotForgeAnotherTenantsPartition()
+    {
+        string forged = ForgedNamespace;
+
+        // The alphabet guard is public and rejects the whole control-character class, not just the
+        // separator — narrowing it to one character would reopen the hole on the next separator change.
+        var direct = Assert.Throws<ArgumentException>(
+            () => Tenancy.ValidatePartitionComponent(forged, "ns"));
+        Assert.Contains("control characters", direct.Message);
+        // The offending value is attacker-controlled, so it must not be echoed back into a log line.
+        // Ordinal is required, not stylistic: the default overload compares with the current culture,
+        // and under ICU collation a control character is zero-weight, so a culture-sensitive search
+        // for U+001F matches at position 0 of *every* string — the assertion would fail against a
+        // message that never contained the separator at all.
+        Assert.DoesNotContain(Tenancy.PartitionSeparator.ToString(), direct.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Ns, direct.Message, StringComparison.Ordinal);
+
+        // Every public partition-keyed path refuses it rather than composing tenant-a's key.
+        // DeleteAllInNamespace is the damaging one and is checked before any state is touched.
+        Assert.Throws<ArgumentException>(() => _index.DeleteAllInNamespace(forged));
+        Assert.Throws<ArgumentException>(() => _index.Get(EntryA, forged));
+        Assert.Throws<ArgumentException>(() => _index.Delete(EntryA, forged));
+        Assert.Throws<ArgumentException>(() => _index.CountInNamespace(forged));
+
+        // The other half of the key is closed too: a tenant id carrying the separator would let a
+        // tenant-scoped caller compose a *namespace* boundary instead.
+        Assert.Throws<ArgumentException>(
+            () => Tenancy.Normalize(TenantId + Tenancy.PartitionSeparator + Ns));
+
+        // OVER-CORRECTION CONTROL — the guard rejects forged components, not tenancy itself.
+        // A legitimate tenant key still composes, still resolves, and tenant-a's partition came
+        // through the rejected forgery completely intact.
+        Assert.Equal(TenantId, Tenancy.Normalize(TenantId));
+        Assert.Equal("tenant alpha", _index.Get(EntryA, Ns, TenantId)?.Text);
+        Assert.Equal(2, _index.CountInNamespace(Ns, TenantId));
+        // LEGACY MIRROR — a single-tenant deployment naming a clean namespace is untouched.
+        Assert.Equal("legacy alpha", _index.Get(EntryA, Ns)?.Text);
+        Assert.Equal(2, _index.CountInNamespace(Ns));
+    }
+
+    /// <summary>
+    /// The stay-bootable guarantee. A store written before partition components were validated can
+    /// already hold two decay-config rows that compose to one key — here a tenant-scoped row for
+    /// (tenant-a, shared-structure) and a legacy row whose namespace IS the composed key. The
+    /// obvious <c>ToDictionary</c> throws on that, turning a historical bad write into a host that
+    /// cannot start with manual database repair as the only way out. Loading must instead keep one
+    /// row deterministically and log.
+    ///
+    /// Driven through <see cref="PersistenceManager.LoadDecayConfigs"/> because the shared builder
+    /// itself is internal to McpEngramMemory.Core, which does not expose internals to this assembly.
+    /// </summary>
+    [Fact]
+    public void LoadDecayConfigs_CollidingPartitionKeys_DoesNotThrow()
+    {
+        // Its own directory under the fixture's per-run temp path, so the fixture's Dispose still
+        // owns the cleanup and no other test in this class sees the poisoned file.
+        string poisonedPath = Path.Combine(_dataPath, "poisoned_decay_store");
+        Directory.CreateDirectory(poisonedPath);
+
+        const string cleanNs = "decay-clean";
+        var poisoned = new List<DecayConfig>
+        {
+            // Legacy row FIRST in stored order, so the surviving row is decided by the
+            // tenant-scoped-first rule and not merely by file position.
+            new(ns: ForgedNamespace, decayRate: 0.99f),
+            new(ns: Ns, decayRate: 0.42f, tenantId: TenantId),
+            // A well-formed legacy row, to pin that a poisoned pair does not disturb the rest.
+            new(ns: cleanNs, decayRate: 0.11f),
+        };
+        File.WriteAllText(
+            Path.Combine(poisonedPath, "_decay_configs.json"),
+            JsonSerializer.Serialize(poisoned));
+
+        using var persistence = new PersistenceManager(poisonedPath, debounceMs: 50);
+
+        // The load completes instead of throwing — this is the whole point.
+        var loaded = persistence.LoadDecayConfigs();
+
+        // Exactly one row survives the collision, and it is the tenant-scoped one.
+        Assert.Equal(2, loaded.Count);
+        Assert.True(loaded.ContainsKey(ForgedNamespace));
+        var survivor = loaded[ForgedNamespace];
+        Assert.Equal(TenantId, survivor.TenantId);
+        Assert.Equal(Ns, survivor.Ns);
+        Assert.Equal(0.42f, survivor.DecayRate);
+
+        // LEGACY MIRROR — a well-formed legacy row still keys on the bare namespace, unchanged.
+        Assert.True(loaded.ContainsKey(cleanNs));
+        var clean = loaded[cleanNs];
+        Assert.Equal(string.Empty, clean.TenantId);
+        Assert.Equal(0.11f, clean.DecayRate);
+    }
+
+    /// <summary>
+    /// A tenant id arrives from a host environment variable or an auth-token claim, so
+    /// <c>" tenant-a "</c> and <c>"tenant-a"</c> would otherwise address two different partitions
+    /// for every consumer at once. Normalization therefore has to live in the init accessor: a
+    /// <c>with</c> expression bypasses the constructor entirely and would reintroduce the raw value.
+    /// </summary>
+    [Fact]
+    public void PrincipalContext_PaddedTenantId_NormalizesAtConstruction()
+    {
+        var padded = new PrincipalContext($"  {TenantId}\t", "alice");
+        Assert.Equal(TenantId, padded.TenantId);
+
+        // The `with` path is the one the constructor cannot cover.
+        var copied = padded with { TenantId = $"\n{TenantId}  " };
+        Assert.Equal(TenantId, copied.TenantId);
+
+        // Observable consequence: the padded principal lands in tenant-a's partition, not the
+        // legacy one, so it sees tenant-a's cluster and only that.
+        var paddedClusters = new ClusterTools(_clusters, _embedding, Access(padded));
+        Assert.Equal("tenant-cluster", Assert.Single(paddedClusters.ListClusters(Ns)).ClusterId);
+        Assert.Equal(TenantId, Access(copied).TenantId);
+
+        // Case is PRESERVED by decision — folding here would silently merge two distinct tenants.
+        Assert.Equal("Tenant-A", new PrincipalContext(" Tenant-A ", "alice").TenantId);
+        Assert.NotEqual(padded.TenantId, new PrincipalContext(" TENANT-A ", "alice").TenantId);
+
+        // Refused rather than silently truncated or allowed to forge a partition key.
+        Assert.Throws<ArgumentException>(
+            () => new PrincipalContext(new string('t', Tenancy.MaxTenantIdLength + 1), "alice"));
+        Assert.Throws<ArgumentException>(
+            () => padded with { TenantId = TenantId + Tenancy.PartitionSeparator });
+
+        // OVER-CORRECTION CONTROL / LEGACY MIRROR — a max-length id is accepted, and null,
+        // empty and whitespace all still collapse to the legacy partition.
+        Assert.Equal(
+            new string('t', Tenancy.MaxTenantIdLength),
+            new PrincipalContext($" {new string('t', Tenancy.MaxTenantIdLength)} ", "alice").TenantId);
+        Assert.Equal(string.Empty, new PrincipalContext(null!, "alice").TenantId);
+        Assert.Equal(string.Empty, new PrincipalContext("   ", "alice").TenantId);
+        Assert.True(PrincipalContext.LegacyUnisolated.IsLegacyUnisolated);
+        Assert.Equal(string.Empty, PrincipalContext.LegacyUnisolated.TenantId);
+    }
+
+    /// <summary>
+    /// THE EXPLOIT. Synthesis chunks entries along cluster boundaries and puts the cluster's LABEL
+    /// into the map and reduce prompts. The entries were already gathered from the tenant partition,
+    /// but the cluster lookup used to fall back to the legacy ("") partition — a real, populated
+    /// dataset, not a sentinel — so another partition's cluster labels were written straight into
+    /// this tenant's prompts and on to the model.
+    ///
+    /// The assertion is on PROMPT TEXT, never on status: the status is "synthesized" either way,
+    /// which is precisely why <see cref="Synthesis_RunsOverTenantPartition"/> could not see this.
+    /// </summary>
+    [Fact]
+    public async Task Synthesis_ClusterLabels_AreTenantScoped()
+    {
+        var generator = new RecordingTextGenerator();
+        var synthesis = new SynthesisEngine(_index, _clusters, generator);
+        var tenantSynthesis = new SynthesisTools(synthesis, Tenant());
+
+        var result = Assert.IsType<SynthesisResult>(await tenantSynthesis.SynthesizeMemories(Ns));
+        Assert.Equal("synthesized", result.Status);
+
+        var prompts = generator.Prompts;
+        Assert.NotEmpty(prompts);
+        // The tenant's own cluster label reached the prompts...
+        Assert.Contains(prompts, p => p.Contains("tenant cluster", StringComparison.Ordinal));
+        // ...and the colliding legacy cluster's label reached none of them.
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy cluster", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("global-cluster", p));
+        // Entry text was already tenant-scoped; pin it so a regression there cannot hide here.
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy alpha", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("legacy beta", p));
+    }
+
+    /// <summary>
+    /// LEGACY MIRROR — the fix scopes the cluster lookup to the caller's partition; for a
+    /// single-tenant deployment that partition is still the legacy one, so its prompts are
+    /// byte-for-byte what they always were.
+    /// </summary>
+    [Fact]
+    public async Task Synthesis_LegacyPrincipal_StillUsesLegacyClusterLabel()
+    {
+        var generator = new RecordingTextGenerator();
+        var synthesis = new SynthesisEngine(_index, _clusters, generator);
+        var legacySynthesis = new SynthesisTools(synthesis, Legacy());
+
+        var result = Assert.IsType<SynthesisResult>(await legacySynthesis.SynthesizeMemories(Ns));
+        Assert.Equal("synthesized", result.Status);
+
+        var prompts = generator.Prompts;
+        Assert.NotEmpty(prompts);
+        Assert.Contains(prompts, p => p.Contains("legacy cluster", StringComparison.Ordinal));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant cluster", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant alpha", p));
+        Assert.All(prompts, p => Assert.DoesNotContain("tenant beta", p));
+    }
+
+    /// <summary>
+    /// The namespace that composes to tenant-a's partition key when it is named by a LEGACY caller,
+    /// for whom the composed key is the bare namespace.
+    /// </summary>
+    private static string ForgedNamespace
+        => string.Concat(TenantId, Tenancy.PartitionSeparator.ToString(), Ns);
 
     private NamespaceAccess Access(IPrincipalContext principal)
         => new(_registry, principal);
@@ -226,12 +455,23 @@ public sealed class TenantStructureIsolationTests : IDisposable
 
     private void SeedCollidingPartitions()
     {
+        // Same (ns, id) pairs in BOTH partitions, with distinct content.
         _index.Upsert(Entry(EntryA, Ns, "legacy alpha"));
         _index.Upsert(Entry(EntryB, Ns, "legacy beta"));
         _index.Upsert(Entry(EntryA, Ns, "tenant alpha", TenantId));
         _index.Upsert(Entry(EntryB, Ns, "tenant beta", TenantId));
+
+        // Legacy graph + cluster.
         _graph.AddEdge(new GraphEdge(EntryA, EntryB, "similar_to"));
         _clusters.CreateCluster("global-cluster", Ns, [EntryA, EntryB], "legacy cluster");
+
+        // Tenant-a graph + cluster over the same bare ids — must not collide with legacy.
+        _graph.AddEdge(new GraphEdge(EntryA, EntryB, "depends_on", 1f, null, TenantId));
+        _clusters.CreateCluster("tenant-cluster", Ns, [EntryA, EntryB], "tenant cluster", TenantId);
+
+        // The identified tenant principal must own the namespace to reach it — an unregistered
+        // namespace is closed to identified agents. The legacy default agent needs no ownership.
+        _registry.EnsureOwnership(Ns, "alice", TenantId);
     }
 
     private static CognitiveEntry Entry(string id, string ns, string text, string tenantId = "")
@@ -257,9 +497,31 @@ public sealed class TenantStructureIsolationTests : IDisposable
         public float[] Embed(string text) => [0f, 1f, 0f];
     }
 
+    /// <summary>
+    /// Captures every prompt handed to the generator. The prompt is the only place a cluster
+    /// label ever becomes observable — <see cref="SynthesisResult.Status"/> reads "synthesized"
+    /// whether the labels came from this tenant's partition or someone else's, which is exactly
+    /// why <see cref="Synthesis_RunsOverTenantPartition"/> passed while the leak was live.
+    ///
+    /// The list is lock-guarded and reads snapshot under the SAME lock:
+    /// <see cref="SynthesisEngine"/> runs two map workers, so <see cref="GenerateAsync"/> is
+    /// called concurrently and an unsynchronized <c>List.Add</c> would tear or lose entries.
+    /// <see cref="AvailabilityCalls"/> needs no lock only because it is incremented once,
+    /// before the pipeline starts.
+    /// </summary>
     private sealed class RecordingTextGenerator : ITextGenerator
     {
+        // Plain object, not System.Threading.Lock: this fixture also builds for net8.0.
+        private readonly object _gate = new();
+        private readonly List<string> _prompts = [];
+
         public int AvailabilityCalls { get; private set; }
+
+        /// <summary>Snapshot of the prompts captured so far, taken under the capture lock.</summary>
+        public IReadOnlyList<string> Prompts
+        {
+            get { lock (_gate) return _prompts.ToArray(); }
+        }
 
         public Task<bool> IsAvailableAsync(string model, CancellationToken ct = default)
         {
@@ -273,7 +535,10 @@ public sealed class TenantStructureIsolationTests : IDisposable
             int maxTokens = 512,
             float temperature = 0.1f,
             CancellationToken ct = default)
-            => Task.FromResult<string?>("generated synthesis");
+        {
+            lock (_gate) _prompts.Add(prompt);
+            return Task.FromResult<string?>("generated synthesis");
+        }
 
         public void Dispose() { }
     }

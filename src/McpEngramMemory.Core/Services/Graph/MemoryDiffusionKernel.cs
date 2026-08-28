@@ -21,7 +21,7 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///
 /// Construction. For namespace <c>ns</c>:
 /// 1. Snapshot entry ids in stable order from <see cref="CognitiveIndex.GetAllInNamespace(string)"/>.
-/// 2. Snapshot the global edge list from <see cref="KnowledgeGraph.GetAllEdges"/>, filter
+/// 2. Snapshot the edge list from <see cref="KnowledgeGraph.GetAllEdges()"/>, filter
 ///    to edges whose endpoints are both in <c>ns</c> and whose relation is in
 ///    <see cref="PositiveRelations"/> (parent_child, cross_reference, similar_to,
 ///    elaborates, depends_on). The <c>contradicts</c> relation is excluded so the
@@ -115,10 +115,14 @@ public class MemoryDiffusionKernel
     /// returning <c>null</c>) is deliberate — <c>null</c> would be
     /// indistinguishable from a legitimate too-small-namespace bypass.
     /// </summary>
-    public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK)
+    public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK, string tenantId = "")
     {
-        long currentRev = _graph.Revision;
-        if (_cache.TryGetValue(ns, out var cached)
+        // Cache/lock/failure keys are the (tenant, ns) partition key so a tenant's basis never
+        // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
+        // legacy cache keys are unchanged.
+        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        long currentRev = _graph.RevisionFor(tenantId);
+        if (_cache.TryGetValue(pk, out var cached)
             && cached.GraphRevision == currentRev
             && (cached.TopK >= topK || cached.TopK >= cached.NodeCount))
         {
@@ -128,42 +132,42 @@ public class MemoryDiffusionKernel
             return cached;
         }
 
-        if (_failedRevisions.TryGetValue(ns, out var failed) && failed.Revision == currentRev)
+        if (_failedRevisions.TryGetValue(pk, out var failed) && failed.Revision == currentRev)
             throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
-        var nsLock = _nsLocks.GetOrAdd(ns, _ => new object());
+        var nsLock = _nsLocks.GetOrAdd(pk, _ => new object());
         lock (nsLock)
         {
-            currentRev = _graph.Revision;
-            if (_cache.TryGetValue(ns, out cached)
+            currentRev = _graph.RevisionFor(tenantId);
+            if (_cache.TryGetValue(pk, out cached)
                 && cached.GraphRevision == currentRev
                 && cached.TopK >= topK)
             {
                 return cached;
             }
 
-            if (_failedRevisions.TryGetValue(ns, out failed) && failed.Revision == currentRev)
+            if (_failedRevisions.TryGetValue(pk, out failed) && failed.Revision == currentRev)
                 throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
             DiffusionBasis? built;
             try
             {
-                built = ComputeBasis(ns, topK, currentRev);
+                built = ComputeBasis(ns, topK, currentRev, tenantId);
             }
             catch (Exception ex)
             {
-                _failedRevisions[ns] = (currentRev, ex.Message);
+                _failedRevisions[pk] = (currentRev, ex.Message);
                 _logger?.LogWarning(ex,
                     "Diffusion basis computation failed for ns={Namespace} at revision {Revision}; caching failure until the graph changes.",
                     ns, currentRev);
                 throw;
             }
 
-            _failedRevisions.TryRemove(ns, out _);
+            _failedRevisions.TryRemove(pk, out _);
             if (built is not null)
-                _cache[ns] = built;
+                _cache[pk] = built;
             else
-                _cache.TryRemove(ns, out _);
+                _cache.TryRemove(pk, out _);
             return built;
         }
     }
@@ -187,9 +191,10 @@ public class MemoryDiffusionKernel
     public IReadOnlyDictionary<string, float> ApplySpectralFilter(
         string ns,
         IReadOnlyDictionary<string, float> signal,
-        Func<float, float> modeFilter)
+        Func<float, float> modeFilter,
+        string tenantId = "")
     {
-        var basis = GetBasis(ns);
+        var basis = GetBasis(ns, DefaultTopK, tenantId);
         if (basis is null) return signal;
 
         int n = basis.NodeCount;
@@ -222,11 +227,11 @@ public class MemoryDiffusionKernel
     }
 
     /// <summary>Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.</summary>
-    public DiffusionStats? GetStats(string ns)
+    public DiffusionStats? GetStats(string ns, string tenantId = "")
     {
-        var basis = GetBasis(ns);
+        var basis = GetBasis(ns, DefaultTopK, tenantId);
         if (basis is null) return null;
-        bool stale = basis.GraphRevision != _graph.Revision;
+        bool stale = basis.GraphRevision != _graph.RevisionFor(tenantId);
         return new DiffusionStats(
             ns,
             basis.NodeCount,
@@ -240,10 +245,11 @@ public class MemoryDiffusionKernel
     }
 
     /// <summary>Drop the cached basis (and any negative-cached failure) for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
-    public void Invalidate(string ns)
+    public void Invalidate(string ns, string tenantId = "")
     {
-        _cache.TryRemove(ns, out _);
-        _failedRevisions.TryRemove(ns, out _);
+        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        _cache.TryRemove(pk, out _);
+        _failedRevisions.TryRemove(pk, out _);
     }
 
     // ── internals ─────────────────────────────────────────────────────────────
@@ -253,9 +259,9 @@ public class MemoryDiffusionKernel
     /// namespace doesn't qualify. Virtual purely as a test seam so fault-isolation
     /// tests can inject deterministic failures — not intended as an extension point.
     /// </summary>
-    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision)
+    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId = "")
     {
-        var entries = _index.GetAllInNamespace(ns);
+        var entries = _index.GetAllInNamespace(ns, tenantId);
         if (entries.Count < MinimumNodesForSpectral)
         {
             _logger?.LogDebug(
@@ -270,7 +276,7 @@ public class MemoryDiffusionKernel
 
         // Build symmetric sparse adjacency restricted to this namespace and positive relations.
         // First pass: collect candidate edge weights keyed by ordered (i,j) with i<j.
-        var allEdges = _graph.GetAllEdges();
+        var allEdges = _graph.GetAllEdges(tenantId);
         var weights = new Dictionary<(int Lo, int Hi), float>();
         int edgeCount = 0;
         foreach (var edge in allEdges)

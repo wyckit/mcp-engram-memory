@@ -199,13 +199,15 @@ or authenticated host must bind verified request/session claims to its own princ
 Empty tenant plus the default agent is `PrincipalContext.LegacyUnisolated`. It preserves historical
 single-user behavior and is deliberately not described as secure multi-tenant operation.
 
-Memory entry storage and lookup are tenant-aware. The cognitive graph, clusters, lifecycle support
-structures, collapse history, diffusion basis, and several synthesis/maintenance paths still use
-global bare IDs. Therefore non-empty-tenant principals currently fail closed for the affected
-graph, cluster, lifecycle, intelligence, accretion, diffusion, spectral, maintenance, synthesis, and
-visualization tools. Admin debate purge can delete tenant entries but intentionally does not mutate
-global graph or cluster structures. This is a containment measure, **not** full tenant-qualified
-graph support.
+Multi-tenancy is full. Memory storage and lookup, the cognitive graph, clusters, lifecycle support
+structures, collapse history, diffusion basis, intelligence, and the synthesis/maintenance/
+visualization paths are all partitioned: the graph is keyed by `(tenant, id)`, clusters by
+`(tenant, clusterId)`, diffusion bases and decay configs by `(tenant, ns)`, and every standard/full
+tool threads the caller's principal tenant. A non-empty-tenant principal sees and mutates only its
+own partition — graph edges never cross tenants, while cross-namespace association within a tenant is
+preserved — and the legacy empty-tenant partition is byte-for-byte unchanged. Admin debate purge
+deletes only the caller's tenant entries. Background decay, consolidation, auto-link, and accretion
+run for every tenant.
 
 See [Security](../SECURITY.md) for the threat boundary and [Architecture](architecture.md) for the
 full system map.

@@ -193,6 +193,183 @@ public class NamespaceCleanupTests : IDisposable
         Assert.Equal(0, _index.CountInNamespace("active-debate-old"));
     }
 
+    // ── purge_debates cascade under a real tenant ──
+    //
+    // Every test below is seeded under tenant "t1", NOT the legacy tenant. In the legacy tenant
+    // CognitiveIndex.Delete's UntrackEntry path and the global _idToNamespace alias make two
+    // same-id entries alias one another, so a legacy-seeded version of these tests would appear
+    // to pass or fail for reasons that have nothing to do with the cascade guard under test.
+    //
+    // Tenancy also makes the principal genuinely identified: NamespaceRegistry.HasAccess only
+    // short-circuits the default agent to unrestricted access when the tenant is the legacy ""
+    // partition, so under "t1" purge_debates really does have to pass the write gate, and
+    // ownership of each debate namespace is registered explicitly below.
+
+    private const string PurgeTenant = "t1";
+    private const string PurgeAgent = "purge-agent";
+    private const string LiveNs = "live-ns";
+
+    /// <summary>Seed one entry into <see cref="PurgeTenant"/>, optionally back-dated to look stale.</summary>
+    private void SeedTenantEntry(string id, string ns, string text, DateTimeOffset? createdAt = null)
+        => _index.Upsert(createdAt.HasValue
+            ? MakeEntryWithTimestamp(id, new[] { 1f, 0f }, ns, text, createdAt.Value, PurgeTenant)
+            : new CognitiveEntry(id, new[] { 1f, 0f }, ns, text, tenantId: PurgeTenant));
+
+    /// <summary>
+    /// purge_debates driven as a tenant-scoped principal that owns <paramref name="ownedNamespaces"/>.
+    /// Ownership has to be registered because an identified principal never inherits an unregistered
+    /// namespace and cannot claim a non-empty one; without it the tool would simply filter the debate
+    /// namespace out and every assertion below would be vacuous.
+    /// </summary>
+    private AdminTools PurgeAdmin(NamespaceRegistry registry, params string[] ownedNamespaces)
+    {
+        foreach (var ns in ownedNamespaces)
+            registry.EnsureOwnership(ns, PurgeAgent, PurgeTenant);
+        return new AdminTools(_index, _graph, _clusters, _persistence, registry,
+            new PrincipalContext(PurgeTenant, PurgeAgent));
+    }
+
+    [Fact]
+    public async Task PurgeDebates_AmbiguousId_PreservesSurvivingNamespaceEdges()
+    {
+        const string debateNs = "active-debate-ambiguous-edges";
+        var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
+        var stale = DateTimeOffset.UtcNow.AddHours(-48);
+
+        // "shared" is held by BOTH the stale debate namespace and a live one inside tenant t1.
+        // Graph adjacency is keyed by (tenant, bare id), so the single edge below is reachable
+        // from either entry and nothing at the cascade level can attribute it to one of them.
+        SeedTenantEntry("shared", debateNs, "debate copy", stale);
+        SeedTenantEntry("shared", LiveNs, "live copy");
+        SeedTenantEntry("live-anchor", LiveNs, "live anchor");
+        _graph.AddEdge(new GraphEdge("shared", "live-anchor", "similar_to", tenantId: PurgeTenant));
+        Assert.Single(_graph.GetEdgesForEntry("shared", PurgeTenant));
+
+        var result = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));
+
+        // The debate entry itself still goes: DeleteAllInNamespace is namespace-scoped, so it can
+        // only ever reach the debate copy.
+        Assert.Equal(0, _index.CountInNamespace(debateNs, PurgeTenant));
+        // The id was ambiguous, so its topology was declined rather than guessed at — and the
+        // refusal is reported, not swallowed.
+        Assert.Equal(1, result.TotalIdsSkippedAmbiguous);
+        Assert.Equal(0, result.TotalEdgesRemoved);
+
+        // The live namespace's entry keeps the edge it never should have lost.
+        var surviving = _graph.GetEdgesForEntry("shared", PurgeTenant);
+        Assert.Single(surviving);
+        Assert.Equal("live-anchor", surviving[0].TargetId);
+        Assert.Equal("similar_to", surviving[0].Relation);
+
+        // With the debate copy gone the id resolves unambiguously again, to the live entry.
+        var resolved = _index.GetForTenant("shared", PurgeTenant);
+        Assert.NotNull(resolved);
+        Assert.Equal(LiveNs, resolved!.Ns);
+        Assert.Equal("live copy", resolved.Text);
+    }
+
+    [Fact]
+    public async Task PurgeDebates_AmbiguousId_PreservesClusterMembership()
+    {
+        const string debateNs = "active-debate-ambiguous-clusters";
+        var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
+        var stale = DateTimeOffset.UtcNow.AddHours(-48);
+
+        // Same ambiguity as above, but the topology at risk is cluster membership, which is keyed
+        // by (tenant, bare id) for exactly the same reason.
+        SeedTenantEntry("shared", debateNs, "debate copy", stale);
+        SeedTenantEntry("shared", LiveNs, "live copy");
+        SeedTenantEntry("live-anchor", LiveNs, "live anchor");
+        _clusters.CreateCluster("live-cluster", LiveNs, new[] { "shared", "live-anchor" },
+            "live cluster", PurgeTenant);
+        Assert.Equal(2, _clusters.GetCluster("live-cluster", PurgeTenant)!.MemberCount);
+
+        var result = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));
+
+        Assert.Equal(0, _index.CountInNamespace(debateNs, PurgeTenant));
+        Assert.Equal(1, result.TotalIdsSkippedAmbiguous);
+
+        // Membership is intact, and still paired with the cluster's OWN namespace.
+        var membership = Assert.Single(_clusters.GetClusterMembershipsForEntry("shared", PurgeTenant));
+        Assert.Equal("live-cluster", membership.ClusterId);
+        Assert.Equal(LiveNs, membership.Ns);
+        Assert.Equal(2, _clusters.GetCluster("live-cluster", PurgeTenant)!.MemberCount);
+    }
+
+    [Fact]
+    public async Task PurgeDebates_DryRun_MatchesRealPurgeEdgeCount()
+    {
+        const string debateNs = "active-debate-dryrun-parity";
+        var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
+        var stale = DateTimeOffset.UtcNow.AddHours(-48);
+
+        SeedTenantEntry("cd1", debateNs, "debate one", stale);
+        SeedTenantEntry("cd2", debateNs, "debate two", stale);
+        SeedTenantEntry("cascade-anchor", LiveNs, "cascade anchor");
+
+        // cd1 -> cd2 is INTERNAL to the swept set, so it appears in both entries' edge lists.
+        // Summing those lists reports 4 where the purge removes 3; the dry run and the purge must
+        // agree, which is why both now run the same TopologyCascade.CascadeAll call.
+        _graph.AddEdge(new GraphEdge("cd1", "cd2", "similar_to", tenantId: PurgeTenant));
+        _graph.AddEdge(new GraphEdge("cd1", "cascade-anchor", "depends_on", tenantId: PurgeTenant));
+        _graph.AddEdge(new GraphEdge("cd2", "cascade-anchor", "depends_on", tenantId: PurgeTenant));
+
+        var dry = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: true));
+        Assert.True(dry.DryRun);
+        // A preview must not have moved anything, or the comparison below is not a comparison.
+        Assert.Equal(2, _index.CountInNamespace(debateNs, PurgeTenant));
+        Assert.Equal(3, _graph.EdgeCount);
+
+        var real = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));
+        Assert.False(real.DryRun);
+
+        Assert.Equal(dry.TotalEdgesRemoved, real.TotalEdgesRemoved);
+        Assert.Equal(dry.NamespacesAffected, real.NamespacesAffected);
+        Assert.Equal(dry.TotalEntriesRemoved, real.TotalEntriesRemoved);
+        Assert.Equal(dry.TotalIdsSkippedAmbiguous, real.TotalIdsSkippedAmbiguous);
+        // Pin the shared figure: an equality between two zeroes would prove nothing, and 4 is the
+        // double-counted answer the dry run used to give.
+        Assert.Equal(3, real.TotalEdgesRemoved);
+        Assert.Equal(0, _graph.EdgeCount);
+    }
+
+    [Fact]
+    public async Task PurgeDebates_UnambiguousId_StillCascades()
+    {
+        const string debateNs = "active-debate-unambiguous";
+        var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
+        var stale = DateTimeOffset.UtcNow.AddHours(-48);
+
+        // Over-correction control: nothing else in tenant t1 answers to "solo-d1", so the guard
+        // has nothing to be ambiguous about and the cascade must still run in full.
+        SeedTenantEntry("solo-d1", debateNs, "the only holder of this id", stale);
+        SeedTenantEntry("solo-anchor", LiveNs, "solo anchor");
+        _graph.AddEdge(new GraphEdge("solo-d1", "solo-anchor", "similar_to", tenantId: PurgeTenant));
+        _clusters.CreateCluster("solo-cluster", debateNs, new[] { "solo-d1", "solo-anchor" },
+            "solo cluster", PurgeTenant);
+
+        var result = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNs).PurgeDebates(maxAgeHours: 24, dryRun: false));
+
+        Assert.Equal(0, result.TotalIdsSkippedAmbiguous);
+        Assert.Equal(1, result.TotalEntriesRemoved);
+        Assert.Equal(1, result.TotalEdgesRemoved);
+        Assert.Equal(0, _index.CountInNamespace(debateNs, PurgeTenant));
+        Assert.Empty(_graph.GetEdgesForEntry("solo-d1", PurgeTenant));
+        Assert.Empty(_clusters.GetClusterMembershipsForEntry("solo-d1", PurgeTenant));
+
+        // The guard skips ambiguous ids; it does not disable the cascade, and it does not take
+        // the co-member down with it.
+        var surviving = _clusters.GetCluster("solo-cluster", PurgeTenant);
+        Assert.NotNull(surviving);
+        Assert.Equal(1, surviving!.MemberCount);
+        Assert.Equal("solo-anchor", Assert.Single(surviving.Members).Id);
+    }
+
     // ── DeleteNamespaceAsync for both storage providers ──
 
     [Fact]
@@ -321,9 +498,13 @@ public class NamespaceCleanupTests : IDisposable
 
     // ── Helper ──
 
-    /// <summary>Create a CognitiveEntry with a specific CreatedAt timestamp (for testing staleness).</summary>
+    /// <summary>
+    /// Create a CognitiveEntry with a specific CreatedAt timestamp (for testing staleness).
+    /// <paramref name="tenantId"/> defaults to null, i.e. the legacy "" partition, which is what
+    /// every pre-tenancy caller of this helper already got.
+    /// </summary>
     private static CognitiveEntry MakeEntryWithTimestamp(string id, float[] vector, string ns,
-        string text, DateTimeOffset createdAt)
+        string text, DateTimeOffset createdAt, string? tenantId = null)
     {
         return new CognitiveEntry(
             id, vector, ns, text,
@@ -335,6 +516,8 @@ public class NamespaceCleanupTests : IDisposable
             accessCount: 1,
             activationEnergy: 0f,
             isSummaryNode: false,
-            sourceClusterId: null);
+            sourceClusterId: null,
+            keywords: null,
+            tenantId: tenantId);
     }
 }

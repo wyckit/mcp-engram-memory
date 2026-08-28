@@ -16,6 +16,10 @@ public sealed class SemanticCluster
     [JsonPropertyName("ns")]
     public string Ns { get; }
 
+    /// <summary>Tenant partition this cluster belongs to. Legacy clusters default to <c>""</c>.</summary>
+    [JsonPropertyName("tenantId")]
+    public string TenantId { get; }
+
     [JsonPropertyName("memberIds")]
     public List<string> MemberIds { get; }
 
@@ -29,7 +33,8 @@ public sealed class SemanticCluster
         string clusterId,
         string ns,
         List<string>? memberIds = null,
-        string? label = null)
+        string? label = null,
+        string? tenantId = null)
     {
         if (string.IsNullOrWhiteSpace(clusterId))
             throw new ArgumentException("ClusterId must not be empty.", nameof(clusterId));
@@ -40,6 +45,7 @@ public sealed class SemanticCluster
         Ns = ns;
         MemberIds = memberIds ?? new();
         Label = label;
+        TenantId = Tenancy.Normalize(tenantId);
     }
 
     [JsonConstructor]
@@ -49,7 +55,8 @@ public sealed class SemanticCluster
         string ns,
         List<string> memberIds,
         float[]? centroid,
-        string? summaryEntryId)
+        string? summaryEntryId,
+        string? tenantId = null)
     {
         ClusterId = clusterId;
         Label = label;
@@ -57,5 +64,6 @@ public sealed class SemanticCluster
         MemberIds = memberIds ?? new();
         Centroid = centroid;
         SummaryEntryId = summaryEntryId;
+        TenantId = Tenancy.Normalize(tenantId);
     }
 }

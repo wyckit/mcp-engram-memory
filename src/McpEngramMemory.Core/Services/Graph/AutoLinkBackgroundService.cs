@@ -68,18 +68,19 @@ public sealed class AutoLinkBackgroundService : BackgroundService
 
     private long ScanAllNamespaces()
     {
-        var namespaces = _index.GetNamespaces();
         int totalCreated = 0;
         int scannedCount = 0;
         int skippedCount = 0;
         long totalEntriesProcessed = 0;
 
-        foreach (var ns in namespaces)
+        // Scan every tenant's namespaces (the legacy tenant "" is included when present).
+        foreach (var tenant in _index.GetAllTenants())
+        foreach (var ns in _index.GetNamespaces(tenant))
         {
             // Skip system namespaces (sharing registry, etc.).
             if (ns.StartsWith('_')) { skippedCount++; continue; }
 
-            var config = _lifecycle.GetDecayConfig(ns);
+            var config = _lifecycle.GetDecayConfig(ns, tenant);
             // No stored config means defaults — auto-link is on by default.
             if (config is not null && !config.EnableAutoLink)
             {
@@ -93,7 +94,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _scanner.Scan(ns, threshold, cap);
+                var result = _scanner.Scan(ns, threshold, cap, tenantId: tenant);
                 sw.Stop();
                 scannedCount++;
                 totalCreated += result.EdgesCreated;

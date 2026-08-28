@@ -40,13 +40,6 @@ public sealed class VisualizationTools
         [Description("Include archived entries in the snapshot (default: false).")]
         bool includeArchived = false)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-        {
-            var emptyStats = new GraphSnapshotStats(0, 0, 0, 0, 0, 0, Array.Empty<string>());
-            return new GraphSnapshot(ns, DateTimeOffset.UtcNow,
-                Array.Empty<GraphSnapshotNode>(), Array.Empty<GraphSnapshotEdge>(),
-                Array.Empty<GraphSnapshotCluster>(), emptyStats);
-        }
         // ── Nodes ────────────────────────────────────────────────────────────
         // This exports the whole graph, so an unreadable single ns or a namespace this
         // caller can't see inside "*" must vanish entirely - same shape as an empty store,
@@ -82,7 +75,7 @@ public sealed class VisualizationTools
 
         // ── Edges ────────────────────────────────────────────────────────────
         // Only include edges where both endpoints are in the visible node set
-        var edges = _graph.GetAllEdges()
+        var edges = _graph.GetAllEdges(_access.TenantId)
             .Where(e => nodeIds.Contains(e.SourceId) && nodeIds.Contains(e.TargetId))
             .Select(e => new GraphSnapshotEdge(e.SourceId, e.TargetId, e.Relation, e.Weight))
             .ToList();
@@ -90,15 +83,15 @@ public sealed class VisualizationTools
         // ── Clusters ─────────────────────────────────────────────────────────
         // Also drives Stats.Namespaces below - filtering here keeps namespace names
         // themselves from leaking through either surface.
-        IEnumerable<string> candidateNamespaces = ns == "*" ? _index.GetNamespaces() : new[] { ns };
+        IEnumerable<string> candidateNamespaces = ns == "*" ? _index.GetNamespaces(_access.TenantId) : new[] { ns };
         var namespaces = candidateNamespaces.Where(n => !n.StartsWith('_')).Where(_access.CanRead).ToList();
 
         var clusters = new List<GraphSnapshotCluster>();
         foreach (var nsName in namespaces)
         {
-            foreach (var info in _clusters.ListClusters(nsName))
+            foreach (var info in _clusters.ListClusters(nsName, _access.TenantId))
             {
-                var detail = _clusters.GetCluster(info.ClusterId);
+                var detail = _clusters.GetCluster(info.ClusterId, _access.TenantId);
                 if (detail is null) continue;
 
                 var memberIds = detail.Members

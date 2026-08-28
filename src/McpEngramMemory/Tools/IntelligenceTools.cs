@@ -45,8 +45,6 @@ public sealed class IntelligenceTools
         [Description("Filter by category.")] string? category = null,
         [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new DuplicateDetectionResult(0, Array.Empty<DuplicatePair>(), threshold);
         if (threshold < 0f || threshold > 1f)
             return "Error: Threshold must be between 0 and 1.";
         if (!_access.CanRead(ns))
@@ -56,13 +54,13 @@ public sealed class IntelligenceTools
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             : new HashSet<string> { "stm", "ltm" };
 
-        var raw = _index.FindDuplicates(ns, threshold, category, states);
+        var raw = _index.FindDuplicates(ns, threshold, category, states, tenantId: _access.TenantId);
 
         var pairs = new List<DuplicatePair>(raw.Count);
         foreach (var (idA, idB, sim) in raw)
         {
-            var a = _index.Get(idA, ns);
-            var b = _index.Get(idB, ns);
+            var a = _index.Get(idA, ns, _access.TenantId);
+            var b = _index.Get(idB, ns, _access.TenantId);
             if (a is null || b is null) continue;
 
             pairs.Add(new DuplicatePair(
@@ -71,7 +69,7 @@ public sealed class IntelligenceTools
                 sim));
         }
 
-        var scannedCount = _index.CountInNamespace(ns);
+        var scannedCount = _index.CountInNamespace(ns, _access.TenantId);
         return new DuplicateDetectionResult(scannedCount, pairs, threshold);
     }
 
@@ -82,19 +80,22 @@ public sealed class IntelligenceTools
         [Description("Optional topic text to focus contradiction search.")] string? topic = null,
         [Description("Cosine similarity threshold for potential contradiction detection (default: 0.8).")] float similarityThreshold = 0.8f)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
         if (!_access.CanRead(ns))
             return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
 
-        // Part 1: Get explicit contradiction edges from the knowledge graph
-        var graphContradictions = _graph.GetContradictions(ns);
+        // Part 1: Get explicit contradiction edges from the knowledge graph (this tenant)
+        var graphContradictions = _graph.GetContradictions(ns, _access.TenantId);
         var contradictions = new List<ContradictionInfo>();
         var knownPairs = new HashSet<(string, string)>();
 
         foreach (var (edge, source, target) in graphContradictions)
         {
-            if (source is null || target is null) continue;
+            // A contradiction edge is only half-anchored in `ns`: the graph query matches an edge
+            // when EITHER endpoint lives here, so the opposite endpoint can be any namespace in
+            // the tenant, including one this caller was never granted. Authorize the entry we are
+            // about to disclose, not the namespace that was asked for. CanReadEntry null-guards,
+            // so an unresolvable endpoint is skipped by the same test — fail closed.
+            if (!_access.CanReadEntry(source) || !_access.CanReadEntry(target)) continue;
 
             // Compute similarity between the two entries
             float sim = 0f;
@@ -115,6 +116,9 @@ public sealed class IntelligenceTools
             knownPairs.Add((source.Id, target.Id));
             knownPairs.Add((target.Id, source.Id));
         }
+        // Counted after the loop, never from graphContradictions.Count: the tally has to be
+        // post-filter by construction, or it reports how many pairs were withheld and the count
+        // becomes an existence oracle for the namespaces the caller cannot read.
         int graphCount = contradictions.Count;
 
         // Part 2: If a topic is provided, find high-similarity entries that might contradict
@@ -122,13 +126,13 @@ public sealed class IntelligenceTools
         if (topic is not null)
         {
             var vector = _embedding.Embed(topic);
-            var results = _index.Search(vector, ns, k: 20, minScore: similarityThreshold);
+            var results = _index.Search(vector, ns, k: 20, minScore: similarityThreshold, tenantId: _access.TenantId);
 
             // Pre-resolve all entries and their norms in a single pass (O(N) locks instead of O(N²))
             var resolved = new (CognitiveEntry? Entry, float Norm)[results.Count];
             for (int i = 0; i < results.Count; i++)
             {
-                var entry = _index.Get(results[i].Id, ns);
+                var entry = _index.Get(results[i].Id, ns, _access.TenantId);
                 resolved[i] = (entry, entry is not null ? VectorMath.Norm(entry.Vector) : 0f);
             }
 
@@ -170,15 +174,13 @@ public sealed class IntelligenceTools
     public string UncollapseCluster(
         [Description("The collapse ID to reverse.")] string collapseId)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
-        // Resolve the collapse's namespace before touching anything - same reply shape as a
-        // genuine miss for both "doesn't exist" and "exists but you can't touch it".
-        var ns = _scanner.GetCollapseRecordNs(collapseId);
+        // Resolve the collapse's namespace before touching anything (within this tenant) - same
+        // reply shape as a genuine miss for both "doesn't exist" and "exists but you can't touch it".
+        var ns = _scanner.GetCollapseRecordNs(collapseId, _access.TenantId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: No collapse record found for '{collapseId}'.";
 
-        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(ns);
         return result;
@@ -189,10 +191,8 @@ public sealed class IntelligenceTools
     public IReadOnlyList<CollapseRecord> ListCollapseHistory(
         [Description("Namespace to list collapse history for.")] string ns)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return Array.Empty<CollapseRecord>();
         if (!_access.CanRead(ns)) return Array.Empty<CollapseRecord>();
-        return _scanner.GetCollapseHistory(ns);
+        return _scanner.GetCollapseHistory(ns, _access.TenantId);
     }
 
     [McpServerTool(Name = "merge_memories", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -202,15 +202,13 @@ public sealed class IntelligenceTools
         [Description("ID of the duplicate entry to archive.")] string archiveId,
         [Description("Namespace containing both entries.")] string ns)
     {
-        if (_access.RequiresTenantQualifiedStructures)
-            return NamespaceAccess.TenantStructureUnavailable;
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
-        var keepEntry = _index.Get(keepId, ns);
+        var keepEntry = _index.Get(keepId, ns, _access.TenantId);
         if (keepEntry is null)
             return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
 
-        var archiveEntry = _index.Get(archiveId, ns);
+        var archiveEntry = _index.Get(archiveId, ns, _access.TenantId);
         if (archiveEntry is null)
             return $"Error: Entry '{archiveId}' not found in namespace '{ns}'.";
 
@@ -231,21 +229,22 @@ public sealed class IntelligenceTools
             keepEntry.Category, mergedMeta, keepEntry.LifecycleState,
             keepEntry.CreatedAt, keepEntry.LastAccessedAt,
             keepEntry.AccessCount + archiveEntry.AccessCount,
-            keepEntry.ActivationEnergy, keepEntry.IsSummaryNode, keepEntry.SourceClusterId);
+            keepEntry.ActivationEnergy, keepEntry.IsSummaryNode, keepEntry.SourceClusterId,
+            keywords: keepEntry.Keywords, tenantId: keepEntry.TenantId);
         _index.Upsert(updated);
         _access.ClaimOnWrite(ns);
 
-        // Transfer graph edges from archived entry to kept entry
-        int edgesTransferred = _graph.TransferEdges(archiveId, keepId);
+        // Transfer graph edges from archived entry to kept entry (within this tenant)
+        int edgesTransferred = _graph.TransferEdges(archiveId, keepId, _access.TenantId);
 
         // Transfer cluster memberships
-        int clustersTransferred = _clusters.TransferMembership(archiveId, keepId);
+        int clustersTransferred = _clusters.TransferMembership(archiveId, keepId, _access.TenantId);
 
         // Archive the duplicate via lifecycle engine
-        _lifecycle.PromoteMemory(archiveId, "archived");
+        _lifecycle.PromoteMemory(archiveId, "archived", ns, _access.TenantId);
 
         // Add traceability edge
-        _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to"));
+        _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to", 1.0f, null, _access.TenantId));
 
         return $"Merged '{archiveId}' into '{keepId}'. " +
                $"Transferred {edgesTransferred} edge(s), {clustersTransferred} cluster(s), " +

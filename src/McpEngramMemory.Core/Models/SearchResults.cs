@@ -86,6 +86,15 @@ public sealed record ClusterSummaryInfo(
     [property: JsonPropertyName("hasSummary")] bool HasSummary);
 
 /// <summary>
+/// A cluster membership paired with the namespace that cluster lives in.
+/// A bare cluster id is not authorizable: cluster ids reached through topology arrive without
+/// their namespace, so a caller filtering by ACL would have to re-resolve each one. Carrying
+/// <see cref="Ns"/> alongside the id lets callers apply their namespace permission check directly
+/// on what the lookup already knew, instead of round-tripping through a full cluster load.
+/// </summary>
+public readonly record struct ClusterMembershipInfo(string ClusterId, string Ns);
+
+/// <summary>
 /// Result of decay_cycle tool. <see cref="SpectralFallbackNamespaces"/> and
 /// <see cref="FailedNamespaces"/> report per-namespace partial failures for
 /// telemetry: fallback namespaces still received full non-spectral pointwise

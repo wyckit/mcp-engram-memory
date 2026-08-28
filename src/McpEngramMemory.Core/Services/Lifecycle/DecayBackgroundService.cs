@@ -49,16 +49,25 @@ public sealed class DecayBackgroundService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _lifecycle.RunDecayCycle("*", useStoredConfig: true);
+                // Decay every tenant partition (the legacy tenant "" is included when present), so a
+                // multi-tenant store maintains every tenant's memories, not just legacy data.
+                int stateChanges = 0;
+                foreach (var tenant in _lifecycle.GetAllTenants())
+                {
+                    var result = _lifecycle.RunDecayCycle("*", useStoredConfig: true, tenantId: tenant);
+                    entriesProcessed += result.ProcessedCount;
+                    stateChanges += result.StmToLtm + result.LtmToArchived;
+                    var partial = LifecyclePartialFailure.DescribeDecay(result);
+                    if (partial is not null)
+                    {
+                        errorMessage = partial;
+                        _logger.LogWarning("Decay cycle (tenant='{Tenant}') completed with partial failures: {Message}", tenant, partial);
+                    }
+                }
                 sw.Stop();
-                entriesProcessed = result.ProcessedCount;
-                int stateChanges = result.StmToLtm + result.LtmToArchived;
                 _logger.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} statesChanged={StatesChanged}",
                     "decay", "*", sw.ElapsedMilliseconds, entriesProcessed, stateChanges);
-                errorMessage = LifecyclePartialFailure.DescribeDecay(result);
-                if (errorMessage is not null)
-                    _logger.LogWarning("Decay cycle completed with partial failures: {Message}", errorMessage);
             }
             catch (Exception ex)
             {

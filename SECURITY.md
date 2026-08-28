@@ -117,27 +117,36 @@ does not disable governance. Benchmark tools remain operator capabilities:
 their executable and artifact-path inputs are not tenant data-isolation APIs,
 and `OpenWorld` metadata tells clients when a tool may invoke an external model.
 
-## Tenant isolation and global bare-ID structures
+## Tenant isolation
 
-Memory entries, index partitions, namespace ownership records, and provider CRUD
-are tenant-aware. This does **not** yet extend to every cognitive support
-structure. The association graph, semantic clusters, lifecycle/collapse support
-records, and diffusion caches still use global bare entry IDs. Treating those
-structures as tenant-qualified would allow collisions and cross-tenant reads or
-mutations.
+Multi-tenant isolation is full and applies to every cognitive structure. Memory
+entries, index partitions, and namespace ownership records were already
+tenant-aware; the association graph (keyed by `(tenant, id)`), semantic clusters
+(`(tenant, clusterId)`), lifecycle/collapse support records, decay configs, and
+diffusion/spectral bases (`(tenant, ns)`) now are as well. Each `GraphEdge`,
+`SemanticCluster`, `CollapseRecord`, and `DecayConfig` carries its own `TenantId`,
+persisted inside the serialized blob, so nothing crosses tenants and the same bare
+`(ns, id)` may exist independently under two tenants.
 
-The current server therefore fails closed for non-empty-tenant principals before
-affected graph, cluster, lifecycle, intelligence, accretion, diffusion, spectral,
-maintenance, synthesis, and visualization operations reach global structures.
-Read-shaped operations return empty/not-found results; mutations return an
-unavailable/error result. Tenant-scoped debate purge deletes tenant entries but
-intentionally skips global graph and cluster cascades. The empty-tenant/default
-principal retains historical behavior as explicit
-`PrincipalContext.LegacyUnisolated` mode.
+A non-empty-tenant principal sees and mutates only its own partition across the
+graph, cluster, lifecycle, intelligence, accretion, diffusion, spectral,
+maintenance, synthesis, and visualization tools. Graph edges never connect entries
+in different tenants (both endpoints are interpreted within the edge's tenant);
+cross-namespace association *within* a tenant is preserved. Reads that resolve an
+id the caller cannot see return empty/not-found rather than a distinct denial, so
+no operation becomes an existence oracle. The global bare `get_memory`/`delete`
+by-id path stays legacy-only, so a bare id can never be probed across tenants.
+Background decay, consolidation, auto-link, and accretion run for every tenant.
 
-This is a containment boundary, not full tenant-qualified graph support. If a
-tenant needs graph/lifecycle behavior today, use a dedicated server process and
-data directory for that tenant. Do not disable or bypass the fail-closed guard.
+An identified principal must own or be granted a namespace to reach it — an
+unregistered namespace is closed to identified agents, and a write may atomically
+claim only a genuinely empty namespace. The empty-tenant/default principal retains
+historical behavior as explicit `PrincipalContext.LegacyUnisolated` mode.
+
+`AGENT_ID` and `MEMORY_TENANT_ID` remain host-supplied process configuration, not
+authentication: they are an isolation boundary between cooperating identities, not
+a defense against a hostile process that can set its own env. For mutually
+untrusted tenants, still run separate server processes and data directories.
 
 ## Constitutional MCP boundary
 
