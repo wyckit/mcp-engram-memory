@@ -33,8 +33,31 @@ namespace McpEngramMemory.Tests;
 /// viable ones behind them — one window further back. Eleven viable pairs under a cap of one stopped
 /// at ten stored edges and stayed there, reporting EdgesCreated 0 with HitMaxEdgeCap false, which is
 /// indistinguishable from a namespace with nothing left to link. The scan now draws progressively,
-/// so the remaining tests pin both halves of the resulting contract: rescans reach every viable pair
+/// so tests 5 to 8 pin both halves of the resulting contract: rescans reach every viable pair
 /// however many ineligible ones stand in front of it, and one scan still costs ONE pairwise pass.
+///
+/// AND WHAT DRAWING PROGRESSIVELY COST. Four things, pinned by tests 9 to 13.
+///
+/// MEMORY (9): a scan that walks every pair must not remember every pair. The consumer's scan-wide
+/// pair set was quadratic in the namespace and bought nothing — the detector already yields each
+/// unordered pair once — and it lived in a six-hourly background job, where a multi-gigabyte
+/// allocation has no one to report it to.
+///
+/// WORK (10): a namespace in steady state walked its entire pair space every six hours to find
+/// nothing. Bounding that is easy; bounding it WITHOUT recreating the starvation above is the whole
+/// difficulty, because a budget that restarts at the first pair every time hides everything past it
+/// on every scan, forever. The budget resumes, so successive scans tile the pair space.
+///
+/// THE RACE (11): the neighbour memo that keeps this scan off the graph lock is a snapshot of a
+/// mutable graph, so it can only ever be a cost filter. The condition it tests is enforced where it
+/// can be atomic — inside the graph's own write lock.
+///
+/// RANKING (12): the buffer used to stop the loop, so "the highest-ranked admissible candidates"
+/// meant the highest-ranked of the first few — ten pairs at 0.90 ahead of one at 0.99 wrote a 0.90
+/// edge. It is a bounded top-K over everything the scan examined now, which costs O(cap) memory and
+/// is what the comments already claimed.
+///
+/// AND THE LEGACY MIRROR (13): none of it may be visible in the pre-tenancy partition.
 /// </summary>
 public class AutoLinkCapAccountingTests : IDisposable
 {
@@ -46,6 +69,12 @@ public class AutoLinkCapAccountingTests : IDisposable
     // Holds nothing but the twin. It never meets the scan — its only job is to be a second
     // namespace of the same tenant answering to one of the scanned namespace's ids.
     private const string ShadowNs = "shadow";
+
+    // A third namespace, for ids that must be unattributable without appearing in the scan at all.
+    private const string SecondShadowNs = "shadow-two";
+
+    // The pre-tenancy partition every legacy deployment still runs in.
+    private const string LegacyTenant = "";
 
     // Two dimensions per planted pair, plus one spare for the twin. Sized for the widest fixture
     // here (twelve pairs), so every pair lies in its own plane and no cross-pair can drift above
@@ -201,7 +230,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// every pair is admissible on the scan that first reaches it, so eleven scans must write eleven
     /// edges.
     ///
-    /// The window the detector was asked for used to be a fixed <c>2*cap + PairPoolSlack</c>, and the
+    /// The window the detector was asked for used to be a fixed <c>2*cap + RankingBufferSlack</c>, and
     /// pairs already linked by earlier scans were filtered only after that window had been filled. So
     /// ten of the eleven were offered forever and the eleventh never once, and the plateau was silent:
     /// the scan that wrote nothing reported EdgesCreated 0 with HitMaxEdgeCap false, which is the
@@ -238,7 +267,7 @@ public class AutoLinkCapAccountingTests : IDisposable
 
     /// <summary>
     /// Eleven already-linked pairs handed over before the one viable pair, under a cap of one. The
-    /// buffer the scan settles its ranking in holds <c>2*cap + PairPoolSlack</c> = ten, so a viable
+    /// buffer the scan settles its ranking in holds <c>2*cap + RankingBufferSlack</c> = ten, so a viable
     /// pair sitting twelfth is outside anything a fixed request of that size could have returned.
     ///
     /// The order is scripted rather than planted, because "in front of" is the whole claim: pair
@@ -419,7 +448,413 @@ public class AutoLinkCapAccountingTests : IDisposable
         Assert.Equal(2, passes);
     }
 
+    // ── 9. MEMORY: WALKING EVERY PAIR MUST NOT MEAN REMEMBERING EVERY PAIR ──
+
+    /// <summary>
+    /// The invariant that licenses the scan to keep no pair identity at all: the detector yields
+    /// each unordered pair exactly once, on BOTH paths.
+    ///
+    /// The consumer used to hold a set of every pair the stream had offered, to be sure it proposed
+    /// at most one edge per pair. That set is sized by pairs walked, which is quadratic in the
+    /// namespace — 49,995,000 tuples at the entry cap — and it was pure overhead, because the walks
+    /// are triangular and entry ids inside one partition are dictionary keys. Uniqueness belongs
+    /// here, where the working set is one namespace, not in a consumer whose working set is one
+    /// namespace SQUARED.
+    /// </summary>
+    [Fact]
+    public void StreamDuplicates_YieldsEachUnorderedPairExactlyOnce_OnBothPaths()
+    {
+        // Below the pivot the detector walks pairs directly; above it, it projects to a subspace
+        // first and confirms survivors. Both are covered because either could double-count.
+        AssertEveryUnorderedPairArrivesOnce(SyntheticCandidates(DuplicateDetector.LowRankPivot - 6));
+        AssertEveryUnorderedPairArrivesOnce(SyntheticCandidates(DuplicateDetector.LowRankPivot + 6));
+    }
+
+    /// <summary>
+    /// Tens of thousands of permanently-refused pairs walked in one scan, and the loop must be
+    /// holding a constant number of candidates when it ends.
+    ///
+    /// This is the availability half of the finding. The scan runs in a BackgroundService over every
+    /// namespace every six hours, so per-pair retention is not a slow leak — it is a quadratic
+    /// allocation inside a process that has no one to report it to. A structural assertion rather
+    /// than a timing or GC one: what is asserted is that retention is a function of the CAP and not
+    /// of the pairs examined, which is either true of the loop or it is not.
+    /// </summary>
+    [Fact]
+    public void AFloodOfRefusedPairs_IsWalkedWithoutRetainingThem()
+    {
+        const int floodIds = 300;
+        for (int i = 0; i < floodIds; i++)
+            PlantAmbiguousOutsideTheScan($"flood-{i:D4}");
+
+        // The one viable pair, scripted LAST so the flood is also shown not to hide it.
+        PlantPair(slot: 0, "viable-a", "viable-b", skew: 0.30f);
+
+        int retained = -1;
+        var scanner = ScannerOver(FloodThenOneViablePair(floodIds), r => retained = r);
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 2, tenantId: Tenant);
+
+        int floodPairs = floodIds * (floodIds - 1) / 2;
+        Assert.Equal(floodPairs + 1, result.PairsExamined);
+
+        // O(cap), not O(pairs). The ranking buffer is 2*cap + slack = 12 at this cap, and it is the
+        // only thing the loop accumulates; the flood contributes nothing to it because a refused
+        // candidate never enters it. A scan-wide set keyed by pair would report 44,851 here.
+        Assert.InRange(retained, 0, 12);
+        Assert.True(floodPairs > 40_000, "the flood must dwarf any per-cap bound for this to mean anything");
+
+        Assert.Equal(1, result.EdgesCreated);
+        AssertLinked("viable-a", "viable-b");
+        Assert.False(result.HitMaxEdgeCap);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the memory fix. Bounding what the loop keeps must not bound what
+    /// it RANKS: with more admissible candidates than the buffer holds, the cap still buys the best
+    /// ones in the namespace and not the best ones that happened to fit.
+    /// </summary>
+    [Fact]
+    public void TheRankingBufferBoundsMemoryAndNotTheRanking()
+    {
+        for (int slot = 0; slot < 12; slot++)
+            PlantPair(slot, $"p{slot:D2}-a", $"p{slot:D2}-b", skew: 0.02f);
+
+        // Twelve admissible candidates through a buffer of 2*1 + 8 = 10, worst first, so a scan that
+        // ranked only what it could hold would write one of the pairs it saw early.
+        var script = new List<(string IdA, string IdB, float Similarity)>();
+        for (int slot = 0; slot < 12; slot++)
+            script.Add(($"p{slot:D2}-a", $"p{slot:D2}-b", 0.86f + (slot * 0.01f)));
+
+        int retained = -1;
+        var scanner = ScannerOver(script, r => retained = r);
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant);
+
+        Assert.Equal(1, result.EdgesCreated);
+        Assert.True(result.HitMaxEdgeCap);
+        AssertLinked("p11-a", "p11-b");
+        Assert.InRange(retained, 0, 10);
+    }
+
+    // ── 10. THE WORK BUDGET, AND THE STARVATION IT MUST NOT REINTRODUCE ──
+
+    /// <summary>
+    /// A budget that always restarted at the first pair would be the original defect with a new
+    /// cause: the pairs past it would be unreachable on every scan, forever, exactly as a fixed
+    /// candidate window made them. So the budget resumes.
+    ///
+    /// One anchor per scan here, with the only viable pair five anchors past where the first scan
+    /// can reach. Five scans must report having done nothing AND having stopped early, and the sixth
+    /// must write the edge — which is only possible if each scan begins where the last one stopped.
+    /// </summary>
+    [Fact]
+    public void AViablePairBeyondOneScansBudget_IsReachedByASuccessiveScan()
+    {
+        // Eight candidates, so the anchor space is 0..7 and a budget of eight comparisons buys
+        // exactly one anchor per scan.
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"q{slot}-a", $"q{slot}-b", skew: 0.02f);
+
+        var rows = new Dictionary<int, (string IdA, string IdB, float Similarity)[]>
+        {
+            [5] = new[] { ("q3-a", "q3-b", 0.95f) },
+        };
+
+        var scanner = WindowedScannerOver(rows);
+
+        for (int scan = 0; scan < 5; scan++)
+        {
+            var early = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant,
+                maxPairComparisons: 8);
+
+            Assert.Equal(0, early.PairsExamined);
+            Assert.Equal(0, early.EdgesCreated);
+            Assert.False(early.HitMaxEdgeCap);
+
+            // The third outcome, stated rather than folded into one of the other two: nothing was
+            // written and the cap was not binding, but this is NOT "nothing left to link".
+            Assert.True(early.PairScanIncomplete);
+        }
+
+        var reached = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant,
+            maxPairComparisons: 8);
+
+        Assert.Equal(1, reached.PairsExamined);
+        Assert.Equal(1, reached.EdgesCreated);
+        AssertLinked("q3-a", "q3-b");
+        Assert.True(reached.PairScanIncomplete);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the budget. A namespace small enough for its whole pair space to
+    /// fit inside the default budget — which is every namespace up to a few thousand entries — must
+    /// see the windowing not at all: one scan, everything examined, and the completeness flag says
+    /// so, which is what lets "no edges and no cap" keep meaning "nothing left to link".
+    /// </summary>
+    [Fact]
+    public void UnderTheDefaultBudget_ASmallNamespaceIsScannedWholeAndSaysSo()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"q{slot}-a", $"q{slot}-b", skew: 0.02f);
+
+        var rows = new Dictionary<int, (string IdA, string IdB, float Similarity)[]>
+        {
+            [5] = new[] { ("q3-a", "q3-b", 0.95f) },
+        };
+
+        var scanner = WindowedScannerOver(rows);
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant);
+
+        Assert.Equal(1, result.EdgesCreated);
+        Assert.False(result.PairScanIncomplete);
+        AssertLinked("q3-a", "q3-b");
+
+        var exhausted = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant);
+        Assert.Equal(0, exhausted.EdgesCreated);
+        Assert.Equal(1, exhausted.EdgesSkippedExisting);
+        Assert.False(exhausted.HitMaxEdgeCap);
+        Assert.False(exhausted.PairScanIncomplete);
+    }
+
+    // ── 11. THE RACE: A RELATION ADDED WHILE THE SCAN IS MID-ENUMERATION ──
+
+    /// <summary>
+    /// The scan memoizes a node's neighbours so that examining every pair does not take the graph
+    /// lock a quadratic number of times. That memo is a snapshot, and the graph stays mutable, so a
+    /// relation created after it is read is invisible to the scan; the default write boundary
+    /// replaces only the SAME source/target/relation, so a derived <c>similar_to</c> would land on
+    /// top of it and the pair would carry both.
+    ///
+    /// Deterministic, and forced rather than hoped for. The pair source is a lazy iterator, so the
+    /// scan is genuinely suspended INSIDE its own enumeration — with the node's adjacency already
+    /// memoized — at the instant the writer runs. A timed pair of worker loops that observed no
+    /// exception would prove nothing about whether the two ever overlapped; this interleaving is the
+    /// one the race needs and it happens on every run.
+    /// </summary>
+    [Fact]
+    public void ARelationCreatedMidEnumeration_IsNotJoinedByADerivedSimilarTo()
+    {
+        PlantPair(slot: 0, "node-a", "node-b", skew: 0.02f);
+        PlantPair(slot: 1, "node-x", "node-z", skew: 0.02f);
+
+        var scanner = ScannerOver(LinkTheSecondPairMidEnumeration());
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: Tenant);
+
+        // Exactly one relation between the two, and it is the one a person asserted. The reviewer's
+        // barrier left both contradicts and similar_to here.
+        Assert.Equal(new[] { "contradicts" }, RelationsBetween("node-a", "node-b"));
+
+        // The count stays the count the graph accepted: the declined write is not reported as one.
+        Assert.Equal(1, result.EdgesCreated);
+        AssertLinked("node-a", "node-x");
+
+        // And the refusal is invisible to the caller, like every other write-time decline.
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+        Assert.DoesNotContain("declin", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the race. The identical fixture with nothing racing it: the write
+    /// boundary that refuses an already-related pair must still write an unrelated one, or the fix
+    /// would have bought its safety by never linking anything.
+    /// </summary>
+    [Fact]
+    public void WithNothingRacingIt_TheUnlinkedWriteBoundaryStillWritesBothEdges()
+    {
+        PlantPair(slot: 0, "node-a", "node-b", skew: 0.02f);
+        PlantPair(slot: 1, "node-x", "node-z", skew: 0.02f);
+
+        var scanner = ScannerOver(new[]
+        {
+            ("node-a", "node-x", 0.99f),
+            ("node-a", "node-b", 0.95f),
+        });
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: Tenant);
+
+        Assert.Equal(2, result.EdgesCreated);
+        Assert.Equal(new[] { "similar_to" }, RelationsBetween("node-a", "node-b"));
+        AssertLinked("node-a", "node-x");
+    }
+
+    // ── 12. RANKING REACHES PAST THE BUFFER, NOT JUST INTO IT ──
+
+    /// <summary>
+    /// Ten admissible candidates at 0.90 and then one at 0.99, under a cap of one.
+    ///
+    /// The loop used to stop as soon as the buffer held <c>2*cap + slack</c> admissible candidates
+    /// and sort only those, so the tenth 0.90 pair closed the scan and the 0.99 pair was never
+    /// examined — while the cap's documented contract said "the highest-ranked admissible
+    /// candidates". The buffer is now a bounded top-K over everything the scan's budget lets it
+    /// examine: it still costs O(cap) memory, and what it holds at the end really is the best of
+    /// what was seen.
+    /// </summary>
+    [Fact]
+    public void TenGoodCandidatesAheadOfABetterOne_DoNotClaimTheCap()
+    {
+        for (int slot = 0; slot < 11; slot++)
+            PlantPair(slot, $"r{slot:D2}-a", $"r{slot:D2}-b", skew: 0.02f);
+
+        var script = new List<(string IdA, string IdB, float Similarity)>();
+        for (int slot = 0; slot < 10; slot++)
+            script.Add(($"r{slot:D2}-a", $"r{slot:D2}-b", 0.90f));
+        script.Add(("r10-a", "r10-b", 0.99f));
+
+        var scanner = ScannerOver(script);
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 1, tenantId: Tenant);
+
+        Assert.Equal(11, result.PairsExamined);
+        Assert.Equal(1, result.EdgesCreated);
+        AssertLinked("r10-a", "r10-b");
+        for (int slot = 0; slot < 10; slot++)
+            AssertNotLinked($"r{slot:D2}-a", $"r{slot:D2}-b");
+
+        // Eleven admissible candidates and a cap of one: the cap was binding, and the flag says so
+        // from a count of what existed rather than from how full a buffer got.
+        Assert.True(result.HitMaxEdgeCap);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the ranking. With a cap wide enough for all of them, a top-K must
+    /// discard nobody: eleven admissible candidates, eleven edges, and no cap reported.
+    /// </summary>
+    [Fact]
+    public void WhenTheCapFitsEveryCandidate_TheTopKDiscardsNone()
+    {
+        for (int slot = 0; slot < 11; slot++)
+            PlantPair(slot, $"r{slot:D2}-a", $"r{slot:D2}-b", skew: 0.02f);
+
+        var script = new List<(string IdA, string IdB, float Similarity)>();
+        for (int slot = 0; slot < 10; slot++)
+            script.Add(($"r{slot:D2}-a", $"r{slot:D2}-b", 0.90f));
+        script.Add(("r10-a", "r10-b", 0.99f));
+
+        var scanner = ScannerOver(script);
+        var result = scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 11, tenantId: Tenant);
+
+        Assert.Equal(11, result.EdgesCreated);
+        Assert.False(result.HitMaxEdgeCap);
+        Assert.False(result.PairScanIncomplete);
+        for (int slot = 0; slot <= 10; slot++)
+            AssertLinked($"r{slot:D2}-a", $"r{slot:D2}-b");
+    }
+
+    // ── 13. THE LEGACY MIRROR: the same scan in the partition with no tenant ──
+
+    /// <summary>
+    /// Everything above is planted in a real tenant, because the guard's namespace listing, the
+    /// candidate index and the scan are all tenant-scoped and the legacy <c>""</c> partition takes a
+    /// separate fast path through the index. This is that path: a default agent, unique ids, nothing
+    /// ambiguous anywhere. None of the three fixes may show up here at all — same counts, same
+    /// ranking, same deferral of what the cap did not buy.
+    /// </summary>
+    [Fact]
+    public void InTheLegacyPartition_WithUniqueIds_NothingAboveChangesTheOutcome()
+    {
+        PlantPairIn(LegacyTenant, slot: 0, "safe1-a", "safe1-b", skew: 0.01f);
+        PlantPairIn(LegacyTenant, slot: 1, "safe2-a", "safe2-b", skew: 0.14f);
+        PlantPairIn(LegacyTenant, slot: 2, "safe3-a", "safe3-b", skew: 0.33f);
+
+        var capped = _scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 2, tenantId: LegacyTenant);
+
+        Assert.Equal(3, capped.PairsExamined);
+        Assert.Equal(2, capped.EdgesCreated);
+        Assert.Equal(capped.EdgesCreated, _graph.EdgeCount);
+        Assert.True(capped.HitMaxEdgeCap);
+        Assert.False(capped.PairScanIncomplete);
+        AssertLinkedIn(LegacyTenant, "safe1-a", "safe1-b");
+        AssertLinkedIn(LegacyTenant, "safe2-a", "safe2-b");
+
+        var rest = _scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: LegacyTenant);
+
+        Assert.Equal(1, rest.EdgesCreated);
+        Assert.Equal(2, rest.EdgesSkippedExisting);
+        Assert.False(rest.HitMaxEdgeCap);
+        Assert.False(rest.PairScanIncomplete);
+        Assert.Equal(3, _graph.EdgeCount);
+        AssertLinkedIn(LegacyTenant, "safe3-a", "safe3-b");
+    }
+
     // ── fixtures ──
+
+    /// <summary>
+    /// Every ordered flood pair, generated lazily, then the one viable pair. Lazy because the point
+    /// of the test is that nothing holds tens of thousands of tuples — and that has to include the
+    /// fixture, or the test would be measuring its own list.
+    /// </summary>
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> FloodThenOneViablePair(int floodIds)
+    {
+        for (int i = 0; i < floodIds; i++)
+            for (int j = i + 1; j < floodIds; j++)
+                yield return ($"flood-{i:D4}", $"flood-{j:D4}", 0.99f);
+
+        yield return ("viable-a", "viable-b", 0.95f);
+    }
+
+    /// <summary>
+    /// THE BARRIER. The scan is suspended inside this enumeration, having already read and memoized
+    /// node-a's adjacency for the first pair, when the writer runs. That is the interleaving the
+    /// production race produces between two threads, made deterministic: no delay, no polling, and
+    /// no run in which the two miss each other.
+    /// </summary>
+    private IEnumerable<(string IdA, string IdB, float Similarity)> LinkTheSecondPairMidEnumeration()
+    {
+        // Canonically node-a is the source, so judging this pair is what caches node-a's neighbours
+        // for the rest of the scan — the snapshot the write below invalidates.
+        yield return ("node-a", "node-x", 0.99f);
+
+        _graph.AddEdge(new GraphEdge("node-a", "node-b", "contradicts", 1f, null, Tenant));
+
+        yield return ("node-a", "node-b", 0.95f);
+    }
+
+    /// <summary>
+    /// <paramref name="count"/> distinct unit-ish vectors in a fixed dimension — enough of them to
+    /// push the detector over its spectral pivot when asked, and consistent enough that no candidate
+    /// is dropped for a zero norm or a mismatched length.
+    /// </summary>
+    private static List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> SyntheticCandidates(int count)
+    {
+        const int dim = 96;
+        var candidates = new List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>(count);
+        for (int i = 0; i < count; i++)
+        {
+            var v = new float[dim];
+            for (int k = 0; k < dim; k++)
+                v[k] = MathF.Sin((i + 1) * 0.37f * (k + 1)) + 0.05f;
+            var entry = new CognitiveEntry($"syn-{i:D5}", v, ScanNs, $"synthetic {i}", tenantId: Tenant);
+            candidates.Add((entry, McpEngramMemory.Core.Services.Retrieval.VectorMath.Norm(v), null));
+        }
+        return candidates;
+    }
+
+    /// <summary>
+    /// Drains the stream at a threshold nothing can fail, so the yielded set must be the complete
+    /// unordered pair set of the candidate list — once each, and no self-pairs.
+    /// </summary>
+    private static void AssertEveryUnorderedPairArrivesOnce(
+        List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates)
+    {
+        var seen = new HashSet<(string, string)>();
+        int yielded = 0;
+        foreach (var (idA, idB, _) in new DuplicateDetector()
+                     .StreamDuplicates(candidates, -1f, PairScanWindow.Full, CancellationToken.None))
+        {
+            Assert.NotEqual(idA, idB);
+            var key = string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
+            Assert.True(seen.Add(key), $"pair {key} was yielded more than once");
+            yielded++;
+        }
+
+        int n = candidates.Count;
+        Assert.Equal(n * (n - 1) / 2, yielded);
+    }
+
+    private IReadOnlyList<string> RelationsBetween(string idA, string idB)
+        => _graph.GetStoredEdgesForEntry(idA, tenantId: Tenant)
+            .Where(e => (e.SourceId == idA && e.TargetId == idB) || (e.SourceId == idB && e.TargetId == idA))
+            .Select(e => e.Relation)
+            .OrderBy(r => r, StringComparer.Ordinal)
+            .ToList();
+
 
     /// <summary>
     /// A scanner fed a fixed candidate ORDER instead of the detector's.
@@ -431,7 +866,17 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// still really consulted, so everything downstream of the ordering is the production path.
     /// </summary>
     private AutoLinkScanner ScannerOver(IEnumerable<(string IdA, string IdB, float Similarity)> script)
-        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _) => script);
+        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _) => script);
+
+    /// <summary>
+    /// As <see cref="ScannerOver"/>, plus the number of candidate tuples the pair loop still held
+    /// when it ended. That number is the whole memory claim: the scan walks every pair in its
+    /// window, and what it may not do is remember them.
+    /// </summary>
+    private AutoLinkScanner ScannerOver(
+        IEnumerable<(string IdA, string IdB, float Similarity)> script, Action<int> onRetention)
+        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _) => script,
+            logger: null, onLoopRetention: onRetention);
 
     /// <summary>
     /// The real detector with a tally of how many times a pairwise pass was STARTED. It counts the
@@ -440,11 +885,38 @@ public class AutoLinkCapAccountingTests : IDisposable
     private AutoLinkScanner CountingScanner(Action onPass)
     {
         var detector = new DuplicateDetector();
-        return new AutoLinkScanner(_index, _graph, detector, pairs: (candidates, threshold) =>
+        return new AutoLinkScanner(_index, _graph, detector, pairs: (candidates, threshold, window, token) =>
         {
             onPass();
-            return detector.StreamDuplicates(candidates, threshold);
+            return detector.StreamDuplicates(candidates, threshold, window, token);
         });
+    }
+
+    /// <summary>
+    /// A pair source that HONOURS the window it is handed, the way the detector does: anchor
+    /// <paramref name="rowsByAnchor"/> keyed by candidate index, visited in the window's rotated
+    /// order. Scripting the rows rather than planting them is what lets a test say "the viable pair
+    /// lives five anchors past where this scan can reach" and mean it.
+    /// </summary>
+    private AutoLinkScanner WindowedScannerOver(
+        IReadOnlyDictionary<int, (string IdA, string IdB, float Similarity)[]> rowsByAnchor)
+        => new(_index, _graph, new DuplicateDetector(),
+            pairs: (candidates, _, window, _) => EnumerateWindow(candidates.Count, window, rowsByAnchor));
+
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> EnumerateWindow(
+        int count, PairScanWindow window,
+        IReadOnlyDictionary<int, (string IdA, string IdB, float Similarity)[]> rowsByAnchor)
+    {
+        if (count <= 0) yield break;
+        int rows = Math.Min(window.MaxAnchors, count);
+        int start = ((window.StartAnchor % count) + count) % count;
+        for (int r = 0; r < rows; r++)
+        {
+            int anchor = start + r;
+            if (anchor >= count) anchor -= count;
+            if (!rowsByAnchor.TryGetValue(anchor, out var pairs)) continue;
+            foreach (var pair in pairs) yield return pair;
+        }
     }
 
     /// <summary>
@@ -454,6 +926,10 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// and reorder the candidates a test is reasoning about.
     /// </summary>
     private void PlantPair(int slot, string idA, string idB, float skew)
+        => PlantPairIn(Tenant, slot, idA, idB, skew);
+
+    /// <inheritdoc cref="PlantPair"/>
+    private void PlantPairIn(string tenantId, int slot, string idA, string idB, float skew)
     {
         var a = new float[Dim];
         var b = new float[Dim];
@@ -461,8 +937,24 @@ public class AutoLinkCapAccountingTests : IDisposable
         b[slot * 2] = 1f;
         b[(slot * 2) + 1] = skew;
 
-        _index.Upsert(new CognitiveEntry(idA, a, ScanNs, $"{idA} text", tenantId: Tenant));
-        _index.Upsert(new CognitiveEntry(idB, b, ScanNs, $"{idB} text", tenantId: Tenant));
+        _index.Upsert(new CognitiveEntry(idA, a, ScanNs, $"{idA} text", tenantId: tenantId));
+        _index.Upsert(new CognitiveEntry(idB, b, ScanNs, $"{idB} text", tenantId: tenantId));
+    }
+
+    /// <summary>
+    /// An id the tenant answers to in two namespaces, NEITHER of them the scanned one.
+    ///
+    /// The flood fixture needs tens of thousands of permanently-refused pairs without putting tens
+    /// of thousands of entries in front of the scan: the pairs are scripted, so the ids only have to
+    /// be unattributable, and an id outside the scanned namespace is unattributable just as well as
+    /// one inside it while leaving the candidate list at its planted size.
+    /// </summary>
+    private void PlantAmbiguousOutsideTheScan(string id)
+    {
+        var v = new float[Dim];
+        v[Dim - 1] = 1f;
+        _index.Upsert(new CognitiveEntry(id, v, ShadowNs, "flood id", tenantId: Tenant));
+        _index.Upsert(new CognitiveEntry(id, v, SecondShadowNs, "flood id twin", tenantId: Tenant));
     }
 
     /// <summary>
@@ -479,7 +971,10 @@ public class AutoLinkCapAccountingTests : IDisposable
     }
 
     private void AssertLinked(string idA, string idB)
-        => Assert.Contains(_graph.GetStoredEdgesForEntry(idA, tenantId: Tenant), e => IsSimilarTo(e, idA, idB));
+        => AssertLinkedIn(Tenant, idA, idB);
+
+    private void AssertLinkedIn(string tenantId, string idA, string idB)
+        => Assert.Contains(_graph.GetStoredEdgesForEntry(idA, tenantId: tenantId), e => IsSimilarTo(e, idA, idB));
 
     private void AssertNotLinked(string idA, string idB)
         => Assert.DoesNotContain(_graph.GetStoredEdgesForEntry(idA, tenantId: Tenant), e => IsSimilarTo(e, idA, idB));

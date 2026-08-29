@@ -51,7 +51,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             string? errorMessage = null;
             long totalEntriesProcessed = 0;
             var swTotal = Stopwatch.StartNew();
-            try { totalEntriesProcessed = ScanAllNamespaces(); }
+            try { totalEntriesProcessed = ScanAllNamespaces(stoppingToken); }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 swTotal.Stop();
@@ -66,7 +66,11 @@ public sealed class AutoLinkBackgroundService : BackgroundService
         }
     }
 
-    private long ScanAllNamespaces()
+    // The token reaches the scanner rather than only gating the loop between namespaces: one
+    // namespace at the entry cap is a multi-second pairwise walk, and a shutdown that has to wait
+    // for it holds the whole host up. A cancelled scan writes what it had already ranked and leaves
+    // its resume cursor where it was, so nothing is skipped when the process comes back.
+    private long ScanAllNamespaces(CancellationToken cancellationToken)
     {
         int totalCreated = 0;
         int scannedCount = 0;
@@ -77,6 +81,8 @@ public sealed class AutoLinkBackgroundService : BackgroundService
         foreach (var tenant in _index.GetAllTenants())
         foreach (var ns in _index.GetNamespaces(tenant))
         {
+            if (cancellationToken.IsCancellationRequested) break;
+
             // Skip system namespaces (sharing registry, etc.).
             if (ns.StartsWith('_')) { skippedCount++; continue; }
 
@@ -94,7 +100,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _scanner.Scan(ns, threshold, cap, tenantId: tenant);
+                var result = _scanner.Scan(ns, threshold, cap, tenantId: tenant, cancellationToken: cancellationToken);
                 sw.Stop();
                 scannedCount++;
                 totalCreated += result.EdgesCreated;

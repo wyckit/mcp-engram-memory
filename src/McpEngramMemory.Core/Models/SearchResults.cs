@@ -132,6 +132,16 @@ public sealed record ConsolidationResult(
 /// Result of an auto-link scan: a periodic background pass that adds
 /// <c>similar_to</c> edges between high-cosine-similarity pairs so the diffusion
 /// kernel and consolidation operate on a richer graph topology.
+///
+/// A scan can stop for three different reasons and all three are separately expressible, because
+/// collapsing any two of them produces a report a caller cannot act on.
+/// <see cref="HitMaxEdgeCap"/> means the cap was binding — more admissible candidates were found
+/// than it would spend. <see cref="PairScanIncomplete"/> means this pass examined only part of the
+/// namespace's pair space and the next scan resumes where it stopped. Both false means the scan saw
+/// every pair and wrote every one it could: only then does "no edges created" mean "nothing left to
+/// link". <see cref="EntriesNotScanned"/> is the fourth and oldest of these bounds, and unlike the
+/// other two it is not resumed — those entries wait for the namespace to shrink or for a wider
+/// <c>maxScanEntries</c>.
 /// </summary>
 public sealed record AutoLinkResult(
     [property: JsonPropertyName("namespace")] string Namespace,
@@ -140,7 +150,8 @@ public sealed record AutoLinkResult(
     [property: JsonPropertyName("edgesCreated")] int EdgesCreated,
     [property: JsonPropertyName("edgesSkippedExisting")] int EdgesSkippedExisting,
     [property: JsonPropertyName("hitMaxEdgeCap")] bool HitMaxEdgeCap,
-    [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0);
+    [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0,
+    [property: JsonPropertyName("pairScanIncomplete")] bool PairScanIncomplete = false);
 
 /// <summary>
 /// System overview statistics.

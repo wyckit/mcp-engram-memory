@@ -171,6 +171,29 @@ public static class TopologyGuard
 }
 
 /// <summary>
+/// What a batch write does about an edge whose endpoints are already related.
+/// </summary>
+public enum EdgeAddMode
+{
+    /// <summary>
+    /// Replace an edge with the same source, target AND relation; leave every other relation between
+    /// the same two ids alone. The historic behaviour, and the right one for a caller asserting one
+    /// specific relationship.
+    /// </summary>
+    ReplaceSameRelation = 0,
+
+    /// <summary>
+    /// Write the edge only when NO relation yet runs between its endpoints, in either direction.
+    ///
+    /// For a caller whose precondition is that the two are unrelated — auto-link, which must never
+    /// lay a derived <c>similar_to</c> over a manually-asserted <c>contradicts</c>. That
+    /// precondition cannot be established outside the write lock: any pre-filter reads a snapshot,
+    /// and a relation added between the read and the write is invisible to it.
+    /// </summary>
+    OnlyIfUnlinked = 1,
+}
+
+/// <summary>
 /// In-memory knowledge graph using adjacency lists for directed edges between cognitive entries.
 ///
 /// Tenant isolation: adjacency is keyed by <c>(tenant, entryId)</c>, and every <see cref="GraphEdge"/>
@@ -335,8 +358,16 @@ public sealed class KnowledgeGraph
     /// <summary>
     /// Create multiple edges in a single write lock acquisition. Returns the number actually
     /// written, which is what makes the count honest when an endpoint was declined.
+    ///
+    /// <paramref name="mode"/> chooses the write boundary. The default one replaces an edge with the
+    /// same source, target AND relation and is blind to every other relation between the same two
+    /// ids, which is correct for a caller asserting a specific relationship and wrong for one whose
+    /// precondition is "these two are not related at all": that caller can only have tested the
+    /// precondition against a snapshot, and a relation added between its test and this write lands
+    /// on top of it. <see cref="EdgeAddMode.OnlyIfUnlinked"/> moves the test to the only place it can
+    /// be atomic with the write.
     /// </summary>
-    public int AddEdges(IEnumerable<GraphEdge> edges)
+    public int AddEdges(IEnumerable<GraphEdge> edges, EdgeAddMode mode = EdgeAddMode.ReplaceSameRelation)
     {
         ArgumentNullException.ThrowIfNull(edges);
 
@@ -363,6 +394,19 @@ public sealed class KnowledgeGraph
             var touchedTenants = new HashSet<string>();
             foreach (var edge in admitted)
             {
+                // The whole point of the mode: the condition is evaluated against the graph as it is
+                // at the instant of the write, holding the write lock, so nothing can slip between
+                // the test and the mutation. A caller's own pre-filter cannot achieve that however
+                // carefully it is written — it reads a snapshot, and the graph stays mutable.
+                //
+                // Nothing is allocated here. The check walks the two adjacency lists this edge's
+                // source already has, in place; a correctness fix that widened a lock around a
+                // dictionary build in this codebase once delayed every writer behind it, and a
+                // per-edge allocation inside a batch write lock would repeat that mistake.
+                if (mode == EdgeAddMode.OnlyIfUnlinked
+                    && AnyEdgeBetweenUnderLock(edge.TenantId, edge.SourceId, edge.TargetId))
+                    continue;
+
                 AddEdgeInternal(edge);
                 touchedTenants.Add(edge.TenantId);
                 if (edge.Relation == "cross_reference")
@@ -946,6 +990,29 @@ public sealed class KnowledgeGraph
     /// <summary>Resolve an entry id within a tenant: fast legacy locator for tenant "", tenant-scoped scan otherwise.</summary>
     private CognitiveEntry? ResolveEntry(string id, string tenantId)
         => tenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, tenantId: tenantId);
+
+    /// <summary>
+    /// True when ANY edge already runs between the two ids inside one tenant, in either direction
+    /// and under any relation. Caller must hold the write lock.
+    ///
+    /// No attribution test is needed and none could be taken: an edge between these two ids has
+    /// exactly these two endpoints, and both of them already passed the pre-lock topology screen, so
+    /// such an edge is attributable by construction. Taking the screen here instead would resolve
+    /// through CognitiveIndex under the graph write lock, which is the lock ordering this class
+    /// exists to never do.
+    /// </summary>
+    private bool AnyEdgeBetweenUnderLock(string tenantId, string sourceId, string targetId)
+    {
+        if (_outgoing.TryGetValue((tenantId, sourceId), out var fromSource))
+            for (int i = 0; i < fromSource.Count; i++)
+                if (fromSource[i].TargetId == targetId) return true;
+
+        if (_incoming.TryGetValue((tenantId, sourceId), out var toSource))
+            for (int i = 0; i < toSource.Count; i++)
+                if (toSource[i].SourceId == targetId) return true;
+
+        return false;
+    }
 
     private void AddEdgeInternal(GraphEdge edge)
     {
