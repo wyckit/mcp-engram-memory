@@ -167,6 +167,22 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>
+    /// Materialize every persisted partition, listing nothing.
+    ///
+    /// Internal and deliberately narrow: it exists for the one caller that captures
+    /// <see cref="AttributionRevisionFor"/> as a freshness baseline and cannot afford its own lazy
+    /// load to move that counter afterwards (<see cref="Graph.TopologyGuard.Sweep"/>). Loading
+    /// TRACKS every row it materializes, so a cold store's first load bumps the counter once per
+    /// id that is already ambiguous on disk — and a consumer comparing the counter later would read
+    /// that as somebody else's concurrent write and refuse a write for no reason. Warming first is
+    /// what separates "the store just woke up" from "attribution moved".
+    ///
+    /// Idempotent and nearly free after the first call: <c>NamespaceStore.LoadAll</c> caches its
+    /// completion generation and thereafter returns on two atomic reads.
+    /// </summary>
+    internal void EnsureAllNamespacesLoaded() => _store.LoadAll();
+
+    /// <summary>
     /// The namespaces of <paramref name="tenantId"/> that hold <paramref name="id"/> — usually one,
     /// occasionally two, never the whole namespace list. Every bare-id path (resolution,
     /// ambiguity counting, tenant-scoped get/delete) probes this instead of walking the tenant.

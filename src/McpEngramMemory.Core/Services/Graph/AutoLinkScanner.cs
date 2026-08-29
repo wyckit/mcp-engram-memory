@@ -8,19 +8,86 @@ namespace McpEngramMemory.Core.Services.Graph;
 
 /// <summary>
 /// The deferred pair source an auto-link scan draws from —
-/// <see cref="DuplicateDetector.StreamDuplicates"/> in every production path.
+/// <c>DuplicateDetector.StreamDuplicates</c> in every production path.
 ///
 /// It has no OUTPUT bound by design: the scan filters what it is handed, so a source that could
 /// only be asked for a fixed number of pairs would hand back the same window on every deterministic
 /// rescan and never reach what stands behind it. What it does take is a
 /// <see cref="PairScanWindow"/> — a bound on COMPARISONS, which is a different thing entirely,
 /// because successive windows tile the pair space instead of repeating one prefix of it.
+///
+/// It yields only pairs that CLEAR the threshold. A consumer counting the loop body therefore counts
+/// hits and not comparisons, which is why the comparison count is derived from the window instead
+/// (see <see cref="AutoLinkScanner"/>) and why the two are reported separately.
+///
+/// ANCHOR-MAJOR, as a cost hint and not as a correctness precondition. Both detector paths walk one
+/// anchor's row at a time and yield the anchor as <c>IdA</c>, so a consumer memoizing anything keyed
+/// on <c>IdA</c> gets one miss per row rather than one per pair. A source that violates it — a test
+/// seam scripting an arbitrary order — must still get the same ANSWERS out of the scan: the only
+/// thing this property buys is that a lookup hits, and the scan's use of it re-reads on a miss.
 /// </summary>
 internal delegate IEnumerable<(string IdA, string IdB, float Similarity)> PairStream(
     IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
     float threshold,
     PairScanWindow window,
     CancellationToken cancellationToken);
+
+/// <summary>
+/// What one scan's pair loop actually cost, for the tests that have to state properties
+/// <see cref="AutoLinkResult"/> cannot carry — because they are properties of the implementation
+/// rather than of the scan, and because none of them is visible in the result, in the graph or
+/// in a timing until it is large enough to take the process down.
+///
+/// IT MUST COVER EVERY STRUCTURE THE LOOP RETAINS, not one of them. The previous version reported
+/// the ranking buffer only, and the loop's LARGEST retained structure — the neighbour memo — sat
+/// beside it unmeasured while a test asserted the buffer was small. A witness with a blind spot is
+/// how the retention defect this seam exists for came back.
+///
+/// <see cref="PairsAboveThreshold"/> is how many pairs the stream yielded, which is how many cleared
+/// the similarity threshold. It is NOT the comparison count: the stream filters before it yields, so
+/// in a steady-state namespace this is three to five orders of magnitude below the work done. The
+/// work is <see cref="AutoLinkResult.PairsExamined"/>, derived from the window.
+///
+/// <see cref="Retained"/> is how many candidates the ranking buffer still held when the loop ended.
+/// The retention that mattered was a set keyed by PAIR, which is quadratic in the namespace; this
+/// number must track the cap instead.
+///
+/// <see cref="NeighborNodesMemoized"/> and <see cref="NeighborIdsRetained"/> are the other half of
+/// that claim: how many nodes' adjacency the neighbour memo still held, and how many neighbour ids
+/// that was. The memo was keyed by pair endpoint and grew toward one set per candidate, each sized
+/// by that node's degree — O(candidates x degree) held for a whole scan, largest in exactly the
+/// densified steady state auto-link produces. It holds ONE node now, so the node count is the
+/// structural claim and the id count is the memory one.
+///
+/// <see cref="AdjacencyReads"/> is how many times the scan read a node's adjacency out of the graph.
+/// Each one takes <c>ReaderWriterLockSlim.EnterUpgradeableReadLock</c>, which admits a single holder
+/// at a time process-wide, so this is the count that decides whether a background sweep serializes
+/// against interactive graph reads. It must scale with the anchors walked, never with the pairs.
+///
+/// <see cref="EdgesMaterialized"/> is how many <see cref="GraphEdge"/> objects the scan constructed.
+/// It must equal what the scan OFFERS the graph, never what it examined: an edge and its metadata
+/// dictionary cost ~146 bytes, and the loop used to build one per ADMISSIBLE pair — which in a
+/// namespace of near-duplicate memories, the state this store actually reaches, is very nearly every
+/// pair compared. At the default window that worst case is roughly eighteen million objects in one
+/// background pass. A count alone could not have caught that, which is why the seam reports this
+/// beside <see cref="PairsAboveThreshold"/>.
+///
+/// THE WITNESS IS THE SINGLE CONSTRUCTION SITE. This number is incremented where the scan builds
+/// its edges, so a <c>new GraphEdge(...)</c> written anywhere else in the scanner would be
+/// invisible here. That is why there is exactly one such site, and why it has to stay that way.
+///
+/// <see cref="EdgeCapApplied"/> is the cap after clamping. The cap sizes the ranking buffer and the
+/// pending-edge list, so it is a memory bound arriving from a public parameter; reporting what was
+/// actually applied is what lets a test state that the bound cannot be defeated by the caller.
+/// </summary>
+internal readonly record struct AutoLinkScanProbe(
+    int PairsAboveThreshold,
+    int Retained,
+    int NeighborNodesMemoized,
+    int NeighborIdsRetained,
+    int AdjacencyReads,
+    int EdgesMaterialized,
+    int EdgeCapApplied);
 
 /// <summary>
 /// Background-friendly graph maintenance that periodically scans a namespace for
@@ -69,6 +136,28 @@ internal delegate IEnumerable<(string IdA, string IdB, float Similarity)> PairSt
 /// on every deterministic rescan and the eleventh on none of them. So this pulls from a DEFERRED
 /// pair stream and keeps pulling past what it discards, holding nothing per pair beyond a ranking
 /// buffer the size of the cap.
+///
+/// That loop walks the whole window, so what it costs PER PAIR is the number that scales. It ranks
+/// endpoints and a similarity — a value tuple — and constructs a <see cref="GraphEdge"/> only for
+/// the candidates the cap will actually spend. Ranking the objects instead cost an edge and its
+/// metadata dictionary per ADMISSIBLE pair; the default window examines roughly eighteen million
+/// pairs in one pass, and in a namespace of near-duplicate memories — the state a memory store
+/// reaches on its own, and the reason a 0.85 threshold finds anything at all — very nearly all of
+/// them are admissible.
+///
+/// WHAT THE SCAN REPORTS AS ITS COST is the pairs it EXAMINED, which is the window's pair slots and
+/// is derived from the window rather than counted in the loop. The pair stream yields only what
+/// clears the threshold, so a counter in the loop body counts hits; it carried the name "pairs
+/// examined" for several rounds while reporting a number that in steady state is three to five
+/// orders of magnitude smaller, and that does not even move monotonically with the work done. Both
+/// are reported now, separately and under their own names: see <see cref="AutoLinkResult"/>.
+///
+/// One scan per (tenant, namespace) runs at a time. This is a singleton reachable from both the
+/// background sweep and the tool, and the resume cursor is read, advanced and written as three
+/// steps, so two overlapping scans could roll progress backwards onto a window that had already
+/// been paid for — and would meanwhile be running the same quadratic walk twice. The second caller
+/// is turned away rather than queued, and says so: see
+/// <see cref="AutoLinkResult.ScanAlreadyInProgress"/>.
 ///
 /// A scan is bounded by COMPARISONS rather than by candidates offered, and it resumes: each
 /// namespace carries a cursor into the pairwise walk's anchor space, and a scan that stopped on the
@@ -121,6 +210,35 @@ public sealed class AutoLinkScanner
     public const long DefaultMaxPairComparisons = 20_000_000;
 
     /// <summary>
+    /// Edges one scan proposes when the caller names no cap.
+    /// </summary>
+    public const int DefaultMaxNewEdgesPerScan = 1_000;
+
+    /// <summary>
+    /// Ceiling on the per-scan edge cap, applied to whatever the caller asked for.
+    ///
+    /// The cap is a MEMORY bound, not just a policy: it sizes the ranking buffer (2x + slack value
+    /// tuples) and the pending-edge list (one <see cref="GraphEdge"/> and its metadata dictionary,
+    /// ~146 bytes each), and <see cref="KnowledgeGraph.AddEdges"/> builds an admitted list of the
+    /// same size under its write lock. So "the buffer bounds memory at O(cap) rather than O(pairs
+    /// walked)" is only a bound while the cap is bounded — and it arrives unvalidated from three
+    /// public surfaces: <see cref="Scan"/>, the auto-link tool, and
+    /// <see cref="DecayConfig.AutoLinkMaxNewEdgesPerScan"/>, a settable int the background sweep
+    /// reads straight through. At <c>int.MaxValue</c> the buffer could never reach its own capacity,
+    /// so compaction never ran and the buffer became a scan-wide set sized by pairs walked: the
+    /// round-6 defect, reached again through a parameter.
+    ///
+    /// Ten times the default and equal to <see cref="DefaultMaxScanEntries"/>, deliberately: no
+    /// single pass should propose more edges than the widest namespace it will look at has entries,
+    /// and what a cap defers is not lost — the next scan picks it up. At this value the ranking
+    /// buffer is ~480 KB and the pending list ~1.5 MB, both bounded and both far below anything a
+    /// six-hourly background job needs to apologise for. Clamping is LOGGED, never silent, on the
+    /// same reasoning as entry truncation: a scan that quietly did less than it was asked looks
+    /// identical to one that found nothing.
+    /// </summary>
+    public const int MaxNewEdgesPerScanHardCap = DefaultMaxScanEntries;
+
+    /// <summary>
     /// Spare capacity in the ranking buffer beyond twice the edge cap.
     ///
     /// The buffer is a bounded top-K: candidates arrive in scan order, not in similarity order, so
@@ -132,15 +250,45 @@ public sealed class AutoLinkScanner
     ///
     /// It is NOT a bound on how far the scan looks, and no longer stops the loop at all. Every
     /// admissible candidate in the scan's window is ranked against every other; what the buffer
-    /// bounds is MEMORY, at O(cap) rather than O(pairs walked).
+    /// bounds is MEMORY, at O(cap) rather than O(pairs walked) — and the cap it is O(of) is the
+    /// CLAMPED one, because an unclamped cap is what turned that bound back into O(pairs walked).
+    /// See <see cref="MaxNewEdgesPerScanHardCap"/>.
     /// </summary>
     private const int RankingBufferSlack = 8;
 
     private readonly CognitiveIndex _index;
     private readonly KnowledgeGraph _graph;
     private readonly PairStream _pairs;
-    private readonly Action<int>? _onLoopRetention;
+    private readonly Action<AutoLinkScanProbe>? _onScanProbe;
     private readonly ILogger<AutoLinkScanner>? _logger;
+
+    /// <summary>
+    /// The (tenant, namespace) keys a scan is currently inside. Presence is the lock.
+    ///
+    /// This type is a SINGLETON reachable from two places at once — the six-hourly
+    /// <see cref="AutoLinkBackgroundService"/> and the <c>auto_link</c> tool — over a resume cursor
+    /// that is read, advanced and written as three separate steps. Two scans of one key could
+    /// therefore read the same start, and the slower one would finish last and overwrite the faster
+    /// one's cursor with an older value: observed progress running 0, 0, 1, 1 while an intervening
+    /// scan had already advanced to 2. That is the starvation this whole area keeps rediscovering,
+    /// arriving by a third road — a window the rotation has stepped back over is a window the next
+    /// scan pays for again.
+    ///
+    /// Mutual exclusion rather than a versioned cursor, because the cursor is only half the cost. A
+    /// version stamp would keep progress monotonic and still let two scans run the same quadratic
+    /// window at the same time, which is the more expensive half of the defect.
+    ///
+    /// TRY-ACQUIRE, NEVER WAIT, and the second caller is told so rather than served a lie. Blocking
+    /// would put an interactive tool call behind a background sweep that can run for seconds and
+    /// then have it redo a window that was just done. It is also what makes this deadlock-proof by
+    /// construction: the key is taken before any graph or index lock and released after all of them,
+    /// so it is strictly outermost, and a re-entrant call cannot self-deadlock because a
+    /// try-acquire on a key already held simply fails. <see cref="AutoLinkResult.ScanAlreadyInProgress"/>
+    /// carries the outcome, and <see cref="AutoLinkResult.PairScanIncomplete"/> is set with it so a
+    /// caller reading only the completeness flags can never mistake a deferred scan for "nothing
+    /// left to link".
+    /// </summary>
+    private readonly ConcurrentDictionary<(string Tenant, string Namespace), byte> _scansInFlight = new();
 
     /// <summary>
     /// Where the next scan of each (tenant, namespace) resumes in the pairwise walk's anchor space.
@@ -154,8 +302,37 @@ public sealed class AutoLinkScanner
     /// or delete shifts what a given anchor covers. That is sound for what this is — a rotation that
     /// guarantees every anchor is visited, not a promise about which pair comes next — and the
     /// steady state it exists to bound is precisely the case where nothing shifts.
+    ///
+    /// A ConcurrentDictionary makes each entry's write atomic, which was never the problem: the
+    /// unsafe step is READ, advance, WRITE, and only one scan per key being in flight at a time
+    /// makes those three one step. See <see cref="_scansInFlight"/>.
+    ///
+    /// WHAT REMOVES AN ENTRY, because for several rounds nothing did and this dictionary was
+    /// monotonic over the lifetime of a process designed to run for weeks. Two paths, both inside
+    /// the scan, because no teardown anywhere else reaches this type: <c>DeleteAllInNamespace</c>,
+    /// <c>NamespaceStore.RemoveNamespace</c> and <c>MemoryDiffusionKernel.Invalidate</c> all retract
+    /// their own per-partition state and none of them knows this exists.
+    ///
+    /// - A namespace that no longer holds two scannable entries has no pair space to be part-way
+    ///   through, so its cursor describes nothing and is dropped on the way out of the early return.
+    /// - <see cref="ForgetCursorsForDeadNamespaces"/> drops the cursors of namespaces the tenant no
+    ///   longer has at all. That is the case the first path cannot reach: a deleted namespace is
+    ///   never scanned again, so it would never come back to have its own cursor removed. Debate
+    ///   namespaces make it concrete — <c>active-debate-{sessionId}</c>, one per session, deleted on
+    ///   a TTL by <c>purge_debates</c>, and none of them starting with '_' so the sweep scans every
+    ///   one of them.
+    ///
+    /// Together those bound the dictionary by the namespaces that currently hold a pair worth
+    /// scanning, rather than by every (tenant, namespace) ever scanned.
     /// </summary>
     private readonly ConcurrentDictionary<(string Tenant, string Namespace), int> _resumeAnchors = new();
+
+    /// <summary>
+    /// How many resume cursors are held. For the test that has to state that this dictionary
+    /// SHRINKS — a property invisible in the result, in the graph and in the timings until it is
+    /// large enough to matter, exactly like the numbers on <see cref="AutoLinkScanProbe"/>.
+    /// </summary>
+    internal int ResumeCursorCount => _resumeAnchors.Count;
 
     public AutoLinkScanner(
         CognitiveIndex index,
@@ -172,11 +349,11 @@ public sealed class AutoLinkScanner
     /// Internal because neither is a knob an embedder should be turning: <paramref name="pairs"/>
     /// null means the detector, which is what every production path gets.
     ///
-    /// <paramref name="onLoopRetention"/> is handed the number of candidate tuples the scan is still
-    /// holding when its pair loop ends. It is the only way to state the memory property from
-    /// outside: the retention that mattered was a set keyed by pair, and a set keyed by pair is
-    /// invisible in the result, in the graph and in the timings until it is large enough to take the
-    /// process down with it.
+    /// <paramref name="onScanProbe"/> is handed one <see cref="AutoLinkScanProbe"/> per scan: every
+    /// structure the pair loop still held when it ended, how much of the graph it read to get there,
+    /// how many edge objects it built, and the cap those bounds derive from. All of them are cost
+    /// properties, and a cost property is invisible in the result, in the graph and in the timings
+    /// until it is large enough to take the process down with it.
     /// </summary>
     internal AutoLinkScanner(
         CognitiveIndex index,
@@ -184,13 +361,13 @@ public sealed class AutoLinkScanner
         DuplicateDetector duplicateDetector,
         PairStream? pairs,
         ILogger<AutoLinkScanner>? logger = null,
-        Action<int>? onLoopRetention = null)
+        Action<AutoLinkScanProbe>? onScanProbe = null)
     {
         _index = index;
         _graph = graph;
         _pairs = pairs ?? duplicateDetector.StreamDuplicates;
         _logger = logger;
-        _onLoopRetention = onLoopRetention;
+        _onScanProbe = onScanProbe;
     }
 
     /// <summary>
@@ -199,23 +376,74 @@ public sealed class AutoLinkScanner
     /// </summary>
     /// <param name="ns">Namespace to scan.</param>
     /// <param name="threshold">Similarity threshold override; pass <c>threshold: null</c> to use the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>. Required so tenantId never sits behind a nullable slot an old positional call could silently shift into.</param>
-    /// <param name="maxNewEdges">Per-scan cap on edges the graph ACCEPTS, not on candidates offered; pass <c>maxNewEdges: null</c> for the default cap. Required for the same reason as <paramref name="threshold"/>.</param>
+    /// <param name="maxNewEdges">Per-scan cap on edges the graph ACCEPTS, not on candidates offered; pass <c>maxNewEdges: null</c> for <see cref="DefaultMaxNewEdgesPerScan"/>. Required for the same reason as <paramref name="threshold"/>. Clamped into [0, <see cref="MaxNewEdgesPerScanHardCap"/>] and logged when it is — the cap sizes this scan's ranking buffer and pending-edge list, so it is a memory bound and cannot be left to the caller.</param>
     /// <param name="tenantId">Tenant partition to scan. Pass "" for the legacy partition.</param>
     /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
-    /// <param name="maxPairComparisons">Cosine comparisons this pass will make before deferring the rest to the next scan, which resumes where this one stopped; 0 or less disables the bound. Reported as <see cref="AutoLinkResult.PairScanIncomplete"/>.</param>
+    /// <param name="maxPairComparisons">Cosine comparisons this pass will make before deferring the rest to the next scan, which resumes where this one stopped; 0 or less disables the bound. That a pass stopped early is reported as <see cref="AutoLinkResult.PairScanIncomplete"/>, and what it spent — in this same unit — as <see cref="AutoLinkResult.PairsExamined"/>.</param>
     /// <param name="cancellationToken">Stops the pairwise walk between anchors. A cancelled scan writes what it already ranked and leaves its resume cursor untouched, so the window it abandoned is the window the next scan starts on.</param>
     public AutoLinkResult Scan(string ns, float? threshold, int? maxNewEdges,
         string tenantId, int maxScanEntries = DefaultMaxScanEntries,
         long maxPairComparisons = DefaultMaxPairComparisons,
         CancellationToken cancellationToken = default)
     {
+        // One scan per (tenant, namespace) at a time — see _scansInFlight for why, and for why the
+        // loser is turned away instead of queued. Acquired around the WHOLE scan because the thing
+        // being protected is not the cursor write, it is read-compute-write as one step.
+        var key = (tenantId, ns);
+        if (!_scansInFlight.TryAdd(key, 0))
+        {
+            // Honest, and honest in the caller's own terms: nothing was examined and nothing was
+            // written, so the completeness flag says the pair space was not covered. A caller that
+            // reads only EdgesCreated sees the same 0 an exhausted namespace produces, which is why
+            // the deferral gets a field of its own rather than being inferred from the counts.
+            _logger?.LogInformation(
+                "Auto-link scan ns={Namespace} deferred: a scan of this namespace is already in flight.", ns);
+            return new AutoLinkResult(ns, 0, 0, 0, 0, false,
+                EntriesNotScanned: 0, PairScanIncomplete: true, ScanAlreadyInProgress: true);
+        }
+
+        try
+        {
+            return ScanExclusive(ns, threshold, maxNewEdges, tenantId, maxScanEntries,
+                maxPairComparisons, cancellationToken);
+        }
+        finally
+        {
+            // In a finally, because a scan that threw must not wedge its namespace shut for the
+            // lifetime of the process: the background service catches per-namespace failures and
+            // carries on, and the next sweep has to be able to try again.
+            _scansInFlight.TryRemove(key, out _);
+        }
+    }
+
+    /// <summary>
+    /// The scan itself, entered only by the holder of this (tenant, namespace) key. Everything about
+    /// the resume cursor below — reading the start anchor, deciding whether to advance, writing the
+    /// new one — is safe to treat as a single step because of that exclusion and for no other
+    /// reason.
+    /// </summary>
+    private AutoLinkResult ScanExclusive(string ns, float? threshold, int? maxNewEdges,
+        string tenantId, int maxScanEntries,
+        long maxPairComparisons,
+        CancellationToken cancellationToken)
+    {
+        // Retraction first, and for this tenant only: the sweep visits every tenant every cycle, so
+        // scoping it to the one being scanned still reconciles the whole dictionary once per cycle
+        // while costing a scan nothing it does not already pay. See _resumeAnchors.
+        ForgetCursorsForDeadNamespaces(tenantId);
+
         var entries = _index.GetAllInNamespace(ns, tenantId: tenantId);
         var nonSummary = new List<CognitiveEntry>(entries.Count);
         foreach (var e in entries)
             if (!e.IsSummaryNode && e.Vector.Length > 0) nonSummary.Add(e);
 
         if (nonSummary.Count < 2)
+        {
+            // Fewer than two scannable entries: there is no pair space for a cursor to point into,
+            // so a cursor here is dead state. One TryRemove on a path that is already returning.
+            _resumeAnchors.TryRemove((tenantId, ns), out _);
             return new AutoLinkResult(ns, nonSummary.Count, 0, 0, 0, false);
+        }
 
         int notScanned = 0;
         if (maxScanEntries > 0 && nonSummary.Count > maxScanEntries)
@@ -239,19 +467,34 @@ public sealed class AutoLinkScanner
             candidates.Add((entry, norm, null));
         }
         if (candidates.Count < 2)
+        {
+            // Same reasoning as above: no pair space, so no cursor. Reached separately because a
+            // namespace can hold entries that are all zero-norm and never become candidates.
+            _resumeAnchors.TryRemove((tenantId, ns), out _);
             return new AutoLinkResult(ns, candidates.Count, 0, 0, 0, false, notScanned);
+        }
 
         float effectiveThreshold = threshold ?? 0.85f;
-        int effectiveCap = maxNewEdges ?? 1000;
-        int spendable = Math.Max(effectiveCap, 0);
 
-        // How many of the best admissible candidates to keep while ranking. Saturating rather than
-        // multiplying blind: an int.MaxValue cap doubled is NEGATIVE, and a buffer with a negative
-        // capacity would be full before the first candidate arrived — the starvation this whole fix
-        // is about, arriving by a different road.
-        int rankingCapacity = effectiveCap > (int.MaxValue - RankingBufferSlack) / 2
-            ? int.MaxValue
-            : Math.Max((effectiveCap * 2) + RankingBufferSlack, RankingBufferSlack);
+        // CLAMPED RATHER THAN TRUSTED, because this number is a memory bound and it arrives from a
+        // public parameter with no validation anywhere on the path. See MaxNewEdgesPerScanHardCap
+        // for why an unclamped cap put a scan-wide set sized by pairs walked back into the loop.
+        // The clamp is what lets rankingCapacity below be a plain multiplication: at the hard cap it
+        // is 20,008, so there is no saturating branch to get wrong and none to leave untested.
+        int requestedCap = maxNewEdges ?? DefaultMaxNewEdgesPerScan;
+        int effectiveCap = Math.Clamp(requestedCap, 0, MaxNewEdgesPerScanHardCap);
+        if (effectiveCap != requestedCap)
+        {
+            _logger?.LogWarning(
+                "Auto-link scan for ns={Namespace} clamped its per-scan edge cap from {Requested} to {Cap}. " +
+                "The cap sizes this scan's ranking buffer and its pending-edge list, so it bounds memory; " +
+                "edges it defers are picked up by the next scan.",
+                ns, requestedCap, effectiveCap);
+        }
+        int spendable = effectiveCap;
+
+        // How many of the best admissible candidates to keep while ranking.
+        int rankingCapacity = (effectiveCap * 2) + RankingBufferSlack;
 
         // The window this scan gets, and where the next one picks up. maxAnchors is derived from the
         // comparison budget rather than configured directly because an anchor is worth a different
@@ -266,7 +509,17 @@ public sealed class AutoLinkScanner
             ? candidates.Count
             : (int)Math.Clamp(maxPairComparisons / candidates.Count, 1, candidates.Count);
 
-        int pairsExamined = 0;
+        // WHAT THIS PASS COSTS, in the unit its budget is spent in — derived from the window, not
+        // counted in the loop, because the loop cannot see a comparison. The pair stream filters
+        // before it yields (see PairStream), so a counter in the loop body counts pairs that CLEARED
+        // the threshold. That number carried the name "pairs examined" through several rounds while
+        // being, in a steady-state namespace, three to five orders of magnitude below the work done
+        // — and it does not even move monotonically with that work, since a namespace of
+        // near-duplicates reports a large number for the same walk that reports a tiny one when
+        // nothing matches. Both numbers are reported now, each under its own name.
+        long pairsExamined = PairSlotsInWindow(candidates.Count, startAnchor, maxAnchors);
+
+        int pairsAboveThreshold = 0;
         int skippedExisting = 0;
         int refusedUnattributable = 0;
         int admissibleSeen = 0;
@@ -304,8 +557,24 @@ public sealed class AutoLinkScanner
         // the namespace and bought nothing: the stream yields each unordered pair exactly once (see
         // DuplicateDetector.StreamDuplicates), and the write boundary below refuses a second edge
         // between one pair of endpoints anyway.
-        var ranked = new List<(GraphEdge Edge, float Similarity)>();
-        var neighbors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        //
+        // ENDPOINTS AND A SIMILARITY, not an edge. Ranking decides which candidates are worth
+        // WRITING, and a candidate that loses the ranking is a candidate whose GraphEdge would be
+        // built and thrown away — object plus metadata dictionary, ~146 bytes, once per ADMISSIBLE
+        // pair rather than once per edge kept. The loop walks its whole window now, and the default
+        // window walks ~18 million pairs; in a namespace of near-duplicate memories nearly all of
+        // them are admissible, so the worst case really is ~18 million objects and ~2.6 GB of churn
+        // in one pass of a six-hourly background job with no one to report it to. The tuple is a
+        // value type: the buffer holds two string references and a float per candidate and allocates
+        // nothing per pair.
+        var ranked = new List<(string Source, string Target, float Similarity)>();
+
+        // ONE node's neighbours at a time — see NeighborMemo for why this may not be a dictionary.
+        var neighbors = new NeighborMemo();
+
+        // Counted at the one construction site below. See AutoLinkScanProbe: this is the number the
+        // memory property is actually about, and a retention count alone could not express it.
+        int edgesMaterialized = 0;
 
         // ONE pairwise pass. Re-asking a fixed-size detector with a larger number would have been
         // the other way to reach the pairs behind an ineligible run, and it would repeat the whole
@@ -314,31 +583,37 @@ public sealed class AutoLinkScanner
         foreach (var (idA, idB, sim) in _pairs(candidates, effectiveThreshold,
                      new PairScanWindow(startAnchor, maxAnchors), cancellationToken))
         {
-            pairsExamined++;
+            pairsAboveThreshold++;
 
             // Canonical direction: lex-smaller id is the source. This makes
-            // re-scans deterministic — we always try to add the same edge object.
+            // re-scans deterministic — we always try to add the same edge.
             var (src, dst) = string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
 
             guard ??= TopologyGuard.ForSweep(_index, tenantId);
 
-            var candidate = new GraphEdge(src, dst, "similar_to", Math.Clamp(sim, 0f, 1f), null, tenantId);
-
-            // Screened as the EDGE that would be written, against the same predicate AddEdges will
-            // apply to it, and BEFORE the slot is taken — that ordering is the fix. A candidate the
-            // graph is going to decline must not spend a cap the next candidate could have used.
+            // Screened as the EDGE that would be written — both endpoints, the same predicate
+            // AddEdges will apply — and BEFORE the slot is taken; that ordering is the fix. A
+            // candidate the graph is going to decline must not spend a cap the next candidate could
+            // have used. It is asked of the endpoints rather than of a constructed GraphEdge for
+            // the reason above the buffer: the overwhelming majority of pairs walked never become
+            // an edge, and building one to ask the question pays for every one of them.
             //
             // Ahead of the existing-edge probe, not after it, and that is load-bearing beyond cost:
             // EdgesSkippedExisting reaches a caller. Probing first would let an unattributable pair
             // land in that count whenever a hidden edge happens to run between the two ids, and the
             // count would then answer a question about a node the caller was never shown.
-            if (!guard.IsEdgeUsable(candidate))
+            if (!guard.IsEdgeUsable(src, dst))
             {
                 refusedUnattributable++;
                 continue;
             }
 
-            if (HasAnyEdgeBetween(src, dst, tenantId, guard, neighbors))
+            // Asked of the pair as the STREAM presented it, not of the canonical endpoints: the
+            // memo holds one node and the stream is anchor-major, so idA is the id every pair of
+            // this row shares. Canonicalizing first would key the memo on min(idA, idB), which
+            // changes within a single row and is what made the old memo grow toward one entry per
+            // candidate. The question is unaffected — one node's adjacency covers both directions.
+            if (HasAnyEdgeBetween(idA, idB, tenantId, guard, neighbors))
             {
                 skippedExisting++;
                 continue;
@@ -349,17 +624,17 @@ public sealed class AutoLinkScanner
             // that question outlived the buffer that used to answer it.
             admissibleSeen++;
 
-            // Ranked on the raw cosine rather than on the edge's clamped weight: the clamp exists to
-            // keep a stored weight inside [0,1] against float drift, and two candidates that both
-            // drifted above 1 would otherwise rank as a tie they are not.
-            ranked.Add((candidate, sim));
+            // Ranked on the raw cosine rather than on the weight a GraphEdge would carry: that
+            // constructor clamps into [0,1] to keep a stored weight sane against float drift, and
+            // two candidates that both drifted above 1 would otherwise rank as a tie they are not.
+            ranked.Add((src, dst, sim));
             if (ranked.Count >= rankingCapacity)
                 KeepBest(ranked, spendable);
         }
 
-        // Bounded by the cap and not by the pairs walked. The witness is here rather than in the
-        // result because it is a property of the implementation, not of the scan.
-        _onLoopRetention?.Invoke(ranked.Count);
+        // Bounded by the cap and not by the pairs walked. Captured here, where the loop ends,
+        // and reported below with the rest of the probe.
+        int retained = ranked.Count;
 
         // The cap was binding only if it left an admissible candidate unwritten. Stated over how
         // many admissible candidates the scan SAW, which is exact: it does not depend on how large
@@ -367,6 +642,11 @@ public sealed class AutoLinkScanner
         // outranked. A caller reading HitMaxEdgeCap false learns that every admissible candidate in
         // this scan's window was written — and PairScanIncomplete tells it whether that window was
         // the whole namespace.
+        //
+        // Stated over the CLAMPED cap, which is the one the scan actually spent. Comparing against
+        // what the caller asked for would report "the cap did not bind" on a scan the ceiling had
+        // just bound, and the cursor rule below reads this flag: the window would then be advanced
+        // past edges it still owed.
         bool hitCap = admissibleSeen > effectiveCap;
 
         // Highest similarity first, ties broken on the canonical endpoints. The stream arrives in
@@ -374,23 +654,42 @@ public sealed class AutoLinkScanner
         // candidates from swapping places between rescans and re-deciding which one the cap buys.
         KeepBest(ranked, spendable);
 
+        // THE ONE PLACE THIS SCAN CONSTRUCTS A GraphEdge, and the count that witnesses it. Only the
+        // candidates the cap will actually spend get an object; everything the loop examined and
+        // everything the ranking discarded cost a value tuple and nothing else. A construction site
+        // added anywhere else in this file would be invisible to AutoLinkScanProbe.EdgesMaterialized
+        // and would silently reopen the per-pair allocation this replaces, so there must not be one.
+        //
+        // The weight is the raw cosine; GraphEdge's constructor clamps it into [0,1].
         var pending = new List<GraphEdge>(Math.Min(spendable, ranked.Count));
         for (int i = 0; i < ranked.Count && pending.Count < spendable; i++)
-            pending.Add(ranked[i].Edge);
+        {
+            var (src, dst, sim) = ranked[i];
+            edgesMaterialized++;
+            pending.Add(new GraphEdge(src, dst, "similar_to", sim, null, tenantId));
+        }
+
+        _onScanProbe?.Invoke(new AutoLinkScanProbe(
+            pairsAboveThreshold, retained,
+            neighbors.NodesHeld, neighbors.Neighbors.Count, neighbors.Reads,
+            edgesMaterialized, effectiveCap));
 
         // OnlyIfUnlinked, because "these two are not related yet" is the one precondition this
-        // scanner cannot establish for itself. HasAnyEdgeBetween above reads a snapshot and memoizes
-        // it for the whole scan; a manual relation created after that read is invisible to it, and
-        // the default write boundary replaces only the SAME relation, so the pair would end up
-        // carrying both the manual edge and a derived similar_to. The graph re-tests the condition
-        // under its own write lock, where it is atomic with the write.
+        // scanner cannot establish for itself. HasAnyEdgeBetween above reads a snapshot of one
+        // node's adjacency and holds it for as long as that node keeps arriving; a manual relation
+        // created after that read is invisible to it, and the default write boundary replaces only
+        // the SAME relation, so the pair would end up carrying both the manual edge and a derived
+        // similar_to. The graph re-tests the condition under its own write lock, where it is atomic
+        // with the write.
         int created = pending.Count > 0 ? _graph.AddEdges(pending, EdgeAddMode.OnlyIfUnlinked) : 0;
 
-        // Two causes, kept together because both mean the same thing to a caller — the scan judged a
-        // candidate admissible and the graph disagreed at the instant of writing. Either an endpoint
-        // became ambiguous between the scanner's sweep and the one inside AddEdges, or a relation
-        // appeared between the endpoints after this scan read their adjacency. Both must fail
-        // closed, and neither is an error; a non-zero value here means a race, not a bad candidate.
+        // Three causes, kept together because all three mean the same thing to a caller — the scan
+        // judged a candidate admissible and the graph disagreed at the instant of writing. An
+        // endpoint became ambiguous between the scanner's sweep and the one inside AddEdges; or
+        // attribution moved anywhere in the tenant between that sweep and the graph's write lock, in
+        // which case AddEdges refuses the whole batch and this equals pending.Count; or a relation
+        // appeared between the endpoints after this scan read their adjacency. All three must fail
+        // closed, and none is an error; a non-zero value here means a race, not a bad candidate.
         int declinedAtWrite = pending.Count - created;
 
         bool cancelled = cancellationToken.IsCancellationRequested;
@@ -421,16 +720,95 @@ public sealed class AutoLinkScanner
         // carries no such field for the same reason inverted: it does reach a caller.
         if (created > 0 || refusedUnattributable > 0 || declinedAtWrite > 0 || pairScanIncomplete)
         {
+            // Both numbers, and neither standing in for the other. The sentence used to read "{n}
+            // pairs examined over anchors ..." off the yield counter, asserting that a count of
+            // above-threshold HITS was the work done over that anchor range — the sentence an
+            // operator reads when a six-hourly sweep is slow and they are deciding whether the
+            // pairwise stage is worth tuning.
             _logger?.LogInformation(
-                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Declined} declined at write (endpoint became ambiguous, or the pair was linked, mid-scan), {Skipped} skipped (existing edge), {Examined} pairs examined over anchors {Start}..+{Anchors} of {Total}{CapNote}{BudgetNote}.",
-                ns, created, refusedUnattributable, declinedAtWrite, skippedExisting, pairsExamined,
+                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Declined} declined at write (endpoint became ambiguous, or the pair was linked, mid-scan), {Skipped} skipped (existing edge), {AboveThreshold} pairs above threshold out of {Examined} examined over anchors {Start}..+{Anchors} of {Total}{CapNote}{BudgetNote}.",
+                ns, created, refusedUnattributable, declinedAtWrite, skippedExisting,
+                pairsAboveThreshold, pairsExamined,
                 startAnchor, maxAnchors, candidates.Count,
                 hitCap ? " (hit cap)" : "",
                 pairScanIncomplete ? " (pair scan incomplete; next scan resumes where this one stopped)" : "");
         }
 
         return new AutoLinkResult(ns, candidates.Count, pairsExamined, created, skippedExisting,
-            hitCap, notScanned, pairScanIncomplete);
+            hitCap, notScanned, pairScanIncomplete, PairsAboveThreshold: pairsAboveThreshold);
+    }
+
+    /// <summary>
+    /// The pair slots the anchors of one window own, computed rather than walked.
+    ///
+    /// Anchor <c>i</c> owns exactly the pairs <c>(i, j)</c> for <c>j &gt; i</c> — the triangular
+    /// walk both detector paths perform, and the reason a window can be resumed at all — so a
+    /// window's cost is the sum of <c>count - 1 - i</c> over the anchors it visits. The anchors of a
+    /// window are consecutive and wrap at most once, so that is one or two arithmetic series and
+    /// there is no reason to iterate.
+    ///
+    /// EXACT for the direct pairwise path: every slot there is one FP32 cosine. Above the spectral
+    /// pivot the same slots are walked and most are settled by a cheaper projection dot, so it is an
+    /// upper bound on the full comparisons and an exact count of the slots — which is the unit
+    /// <c>maxPairComparisons</c> is spent in on either path. A slot whose two vectors differ in
+    /// length is visited and not compared; the index does not produce mixed-dimension namespaces,
+    /// and over-reporting the cost of one is the safe direction.
+    /// </summary>
+    private static long PairSlotsInWindow(int count, int startAnchor, int anchors)
+    {
+        int rows = Math.Min(anchors, count);
+        if (rows <= 0 || count <= 0) return 0;
+        int firstRun = Math.Min(rows, count - startAnchor);
+        return SlotsInAnchorRun(count, startAnchor, firstRun)
+             + SlotsInAnchorRun(count, 0, rows - firstRun);
+    }
+
+    /// <summary>
+    /// Pair slots owned by <paramref name="anchors"/> consecutive anchors starting at
+    /// <paramref name="first"/>, which is the arithmetic series from the last anchor's slot count
+    /// up to the first's.
+    /// </summary>
+    private static long SlotsInAnchorRun(int count, int first, int anchors)
+    {
+        if (anchors <= 0) return 0;
+        long high = count - 1 - first;             // slots owned by the first anchor of the run
+        long low = count - first - anchors;        // ...by the last, at index first + anchors - 1
+        return (high + low) * (high - low + 1) / 2;
+    }
+
+    /// <summary>
+    /// Drop the resume cursors of namespaces <paramref name="tenantId"/> no longer has.
+    ///
+    /// The retraction this type never had. Nothing tells a DI singleton that a namespace was torn
+    /// down — the candidate index, the BM25/HNSW indexes and the diffusion kernel each retract their
+    /// own per-partition state and none of them reaches here — and a deleted namespace is never
+    /// scanned again, so it can never come back to drop its own cursor. Without this the dictionary
+    /// is monotonic in the number of (tenant, namespace) pairs EVER scanned, in a process designed
+    /// to run for weeks; a host churning debate namespaces accumulates dead keys forever.
+    ///
+    /// Scoped to the tenant being scanned so a scan pays only for its own partition, which is enough
+    /// to reconcile everything: the sweep visits every tenant every cycle, so a dead cursor outlives
+    /// its namespace by at most one sweep. The listing is skipped entirely when this tenant holds no
+    /// cursors, so a first scan pays nothing.
+    ///
+    /// Over-removal is harmless by this cursor's own contract — losing one costs a repeat of one
+    /// window, never a pair no scan reaches — which is why a listing that raced a namespace's
+    /// creation could not do damage even if it lost.
+    /// </summary>
+    private void ForgetCursorsForDeadNamespaces(string tenantId)
+    {
+        if (_resumeAnchors.IsEmpty) return;
+
+        HashSet<string>? live = null;
+        foreach (var (key, _) in _resumeAnchors)
+        {
+            if (!string.Equals(key.Tenant, tenantId, StringComparison.Ordinal)) continue;
+            // Built on the first cursor this tenant owns and not before: GetNamespaces materializes
+            // every persisted partition, and a scan with nothing to reconcile must not pay for it.
+            live ??= new HashSet<string>(_index.GetNamespaces(tenantId), StringComparer.Ordinal);
+            if (!live.Contains(key.Namespace))
+                _resumeAnchors.TryRemove(key, out _);
+        }
     }
 
     /// <summary>
@@ -442,14 +820,14 @@ public sealed class AutoLinkScanner
     /// to see. Compaction is O(k log k) and frees half the buffer, so it amortizes to O(1) per
     /// candidate examined.
     /// </summary>
-    private static void KeepBest(List<(GraphEdge Edge, float Similarity)> ranked, int keep)
+    private static void KeepBest(List<(string Source, string Target, float Similarity)> ranked, int keep)
     {
         ranked.Sort(static (x, y) =>
         {
             int bySimilarity = y.Similarity.CompareTo(x.Similarity);
             if (bySimilarity != 0) return bySimilarity;
-            int bySource = string.CompareOrdinal(x.Edge.SourceId, y.Edge.SourceId);
-            return bySource != 0 ? bySource : string.CompareOrdinal(x.Edge.TargetId, y.Edge.TargetId);
+            int bySource = string.CompareOrdinal(x.Source, y.Source);
+            return bySource != 0 ? bySource : string.CompareOrdinal(x.Target, y.Target);
         });
         if (ranked.Count > keep)
             ranked.RemoveRange(keep, ranked.Count - keep);
@@ -457,7 +835,7 @@ public sealed class AutoLinkScanner
 
     /// <summary>
     /// True when an ATTRIBUTABLE edge already ran between the two ids — in either direction and
-    /// under any relation — as of when this scan first read that node's adjacency.
+    /// under any relation — as of when this scan last read <paramref name="anchor"/>'s adjacency.
     ///
     /// A COST FILTER, NOT THE AUTHORITY. It answers from a snapshot while the graph stays mutable,
     /// so a relation created after the read is invisible to it; the condition is finally enforced by
@@ -475,27 +853,82 @@ public sealed class AutoLinkScanner
     /// pre-screened. Nothing read leaves this method: the only question put to the adjacency is
     /// whether the far endpoint is an id already in hand, so no bare id is resolved or projected.
     ///
-    /// <paramref name="neighbors"/> memoizes one node's attributable neighbor ids for the rest of
-    /// the scan, on the same reasoning as the sweep it is passed alongside: the scan examines every
-    /// above-threshold pair in its window rather than a fixed number of them, and one id takes part
-    /// in as many pairs as it has neighbors, so reading its adjacency per pair would take the
-    /// graph's lock a quadratic number of times.
+    /// <paramref name="memo"/> holds <paramref name="anchor"/>'s attributable neighbor ids, on the
+    /// same reasoning as the sweep it is passed alongside: the scan examines every above-threshold
+    /// pair in its window rather than a fixed number of them, and one id takes part in as many pairs
+    /// as its row is wide, so reading its adjacency per pair would take the graph's lock a quadratic
+    /// number of times. It holds ONE node — see <see cref="NeighborMemo"/> for why it may not hold
+    /// more — so this must be called with the id the pair stream put first.
     /// </summary>
-    private bool HasAnyEdgeBetween(string a, string b, string tenantId, TopologyGuard.Sweep guard,
-        Dictionary<string, HashSet<string>> neighbors)
+    private bool HasAnyEdgeBetween(string anchor, string other, string tenantId,
+        TopologyGuard.Sweep guard, NeighborMemo memo)
     {
-        if (!neighbors.TryGetValue(a, out var adjacent))
+        if (!string.Equals(memo.Node, anchor, StringComparison.Ordinal))
         {
-            adjacent = new HashSet<string>(StringComparer.Ordinal);
-            // One node's adjacency covers both directions, so there is no need to fetch b's and union.
-            foreach (var edge in _graph.GetStoredEdgesForEntry(a, tenantId: tenantId))
+            // Disowned BEFORE the set is touched and re-owned only once it is complete, so a throw
+            // out of the read below leaves the memo describing nothing rather than answering for
+            // the previous node out of a set that now holds part of this one's.
+            memo.Node = null;
+
+            // Cleared and refilled rather than replaced: the set keeps its capacity across a row
+            // change, so a scan allocates one set however many anchors it walks, and a degree-0 node
+            // costs nothing at all. The old memo allocated an empty set per such node AND kept it.
+            memo.Neighbors.Clear();
+            memo.Reads++;
+            // One node's adjacency covers both directions, so there is no need to fetch the other's
+            // and union.
+            foreach (var edge in _graph.GetStoredEdgesForEntry(anchor, tenantId: tenantId))
             {
                 if (!guard.IsEdgeUsable(edge)) continue;
-                if (edge.SourceId == a) adjacent.Add(edge.TargetId);
-                else if (edge.TargetId == a) adjacent.Add(edge.SourceId);
+                if (edge.SourceId == anchor) memo.Neighbors.Add(edge.TargetId);
+                else if (edge.TargetId == anchor) memo.Neighbors.Add(edge.SourceId);
             }
-            neighbors[a] = adjacent;
+            memo.Node = anchor;
         }
-        return adjacent.Contains(b);
+        return memo.Neighbors.Contains(other);
+    }
+
+    /// <summary>
+    /// ONE node's attributable neighbours, and the reason it may not be more than one.
+    ///
+    /// This was a <c>Dictionary&lt;string, HashSet&lt;string&gt;&gt;</c> keyed by the pair's
+    /// canonical (lex-smaller) endpoint, and it was the scan's LARGEST retained structure. Keying by
+    /// id order rather than by walk position means the key changes within a single anchor row, so
+    /// the dictionary grew toward one set per candidate in the namespace, each sized by that node's
+    /// degree: O(candidates x degree) — the edges of the window's induced subgraph — held for the
+    /// whole scan, and largest in precisely the densified steady state this scanner exists to
+    /// produce. At 10,000 candidates of average degree 200 that is 2,000,000 retained slots, ~80 MB
+    /// live in a six-hourly background job, growing with every scan that succeeds. It is the round-6
+    /// finding's exact shape — a scan-wide retained set, quadratic in the namespace — reintroduced
+    /// by the fix for it, and invisible to the probe installed to catch that class of defect.
+    ///
+    /// One slot, keyed on the id the pair stream puts FIRST. Both detector paths are anchor-major
+    /// (see <see cref="PairStream"/>): a row's pairs all carry their anchor as IdA, so one slot is
+    /// hit by every pair of the row and retention falls to O(one node's degree). The graph read
+    /// count falls with it — one per anchor row instead of one per distinct lex-min id — and each
+    /// of those reads takes <c>EnterUpgradeableReadLock</c>, which admits one holder at a time
+    /// across the whole process.
+    ///
+    /// A stream that is NOT anchor-major stays CORRECT and only pays. A miss re-reads the graph, and
+    /// <see cref="HasAnyEdgeBetween"/> is a cost filter rather than the authority — the condition is
+    /// finally decided by <see cref="EdgeAddMode.OnlyIfUnlinked"/> under the graph's write lock — so
+    /// a re-read can never reach a different decision than a hit would have.
+    /// </summary>
+    private sealed class NeighborMemo
+    {
+        /// <summary>The node whose neighbours are held, or null before the first read.</summary>
+        internal string? Node;
+
+        /// <summary><see cref="Node"/>'s attributable neighbour ids.</summary>
+        internal readonly HashSet<string> Neighbors = new(StringComparer.Ordinal);
+
+        /// <summary>Adjacency reads performed — one graph-lock acquisition each.</summary>
+        internal int Reads;
+
+        /// <summary>
+        /// Nodes memoized: 0 or 1 by construction, and reported so a test can state that. A
+        /// dictionary keyed by pair endpoint reports thousands here on the same fixture.
+        /// </summary>
+        internal int NodesHeld => Node is null ? 0 : 1;
     }
 }

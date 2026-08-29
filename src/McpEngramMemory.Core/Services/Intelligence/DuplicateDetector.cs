@@ -1,3 +1,5 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Retrieval;
 
@@ -29,6 +31,33 @@ internal readonly record struct PairScanWindow(int StartAnchor, int MaxAnchors)
     /// <summary>Every anchor, from the first — what a caller that is not resuming anything wants.</summary>
     internal static PairScanWindow Full => new(0, int.MaxValue);
 }
+
+/// <summary>
+/// What one spectral scan COST, as opposed to what it returned.
+///
+/// The spectral path exists for exactly one reason: a 64-dim projection dot is cheaper than the
+/// full-dimension FP32 cosine, so gating on the projection buys back the quadratic. That bargain
+/// is invisible in the result — a healthy prefilter and a prefilter that has stopped filtering
+/// yield the SAME pairs, because the full-fidelity confirmation behind the gate makes the final
+/// decision either way. Only the number of confirmations differs, and nothing in the result, in
+/// the graph, or in <c>AutoLinkScanProbe</c> (pairs examined, retention, edges materialized) moves
+/// when it changes. That is why the innermost loop of this subsystem could be lowered, or
+/// mis-lowered, with no property any test could state.
+///
+/// The RATIO of the two counters below is the prefilter's selectivity, and it is what moves when
+/// the projection dot is computed wrongly. A kernel that OVER-counts (a tail loop re-walking
+/// elements the main loop already consumed) inflates every dot, every pair clears the widened gate,
+/// and the ratio goes to 1 while the yielded pairs stay perfectly correct — visible here and
+/// nowhere else. A kernel that UNDER-counts (a stride that skips a block) shrinks every dot toward
+/// zero and the ratio goes to 0; that one also costs recall, so it is caught by the pair-set
+/// assertion as well. Only the first failure is invisible without these counters, and it is the
+/// failure that gives the whole dimensional reduction back.
+/// </summary>
+/// <param name="ProjectionDots">Pairs this window actually compared in projection space — the
+/// cheap side of the bargain.</param>
+/// <param name="ConfirmationDots">The subset that cleared the widened gate and paid for a
+/// full-dimension FP32 cosine — the expensive side the gate exists to suppress.</param>
+internal readonly record struct ProjectionScanProbe(long ProjectionDots, long ConfirmationDots);
 
 /// <summary>
 /// Detects near-duplicate entries by pairwise cosine similarity.
@@ -78,7 +107,7 @@ public sealed class DuplicateDetector
     ///
     /// <paramref name="maxResults"/> bounds the OUTPUT, and it is applied in scan order before the
     /// sort, so it is a prefix of what was found rather than the globally best pairs. A caller that
-    /// filters what it is handed must take <see cref="StreamDuplicates"/> instead — see there for
+    /// filters what it is handed must take <c>StreamDuplicates</c> instead — see there for
     /// why a bounded result cannot serve one.
     /// </summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
@@ -137,10 +166,33 @@ public sealed class DuplicateDetector
         float threshold,
         PairScanWindow window,
         CancellationToken cancellationToken)
+        => StreamDuplicates(candidates, threshold, window, cancellationToken, onProjectionProbe: null);
+
+    /// <summary>
+    /// The same stream as the four-argument overload above — identical pairs, identical order —
+    /// plus the cost seam.
+    ///
+    /// <paramref name="onProjectionProbe"/> is handed one <see cref="ProjectionScanProbe"/> when the
+    /// spectral enumeration ends — including when a bounded caller abandons it early, because the
+    /// counters describe the work actually done rather than the work a full pass would have done.
+    /// The direct path never reports one: it has no projection stage to measure, and a probe that
+    /// silently reported zeros for it would read as "the prefilter suppressed everything".
+    ///
+    /// The extra parameter is REQUIRED rather than optional on purpose. The four-argument overload
+    /// above is bound as a method group to <c>AutoLinkScanner.PairStream</c>, and an optional
+    /// parameter is not filled in by a method group conversion — making it optional would break
+    /// that binding rather than extending it.
+    /// </summary>
+    internal IEnumerable<(string IdA, string IdB, float Similarity)> StreamDuplicates(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        float threshold,
+        PairScanWindow window,
+        CancellationToken cancellationToken,
+        Action<ProjectionScanProbe>? onProjectionProbe)
     {
         if (candidates.Count < LowRankPivot)
             return StreamDirectPairwise(candidates, threshold, window, cancellationToken);
-        return StreamSpectralPrefiltered(candidates, threshold, window, cancellationToken);
+        return StreamSpectralPrefiltered(candidates, threshold, window, cancellationToken, onProjectionProbe);
     }
 
     /// <summary>Threshold above which two-pass spectral filtering replaces direct O(N^2) scan.</summary>
@@ -189,6 +241,14 @@ public sealed class DuplicateDetector
 
             var a = candidates[i];
             if (a.Norm == 0f) continue;
+
+            // candidates[j] below is an interface-indexer read per pair, and it stays one. This
+            // path is chosen only under LowRankPivot (256 candidates, <32k pairs) or when the
+            // subspace could not be built at all, its per-pair work is already a SIMD
+            // full-dimension VectorMath.Dot that dwarfs one dispatch, and materializing the list
+            // into an array would be an O(N) copy of a three-field tuple on the one path whose
+            // justification is that its cost is already bounded. The dispatch that mattered was in
+            // the spectral inner loop, where the arithmetic beside it is 64-dimensional.
             for (int j = i + 1; j < n; j++)
             {
                 var b = candidates[j];
@@ -217,7 +277,8 @@ public sealed class DuplicateDetector
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
         float threshold,
         PairScanWindow window,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<ProjectionScanProbe>? onProjectionProbe)
     {
         // Skip embeddings of inconsistent dimension or zero norm — fall back to
         // direct on whatever's left if too many drop out.
@@ -240,15 +301,29 @@ public sealed class DuplicateDetector
         var subspace = EmbeddingSubspace.Build(embeddings, EmbeddingSubspace.DefaultTopK);
         if (subspace is null) return StreamDirectPairwise(candidates, threshold, window, cancellationToken);
 
+        // THE CONCRETE ROWS, RESOLVED ONCE PER SCAN AND NEVER PER PAIR.
+        //
+        // SubspaceProjection.Projections is declared IReadOnlyList<float[]> over the float[][] that
+        // EmbeddingSubspace builds, and an interface indexer is a dispatch the JIT cannot fold into
+        // an array load. The loop below this one reads a row per PAIR — ~18M reads in one default
+        // background window over a 10k-entry namespace — so paying the dispatch there is paying it
+        // 18M times for a value whose concrete type never changes within a scan.
+        //
+        // The cast succeeds on every value this type can hold today, since the only constructor
+        // takes float[][]. The fallback is not dead defensiveness: it keeps a future
+        // SubspaceProjection that returned some other IReadOnlyList from making this path WRONG
+        // rather than merely slower, and it is linear set-up cost charged to the scan, not per-pair
+        // cost charged to the window.
+        float[][] projections = subspace.Projections as float[][] ?? subspace.Projections.ToArray();
+
         // Projection-space norms are *not* the original norms (truncation drops magnitude
-        // orthogonal to col(V)), so they are computed here rather than reused.
+        // orthogonal to col(V)), so they are computed here rather than reused. Same kernel as the
+        // pair loop below, so the norm and the dot that divides by it are associated identically.
         var projNorms = new float[keep.Count];
         for (int i = 0; i < keep.Count; i++)
         {
-            float ns = 0f;
-            var p = subspace.Projections[i];
-            for (int k = 0; k < p.Length; k++) ns += p[k] * p[k];
-            projNorms[i] = MathF.Sqrt(ns);
+            var p = projections[i];
+            projNorms[i] = MathF.Sqrt(ProjectionDot(p, p));
         }
 
         // Anchors are candidate indices on every path (see PairScanWindow), so a dropped candidate
@@ -258,8 +333,8 @@ public sealed class DuplicateDetector
         Array.Fill(keepPos, -1);
         for (int p = 0; p < keep.Count; p++) keepPos[keep[p]] = p;
 
-        return StreamProjectionSurvivors(candidates, keep, keepPos, subspace, projNorms, threshold,
-            window, cancellationToken);
+        return StreamProjectionSurvivors(candidates, keep, keepPos, projections, projNorms, threshold,
+            window, cancellationToken, onProjectionProbe);
     }
 
     /// <summary>
@@ -269,36 +344,146 @@ public sealed class DuplicateDetector
     /// unbounded allocation on this path: it is sized by how many pairs clear the LOOSE threshold,
     /// which no output bound reaches. Confirming each survivor as it is found yields the same pairs
     /// in the same order and holds nothing between the passes.
+    ///
+    /// THIS IS THE INNERMOST LOOP OF THE SUBSYSTEM — on the order of 18 million iterations in one
+    /// default background window over a 10k-entry namespace. Everything loop-invariant is hoisted
+    /// out of it in the source rather than left to the JIT, because the one hoist that mattered is
+    /// one the JIT could NOT do: the projection rows arrive as <c>float[][]</c> (resolved once at
+    /// the call site) instead of through an <c>IReadOnlyList</c> indexer, which is a dispatch no
+    /// amount of loop analysis folds into an array load.
     /// </summary>
     private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamProjectionSurvivors(
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
-        List<int> keep, int[] keepPos, SubspaceProjection subspace, float[] projNorms, float threshold,
-        PairScanWindow window, CancellationToken cancellationToken)
+        List<int> keep, int[] keepPos, float[][] projections, float[] projNorms, float threshold,
+        PairScanWindow window, CancellationToken cancellationToken,
+        Action<ProjectionScanProbe>? onProjectionProbe)
     {
-        float looseThreshold = threshold - ProjectionThresholdSlack;
-        foreach (int i in WindowAnchors(candidates.Count, window))
+        long projectionDots = 0;
+        long confirmationDots = 0;
+        try
         {
-            if (cancellationToken.IsCancellationRequested) yield break;
-
-            int pi = keepPos[i];
-            if (pi < 0 || projNorms[pi] == 0f) continue;
-            var vi = subspace.Projections[pi];
-            // keep is ascending, so a later keep position is a later candidate index: walking
-            // forward from pi covers the same triangular half the direct path covers.
-            for (int pj = pi + 1; pj < keep.Count; pj++)
+            float looseThreshold = threshold - ProjectionThresholdSlack;
+            int keepCount = keep.Count;
+            foreach (int i in WindowAnchors(candidates.Count, window))
             {
-                if (projNorms[pj] == 0f) continue;
-                var vj = subspace.Projections[pj];
-                float projDot = 0f;
-                for (int k = 0; k < vi.Length; k++) projDot += vi[k] * vj[k];
-                if (projDot / (projNorms[pi] * projNorms[pj]) < looseThreshold) continue;
+                if (cancellationToken.IsCancellationRequested) yield break;
 
+                int pi = keepPos[i];
+                if (pi < 0 || projNorms[pi] == 0f) continue;
+                var vi = projections[pi];
+
+                // Hoisted above the inner loop because it does not depend on pj. It used to be read
+                // per SURVIVOR, through the IReadOnlyList indexer, inside the loop body.
                 var a = candidates[i];
-                var b = candidates[keep[pj]];
-                float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
-                if (sim >= threshold)
-                    yield return (a.Entry.Id, b.Entry.Id, sim);
+                float normI = projNorms[pi];
+
+                // keep is ascending, so a later keep position is a later candidate index: walking
+                // forward from pi covers the same triangular half the direct path covers.
+                for (int pj = pi + 1; pj < keepCount; pj++)
+                {
+                    float normJ = projNorms[pj];
+                    if (normJ == 0f) continue;
+
+                    projectionDots++;
+                    if (ProjectionDot(vi, projections[pj]) / (normI * normJ) < looseThreshold) continue;
+
+                    confirmationDots++;
+                    var b = candidates[keep[pj]];
+                    float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
+                    if (sim >= threshold)
+                        yield return (a.Entry.Id, b.Entry.Id, sim);
+                }
             }
         }
+        finally
+        {
+            // In a finally so an abandoned enumeration still reports. FindDuplicates stops at its
+            // output bound and disposes the enumerator mid-scan; a probe that only fired on natural
+            // completion would report nothing for exactly the caller whose cost is most bounded.
+            onProjectionProbe?.Invoke(new ProjectionScanProbe(projectionDots, confirmationDots));
+        }
+    }
+
+    /// <summary>
+    /// The projection-space dot product — the single hottest line in this subsystem.
+    ///
+    /// It runs once per candidate PAIR inside a window: a default background sweep over a
+    /// 10,000-entry namespace covers 2,000 anchors, which is on the order of 18 million calls in
+    /// one pass, at a six-hourly cadence, on a job nobody watches. The scalar form this replaces
+    /// accumulated into one float with a serial FP-add chain — at roughly four cycles of add
+    /// latency and K=64 elements that is ~256 cycles per pair with no instruction-level parallelism
+    /// available — while the full-dimension confirmation two lines below it was already SIMD. The
+    /// 6x dimensional reduction that justifies <see cref="LowRankPivot"/> and the randomized-SVD
+    /// set-up was being handed straight back by the loop that exists to collect it.
+    ///
+    /// FOUR INDEPENDENT ACCUMULATORS, not one, and no per-chunk horizontal reduce: the point of the
+    /// change is to break the dependency chain, and <c>Vector.Dot</c> per chunk (what
+    /// <see cref="VectorMath.Dot"/> does) reduces horizontally every chunk and so rebuilds it. One
+    /// reduce at the end is the whole cost of the reduction.
+    ///
+    /// THE RESULT IS NOT BIT-IDENTICAL to the scalar form, and it must not be described as though
+    /// it were: vectorizing re-associates the additions, so the last bits differ, and they differ
+    /// by SIMD width across hosts. That is safe here for a stated reason rather than by hope — this
+    /// value feeds a gate deliberately WIDENED by <see cref="ProjectionThresholdSlack"/> (0.10) to
+    /// absorb subspace-truncation error many orders of magnitude larger than an ULP, and the gate
+    /// admits nothing on its own: every survivor is re-decided by a full-dimension FP32 cosine
+    /// against the unmodified threshold. <see cref="VectorMath.Dot"/>, which computes that
+    /// confirming cosine, already carries the same width-dependent association.
+    ///
+    /// The length equality is tested here rather than asserted by the caller so this stays safe to
+    /// call on its own: it is what makes the unchecked loads below provably in range, and it is one
+    /// perfectly-predicted branch per pair against ~25 cycles of vector work. It is the ONLY
+    /// argument check, deliberately — the same line dereferences both arrays, so a null argument
+    /// still fails immediately, and an explicit null guard would add two more branches per pair to
+    /// an internal kernel whose callers are all in this file.
+    /// </summary>
+    internal static float ProjectionDot(float[] a, float[] b)
+    {
+        if (a.Length != b.Length)
+            throw new ArgumentException(
+                $"Projection vectors must share a length; got {a.Length} and {b.Length}.", nameof(b));
+
+        int n = a.Length;
+        int i = 0;
+        float sum = 0f;
+
+        int width = Vector<float>.Count;
+        if (Vector.IsHardwareAccelerated && n >= width)
+        {
+            // Unchecked loads: n >= width is established, every offset below is bounded by the loop
+            // conditions, and the length equality above makes the same offsets valid in b. This is
+            // the bounds check the old form could not elide at all, because it indexed vj by
+            // vi.Length rather than by vj's own.
+            ref float ra = ref MemoryMarshal.GetArrayDataReference(a);
+            ref float rb = ref MemoryMarshal.GetArrayDataReference(b);
+
+            var acc0 = Vector<float>.Zero;
+            var acc1 = Vector<float>.Zero;
+            var acc2 = Vector<float>.Zero;
+            var acc3 = Vector<float>.Zero;
+
+            int quad = width * 4;
+            for (; i <= n - quad; i += quad)
+            {
+                acc0 += Vector.LoadUnsafe(ref ra, (nuint)i) * Vector.LoadUnsafe(ref rb, (nuint)i);
+                acc1 += Vector.LoadUnsafe(ref ra, (nuint)(i + width)) * Vector.LoadUnsafe(ref rb, (nuint)(i + width));
+                acc2 += Vector.LoadUnsafe(ref ra, (nuint)(i + (2 * width))) * Vector.LoadUnsafe(ref rb, (nuint)(i + (2 * width)));
+                acc3 += Vector.LoadUnsafe(ref ra, (nuint)(i + (3 * width))) * Vector.LoadUnsafe(ref rb, (nuint)(i + (3 * width)));
+            }
+
+            // Whole vectors the quad loop could not reach. At the K=64 this class actually runs
+            // (see EmbeddingSubspace.DefaultTopK) both of these are empty on every SIMD width from
+            // 4 to 16 lanes; they exist so the kernel is correct for any K, which is what the
+            // length-sweep regression test asserts.
+            for (; i <= n - width; i += width)
+                acc0 += Vector.LoadUnsafe(ref ra, (nuint)i) * Vector.LoadUnsafe(ref rb, (nuint)i);
+
+            sum = Vector.Sum(acc0 + acc1 + acc2 + acc3);
+        }
+
+        for (; i < n; i++)
+            sum += a[i] * b[i];
+
+        return sum;
     }
 }

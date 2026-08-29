@@ -17,7 +17,7 @@ namespace McpEngramMemory.Core.Services;
 ///
 /// Almost all of that is enforced at the boundary rather than here, and this class deliberately does
 /// NOT restate it. <see cref="KnowledgeGraph.GetNeighbors"/> applies
-/// <see cref="Graph.TopologyGuard.Sweep.IsEdgeUsable"/> to every edge it hands back, so no hop can
+/// <see cref="Graph.TopologyGuard.Sweep.IsEdgeUsable(Models.GraphEdge)"/> to every edge it hands back, so no hop can
 /// cross an unattributable node; <see cref="ClusterManager.GetCluster"/> withholds an
 /// unattributable member and an unattributable summary from its own projection. A second copy of
 /// either test here would refuse nothing extra and would be one more place to keep in step.

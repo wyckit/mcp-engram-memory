@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Storage;
 
@@ -111,11 +112,42 @@ public static class TopologyGuard
         private readonly IReadOnlyList<string> _namespaces;
         private readonly Dictionary<string, bool> _memo = new(StringComparer.Ordinal);
 
+        /// <summary>
+        /// The tenant's attribution revision as of the instant this sweep's view was fixed —
+        /// see <see cref="CognitiveIndex.AttributionRevisionFor"/>.
+        ///
+        /// The one thing a writer holding a lock can use to find out that this sweep's answers have
+        /// gone stale. Every judgement here resolves through <see cref="CognitiveIndex"/>, which
+        /// takes its own locks, so re-judging under a write lock would invert this codebase's lock
+        /// order; comparing this number does not, because reading it is a single lock-free atomic
+        /// read of a per-tenant counter. Compared, never interpreted: any difference means some id
+        /// in this tenant crossed the ambiguity boundary after the sweep was built, so whatever the
+        /// sweep admitted must be refused rather than written.
+        /// </summary>
+        public long AttributionRevision { get; }
+
         internal Sweep(CognitiveIndex index, string tenantId)
         {
             ArgumentNullException.ThrowIfNull(index);
             _index = index;
             _tenantId = tenantId;
+
+            // THE ORDER OF THESE THREE LINES IS THE CONTRACT, in both directions.
+            //
+            // Warm BEFORE capturing. Listing is what materializes persisted partitions, and a lazy
+            // load tracks every row it materializes — so a cold store's own load bumps the counter
+            // once per id that is already ambiguous on disk. Capturing after the warm keeps that
+            // from reading as somebody else's concurrent crossing, which would refuse the first
+            // write after start-up for no reason at all.
+            //
+            // Capture BEFORE listing. The listing is the snapshot every judgement below is made
+            // against, and a crossing into a namespace the snapshot does not name is invisible to
+            // that judgement. Read the counter after the listing and a crossing landing between the
+            // two would be seen by neither — the sweep would call the id attributable and a writer
+            // re-reading the counter would find nothing had moved. Read it first and every crossing
+            // this sweep could be wrong about is one the counter has already recorded.
+            index.EnsureAllNamespacesLoaded();
+            AttributionRevision = index.AttributionRevisionFor(tenantId);
             _namespaces = index.GetNamespaces(tenantId);
         }
 
@@ -149,7 +181,20 @@ public static class TopologyGuard
         /// be forgotten.
         /// </summary>
         public bool IsEdgeUsable(GraphEdge edge)
-            => edge is not null && IsTopologySafe(edge.SourceId) && IsTopologySafe(edge.TargetId);
+            => edge is not null && IsEdgeUsable(edge.SourceId, edge.TargetId);
+
+        /// <summary>
+        /// <inheritdoc cref="IsEdgeUsable(GraphEdge)" path="/summary/node()"/>
+        ///
+        /// This overload is the SAME edge-level test against an edge that has not been built yet —
+        /// it takes both endpoints, never one, so there is still no way to ask about half an edge.
+        /// It exists for a producer that ranks candidate pairs before deciding which of them are
+        /// worth materializing: constructing a <see cref="GraphEdge"/> merely to ask whether it is
+        /// admissible allocates an object (and its metadata dictionary) per pair examined, and the
+        /// auto-link scan examines every pair in its window rather than a short prefix of them.
+        /// </summary>
+        public bool IsEdgeUsable(string sourceId, string targetId)
+            => IsTopologySafe(sourceId) && IsTopologySafe(targetId);
 
         /// <summary>
         /// The memoized answer alone: false for an id this sweep has not already judged.
@@ -206,7 +251,7 @@ public enum EdgeAddMode
 /// Bare-id attribution: within one tenant an id is not an identity — entries are identified by
 /// (tenant, namespace, id) — so an id the tenant holds in two namespaces names ONE node shared by
 /// two entries. The rule every method here applies is
-/// <see cref="TopologyGuard.Sweep.IsEdgeUsable"/>: an edge is usable only when BOTH of its
+/// <see cref="TopologyGuard.Sweep.IsEdgeUsable(GraphEdge)"/>: an edge is usable only when BOTH of its
 /// endpoints are attributable, tested per edge rather than per argument. Guarding the ids an
 /// operation happens to NAME is what failed repeatedly — the transferred edge's third endpoint and
 /// the neighbor behind a safe seed are both nodes no argument mentions, and both are disclosed or
@@ -222,12 +267,40 @@ public enum EdgeAddMode
 /// stored bytes for persistence and diagnostics, are never projected to a principal, and carry no
 /// resolution step that could turn a bare id into somebody else's entry.
 ///
+/// Tenant keys are NORMALIZED, everywhere, and that is an invariant this class has to maintain by
+/// hand: <see cref="GraphEdge"/> normalizes its own <see cref="GraphEdge.TenantId"/> in its
+/// constructor, so every key ever WRITTEN into the adjacency dictionaries is normalized, while a
+/// tenant id arriving as a method argument is whatever the principal supplied. Comparing the two
+/// forms is a split-brain that makes a tenant's own edges look absent to it — the shipped stdio
+/// host normalizes at PrincipalContext, but <c>IPrincipalContext</c> is an extension point with no
+/// normalization of its own, so a host returning a padded claim value would write under
+/// <c>"acme"</c> and read under <c>"acme "</c>. Every public method here therefore normalizes its
+/// tenant argument as its FIRST statement, exactly as <see cref="Intelligence.ClusterManager"/>
+/// already does for its own map.
+///
 /// Locking strategy:
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
 /// - Mutating methods use EnterWriteLock directly.
 /// - Methods that need CognitiveIndex snapshot data under graph lock, then resolve entries outside
 ///   to avoid lock-ordering deadlocks. The topology guard resolves through CognitiveIndex too, so
 ///   it runs BEFORE the graph lock is taken, never inside it.
+/// - The one thing a write path does consult inside the lock is
+///   <see cref="TopologyGuard.Sweep.AttributionRevision"/> against
+///   <see cref="CognitiveIndex.AttributionRevisionFor"/>, through the single helper
+///   <see cref="AttributionMovedSince"/>. That is a comparison, not a resolution: it reads a
+///   per-tenant counter with no lock at all, so it cannot invert the order above, and it is what
+///   makes an admission decided outside the lock safe to act on inside it. EVERY mutator that
+///   admits through a guard built outside its own write lock consults it — all five of them
+///   (<see cref="TryAddEdge"/>, <see cref="AddEdges"/>, <see cref="RemoveEdges"/>,
+///   <see cref="RemoveAllEdgesForEntry(string, string, TopologyGuard.Sweep)"/>,
+///   <see cref="TransferEdges"/>) — and each fails closed with its own existing no-op reply. Naming
+///   the complete set here is deliberate: the previous round wired the check into the two ADD paths
+///   and left the three remove/transfer paths, which have strictly WIDER admission-to-mutation
+///   windows, consulting nothing. A new mutator that takes a sweep before the lock and does not
+///   call the helper reopens that hole.
+/// - Nothing O(edges) runs inside the write lock. Persistence is scheduled by handing the storage
+///   layer a method group (<see cref="SnapshotEdgesForSave"/>) that snapshots under the READ lock
+///   on the debounce thread; see the note there for why deferring is also strictly more correct.
 /// </summary>
 public sealed class KnowledgeGraph
 {
@@ -253,12 +326,50 @@ public sealed class KnowledgeGraph
     // writes. The global _revision still bumps on every change for callers that want it.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _tenantRevisions = new();
 
-    /// <summary>Monotonic topology revision for one tenant (0 if the tenant has no edges yet).</summary>
+    /// <summary>
+    /// Monotonic topology revision for one tenant (0 if the tenant has no edges yet).
+    ///
+    /// Normalized on the way in for the same reason every other tenant argument is: the bumps come
+    /// from <see cref="BumpTenant"/>, whose callers all key by the normalized tenant, so a reader
+    /// passing an unnormalized spelling would watch a counter nothing ever moves and serve a stale
+    /// derivation forever.
+    /// </summary>
     public long RevisionFor(string tenantId)
-        => _tenantRevisions.TryGetValue(tenantId ?? string.Empty, out var r) ? r : 0;
+        => _tenantRevisions.TryGetValue(Tenancy.Normalize(tenantId), out var r) ? r : 0;
 
+    // Every caller passes an already-normalized tenant — either GraphEdge.TenantId, which the edge
+    // constructor normalized, or a method argument this class normalized at its entry point. The
+    // null coalesce is the belt-and-braces floor, not the normalization.
     private void BumpTenant(string tenantId)
         => _tenantRevisions.AddOrUpdate(tenantId ?? string.Empty, 1L, static (_, v) => v + 1);
+
+    /// <summary>
+    /// THE ADMISSION-TO-MUTATION CHECK, in one place so a mutator cannot half-have it.
+    ///
+    /// True when some id in <paramref name="tenantId"/> crossed the ambiguity boundary after
+    /// <paramref name="guard"/> fixed its view — meaning whatever the guard admitted outside the
+    /// write lock must be refused rather than acted on inside it.
+    ///
+    /// Every mutator here resolves attribution BEFORE taking the write lock, deliberately: the
+    /// guard resolves through <see cref="CognitiveIndex"/>, which holds its own locks, and index
+    /// work under the graph lock is the lock-order inversion this class exists to avoid. That
+    /// leaves a gap, and the gap is writable — inserting a same-id twin is an ordinary entry write
+    /// that takes none of this class's locks, creates no edge and moves no graph revision, so
+    /// nothing in the graph observes it. Re-running the guard here is not available; re-reading
+    /// this counter is, because it is a single lock-free read of a per-tenant
+    /// ConcurrentDictionary: no index lock, no allocation, no inversion.
+    ///
+    /// Conservative in the safe direction, deliberately: a crossing anywhere in the tenant refuses
+    /// the operation even when it named neither endpoint. A refused write is a write that did not
+    /// happen and the caller may simply retry; a mutation applied against stale attribution
+    /// rewrites topology on a node two entries answer to, which is the failure this whole mechanism
+    /// exists to prevent.
+    ///
+    /// Call it after EnsureLoadedUnderWrite and before the first mutation — as late as the check
+    /// can be while still preceding anything that would have to be rolled back.
+    /// </summary>
+    private bool AttributionMovedSince(TopologyGuard.Sweep guard, string tenantId)
+        => _index.AttributionRevisionFor(tenantId) != guard.AttributionRevision;
 
     public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index)
     {
@@ -275,7 +386,7 @@ public sealed class KnowledgeGraph
             try
             {
                 EnsureLoaded();
-                return _outgoing.Values.Sum(l => l.Count);
+                return EdgeCountUnderLock();
             }
             finally { _lock.ExitUpgradeableReadLock(); }
         }
@@ -333,6 +444,19 @@ public sealed class KnowledgeGraph
         try
         {
             EnsureLoadedUnderWrite();
+
+            // ADMISSION IS NOT ATTRIBUTION AT THE INSTANT OF THE WRITE, and the gap is writable —
+            // see AttributionMovedSince for why this comparison is the only re-check the lock order
+            // permits, and why it is conservative in the safe direction.
+            if (AttributionMovedSince(guard, edge.TenantId))
+            {
+                // The same sentence a genuine miss produces, for the same reason as the refusal
+                // above: a caller that could tell "attribution moved under you" apart from "no such
+                // entry" would have an oracle for twins it was never shown.
+                reply = TopologyGuard.Unattributable(edge.SourceId);
+                return false;
+            }
+
             AddEdgeInternal(edge);
 
             // Auto-create reverse edge for cross_reference (same tenant partition)
@@ -366,6 +490,11 @@ public sealed class KnowledgeGraph
     /// precondition against a snapshot, and a relation added between its test and this write lands
     /// on top of it. <see cref="EdgeAddMode.OnlyIfUnlinked"/> moves the test to the only place it can
     /// be atomic with the write.
+    ///
+    /// Returns 0 without writing anything when attribution moved in any tenant of the batch between
+    /// admission and the write lock. That is deliberately indistinguishable from a batch whose every
+    /// edge the graph declined: the count stays "what the graph accepted", and no caller-visible
+    /// signal says which of the two happened.
     /// </summary>
     public int AddEdges(IEnumerable<GraphEdge> edges, EdgeAddMode mode = EdgeAddMode.ReplaceSameRelation)
     {
@@ -386,28 +515,61 @@ public sealed class KnowledgeGraph
                 admitted.Add(edge);
         }
 
+        // Allocated BEFORE the lock, not inside it. It is a per-batch scratch set whose size is the
+        // number of tenants in the batch (almost always one), and the write lock is the one place
+        // in this class where an allocation is paid for by every reader in the process rather than
+        // by the caller. Ordinal, matching `sweeps`, so the two agree about tenant identity.
+        var touchedTenants = new HashSet<string>(StringComparer.Ordinal);
+
         _lock.EnterWriteLock();
         try
         {
             EnsureLoadedUnderWrite();
+
+            // THE ADMISSION-TO-MUTATION GAP, closed the only way the lock order allows — see
+            // AttributionMovedSince. One lock-free atomic read per tenant in the batch: no index
+            // lock, no allocation, no inversion.
+            //
+            // Refuses the WHOLE batch rather than the moved tenant's share of it. A batch is one
+            // caller's proposal; splitting it would report a partial write whose composition
+            // depends on which tenant raced, and every caller of this method already treats the
+            // returned count as "what the graph accepted" and retries the rest later. The
+            // enumeration itself allocates nothing — Dictionary's enumerator is a struct.
+            foreach (var (tenant, sweep) in sweeps)
+            {
+                if (AttributionMovedSince(sweep, tenant))
+                    return 0;
+            }
+
             int count = 0;
-            var touchedTenants = new HashSet<string>();
             foreach (var edge in admitted)
             {
-                // The whole point of the mode: the condition is evaluated against the graph as it is
-                // at the instant of the write, holding the write lock, so nothing can slip between
-                // the test and the mutation. A caller's own pre-filter cannot achieve that however
-                // carefully it is written — it reads a snapshot, and the graph stays mutable.
+                // THE INVARIANT FOR THIS WHOLE LOOP, not just for the line under it: no iteration
+                // allocates, and no iteration walks an adjacency list it does not have to.
                 //
-                // Nothing is allocated here. The check walks the two adjacency lists this edge's
-                // source already has, in place; a correctness fix that widened a lock around a
-                // dictionary build in this codebase once delayed every writer behind it, and a
-                // per-edge allocation inside a batch write lock would repeat that mistake.
-                if (mode == EdgeAddMode.OnlyIfUnlinked
-                    && AnyEdgeBetweenUnderLock(edge.TenantId, edge.SourceId, edge.TargetId))
+                // The mode check is the point of the mode — the condition is evaluated against the
+                // graph as it is at the instant of the write, holding the write lock, so nothing
+                // can slip between the test and the mutation. A caller's own pre-filter cannot
+                // achieve that however carefully it is written: it reads a snapshot, and the graph
+                // stays mutable. AnyEdgeBetweenUnderLock walks the two adjacency lists in place,
+                // with no delegate and no closure.
+                //
+                // AddEdgeInternal's same-relation dedup is then SKIPPED on this path, and that is a
+                // deduction rather than an optimism: AnyEdgeBetweenUnderLock just returned false,
+                // so no edge in _outgoing[(t, source)] has TargetId == target — which is the exact
+                // first clause of the dedup's outgoing predicate — and since the two adjacency
+                // indexes mirror each other, no source->target edge can sit in _incoming[(t,
+                // target)] either. Auto-link is the only caller that uses this mode and it was
+                // paying two full O(degree) delegate-driven scans per edge for a guaranteed zero
+                // removals, on a node whose degree auto-link itself is manufacturing.
+                //
+                // That deduction rests on the mirror invariant, so it is only sound while the
+                // invariant holds — FindAdjacencyMirrorViolations is the seam that pins it.
+                bool unlinkedMode = mode == EdgeAddMode.OnlyIfUnlinked;
+                if (unlinkedMode && AnyEdgeBetweenUnderLock(edge.TenantId, edge.SourceId, edge.TargetId))
                     continue;
 
-                AddEdgeInternal(edge);
+                AddEdgeInternal(edge, dedupeSameRelation: !unlinkedMode);
                 touchedTenants.Add(edge.TenantId);
                 if (edge.Relation == "cross_reference")
                 {
@@ -449,6 +611,10 @@ public sealed class KnowledgeGraph
     /// </summary>
     public string RemoveEdges(string sourceId, string targetId, string? relation, string tenantId)
     {
+        // Adjacency is keyed by the normalized tenant because GraphEdge normalized it on the way
+        // in, so a removal keyed by the raw argument would probe a key that cannot exist.
+        tenantId = Tenancy.Normalize(tenantId);
+
         var guard = TopologyGuard.ForSweep(_index, tenantId);
         if (!guard.IsTopologySafe(sourceId) || !guard.IsTopologySafe(targetId))
             return NoEdgesBetween(sourceId, targetId);
@@ -457,6 +623,16 @@ public sealed class KnowledgeGraph
         try
         {
             EnsureLoadedUnderWrite();
+
+            // Same gap, same close, same failure reply as the add paths — see AttributionMovedSince.
+            // A removal is a topology mutation like any other: it rewrites the adjacency list of a
+            // node that may have become shared between the screen above and this lock, and deleting
+            // somebody else's edge off it is exactly as wrong as adding one. Reuses the no-such-edge
+            // reply verbatim so "nothing to remove", "declined to guess" and "attribution moved
+            // under you" stay one answer.
+            if (AttributionMovedSince(guard, tenantId))
+                return NoEdgesBetween(sourceId, targetId);
+
             int removed = 0;
             removed += RemoveMatching(_outgoing, (tenantId, sourceId), e => e.TargetId == targetId && (relation == null || e.Relation == relation));
             removed += RemoveMatching(_incoming, (tenantId, targetId), e => e.SourceId == sourceId && (relation == null || e.Relation == relation));
@@ -512,6 +688,9 @@ public sealed class KnowledgeGraph
     {
         ArgumentNullException.ThrowIfNull(guard);
 
+        // See RemoveEdges: adjacency keys are normalized because GraphEdge normalized them.
+        tenantId = Tenancy.Normalize(tenantId);
+
         // Snapshot the incident edges under the read lock, judge them after releasing it, then
         // delete exactly the ones that passed. The judgement resolves through CognitiveIndex, so it
         // cannot happen inside the graph lock; deleting a precomputed set rather than a whole
@@ -536,6 +715,17 @@ public sealed class KnowledgeGraph
         try
         {
             EnsureLoadedUnderWrite();
+
+            // The WIDEST of the admission-to-mutation windows in this class, and the last one to
+            // get the check: removableOut/removableIn were judged against CognitiveIndex after the
+            // read lock was released and before this write lock was taken, so every endpoint they
+            // name — including the far ones no argument mentions — was judged in a window that is
+            // linear in this node's degree. See AttributionMovedSince. Fails closed the way the
+            // method already fails: 0, nothing deleted, which is what a node with no attributable
+            // incident edges already reports.
+            if (AttributionMovedSince(guard, tenantId))
+                return 0;
+
             int removed = 0;
 
             // Matched on (endpoint, relation) rather than by dropping the whole list: the list now
@@ -576,7 +766,7 @@ public sealed class KnowledgeGraph
     /// slots without an old positional call like <c>GetNeighbors(id, "supports")</c> silently binding
     /// the relation into the tenant slot — the exact fail-open this shape exists to kill.
     ///
-    /// Every returned edge has passed <see cref="TopologyGuard.Sweep.IsEdgeUsable"/>, which covers
+    /// Every returned edge has passed <see cref="TopologyGuard.Sweep.IsEdgeUsable(GraphEdge)"/>, which covers
     /// the seed and the far endpoint together. This used to be left to the caller on the argument
     /// that one hop is containable from outside — and it was not: spreading activation consumes
     /// this raw, and a safe seed with an edge into a shared node was enough to move a private
@@ -588,6 +778,10 @@ public sealed class KnowledgeGraph
     /// </summary>
     public GetNeighborsResult GetNeighbors(string id, string? relation, string direction, string tenantId)
     {
+        // Adjacency is keyed by the normalized tenant (GraphEdge normalizes on construction), so a
+        // read keyed by the raw argument would miss every edge the same tenant wrote.
+        tenantId = Tenancy.Normalize(tenantId);
+
         // Snapshot edge data under graph lock, then resolve entries outside the lock
         // to avoid lock-ordering issues with CognitiveIndex.
         List<(GraphEdge edge, string resolveId)> edgesToResolve;
@@ -660,6 +854,9 @@ public sealed class KnowledgeGraph
         float minWeight = 0f, int maxResults = 20)
     {
         maxDepth = Math.Clamp(maxDepth, 1, 5);
+
+        // See GetNeighbors: the adjacency snapshot below filters on Key.Tenant, which is normalized.
+        tenantId = Tenancy.Normalize(tenantId);
 
         // One sweep for the whole walk: the root test and every hop's test would otherwise each
         // re-list the tenant's namespaces, and that listing reloads the store.
@@ -745,6 +942,11 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<GraphEdge> GetEdgesForEntry(string id, string tenantId)
     {
+        // Normalized here as well as in the delegate below, so the class-wide rule ("every public
+        // method normalizes its tenant argument first") holds by inspection rather than by tracing
+        // which helper happens to do it.
+        tenantId = Tenancy.Normalize(tenantId);
+
         var stored = GetStoredEdgesForEntry(id, tenantId);
         if (stored.Count == 0)
             return stored;
@@ -764,6 +966,10 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<GraphEdge> GetStoredEdgesForEntry(string id, string tenantId)
     {
+        // See GetNeighbors — the dictionary probe below is the lookup that must match the key the
+        // write used, and the write used GraphEdge.TenantId, which is normalized.
+        tenantId = Tenancy.Normalize(tenantId);
+
         _lock.EnterUpgradeableReadLock();
         try
         {
@@ -785,6 +991,9 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<(GraphEdge Edge, CognitiveEntry? Source, CognitiveEntry? Target)> GetContradictions(string ns, string tenantId)
     {
+        // See GetNeighbors: the Key.Tenant filter below compares against normalized keys.
+        tenantId = Tenancy.Normalize(tenantId);
+
         List<GraphEdge> contradictEdges;
 
         _lock.EnterUpgradeableReadLock();
@@ -851,6 +1060,9 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<GraphEdge> GetAllEdges(string tenantId)
     {
+        // See GetEdgesForEntry.
+        tenantId = Tenancy.Normalize(tenantId);
+
         var stored = GetStoredEdges(tenantId);
         if (stored.Count == 0)
             return stored;
@@ -866,6 +1078,9 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<GraphEdge> GetStoredEdges(string tenantId)
     {
+        // See GetNeighbors: the Key.Tenant filter below compares against normalized keys.
+        tenantId = Tenancy.Normalize(tenantId);
+
         _lock.EnterUpgradeableReadLock();
         try
         {
@@ -897,6 +1112,10 @@ public sealed class KnowledgeGraph
     /// </summary>
     public int TransferEdges(string fromId, string toId, string tenantId)
     {
+        // See RemoveEdges: every dictionary probe below is keyed by this string, and every key that
+        // exists was written from a normalized GraphEdge.TenantId.
+        tenantId = Tenancy.Normalize(tenantId);
+
         var guard = TopologyGuard.ForSweep(_index, tenantId);
         if (!guard.IsTopologySafe(fromId) || !guard.IsTopologySafe(toId))
             return 0;
@@ -927,10 +1146,23 @@ public sealed class KnowledgeGraph
         {
             EnsureLoadedUnderWrite();
 
-            // Re-checked under the write lock against what the sweep already decided, because the
-            // pre-check ran without it. An edge that arrived in between names an endpoint this
-            // sweep has never judged, and judging it here would take the index's locks under the
-            // graph's — so an unknown endpoint aborts instead. Fail closed: 0, nothing mutated.
+            // TWO DIFFERENT STALENESS PROBLEMS, and neither check sees the other's case.
+            //
+            // The counter compare catches attribution MOVING under an endpoint this sweep already
+            // judged. That is the case IsEdgeKnownUsable structurally cannot see: an id the memo
+            // judged safe is returned safe forever, so a twin planted after the snapshot leaves the
+            // memo saying "safe" while the node has become shared. This method's window is the
+            // widest of the class — the incident snapshot is taken under the upgradeable read lock
+            // and then every incident edge is walked through CognitiveIndex, one partition read per
+            // far endpoint — so for a high-degree node it is milliseconds wide, not nanoseconds.
+            // See AttributionMovedSince.
+            if (AttributionMovedSince(guard, tenantId))
+                return 0;
+
+            // The IsEdgeKnownUsable walk catches the other case: an edge that ARRIVED between the
+            // snapshot and this lock, naming an endpoint the sweep has never judged at all. Judging
+            // it here would take the index's locks under the graph's, so an unknown endpoint aborts
+            // instead. Both fail closed the same way: 0, nothing mutated.
             foreach (var dict in new[] { _outgoing, _incoming })
                 if (dict.TryGetValue((tenantId, fromId), out var current))
                     foreach (var edge in current)
@@ -940,12 +1172,43 @@ public sealed class KnowledgeGraph
             int transferred = 0;
             var fromKey = (tenantId, fromId);
 
+            // THE MIRROR RULE FOR BOTH BRANCHES: _outgoing and _incoming are two halves of one
+            // structure, and dropping a node's list from one half obliges this method to strip that
+            // node out of the other half FIRST — for every edge in the list, whether or not the
+            // edge is transferred. Both loops below therefore delete the far endpoint's mirror
+            // before they decide anything else.
+            //
+            // The outgoing branch used to do this only implicitly, via AddEdgeInternal's dedup,
+            // which matches on SourceId == toId and so could never remove a from -> X entry. It
+            // then dropped _outgoing[(t, from)] wholesale, leaving from -> X alive in
+            // _incoming[(t, X)] with no counterpart anywhere. That phantom is observable three
+            // ways, from one merge and no concurrency: get_neighbors(X, "incoming") reports a
+            // predecessor that no longer exists; EdgeCount, GetAllEdges and the edge save all read
+            // _outgoing only, so diagnostics and persistence disagree with what the tool returns
+            // and a restart answers differently from the live process; and AutoLinkScanner's
+            // HasAnyEdgeBetween unions _incoming, so the pair (X, from) counts as already linked
+            // forever — permanent, deterministic starvation if `from` is ever re-created under the
+            // same id, which is the documented upsert-by-id workflow.
+            //
+            // The self-referential skips leak the same way and are handled by the same rule rather
+            // than by `continue`-ing past everything: from -> to must vanish, not survive in
+            // _incoming[(t, to)], because the edge it would become (to -> to) is exactly what the
+            // skip refuses to create.
+
             // Transfer outgoing edges: fromId -> X becomes toId -> X
             if (_outgoing.TryGetValue(fromKey, out var outEdges))
             {
                 foreach (var edge in outEdges.ToList())
                 {
-                    // Skip self-referential edges that would result from the transfer
+                    // The mirror first: _outgoing[(t, from)] is removed wholesale below, so any
+                    // from -> X still sitting in _incoming[(t, X)] would be a phantom. Matched on
+                    // (source, relation) because AddEdgeInternal keeps (source, target, relation)
+                    // unique, so this is the one edge meant.
+                    RemoveMatching(_incoming, (tenantId, edge.TargetId),
+                        e => e.SourceId == fromId && e.Relation == edge.Relation);
+
+                    // Skip self-referential edges that would result from the transfer. The mirror
+                    // above has already been dropped, so this edge is gone rather than orphaned.
                     if (edge.TargetId == toId) continue;
 
                     var newEdge = new GraphEdge(toId, edge.TargetId, edge.Relation, edge.Weight, edge.Metadata, tenantId);
@@ -961,10 +1224,14 @@ public sealed class KnowledgeGraph
             {
                 foreach (var edge in inEdges.ToList())
                 {
-                    if (edge.SourceId == toId) continue;
+                    // The mirror first, symmetrically: remove the old outgoing reference
+                    // (X -> fromId) from the source's outgoing list. Hoisted above the self-edge
+                    // skip because a to -> from edge is dropped from _incoming[(t, from)] below and
+                    // would otherwise survive in _outgoing[(t, to)] as the same phantom.
+                    RemoveMatching(_outgoing, (tenantId, edge.SourceId),
+                        e => e.TargetId == fromId && e.Relation == edge.Relation);
 
-                    // Remove the old outgoing reference (X -> fromId) from the source's outgoing list
-                    RemoveMatching(_outgoing, (tenantId, edge.SourceId), e => e.TargetId == fromId && e.Relation == edge.Relation);
+                    if (edge.SourceId == toId) continue;
 
                     var newEdge = new GraphEdge(edge.SourceId, toId, edge.Relation, edge.Weight, edge.Metadata, tenantId);
                     AddEdgeInternal(newEdge);
@@ -1014,34 +1281,156 @@ public sealed class KnowledgeGraph
         return false;
     }
 
-    private void AddEdgeInternal(GraphEdge edge)
+    /// <summary>
+    /// Publish one edge into both halves of the adjacency structure. Caller must hold the write
+    /// lock.
+    ///
+    /// ALLOCATION-FREE ON THE PUBLISH PATH, and that is the point of the shape rather than a happy
+    /// accident: this runs once per edge inside a batch write lock that blocks every reader in the
+    /// process, and the previous form allocated a display class plus one or two
+    /// <c>Predicate&lt;GraphEdge&gt;</c> per call (the <c>RemoveAll</c> lambdas capture
+    /// <paramref name="edge"/>, so Roslyn hoists it unconditionally at method entry) and probed
+    /// each dictionary three times. A thousand-edge batch into a node of degree 200 paid ~3,000
+    /// closure/delegate allocations and ~8,000 dictionary probes for work that needs neither.
+    ///
+    /// <paramref name="dedupeSameRelation"/> false is for a caller that has ALREADY established,
+    /// under this same lock, that no edge runs between the endpoints — see the deduction written
+    /// out in <see cref="AddEdges"/>. It skips two O(degree) scans that are provably empty.
+    /// </summary>
+    private void AddEdgeInternal(GraphEdge edge, bool dedupeSameRelation = true)
     {
         var srcKey = (edge.TenantId, edge.SourceId);
         var tgtKey = (edge.TenantId, edge.TargetId);
 
-        // Remove existing edge with same source/target/relation to avoid duplicates
-        if (_outgoing.TryGetValue(srcKey, out var outList))
-            outList.RemoveAll(e => e.TargetId == edge.TargetId && e.Relation == edge.Relation);
-        if (_incoming.TryGetValue(tgtKey, out var inList))
-            inList.RemoveAll(e => e.SourceId == edge.SourceId && e.Relation == edge.Relation);
+        // Remove existing edge with same source/target/relation to avoid duplicates. Compacted in
+        // place rather than with RemoveAll: same O(degree) walk, no delegate call per element and
+        // no closure. Deliberately leaves an emptied list published — RemoveMatching drops the key,
+        // this never has, and callers rely on the difference nowhere but would notice the churn.
+        if (dedupeSameRelation)
+        {
+            if (_outgoing.TryGetValue(srcKey, out var existingOut))
+                CompactOut(existingOut, edge.TargetId, edge.Relation);
+            if (_incoming.TryGetValue(tgtKey, out var existingIn))
+                CompactIn(existingIn, edge.SourceId, edge.Relation);
+        }
 
-        if (!_outgoing.ContainsKey(srcKey))
-            _outgoing[srcKey] = new();
-        _outgoing[srcKey].Add(edge);
+        // One hashed probe per dictionary instead of three. The ref is into the bucket array, so
+        // nothing may touch that dictionary between taking it and writing through it — nothing
+        // here does, and the two dictionaries are distinct instances.
+        ref var outList = ref CollectionsMarshal.GetValueRefOrAddDefault(_outgoing, srcKey, out _);
+        (outList ??= new List<GraphEdge>()).Add(edge);
 
-        if (!_incoming.ContainsKey(tgtKey))
-            _incoming[tgtKey] = new();
-        _incoming[tgtKey].Add(edge);
+        ref var inList = ref CollectionsMarshal.GetValueRefOrAddDefault(_incoming, tgtKey, out _);
+        (inList ??= new List<GraphEdge>()).Add(edge);
     }
 
-    private static int RemoveMatching(Dictionary<(string Tenant, string Id), List<GraphEdge>> dict, (string, string) key, Func<GraphEdge, bool> predicate)
+    /// <summary>Drop every edge to <paramref name="targetId"/> under <paramref name="relation"/>,
+    /// in place. Survivors are shifted down and the tail trimmed — no allocation, no delegate.</summary>
+    private static void CompactOut(List<GraphEdge> list, string targetId, string relation)
+    {
+        int write = 0;
+        for (int read = 0; read < list.Count; read++)
+        {
+            var e = list[read];
+            if (e.TargetId == targetId && e.Relation == relation) continue;
+            list[write++] = e;
+        }
+        if (write < list.Count)
+            list.RemoveRange(write, list.Count - write);
+    }
+
+    /// <inheritdoc cref="CompactOut"/>
+    private static void CompactIn(List<GraphEdge> list, string sourceId, string relation)
+    {
+        int write = 0;
+        for (int read = 0; read < list.Count; read++)
+        {
+            var e = list[read];
+            if (e.SourceId == sourceId && e.Relation == relation) continue;
+            list[write++] = e;
+        }
+        if (write < list.Count)
+            list.RemoveRange(write, list.Count - write);
+    }
+
+    // Predicate rather than Func: List.RemoveAll wants a Predicate, so a Func parameter forced an
+    // extra delegate allocation per call, on top of the caller's closure, inside a write lock.
+    private static int RemoveMatching(Dictionary<(string Tenant, string Id), List<GraphEdge>> dict, (string, string) key, Predicate<GraphEdge> predicate)
     {
         if (!dict.TryGetValue(key, out var list))
             return 0;
-        int removed = list.RemoveAll(e => predicate(e));
+        int removed = list.RemoveAll(predicate);
         if (list.Count == 0)
             dict.Remove(key);
         return removed;
+    }
+
+    /// <summary>Total stored edges. Caller must hold at least a read lock.</summary>
+    private int EdgeCountUnderLock()
+    {
+        int total = 0;
+        // Dictionary.ValueCollection's enumerator is a struct and this foreach binds it by its
+        // concrete type, so the walk boxes nothing — unlike the LINQ Sum it replaces, which boxed
+        // one enumerator per adjacency bucket and allocated a delegate.
+        foreach (var list in _outgoing.Values)
+            total += list.Count;
+        return total;
+    }
+
+    /// <summary>
+    /// TEST SEAM. Every violation of the mirror invariant currently in the graph: each edge in
+    /// <c>_outgoing[(t, src)]</c> must also appear in <c>_incoming[(t, tgt)]</c> and vice versa.
+    /// Empty means the two halves agree.
+    ///
+    /// It exists because this is the THIRD distinct way the two indexes have been allowed to drift,
+    /// and each time the suite could not see it: every consistency assertion in the tests compared
+    /// two views that both read <c>_outgoing</c> (<c>GetStoredEdges</c> against <c>GetAllEdges</c>),
+    /// which is structurally incapable of witnessing an <c>_incoming</c>-only phantom.
+    ///
+    /// NOT called from the mutators, deliberately. The check is O(E) and running it inside each
+    /// write lock would put back exactly the cost this class just took out of the edge save — even
+    /// under a DEBUG-only conditional, since the tests are the Debug build. A caller asks for it
+    /// after the operation it is pinning, under an ordinary read lock, on a fixture-sized graph.
+    /// </summary>
+    internal IReadOnlyList<string> FindAdjacencyMirrorViolations()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var violations = new List<string>();
+
+            foreach (var (key, list) in _outgoing)
+                foreach (var edge in list)
+                    if (!Mirrored(_incoming, (key.Tenant, edge.TargetId), edge))
+                        violations.Add(
+                            $"_outgoing[({key.Tenant}, {key.Id})] holds '{edge.SourceId}' -> " +
+                            $"'{edge.TargetId}' ({edge.Relation}) with no counterpart in _incoming.");
+
+            foreach (var (key, list) in _incoming)
+                foreach (var edge in list)
+                    if (!Mirrored(_outgoing, (key.Tenant, edge.SourceId), edge))
+                        violations.Add(
+                            $"_incoming[({key.Tenant}, {key.Id})] holds '{edge.SourceId}' -> " +
+                            $"'{edge.TargetId}' ({edge.Relation}) with no counterpart in _outgoing.");
+
+            return violations;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>True when <paramref name="other"/> holds the same edge under
+    /// <paramref name="key"/>. Caller must hold at least a read lock.</summary>
+    private static bool Mirrored(
+        Dictionary<(string Tenant, string Id), List<GraphEdge>> other,
+        (string, string) key, GraphEdge edge)
+    {
+        if (!other.TryGetValue(key, out var list)) return false;
+        foreach (var candidate in list)
+            if (candidate.SourceId == edge.SourceId
+                && candidate.TargetId == edge.TargetId
+                && candidate.Relation == edge.Relation)
+                return true;
+        return false;
     }
 
     private static CognitiveEntryInfo ToEntryInfo(CognitiveEntry e) =>
@@ -1074,10 +1463,64 @@ public sealed class KnowledgeGraph
         _loaded = true;
     }
 
-    // Snapshot edge data (all tenants) and schedule save. MUST be called within write lock.
-    private void ScheduleSaveEdges()
+    /// <summary>
+    /// Schedule a debounced save of the whole cross-tenant edge set. Called from within the write
+    /// lock; it takes NO snapshot there.
+    ///
+    /// What it hands over is a method group, so the O(E) copy happens on the debounce thread under
+    /// this class's read lock instead of inside the exclusive write lock. That matters because the
+    /// eager form ran on EVERY mutation and blocked every reader in the process — recall's graph
+    /// expansion, get_neighbors, traverse_graph, the diffusion basis build — behind a memcpy of the
+    /// entire graph. A background auto-link sweep is 40 such batches; at 200,000 edges that was
+    /// ~130 MB of churn per sweep, most of it large-object-heap, plus one boxed enumerator per
+    /// adjacency bucket from the LINQ chain.
+    ///
+    /// And almost all of it was discarded: <c>ScheduleSaveGlobalEdges</c> debounces by DISPOSING
+    /// the pending timer and OVERWRITING the pending provider, so only the last proposal in a
+    /// window is ever serialized. Thirty-nine of those forty snapshots never reached storage.
+    ///
+    /// DEFERRING IS NOT A WEAKER SAVE. "edges" is a full-replace blob written from whatever the
+    /// provider returns, and the debounce had already collapsed the window to one write, so
+    /// serializing the graph as of the debounce firing is a LATER and equally valid state rather
+    /// than a lost one.
+    ///
+    /// SAFE AGAINST THE PERSISTENCE CONTRACT, which is the part worth checking before adopting it.
+    /// Every provider invocation — the timer callback and <c>Flush</c>, in all three providers —
+    /// happens AFTER the storage layer's own timer lock has been released, so a writer that is
+    /// inside the graph write lock calling <c>ScheduleSaveGlobalEdges</c> (graph lock, then timer
+    /// lock) can never be waiting on a debounce thread that is inside the timer lock waiting on the
+    /// graph lock. The provider also takes no CognitiveIndex lock, so it cannot invert this class's
+    /// graph/index order either. The provider's older doc line asking for "a pre-captured snapshot
+    /// (no lock re-entry)" is satisfied: the snapshot is captured under a lock this thread does not
+    /// hold, not re-entered under one it does.
+    /// </summary>
+    private void ScheduleSaveEdges() => _persistence.ScheduleSaveGlobalEdges(SnapshotEdgesForSave);
+
+    /// <summary>
+    /// The edge snapshot handed to persistence, taken on the debounce thread under the read lock.
+    ///
+    /// Sized exactly before it is filled and walked with nested index loops over the value
+    /// collection's struct enumerator, so it allocates one right-sized array and nothing else — the
+    /// <c>SelectMany(...).ToList()</c> it replaces enumerated a non-<c>ICollection</c> source and
+    /// doubled its way up, leaving ~2E references' worth of intermediate arrays behind with the
+    /// last several on the large object heap.
+    ///
+    /// It deliberately does NOT call EnsureLoaded, and cannot need to: the only thing that
+    /// schedules a save is a mutator that already ran EnsureLoadedUnderWrite inside its own write
+    /// lock, and <c>_loaded</c> never goes back to false — so there is no interleaving in which
+    /// this writes an empty in-memory graph over a populated store.
+    /// </summary>
+    private List<GraphEdge> SnapshotEdgesForSave()
     {
-        var snapshot = _outgoing.Values.SelectMany(l => l).ToList();
-        _persistence.ScheduleSaveGlobalEdges(() => snapshot);
+        _lock.EnterReadLock();
+        try
+        {
+            var snapshot = new List<GraphEdge>(EdgeCountUnderLock());
+            foreach (var list in _outgoing.Values)
+                for (int i = 0; i < list.Count; i++)
+                    snapshot.Add(list[i]);
+            return snapshot;
+        }
+        finally { _lock.ExitReadLock(); }
     }
 }

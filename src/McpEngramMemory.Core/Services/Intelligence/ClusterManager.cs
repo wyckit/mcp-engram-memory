@@ -50,6 +50,24 @@ namespace McpEngramMemory.Core.Services.Intelligence;
 ///   with CognitiveIndex (which has its own lock). The topology screen resolves through
 ///   CognitiveIndex for the same reason and so runs BEFORE the cluster lock is taken, never inside
 ///   it — which is why each mutator screens its whole id list up front rather than per member.
+///
+/// A CLUSTER IN <c>_clusters</c> IS FROZEN. Every mutator publishes a REPLACEMENT
+/// <see cref="SemanticCluster"/> under the write lock — see <see cref="Replace"/> — and no code
+/// here edits an object that is already in the map, its <see cref="SemanticCluster.MemberIds"/>
+/// list included. That invariant is not a style preference; it is what makes
+/// <see cref="ScheduleSaveClusters"/> correct.
+///
+/// The persistence layer is the one reader that runs AFTER the lock is released. It captures the
+/// provider under the lock and invokes it later from a debounce timer on a thread-pool thread that
+/// never takes this class's lock, then hands the result to <c>JsonSerializer.Serialize</c>. Every
+/// other reader here copies under the lock (<see cref="GetCluster"/>, <see cref="ListClusters"/>)
+/// and is done before it returns, so the shallow <c>Values.ToList()</c> that snapshot used to be
+/// enough for was never enough for this one: <c>ToList</c> copies the list of REFERENCES, so a
+/// concurrent <c>MemberIds.Add/Remove</c> bumped <c>List&lt;T&gt;._version</c> under a serializer
+/// already walking that list. The serializer throws "Collection was modified", the write is caught
+/// and logged, and — because the pending provider was cleared before the callback ran — nothing
+/// reschedules it. Freezing on publish costs one small object per mutation and nothing per save,
+/// and it leaves every critical section exactly the length it already was.
 /// </summary>
 public sealed class ClusterManager
 {
@@ -111,8 +129,12 @@ public sealed class ClusterManager
             if (_clusters.ContainsKey(key))
                 return $"Error: Cluster '{clusterId}' already exists.";
 
-            var cluster = new SemanticCluster(clusterId, ns, memberIdsCopy, label, tenant);
-            _clusters[key] = cluster;
+            // memberIdsCopy becomes the new cluster's frozen member list AND stays reachable from
+            // this method for the centroid pass below. That aliasing is safe for exactly one
+            // reason: nothing ever mutates a published member list — see the class remarks — so the
+            // read outside the lock and the serializer's read on a pool thread see the same fixed
+            // content. Anything that needs a DIFFERENT member set builds a new list.
+            _clusters[key] = new SemanticCluster(clusterId, ns, memberIdsCopy, label, tenant);
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
@@ -124,7 +146,7 @@ public sealed class ClusterManager
         try
         {
             if (_clusters.TryGetValue(key, out var c))
-                c.Centroid = centroid;
+                _clusters[key] = Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId);
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
@@ -163,23 +185,27 @@ public sealed class ClusterManager
             if (!_clusters.TryGetValue(key, out var cluster))
                 return $"Error: Cluster '{clusterId}' not found.";
 
+            // Edited on a copy and published by replacement, never in place. This is the same one
+            // allocation the old `cluster.MemberIds.ToList()` at the end of this block already
+            // made — it has moved to the front and become the stored list instead of a throwaway,
+            // so the critical section is neither longer nor more allocating than it was.
+            memberIdsCopy = new List<string>(cluster.MemberIds);
+
             if (admittedAdds is not null)
             {
                 foreach (var id in admittedAdds)
-                    if (!cluster.MemberIds.Contains(id))
-                        cluster.MemberIds.Add(id);
+                    if (!memberIdsCopy.Contains(id))
+                        memberIdsCopy.Add(id);
             }
 
             if (admittedRemoves is not null)
             {
                 foreach (var id in admittedRemoves)
-                    cluster.MemberIds.Remove(id);
+                    memberIdsCopy.Remove(id);
             }
 
-            if (label is not null)
-                cluster.Label = label;
-
-            memberIdsCopy = cluster.MemberIds.ToList();
+            _clusters[key] = Replace(
+                cluster, memberIdsCopy, label ?? cluster.Label, cluster.Centroid, cluster.SummaryEntryId);
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
@@ -197,7 +223,7 @@ public sealed class ClusterManager
         try
         {
             if (_clusters.TryGetValue(key, out var c))
-                c.Centroid = centroid;
+                _clusters[key] = Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId);
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
@@ -223,7 +249,12 @@ public sealed class ClusterManager
 
             summaryId = $"summary:{clusterId}";
             ns = cluster.Ns;
-            cluster.SummaryEntryId = summaryId;
+            // Published by replacement like every other edit here. A reference assignment cannot
+            // tear, so this one never crashed the serializer the way a member-list edit did — but a
+            // snapshot captured a moment earlier would still have acquired a summary id it was
+            // never meant to carry, which is a half-applied edit written as though it were whole.
+            _clusters[key] = Replace(
+                cluster, cluster.MemberIds, cluster.Label, cluster.Centroid, summaryId);
             ScheduleSaveClusters();
         }
         finally { _lock.ExitWriteLock(); }
@@ -436,8 +467,8 @@ public sealed class ClusterManager
     {
         ArgumentNullException.ThrowIfNull(guard);
 
-        // Phase 1: Remove member from this tenant's clusters, collect affected member lists
-        var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
+        // Phase 1: Remove member from this tenant's clusters, collect the replacements
+        var affectedClusters = new List<(string ClusterId, SemanticCluster Updated)>();
         var tenant = Tenancy.Normalize(tenantId);
 
         // Evicting an ambiguous id evicts the invisible twin's membership along with it, so the
@@ -452,9 +483,22 @@ public sealed class ClusterManager
             foreach (var cluster in _clusters.Values)
             {
                 if (cluster.TenantId != tenant) continue;
-                if (cluster.MemberIds.Remove(entryId))
-                    affectedClusters.Add((cluster.ClusterId, cluster.MemberIds.ToList()));
+                // Tested before copying, so the copy is paid for only by clusters that actually
+                // hold the entry — the old in-place Remove()'s bool did the same job.
+                if (!cluster.MemberIds.Contains(entryId)) continue;
+
+                var remaining = new List<string>(cluster.MemberIds);
+                remaining.Remove(entryId);
+                affectedClusters.Add((cluster.ClusterId,
+                    Replace(cluster, remaining, cluster.Label, cluster.Centroid, cluster.SummaryEntryId)));
             }
+
+            // Published after the walk rather than inside it. Overwriting an existing key is legal
+            // during a Dictionary enumeration on modern runtimes, but this class is multi-targeted
+            // and the guarantee is not worth depending on for a loop that already has the list.
+            foreach (var (clusterId, updated) in affectedClusters)
+                _clusters[(tenant, clusterId)] = updated;
+
             if (affectedClusters.Count > 0)
                 ScheduleSaveClusters();
         }
@@ -464,8 +508,8 @@ public sealed class ClusterManager
         if (affectedClusters.Count == 0) return;
 
         var centroids = new List<(string clusterId, float[]? centroid)>();
-        foreach (var (clusterId, memberIds) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenant, guard)));
+        foreach (var (clusterId, updated) in affectedClusters)
+            centroids.Add((clusterId, ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
 
         // Phase 3: Apply centroids under cluster lock
         _lock.EnterWriteLock();
@@ -474,7 +518,7 @@ public sealed class ClusterManager
             foreach (var (clusterId, centroid) in centroids)
             {
                 if (_clusters.TryGetValue((tenant, clusterId), out var c))
-                    c.Centroid = centroid;
+                    _clusters[(tenant, clusterId)] = Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId);
             }
             ScheduleSaveClusters();
         }
@@ -498,7 +542,7 @@ public sealed class ClusterManager
     /// </summary>
     public int TransferMembership(string fromId, string toId, string tenantId)
     {
-        var affectedClusters = new List<(string clusterId, List<string> memberIds)>();
+        var affectedClusters = new List<(string ClusterId, SemanticCluster Updated)>();
         var tenant = Tenancy.Normalize(tenantId);
 
         // Before the lock, as everywhere else here: the guard resolves through CognitiveIndex.
@@ -513,13 +557,25 @@ public sealed class ClusterManager
             foreach (var cluster in _clusters.Values)
             {
                 if (cluster.TenantId != tenant) continue;
-                if (!cluster.MemberIds.Remove(fromId)) continue;
+                // Tested before copying, so only clusters that really hold fromId pay for a list —
+                // the old in-place Remove()'s bool decided the same thing.
+                if (!cluster.MemberIds.Contains(fromId)) continue;
 
-                if (!cluster.MemberIds.Contains(toId))
-                    cluster.MemberIds.Add(toId);
+                var members = new List<string>(cluster.MemberIds);
+                members.Remove(fromId);
+                // Checked AFTER the removal, as before: a cluster holding both endpoints collapses
+                // to one membership rather than keeping a stale duplicate.
+                if (!members.Contains(toId))
+                    members.Add(toId);
 
-                affectedClusters.Add((cluster.ClusterId, cluster.MemberIds.ToList()));
+                affectedClusters.Add((cluster.ClusterId,
+                    Replace(cluster, members, cluster.Label, cluster.Centroid, cluster.SummaryEntryId)));
             }
+
+            // Published after the walk — see RemoveEntryFromAllClusters for why not inside it.
+            foreach (var (clusterId, updated) in affectedClusters)
+                _clusters[(tenant, clusterId)] = updated;
+
             if (affectedClusters.Count > 0)
                 ScheduleSaveClusters();
         }
@@ -529,8 +585,8 @@ public sealed class ClusterManager
         if (affectedClusters.Count == 0) return 0;
 
         var centroids = new List<(string clusterId, float[]? centroid)>();
-        foreach (var (clusterId, memberIds) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(memberIds, tenant, guard)));
+        foreach (var (clusterId, updated) in affectedClusters)
+            centroids.Add((clusterId, ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
 
         _lock.EnterWriteLock();
         try
@@ -538,7 +594,7 @@ public sealed class ClusterManager
             foreach (var (clusterId, centroid) in centroids)
             {
                 if (_clusters.TryGetValue((tenant, clusterId), out var c))
-                    c.Centroid = centroid;
+                    _clusters[(tenant, clusterId)] = Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId);
             }
             ScheduleSaveClusters();
         }
@@ -574,7 +630,41 @@ public sealed class ClusterManager
         _loaded = true;
     }
 
-    // Snapshot and schedule cluster save (all tenants, one blob). MUST be called within write lock.
+    /// <summary>
+    /// One frozen cluster carrying one edit — the only way anything in <c>_clusters</c> changes.
+    ///
+    /// Identity (<see cref="SemanticCluster.ClusterId"/>, <see cref="SemanticCluster.Ns"/>,
+    /// <see cref="SemanticCluster.TenantId"/>) is carried over unchanged, so a replacement is
+    /// always the same cluster in the same partition under the same key; only the mutable state is
+    /// restated. The tenant is already normalized on the source object and the constructor
+    /// normalizes again, which is idempotent.
+    ///
+    /// <paramref name="memberIds"/> may be the SOURCE cluster's own list when the edit does not
+    /// touch membership. Sharing it is free and safe under the freeze invariant — no published list
+    /// is ever mutated, so a list two frozen clusters both point at cannot change under either of
+    /// them. A caller changing membership passes a list it built itself.
+    /// </summary>
+    private static SemanticCluster Replace(
+        SemanticCluster source, List<string> memberIds, string? label,
+        float[]? centroid, string? summaryEntryId)
+        => new(source.ClusterId, label, source.Ns, memberIds, centroid, summaryEntryId, source.TenantId);
+
+    /// <summary>
+    /// Snapshot and schedule a cluster save (all tenants, one blob). MUST be called within the
+    /// write lock.
+    ///
+    /// The shallow <c>Values.ToList()</c> IS the deep copy here, and only because of the freeze
+    /// invariant in the class remarks: it copies references, and every referenced cluster — its
+    /// <see cref="SemanticCluster.MemberIds"/> list included — is immutable from the moment it
+    /// entered the map. So the provider this hands to persistence can be invoked minutes later,
+    /// from a debounce timer on a thread that holds none of this class's locks, and serialize a
+    /// state that is internally consistent and cannot move underneath the serializer.
+    ///
+    /// If a future edit reintroduces in-place mutation of a stored cluster, THIS is the line that
+    /// silently becomes wrong — not with a compile error but with an intermittent "Collection was
+    /// modified" inside <c>JsonSerializer.Serialize</c> on a pool thread, caught and logged by the
+    /// storage provider, after which nothing reschedules the write.
+    /// </summary>
     private void ScheduleSaveClusters()
     {
         var snapshot = _clusters.Values.ToList();

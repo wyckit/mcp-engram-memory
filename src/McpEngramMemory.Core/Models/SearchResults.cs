@@ -142,16 +142,46 @@ public sealed record ConsolidationResult(
 /// link". <see cref="EntriesNotScanned"/> is the fourth and oldest of these bounds, and unlike the
 /// other two it is not resumed — those entries wait for the namespace to shrink or for a wider
 /// <c>maxScanEntries</c>.
+///
+/// <see cref="ScanAlreadyInProgress"/> is the fifth, and it is a report about a scan that did not
+/// happen rather than about one that stopped early: another scan of this same (tenant, namespace)
+/// was already running, so this call loaded no entries, examined no pairs, wrote no edges and left
+/// the resume cursor exactly where the running scan will put it. Only one scan per namespace runs
+/// at a time — the scanner is a singleton shared by the background sweep and the tool, and its
+/// resume cursor is not read-modify-written atomically, so overlapping scans could roll progress
+/// backwards and pay for the same quadratic window twice. The loser is told rather than queued:
+/// waiting would put an interactive call behind a background sweep and then have it redo the window
+/// that sweep just finished. The flag always arrives with <see cref="PairScanIncomplete"/> set, so
+/// the rule above survives unchanged — both completeness flags false still means the whole pair
+/// space was covered. It names nothing the caller did not name, so it is not an oracle: the caller
+/// already had to hold write access to this namespace to ask.
+///
+/// TWO PAIR COUNTS, AND NEITHER STANDS IN FOR THE OTHER. <see cref="PairsExamined"/> is the WORK: the
+/// pair slots this pass's window covered, in the same unit — and now the same type — as the
+/// <c>maxPairComparisons</c> budget that bounds it. <see cref="PairsAboveThreshold"/> is the FIND:
+/// how many of those pairs cleared the similarity threshold. For several rounds there was one field,
+/// named for the first and holding the second, because the counter sat in a loop the pair stream
+/// only feeds with pairs that already passed. In a steady-state namespace those differ by three to
+/// five orders of magnitude — 40 neighbours found across 18,000,000 comparisons — and the smaller
+/// one does not even move monotonically with the work: a namespace of near-duplicates reports a
+/// large number for the identical walk that reports a tiny one when nothing matches. It was the only
+/// cost number this subsystem published, and an operator tuning <c>maxPairComparisons</c> against it
+/// was reading how much it found, not how much it did.
 /// </summary>
 public sealed record AutoLinkResult(
     [property: JsonPropertyName("namespace")] string Namespace,
     [property: JsonPropertyName("scannedEntries")] int ScannedEntries,
-    [property: JsonPropertyName("pairsExamined")] int PairsExamined,
+    [property: JsonPropertyName("pairsExamined")] long PairsExamined,
     [property: JsonPropertyName("edgesCreated")] int EdgesCreated,
     [property: JsonPropertyName("edgesSkippedExisting")] int EdgesSkippedExisting,
     [property: JsonPropertyName("hitMaxEdgeCap")] bool HitMaxEdgeCap,
     [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0,
-    [property: JsonPropertyName("pairScanIncomplete")] bool PairScanIncomplete = false);
+    [property: JsonPropertyName("pairScanIncomplete")] bool PairScanIncomplete = false,
+    [property: JsonPropertyName("scanAlreadyInProgress")] bool ScanAlreadyInProgress = false,
+    // Appended rather than placed beside PairsExamined where it belongs: the positional constructor
+    // is public and callers pass the leading parameters by position, so inserting one in the middle
+    // silently re-binds their arguments.
+    [property: JsonPropertyName("pairsAboveThreshold")] int PairsAboveThreshold = 0);
 
 /// <summary>
 /// System overview statistics.
