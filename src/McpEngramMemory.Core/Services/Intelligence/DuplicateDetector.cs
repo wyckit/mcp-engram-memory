@@ -42,21 +42,63 @@ public sealed class DuplicateDetector
     }
 
     /// <summary>
-    /// Find near-duplicate entries by pairwise cosine similarity scan. Above
-    /// <see cref="LowRankPivot"/> candidates, switches to a two-pass spectral
+    /// Find near-duplicate entries by pairwise cosine similarity scan, highest similarity first.
+    /// Above <see cref="LowRankPivot"/> candidates, switches to a spectral
     /// pre-filter (project to a K-dim subspace, scan in projection space at a
     /// widened threshold, confirm survivors with full-FP32 cosine) to amortize
     /// the O(N^2) cost. Below the pivot, the original direct pairwise scan is
     /// preserved — its cost is already bounded.
+    ///
+    /// <paramref name="maxResults"/> bounds the OUTPUT, and it is applied in scan order before the
+    /// sort, so it is a prefix of what was found rather than the globally best pairs. A caller that
+    /// filters what it is handed must take <see cref="StreamDuplicates"/> instead — see there for
+    /// why a bounded result cannot serve one.
     /// </summary>
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
         float threshold = 0.95f,
         int maxResults = 100)
     {
+        if (maxResults <= 0)
+            return Array.Empty<(string, string, float)>();
+
+        // A bounded prefix of the same stream, so there is exactly one pairwise implementation and a
+        // caller that filters as it goes cannot drift away from what this returns. Abandoning the
+        // enumeration at the bound abandons the comparisons behind it, which is the early exit the
+        // old nested-loop form got from testing the bound in its loop conditions.
+        var duplicates = new List<(string IdA, string IdB, float Similarity)>();
+        foreach (var pair in StreamDuplicates(candidates, threshold))
+        {
+            duplicates.Add(pair);
+            if (duplicates.Count >= maxResults) break;
+        }
+        duplicates.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
+        return duplicates;
+    }
+
+    /// <summary>
+    /// Every above-threshold pair, yielded lazily in scan order and with no output bound.
+    ///
+    /// It exists because a bound on the OUTPUT is not a bound a filtering caller can use. A caller
+    /// that discards some of what it is handed — auto-link discards pairs that already carry an edge
+    /// and pairs whose endpoint is unattributable — has no way to ask a fixed-size result for "the
+    /// next one after those": the window it was given is the window it keeps getting, and the pairs
+    /// behind that window are never reached on any number of deterministic rescans. Streaming lets
+    /// the caller keep pulling until ITS OWN quota is met, and pay for one pairwise pass to do it,
+    /// rather than re-running the quadratic scan once per widened guess.
+    ///
+    /// Deferred: no PAIR is compared until the result is enumerated, and enumeration abandoned
+    /// partway abandons the remaining comparisons — that is what keeps the bounded caller above at
+    /// its old cost. Above the pivot the subspace set-up still runs eagerly, deliberately; see
+    /// <see cref="StreamSpectralPrefiltered"/>.
+    /// </summary>
+    internal IEnumerable<(string IdA, string IdB, float Similarity)> StreamDuplicates(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        float threshold)
+    {
         if (candidates.Count < LowRankPivot)
-            return DirectPairwiseScan(candidates, threshold, maxResults);
-        return SpectralPrefilteredScan(candidates, threshold, maxResults);
+            return StreamDirectPairwise(candidates, threshold);
+        return StreamSpectralPrefiltered(candidates, threshold);
     }
 
     /// <summary>Threshold above which two-pass spectral filtering replaces direct O(N^2) scan.</summary>
@@ -69,14 +111,13 @@ public sealed class DuplicateDetector
     /// </summary>
     public const float ProjectionThresholdSlack = 0.10f;
 
-    private static IReadOnlyList<(string IdA, string IdB, float Similarity)> DirectPairwiseScan(
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamDirectPairwise(
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
-        float threshold, int maxResults)
+        float threshold)
     {
-        var duplicates = new List<(string IdA, string IdB, float Similarity)>();
-        for (int i = 0; i < candidates.Count && duplicates.Count < maxResults; i++)
+        for (int i = 0; i < candidates.Count; i++)
         {
-            for (int j = i + 1; j < candidates.Count && duplicates.Count < maxResults; j++)
+            for (int j = i + 1; j < candidates.Count; j++)
             {
                 var a = candidates[i];
                 var b = candidates[j];
@@ -87,16 +128,19 @@ public sealed class DuplicateDetector
                 float sim = dot / (a.Norm * b.Norm);
 
                 if (sim >= threshold)
-                    duplicates.Add((a.Entry.Id, b.Entry.Id, sim));
+                    yield return (a.Entry.Id, b.Entry.Id, sim);
             }
         }
-        duplicates.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
-        return duplicates;
     }
 
-    private static IReadOnlyList<(string IdA, string IdB, float Similarity)> SpectralPrefilteredScan(
+    /// <summary>
+    /// The subspace set-up is eager and only the pair scan is deferred: the fallbacks below decide
+    /// WHICH stream a caller gets, and a decision hidden behind first-enumeration would make an
+    /// unenumerated result silently different from an enumerated one.
+    /// </summary>
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamSpectralPrefiltered(
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
-        float threshold, int maxResults)
+        float threshold)
     {
         // Skip embeddings of inconsistent dimension or zero norm — fall back to
         // direct on whatever's left if too many drop out.
@@ -111,17 +155,16 @@ public sealed class DuplicateDetector
             keep.Add(idx);
         }
         if (keep.Count < LowRankPivot)
-            return DirectPairwiseScan(candidates, threshold, maxResults);
+            return StreamDirectPairwise(candidates, threshold);
 
         // Build subspace from the kept embeddings, in their original order.
         var embeddings = new float[keep.Count][];
         for (int i = 0; i < keep.Count; i++) embeddings[i] = candidates[keep[i]].Entry.Vector;
         var subspace = EmbeddingSubspace.Build(embeddings, EmbeddingSubspace.DefaultTopK);
-        if (subspace is null) return DirectPairwiseScan(candidates, threshold, maxResults);
+        if (subspace is null) return StreamDirectPairwise(candidates, threshold);
 
-        // Pass 2: scan in projection space with widened threshold. Norms in the
-        // projection space are *not* the same as the original norms (truncation
-        // drops magnitude orthogonal to col(V)), so compute them locally.
+        // Projection-space norms are *not* the original norms (truncation drops magnitude
+        // orthogonal to col(V)), so they are computed here rather than reused.
         var projNorms = new float[keep.Count];
         for (int i = 0; i < keep.Count; i++)
         {
@@ -131,8 +174,22 @@ public sealed class DuplicateDetector
             projNorms[i] = MathF.Sqrt(ns);
         }
 
+        return StreamProjectionSurvivors(candidates, keep, subspace, projNorms, threshold);
+    }
+
+    /// <summary>
+    /// The widened projection-space filter and the full-FP32 confirmation, interleaved.
+    ///
+    /// They were two passes with a list of survivor indices between them, and that list was the one
+    /// unbounded allocation on this path: it is sized by how many pairs clear the LOOSE threshold,
+    /// which no output bound reaches. Confirming each survivor as it is found yields the same pairs
+    /// in the same order and holds nothing between the passes.
+    /// </summary>
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamProjectionSurvivors(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        List<int> keep, SubspaceProjection subspace, float[] projNorms, float threshold)
+    {
         float looseThreshold = threshold - ProjectionThresholdSlack;
-        var pairCandidates = new List<(int LocalA, int LocalB)>();
         for (int i = 0; i < keep.Count; i++)
         {
             if (projNorms[i] == 0f) continue;
@@ -141,27 +198,16 @@ public sealed class DuplicateDetector
             {
                 if (projNorms[j] == 0f) continue;
                 var pj = subspace.Projections[j];
-                float dot = 0f;
-                for (int k = 0; k < pi.Length; k++) dot += pi[k] * pj[k];
-                float sim = dot / (projNorms[i] * projNorms[j]);
-                if (sim >= looseThreshold)
-                    pairCandidates.Add((i, j));
+                float projDot = 0f;
+                for (int k = 0; k < pi.Length; k++) projDot += pi[k] * pj[k];
+                if (projDot / (projNorms[i] * projNorms[j]) < looseThreshold) continue;
+
+                var a = candidates[keep[i]];
+                var b = candidates[keep[j]];
+                float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
+                if (sim >= threshold)
+                    yield return (a.Entry.Id, b.Entry.Id, sim);
             }
         }
-
-        // Pass 3: confirm survivors with full FP32 cosine on original vectors.
-        var duplicates = new List<(string IdA, string IdB, float Similarity)>();
-        foreach (var (la, lb) in pairCandidates)
-        {
-            if (duplicates.Count >= maxResults) break;
-            var a = candidates[keep[la]];
-            var b = candidates[keep[lb]];
-            float dot = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector);
-            float sim = dot / (a.Norm * b.Norm);
-            if (sim >= threshold)
-                duplicates.Add((a.Entry.Id, b.Entry.Id, sim));
-        }
-        duplicates.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
-        return duplicates;
     }
 }
