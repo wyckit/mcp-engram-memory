@@ -33,6 +33,18 @@ internal readonly record struct PairScanWindow(int StartAnchor, int MaxAnchors)
 }
 
 /// <summary>
+/// Progress from the pairwise walk, reported once after a complete anchor row. The callback is
+/// deliberately outside the inner pair loop: it adds no per-pair branch or allocation, while still
+/// making cancellation accounting exact because cancellation is observed only between anchors.
+/// </summary>
+/// <param name="Anchor">Candidate index whose complete triangular row was visited.</param>
+/// <param name="PairSlotsCompleted">Logical pair slots in that row, including slots that failed a
+/// norm/dimension check or either similarity threshold.</param>
+/// <param name="Spectral">True when the row ran through the projection prefilter; false for the
+/// direct path, including spectral setup fallbacks.</param>
+internal readonly record struct PairScanProgress(int Anchor, long PairSlotsCompleted, bool Spectral);
+
+/// <summary>
 /// What one spectral scan COST, as opposed to what it returned.
 ///
 /// The spectral path exists for exactly one reason: a 64-dim projection dot is cheaper than the
@@ -166,7 +178,20 @@ public sealed class DuplicateDetector
         float threshold,
         PairScanWindow window,
         CancellationToken cancellationToken)
-        => StreamDuplicates(candidates, threshold, window, cancellationToken, onProjectionProbe: null);
+        => StreamDuplicates(candidates, threshold, window, cancellationToken,
+            onAnchorCompleted: null, onProjectionProbe: null);
+
+    /// <summary>
+    /// The production auto-link stream, with one progress notification per completed anchor.
+    /// </summary>
+    internal IEnumerable<(string IdA, string IdB, float Similarity)> StreamDuplicates(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        float threshold,
+        PairScanWindow window,
+        CancellationToken cancellationToken,
+        Action<PairScanProgress>? onAnchorCompleted)
+        => StreamDuplicates(candidates, threshold, window, cancellationToken,
+            onAnchorCompleted, onProjectionProbe: null);
 
     /// <summary>
     /// The same stream as the four-argument overload above — identical pairs, identical order —
@@ -189,10 +214,21 @@ public sealed class DuplicateDetector
         PairScanWindow window,
         CancellationToken cancellationToken,
         Action<ProjectionScanProbe>? onProjectionProbe)
+        => StreamDuplicates(candidates, threshold, window, cancellationToken,
+            onAnchorCompleted: null, onProjectionProbe);
+
+    private IEnumerable<(string IdA, string IdB, float Similarity)> StreamDuplicates(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        float threshold,
+        PairScanWindow window,
+        CancellationToken cancellationToken,
+        Action<PairScanProgress>? onAnchorCompleted,
+        Action<ProjectionScanProbe>? onProjectionProbe)
     {
         if (candidates.Count < LowRankPivot)
-            return StreamDirectPairwise(candidates, threshold, window, cancellationToken);
-        return StreamSpectralPrefiltered(candidates, threshold, window, cancellationToken, onProjectionProbe);
+            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
+        return StreamSpectralPrefiltered(candidates, threshold, window, cancellationToken,
+            onAnchorCompleted, onProjectionProbe);
     }
 
     /// <summary>Threshold above which two-pass spectral filtering replaces direct O(N^2) scan.</summary>
@@ -229,7 +265,8 @@ public sealed class DuplicateDetector
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
         float threshold,
         PairScanWindow window,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<PairScanProgress>? onAnchorCompleted)
     {
         int n = candidates.Count;
         foreach (int i in WindowAnchors(n, window))
@@ -240,27 +277,32 @@ public sealed class DuplicateDetector
             if (cancellationToken.IsCancellationRequested) yield break;
 
             var a = candidates[i];
-            if (a.Norm == 0f) continue;
-
-            // candidates[j] below is an interface-indexer read per pair, and it stays one. This
-            // path is chosen only under LowRankPivot (256 candidates, <32k pairs) or when the
-            // subspace could not be built at all, its per-pair work is already a SIMD
-            // full-dimension VectorMath.Dot that dwarfs one dispatch, and materializing the list
-            // into an array would be an O(N) copy of a three-field tuple on the one path whose
-            // justification is that its cost is already bounded. The dispatch that mattered was in
-            // the spectral inner loop, where the arithmetic beside it is 64-dimensional.
-            for (int j = i + 1; j < n; j++)
+            if (a.Norm != 0f)
             {
-                var b = candidates[j];
-                if (b.Norm == 0f) continue;
-                if (a.Entry.Vector.Length != b.Entry.Vector.Length) continue;
+                // candidates[j] below is an interface-indexer read per pair, and it stays one. This
+                // path is chosen only under LowRankPivot (256 candidates, <32k pairs) or when the
+                // subspace could not be built at all, its per-pair work is already a SIMD
+                // full-dimension VectorMath.Dot that dwarfs one dispatch, and materializing the list
+                // into an array would be an O(N) copy of a three-field tuple on the one path whose
+                // justification is that its cost is already bounded. The dispatch that mattered was
+                // in the spectral inner loop, where the arithmetic beside it is 64-dimensional.
+                for (int j = i + 1; j < n; j++)
+                {
+                    var b = candidates[j];
+                    if (b.Norm == 0f) continue;
+                    if (a.Entry.Vector.Length != b.Entry.Vector.Length) continue;
 
-                float dot = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector);
-                float sim = dot / (a.Norm * b.Norm);
+                    float dot = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector);
+                    float sim = dot / (a.Norm * b.Norm);
 
-                if (sim >= threshold)
-                    yield return (a.Entry.Id, b.Entry.Id, sim);
+                    if (sim >= threshold)
+                        yield return (a.Entry.Id, b.Entry.Id, sim);
+                }
             }
+
+            // Cancellation is checked only before the next anchor, so reaching here attests to the
+            // complete logical row, including any suffix that produced no above-threshold yield.
+            onAnchorCompleted?.Invoke(new PairScanProgress(i, n - 1L - i, Spectral: false));
         }
     }
 
@@ -278,6 +320,7 @@ public sealed class DuplicateDetector
         float threshold,
         PairScanWindow window,
         CancellationToken cancellationToken,
+        Action<PairScanProgress>? onAnchorCompleted,
         Action<ProjectionScanProbe>? onProjectionProbe)
     {
         // Skip embeddings of inconsistent dimension or zero norm — fall back to
@@ -293,13 +336,14 @@ public sealed class DuplicateDetector
             keep.Add(idx);
         }
         if (keep.Count < LowRankPivot)
-            return StreamDirectPairwise(candidates, threshold, window, cancellationToken);
+            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
 
         // Build subspace from the kept embeddings, in their original order.
         var embeddings = new float[keep.Count][];
         for (int i = 0; i < keep.Count; i++) embeddings[i] = candidates[keep[i]].Entry.Vector;
         var subspace = EmbeddingSubspace.Build(embeddings, EmbeddingSubspace.DefaultTopK);
-        if (subspace is null) return StreamDirectPairwise(candidates, threshold, window, cancellationToken);
+        if (subspace is null)
+            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
 
         // THE CONCRETE ROWS, RESOLVED ONCE PER SCAN AND NEVER PER PAIR.
         //
@@ -328,13 +372,14 @@ public sealed class DuplicateDetector
 
         // Anchors are candidate indices on every path (see PairScanWindow), so a dropped candidate
         // keeps its place and a cursor stepping through anchors means the same thing whichever path
-        // produced it. A dropped anchor costs one array read and owns no pairs.
+        // produced it. A dropped anchor resolves its logical row during this setup and costs no
+        // projection dots in the quadratic walk.
         var keepPos = new int[candidates.Count];
         Array.Fill(keepPos, -1);
         for (int p = 0; p < keep.Count; p++) keepPos[keep[p]] = p;
 
         return StreamProjectionSurvivors(candidates, keep, keepPos, projections, projNorms, threshold,
-            window, cancellationToken, onProjectionProbe);
+            window, cancellationToken, onAnchorCompleted, onProjectionProbe);
     }
 
     /// <summary>
@@ -356,6 +401,7 @@ public sealed class DuplicateDetector
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
         List<int> keep, int[] keepPos, float[][] projections, float[] projNorms, float threshold,
         PairScanWindow window, CancellationToken cancellationToken,
+        Action<PairScanProgress>? onAnchorCompleted,
         Action<ProjectionScanProbe>? onProjectionProbe)
     {
         long projectionDots = 0;
@@ -369,30 +415,35 @@ public sealed class DuplicateDetector
                 if (cancellationToken.IsCancellationRequested) yield break;
 
                 int pi = keepPos[i];
-                if (pi < 0 || projNorms[pi] == 0f) continue;
-                var vi = projections[pi];
-
-                // Hoisted above the inner loop because it does not depend on pj. It used to be read
-                // per SURVIVOR, through the IReadOnlyList indexer, inside the loop body.
-                var a = candidates[i];
-                float normI = projNorms[pi];
-
-                // keep is ascending, so a later keep position is a later candidate index: walking
-                // forward from pi covers the same triangular half the direct path covers.
-                for (int pj = pi + 1; pj < keepCount; pj++)
+                if (pi >= 0 && projNorms[pi] != 0f)
                 {
-                    float normJ = projNorms[pj];
-                    if (normJ == 0f) continue;
+                    var vi = projections[pi];
 
-                    projectionDots++;
-                    if (ProjectionDot(vi, projections[pj]) / (normI * normJ) < looseThreshold) continue;
+                    // Hoisted above the inner loop because it does not depend on pj. It used to be
+                    // read per SURVIVOR, through the IReadOnlyList indexer, inside the loop body.
+                    var a = candidates[i];
+                    float normI = projNorms[pi];
 
-                    confirmationDots++;
-                    var b = candidates[keep[pj]];
-                    float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
-                    if (sim >= threshold)
-                        yield return (a.Entry.Id, b.Entry.Id, sim);
+                    // keep is ascending, so a later keep position is a later candidate index:
+                    // walking forward from pi covers the same triangular half the direct path.
+                    for (int pj = pi + 1; pj < keepCount; pj++)
+                    {
+                        float normJ = projNorms[pj];
+                        if (normJ == 0f) continue;
+
+                        projectionDots++;
+                        if (ProjectionDot(vi, projections[pj]) / (normI * normJ) < looseThreshold) continue;
+
+                        confirmationDots++;
+                        var b = candidates[keep[pj]];
+                        float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
+                        if (sim >= threshold)
+                            yield return (a.Entry.Id, b.Entry.Id, sim);
+                    }
                 }
+
+                onAnchorCompleted?.Invoke(new PairScanProgress(
+                    i, candidates.Count - 1L - i, Spectral: true));
             }
         }
         finally

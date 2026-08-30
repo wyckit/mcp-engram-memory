@@ -2,18 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] (ship as 2.0.0 — see risks)
+## [Unreleased] (2.0.0)
 
 ### Changed — BREAKING
 
-- **`AutoLinkResult` gained three trailing positional members** — `PairScanIncomplete`,
-  `ScanAlreadyInProgress`, and the reworked `PairsExamined` semantics. As a positional record this
-  is source-compatible but **binary-breaking** for a consumer compiled against an earlier
-  `McpEngramMemory.Core`: the constructor arity changed, so a recompile is required. The same
-  hazard was recorded for this type once before in this file. `PairsExamined` also changed meaning
-  twice during review and now reports comparison slots actually completed — including partial
-  windows under cancellation — not pairs offered and not above-threshold hits; a caller reading it
-  as "candidate pairs" will read a different number for the same corpus.
+- **`AutoLinkResult` gained four trailing positional members** — `PairScanIncomplete`,
+  `ScanAlreadyInProgress`, `PairsAboveThreshold`, and `PairSlotsPlanned`. Its existing
+  `PairsExamined` member changed from `int` to `long` and changed meaning twice during review; it now
+  reports comparison slots actually completed, including exact partial-window progress under
+  cancellation, rather than pairs offered or above-threshold hits. This is **source- and
+  binary-breaking**: the generated positional constructor/deconstructor signatures changed, and
+  source that assigned or overload-resolved the old `int` property may require an explicit update.
+  Consumers must recompile for 2.0.0 and should use `PairSlotsPlanned` for the window budget and
+  `PairsAboveThreshold` for the find count.
 - **New public surface on `McpEngramMemory.Core`** (additive, but it is a packaged assembly, so it
   is a compatibility commitment): `EdgeAddMode`, an optional `mode` parameter on
   `KnowledgeGraph.AddEdges`, `TopologyGuard.Sweep.TenantId`, `AutoLinkScanner`'s
@@ -67,6 +68,25 @@ All notable changes to this project will be documented in this file.
 - Removed the incorrect comment in `CoreMemoryTools` claiming the graph/cluster DTOs carry no
   namespace field (`CognitiveEntryInfo` always did); that mistaken belief is what spawned the
   duplicate resolvers now removed.
+
+### Fixed
+
+- **Attributable topology reads are now revision-consistent.** Graph and cluster projections use a
+  bounded optimistic retry and publish only if the tenant's attribution revision stayed fixed
+  through the whole projection; continuous churn fails closed. Cascade deletion takes a fresh
+  sweep for each fenced graph/cluster primitive, and centroid publication is conditional on the
+  exact immutable member-list generation it was computed from.
+- **Auto-link progress and lifecycle accounting are exact and bounded.** Production direct and
+  spectral pair walks report completed logical comparison slots once per anchor, so cancellation
+  no longer over- or under-states `PairsExamined`. Namespace deletion retracts the exact normalized
+  resume-cursor key synchronously—including deletion down to zero namespaces—and cannot race an
+  in-flight scan into resurrecting it.
+- **Diffusion-kernel retained state is fully retractable.** The bounded per-call rotation now covers
+  positive bases, negative-cached failures, and lock-only bypasses. In-flight computation and
+  retraction use publication ordering that cannot leave a basis outside the cleanup registry.
+- **The 2.0.0 package set is checked before merge.** CI packs and verifies Core, optional ONNX
+  synthesis, and the global tool on pull requests; main-branch artifact upload remains gated to
+  successful builds and tests.
 
 ## [1.6.0] - 2026-08-27
 

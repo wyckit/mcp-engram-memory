@@ -96,12 +96,21 @@ public class MemoryDiffusionKernel
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
     /// <summary>
-    /// The rotation <see cref="ReconcileOneCachedPartition"/> walks, one partition per
+    /// Every partition that owns retractable kernel state. This registry deliberately sits beside
+    /// the state dictionaries instead of deriving its walk from any one of them: a partition can
+    /// hold a positive basis, a negative-cached failure, or only its per-namespace compute lock
+    /// after a legitimate too-small/sparse bypass. All three must eventually disappear when the
+    /// namespace does.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _retractablePartitions = new();
+
+    /// <summary>
+    /// The rotation <see cref="ReconcileOneRetractablePartition"/> walks, one partition per
     /// <see cref="GetBasis"/> call, and the gate that keeps two concurrent calls from stepping it at
     /// once. Null between passes.
     /// </summary>
     private readonly object _reconcileGate = new();
-    private IEnumerator<KeyValuePair<string, CachedBasis>>? _reconcileWalk;
+    private IEnumerator<KeyValuePair<string, byte>>? _reconcileWalk;
 
     /// <summary>
     /// Negative cache: namespaces whose basis computation threw, keyed by the graph AND attribution
@@ -171,8 +180,9 @@ public class MemoryDiffusionKernel
         // legacy cache keys are unchanged.
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
 
-        // Retraction first, and exactly one partition of it — see ReconcileOneCachedPartition.
-        ReconcileOneCachedPartition();
+        // Retraction first, and exactly one partition of it — see
+        // ReconcileOneRetractablePartition.
+        ReconcileOneRetractablePartition();
 
         // Both revisions are read BEFORE the data they describe is snapshotted, and this ordering
         // is load-bearing rather than incidental. A mutation landing between the read and the
@@ -197,6 +207,7 @@ public class MemoryDiffusionKernel
             throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
         var nsLock = _nsLocks.GetOrAdd(pk, _ => new object());
+        _retractablePartitions[pk] = 0;
         lock (nsLock)
         {
             currentRev = _graph.RevisionFor(tenantId);
@@ -219,6 +230,10 @@ public class MemoryDiffusionKernel
             catch (Exception ex)
             {
                 _failedRevisions[pk] = (currentRev, currentAttribution, ex.Message);
+                // A concurrent reconciliation may have retracted this partition while the
+                // eigensolve was in flight. Publish the registry marker AFTER the failure so the
+                // newly retained state cannot become unreachable from future rotations.
+                _retractablePartitions[pk] = 0;
                 _logger?.LogWarning(ex,
                     "Diffusion basis computation failed for ns={Namespace} at graph revision {Revision} / attribution revision {AttributionRevision}; caching failure until one of them changes.",
                     ns, currentRev, currentAttribution);
@@ -230,10 +245,16 @@ public class MemoryDiffusionKernel
             {
                 var entry = new CachedBasis(built, currentAttribution);
                 _cache[pk] = entry;
+                // See the failure path above: publication precedes registration so a racing
+                // retract cannot strand the large basis outside the bounded cleanup rotation.
+                _retractablePartitions[pk] = 0;
                 return entry;
             }
 
             _cache.TryRemove(pk, out _);
+            // Even a legitimate bypass retains the per-partition compute lock. Track that
+            // lock-only state so a churned namespace does not grow _nsLocks without bound.
+            _retractablePartitions[pk] = 0;
             return null;
         }
     }
@@ -361,7 +382,7 @@ public class MemoryDiffusionKernel
     }
 
     /// <summary>
-    /// How many partitions the cache currently holds a basis or a cached failure for.
+    /// How many partitions the positive cache currently holds a basis for.
     ///
     /// The seam for the one property that is otherwise invisible: this dictionary must SHRINK when
     /// the namespaces behind it go away. A retained entry is a <see cref="DiffusionBasis"/> of
@@ -371,9 +392,21 @@ public class MemoryDiffusionKernel
     /// </summary>
     internal int CachedPartitionCount => _cache.Count;
 
+    /// <summary>Test diagnostics for the two non-basis forms of retained state.</summary>
+    internal int FailedPartitionCount => _failedRevisions.Count;
+    internal int ComputeLockPartitionCount => _nsLocks.Count;
+    internal int RetractablePartitionCount => _retractablePartitions.Count;
+
     /// <summary>
-    /// Forget everything keyed to one partition: the basis, the negative-cached failure, and the
-    /// per-partition compute lock.
+    /// Forget everything keyed to one partition: the basis, the negative-cached failure, the
+    /// cleanup-registry marker, the basis, the negative-cached failure, and the per-partition
+    /// compute lock.
+    ///
+    /// The marker is removed FIRST and every producer publishes its marker AFTER its retained
+    /// state. Those opposite orderings guarantee that a cache/failure/lock which wins a race with
+    /// retraction cannot be left untracked: if the producer's state write lands after the matching
+    /// state removal, its later marker write necessarily lands after the earlier marker removal.
+    /// A marker with no remaining state is cheap and the next rotation removes it unconditionally.
     ///
     /// Dropping the lock is safe while another thread holds it. The lock exists only to keep two
     /// callers from eigensolving the same partition at once; a thread that arrives after the removal
@@ -383,13 +416,14 @@ public class MemoryDiffusionKernel
     /// </summary>
     private void Retract(string partitionKey)
     {
+        _retractablePartitions.TryRemove(partitionKey, out _);
         _cache.TryRemove(partitionKey, out _);
         _failedRevisions.TryRemove(partitionKey, out _);
         _nsLocks.TryRemove(partitionKey, out _);
     }
 
     /// <summary>
-    /// Reconcile exactly ONE cached partition against the store, and never more than one.
+    /// Reconcile exactly ONE retractable partition against the store, and never more than one.
     ///
     /// THE RETRACTION. Nothing tells a DI singleton that a namespace was torn down.
     /// <c>CognitiveIndex</c> raises no namespace-removal event — <c>EntryDeleted</c> fires per entry
@@ -402,11 +436,15 @@ public class MemoryDiffusionKernel
     /// namespace per conversation accumulates one basis per debate, monotonically, in a process
     /// designed to run for weeks.
     ///
+    /// LOCK-ONLY STATE. A too-small or too-sparse namespace returns no basis and no failure, but it
+    /// still acquired a compute lock. Such a partition has no expensive state worth retaining and
+    /// is retracted on sight, even if its entry count is above the node threshold.
+    ///
     /// THE COST BOUND, which is why this is a rotation rather than a sweep. The warmup service calls
     /// <see cref="GetBasis"/> once per namespace per cycle, so anything done here that is linear in
-    /// the number of cached partitions is quadratic per cycle. One partition per call, round-robin,
-    /// gives "reconcile the whole cache once per warmup cycle" without this type having to know what
-    /// a cycle is: there is at most one cache entry per (tenant, namespace), and a cycle steps the
+    /// the number of retained partitions is quadratic per cycle. One partition per call, round-robin,
+    /// gives "reconcile all retained state once per warmup cycle" without this type having to know what
+    /// a cycle is: there is at most one registry entry per (tenant, namespace), and a cycle steps the
     /// rotation once per namespace. Per call it is one enumerator step and one partition count — no
     /// listing, no allocation. This is the same shape, and the same argument, as
     /// <c>AutoLinkScanner.ReconcileOneResumeCursor</c>.
@@ -417,9 +455,17 @@ public class MemoryDiffusionKernel
     /// harmless — the next request recomputes — which is what makes it safe to probe a key another
     /// thread is currently computing for.
     /// </summary>
-    private void ReconcileOneCachedPartition()
+    private void ReconcileOneRetractablePartition()
     {
-        if (!TryTakeNextCachedPartition(out var pk, out var ns, out var tenant)) return;
+        if (!TryTakeNextRetractablePartition(out var pk, out var ns, out var tenant)) return;
+
+        // A marker with neither a basis nor a failure represents only a compute lock (or the
+        // harmless marker-only residue of a retraction race). Neither is worth retaining.
+        if (!_cache.ContainsKey(pk) && !_failedRevisions.ContainsKey(pk))
+        {
+            Retract(pk);
+            return;
+        }
 
         if (_index.CountInNamespace(ns, tenant) < MinimumNodesForSpectral)
             Retract(pk);
@@ -440,7 +486,7 @@ public class MemoryDiffusionKernel
     /// inside <c>CognitiveIndex</c> and is deliberately outside this gate, so the gate is never held
     /// across another component's lock and cannot join a cycle.
     /// </summary>
-    private bool TryTakeNextCachedPartition(out string partitionKey, out string ns, out string tenant)
+    private bool TryTakeNextRetractablePartition(out string partitionKey, out string ns, out string tenant)
     {
         lock (_reconcileGate)
         {
@@ -448,7 +494,7 @@ public class MemoryDiffusionKernel
             if (walk is null || !walk.MoveNext())
             {
                 walk?.Dispose();
-                walk = ((IEnumerable<KeyValuePair<string, CachedBasis>>)_cache).GetEnumerator();
+                walk = ((IEnumerable<KeyValuePair<string, byte>>)_retractablePartitions).GetEnumerator();
 
                 if (!walk.MoveNext())
                 {

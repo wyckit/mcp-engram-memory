@@ -668,6 +668,37 @@ public class AttributionFenceTests : IDisposable
         Assert.True(store.SynchronousInvocations > 0);
         Assert.True(store.SynchronousClusterInvocations > 0);
     }
+
+    /// <summary>
+    /// The graph and cluster halves of a cascade are separate fenced transactions. A crossing that
+    /// lands from the graph's synchronous save callback is after graph mutation and before cluster
+    /// admission; the cluster half must capture a fresh sweep rather than silently skip cleanup.
+    /// </summary>
+    [Fact]
+    public void CascadeUsesAFreshSweepForClusterRemovalAfterAnInterveningCrossing()
+    {
+        var store = new EdgeCapturingProvider(_persistence, synchronous: true);
+        var graph = new KnowledgeGraph(store, _index);
+        var clusters = new ClusterManager(_index, store);
+
+        Seed("a", MainNs);
+        Seed("b", MainNs);
+        Seed("unrelated", MainNs);
+        Assert.True(graph.TryAddEdge(Edge("a", "b"), out _));
+        Assert.Contains("Created",
+            clusters.CreateCluster("k", MainNs, new[] { "a", "b" }, "l", Tenant));
+
+        store.BeforeScheduleGlobalEdges = () =>
+        {
+            store.BeforeScheduleGlobalEdges = null;
+            Seed("unrelated", ShadowNs);
+        };
+
+        TopologyCascade.CascadeAll(_index, graph, clusters, new[] { "a" }, Tenant, apply: true);
+
+        Assert.Empty(graph.GetStoredEdgesForEntry("a", Tenant));
+        Assert.Empty(clusters.GetClustersForEntry("a", Tenant));
+    }
 }
 
 /// <summary>
@@ -708,6 +739,9 @@ file sealed class EdgeCapturingProvider : IStorageProvider
     /// <summary>How many cluster-save providers were invoked inline (synchronous mode only).</summary>
     public int SynchronousClusterInvocations { get; private set; }
 
+    /// <summary>Test-only callback invoked outside the graph lock, immediately before scheduling.</summary>
+    public Action? BeforeScheduleGlobalEdges { get; set; }
+
     /// <summary>What a reload would see.</summary>
     public IReadOnlyList<GraphEdge> PersistedEdges => _persistedEdges;
 
@@ -725,6 +759,7 @@ file sealed class EdgeCapturingProvider : IStorageProvider
 
     public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
     {
+        BeforeScheduleGlobalEdges?.Invoke();
         ScheduledSaveCount++;
         if (_synchronous)
         {

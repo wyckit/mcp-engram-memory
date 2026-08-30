@@ -27,17 +27,18 @@ public static class TopologyCascade
     /// Remove (or, with <paramref name="apply"/> false, merely count) the graph edges and cluster
     /// memberships belonging to <paramref name="ids"/> within one tenant.
     ///
-    /// Both branches run the same resolution and the same guard, so a dry run can no longer report
-    /// a different figure from the purge it is previewing.
+    /// Both branches run the same tenant-wide ambiguity admission rule, so a dry run can no longer
+    /// report a different figure from the purge it is previewing.
     ///
-    /// ONE SWEEP PER ID, SHARED BY THAT ID'S TWO PRIMITIVES — never one sweep for the whole purge,
-    /// and the two halves of that sentence are load-bearing in opposite directions.
+    /// ONE FRESH SWEEP PER PRIMITIVE — never one sweep for the whole purge and never one sweep
+    /// reused after a primitive has released its attribution fence.
     ///
-    /// Shared between the primitives, because building two identical sweeps for one id cost two full
-    /// namespace listings — a LINQ pass over every (tenant, ns) partition in the process, plus a
-    /// list, plus two attribution-fence acquire/release cycles — on a path whose stated design goal
-    /// is that the dry run and the purge cost the same. Both mutators expose a guard overload for
-    /// exactly this, and both assert that the sweep's tenant matches theirs.
+    /// The graph primitive releases its fence before scheduling persistence. An unrelated crossing
+    /// can land before the cluster primitive starts, so handing the latter the graph's sweep turns a
+    /// safe cluster eviction into a silent stale-revision refusal. Building the second sweep after
+    /// graph removal is the optimistic transaction boundary: each primitive acts on a view captured
+    /// immediately before its own fenced publish. Store loading is cached, so the second sweep does
+    /// not repeat provider enumeration on the warm path.
     ///
     /// NOT shared across ids, even though the same overloads would allow it and their older
     /// documentation invited it. A <see cref="TopologyGuard.Sweep"/> carries ONE attribution
@@ -92,11 +93,18 @@ public static class TopologyCascade
 
             if (apply)
             {
-                // One sweep for this id, handed to both primitives — see the remarks above for why
-                // the unit is the id and not the batch.
-                var guard = TopologyGuard.ForSweep(index, tenantId);
-                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId: tenantId, guard);
-                clusters.RemoveEntryFromAllClusters(id, tenantId: tenantId, guard);
+                // Each primitive gets a sweep captured immediately before its own fenced publish.
+                // The graph releases its attribution fence before it schedules persistence and
+                // returns; an unrelated 1<->2 crossing can land in that gap. Reusing the graph's
+                // sweep for cluster eviction would then make the second primitive fail closed on a
+                // stale tenant-wide revision, leaving a dangling membership while the caller goes
+                // on to delete the entry. A fresh sweep preserves the one-id cost bound and judges
+                // the cluster phase against the state that actually precedes it.
+                var graphGuard = TopologyGuard.ForSweep(index, tenantId);
+                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId: tenantId, graphGuard);
+
+                var clusterGuard = TopologyGuard.ForSweep(index, tenantId);
+                clusters.RemoveEntryFromAllClusters(id, tenantId: tenantId, clusterGuard);
             }
             else
             {

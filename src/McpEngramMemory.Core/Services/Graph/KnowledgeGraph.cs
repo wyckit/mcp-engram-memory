@@ -306,6 +306,10 @@ public enum EdgeAddMode
 ///                                                                     ->  schedule the save
 ///
 /// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
+/// - Attributable reads do not take the writer attribution fence around index resolution. They
+///   build a discardable projection, compare the sweep's attribution revision at the end, retry
+///   once on a mismatch, and fail closed if the retry is stale too. The successful comparison is
+///   the read's linearization point; a crossing after it belongs to a later operation.
 /// - Mutating methods use EnterWriteLock directly, inside the fence.
 /// - Methods that need CognitiveIndex snapshot data under graph lock, then resolve entries outside
 ///   to avoid lock-ordering deadlocks. The topology guard resolves through CognitiveIndex too, so
@@ -362,6 +366,11 @@ public enum EdgeAddMode
 /// </summary>
 public sealed class KnowledgeGraph
 {
+    // A discardable read gets one optimistic retry when attribution changes while it is building
+    // its projection. A continuously mutating tenant fails closed after the second stale attempt;
+    // taking the writer fence here would invert the index/graph lock order described above.
+    private const int AttributionReadAttempts = 2;
+
     // outgoing[(tenant, sourceId)] = list of edges from sourceId within that tenant
     private readonly Dictionary<(string Tenant, string Id), List<GraphEdge>> _outgoing = new();
     // incoming[(tenant, targetId)] = list of edges to targetId within that tenant
@@ -436,6 +445,23 @@ public sealed class KnowledgeGraph
     /// </summary>
     private bool AttributionMovedSince(TopologyGuard.Sweep guard, string tenantId)
         => _index.AttributionRevisionFor(tenantId) != guard.AttributionRevision;
+
+    /// <summary>
+    /// True when a discardable read can linearize at this comparison: the attribution view used to
+    /// build its result is still current. Unlike <see cref="AttributionMovedSince"/>, this is not a
+    /// promise about what happens after the comparison; a later crossing is simply later than the
+    /// completed read. A mismatch discards the projection and retries or returns empty.
+    /// </summary>
+    private bool AttributionStayedFixedForRead(TopologyGuard.Sweep guard, string tenantId)
+        => _index.AttributionRevisionFor(tenantId) == guard.AttributionRevision;
+
+    /// <summary>
+    /// TEST SEAM: invoked after a read sweep has admitted an edge and immediately before the edge
+    /// is projected (or its bare endpoint is resolved/enqueued). A test can plant a same-id twin at
+    /// the exact TOCTOU boundary and prove the end-of-operation revision check discards the mixed
+    /// projection. Null in production.
+    /// </summary>
+    internal Action? OnAttributableEdgeRead;
 
     /// <summary>
     /// TEST SEAM: invoked by every mutator while the attribution fence is held SHARED and the graph
@@ -1165,22 +1191,33 @@ public sealed class KnowledgeGraph
         if (edgesToResolve.Count == 0)
             return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
 
-        // Resolve entries outside graph lock (CognitiveIndex has its own lock), scoped to the tenant.
-        var guard = TopologyGuard.ForSweep(_index, tenantId);
-        var neighbors = new List<NeighborResult>();
-        foreach (var (edge, resolveId) in edgesToResolve)
+        // Resolve entries outside graph lock (CognitiveIndex has its own lock), scoped to the
+        // tenant. A crossing after the sweep's safety decision can make legacy resolution select
+        // the newly planted twin, so the whole projection is optimistic: publish it only if the
+        // tenant's attribution revision is still the one the sweep captured.
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
         {
-            // Ahead of the resolve, not after it. Resolution of an ambiguous bare id is what turns
-            // a shared node into "whichever twin this caller can read", so an edge filtered
-            // afterwards has already been given a face that does not belong to it.
-            if (!guard.IsEdgeUsable(edge)) continue;
+            var guard = TopologyGuard.ForSweep(_index, tenantId);
+            var neighbors = new List<NeighborResult>();
+            foreach (var (edge, resolveId) in edgesToResolve)
+            {
+                // Ahead of the resolve, not after it. Resolution of an ambiguous bare id is what
+                // turns a shared node into "whichever twin this caller can read", so an edge
+                // filtered afterwards has already been given a face that does not belong to it.
+                if (!guard.IsEdgeUsable(edge)) continue;
 
-            var entry = ResolveEntry(resolveId, tenantId);
-            if (entry is not null)
-                neighbors.Add(new NeighborResult(edge, ToEntryInfo(entry)));
+                OnAttributableEdgeRead?.Invoke();
+
+                var entry = ResolveEntry(resolveId, tenantId);
+                if (entry is not null)
+                    neighbors.Add(new NeighborResult(edge, ToEntryInfo(entry)));
+            }
+
+            if (AttributionStayedFixedForRead(guard, tenantId))
+                return new GetNeighborsResult(id, neighbors);
         }
 
-        return new GetNeighborsResult(id, neighbors);
+        return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
     }
 
     /// <summary>
@@ -1202,15 +1239,6 @@ public sealed class KnowledgeGraph
         // See GetNeighbors: the adjacency snapshot below filters on Key.Tenant, which is normalized.
         tenantId = Tenancy.Normalize(tenantId);
 
-        // One sweep for the whole walk: the root test and every hop's test would otherwise each
-        // re-list the tenant's namespaces, and that listing reloads the store.
-        var guard = TopologyGuard.ForSweep(_index, tenantId);
-
-        // A shared root cannot be attributed to the entry the caller meant, so there is no walk to
-        // start — and the empty result is exactly what an id with no edges already returns.
-        if (!guard.IsTopologySafe(startId))
-            return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
-
         // Snapshot this tenant's adjacency under the graph lock (keyed by bare id for BFS),
         // then resolve entries outside the lock to avoid lock-ordering issues.
         Dictionary<string, List<GraphEdge>> outgoingSnapshot;
@@ -1225,53 +1253,72 @@ public sealed class KnowledgeGraph
         }
         finally { _lock.ExitUpgradeableReadLock(); }
 
-        // BFS on snapshot, resolving entries via CognitiveIndex (its own lock)
-        var visited = new HashSet<string>();
-        var queue = new Queue<(string id, int depth)>();
-        var resultEntries = new List<CognitiveEntryInfo>();
-        var resultEdges = new List<GraphEdge>();
-
-        queue.Enqueue((startId, 0));
-        visited.Add(startId);
-
-        var startEntry = ResolveEntry(startId, tenantId);
-        if (startEntry is not null)
-            resultEntries.Add(ToEntryInfo(startEntry));
-
-        while (queue.Count > 0 && resultEntries.Count < maxResults)
+        // BFS on the snapshot, resolving entries via CognitiveIndex (its own lock). The result is
+        // discardable, so an in-flight ambiguity crossing retries once and then fails closed rather
+        // than taking the writer attribution fence around this unbounded walk.
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
         {
-            var (currentId, depth) = queue.Dequeue();
-            if (depth >= maxDepth) continue;
+            // One sweep for the whole walk: the root test and every hop's test would otherwise each
+            // re-list the tenant's namespaces, and that listing reloads the store.
+            var guard = TopologyGuard.ForSweep(_index, tenantId);
 
-            if (outgoingSnapshot.TryGetValue(currentId, out var edges))
+            // A shared root cannot be attributed to the entry the caller meant, so there is no walk
+            // to start — and the empty result is exactly what an id with no edges already returns.
+            if (!guard.IsTopologySafe(startId))
+                return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
+
+            var visited = new HashSet<string>();
+            var queue = new Queue<(string id, int depth)>();
+            var resultEntries = new List<CognitiveEntryInfo>();
+            var resultEdges = new List<GraphEdge>();
+
+            queue.Enqueue((startId, 0));
+            visited.Add(startId);
+
+            var startEntry = ResolveEntry(startId, tenantId);
+            if (startEntry is not null)
+                resultEntries.Add(ToEntryInfo(startEntry));
+
+            while (queue.Count > 0 && resultEntries.Count < maxResults)
             {
-                foreach (var edge in edges)
+                var (currentId, depth) = queue.Dequeue();
+                if (depth >= maxDepth) continue;
+
+                if (outgoingSnapshot.TryGetValue(currentId, out var edges))
                 {
-                    if (relation is not null && edge.Relation != relation) continue;
-                    if (edge.Weight < minWeight) continue;
-                    if (visited.Contains(edge.TargetId)) continue;
+                    foreach (var edge in edges)
+                    {
+                        if (relation is not null && edge.Relation != relation) continue;
+                        if (edge.Weight < minWeight) continue;
+                        if (visited.Contains(edge.TargetId)) continue;
 
-                    // The stop, and it has to be here — ahead of the edge, the resolve and the
-                    // enqueue. An edge with an unattributable endpoint reaches a node two entries
-                    // share, so neither the edge, the entry it resolves to, nor anything beyond it
-                    // is attributable to the entry this walk is about. Not marked visited: it was
-                    // never visited, and the sweep memoizes so a second path costs nothing.
-                    if (!guard.IsEdgeUsable(edge)) continue;
+                        // The stop, and it has to be here — ahead of the edge, the resolve and the
+                        // enqueue. An edge with an unattributable endpoint reaches a node two entries
+                        // share, so neither the edge, the entry it resolves to, nor anything beyond
+                        // it is attributable to the entry this walk is about. Not marked visited: it
+                        // was never visited, and the sweep memoizes so a second path costs nothing.
+                        if (!guard.IsEdgeUsable(edge)) continue;
 
-                    visited.Add(edge.TargetId);
-                    resultEdges.Add(edge);
+                        OnAttributableEdgeRead?.Invoke();
 
-                    var entry = ResolveEntry(edge.TargetId, tenantId);
-                    if (entry is not null)
-                        resultEntries.Add(ToEntryInfo(entry));
+                        visited.Add(edge.TargetId);
+                        resultEdges.Add(edge);
 
-                    if (resultEntries.Count < maxResults)
-                        queue.Enqueue((edge.TargetId, depth + 1));
+                        var entry = ResolveEntry(edge.TargetId, tenantId);
+                        if (entry is not null)
+                            resultEntries.Add(ToEntryInfo(entry));
+
+                        if (resultEntries.Count < maxResults)
+                            queue.Enqueue((edge.TargetId, depth + 1));
+                    }
                 }
             }
+
+            if (AttributionStayedFixedForRead(guard, tenantId))
+                return new TraversalResult(startId, resultEntries, resultEdges);
         }
 
-        return new TraversalResult(startId, resultEntries, resultEdges);
+        return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
     }
 
     /// <summary>
@@ -1295,9 +1342,7 @@ public sealed class KnowledgeGraph
         if (stored.Count == 0)
             return stored;
 
-        // Built after the lock, and only when there is something to judge — see GetNeighbors.
-        var guard = TopologyGuard.ForSweep(_index, tenantId);
-        return stored.Where(guard.IsEdgeUsable).ToList();
+        return FilterAttributableEdges(stored, tenantId);
     }
 
     /// <summary>
@@ -1355,25 +1400,34 @@ public sealed class KnowledgeGraph
         if (contradictEdges.Count == 0)
             return Array.Empty<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
 
-        // Resolve entries outside graph lock (scoped to tenant), filter to namespace
-        var guard = TopologyGuard.ForSweep(_index, tenantId);
-        var results = new List<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
-        foreach (var edge in contradictEdges)
+        // Resolve entries outside graph lock (scoped to tenant), filter to namespace. As with
+        // GetNeighbors, publish only a projection whose attribution revision stayed fixed.
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
         {
-            // This method resolves BOTH endpoints and hands the entries back, so an unattributable
-            // endpoint here discloses a whole entry rather than just an id — and a "contradicts"
-            // edge is a claim about the pair, which is meaningless if one half is the wrong twin.
-            if (!guard.IsEdgeUsable(edge)) continue;
+            var guard = TopologyGuard.ForSweep(_index, tenantId);
+            var results = new List<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
+            foreach (var edge in contradictEdges)
+            {
+                // This method resolves BOTH endpoints and hands the entries back, so an
+                // unattributable endpoint here discloses a whole entry rather than just an id — and
+                // a "contradicts" edge is meaningless if one half is the wrong twin.
+                if (!guard.IsEdgeUsable(edge)) continue;
 
-            var source = ResolveEntry(edge.SourceId, tenantId);
-            var target = ResolveEntry(edge.TargetId, tenantId);
+                OnAttributableEdgeRead?.Invoke();
 
-            // Include if either entry is in the requested namespace
-            if ((source?.Ns == ns) || (target?.Ns == ns))
-                results.Add((edge, source, target));
+                var source = ResolveEntry(edge.SourceId, tenantId);
+                var target = ResolveEntry(edge.TargetId, tenantId);
+
+                // Include if either entry is in the requested namespace
+                if ((source?.Ns == ns) || (target?.Ns == ns))
+                    results.Add((edge, source, target));
+            }
+
+            if (AttributionStayedFixedForRead(guard, tenantId))
+                return results;
         }
 
-        return results;
+        return Array.Empty<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
     }
 
     /// <summary>
@@ -1411,8 +1465,7 @@ public sealed class KnowledgeGraph
         if (stored.Count == 0)
             return stored;
 
-        var guard = TopologyGuard.ForSweep(_index, tenantId);
-        return stored.Where(guard.IsEdgeUsable).ToList();
+        return FilterAttributableEdges(stored, tenantId);
     }
 
     /// <summary>
@@ -1435,6 +1488,33 @@ public sealed class KnowledgeGraph
                 .ToList();
         }
         finally { _lock.ExitUpgradeableReadLock(); }
+    }
+
+    /// <summary>
+    /// Build an attributable edge-only projection and publish it only if no id in the tenant
+    /// crossed the ambiguity boundary while the sweep was being consumed. The raw edge snapshot is
+    /// immutable, so it can be reused for the one bounded retry.
+    /// </summary>
+    private IReadOnlyList<GraphEdge> FilterAttributableEdges(
+        IReadOnlyList<GraphEdge> stored, string tenantId)
+    {
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
+        {
+            var guard = TopologyGuard.ForSweep(_index, tenantId);
+            var attributable = new List<GraphEdge>();
+            foreach (var edge in stored)
+            {
+                if (!guard.IsEdgeUsable(edge)) continue;
+
+                OnAttributableEdgeRead?.Invoke();
+                attributable.Add(edge);
+            }
+
+            if (AttributionStayedFixedForRead(guard, tenantId))
+                return attributable;
+        }
+
+        return Array.Empty<GraphEdge>();
     }
 
     /// <summary>

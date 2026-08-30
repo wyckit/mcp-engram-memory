@@ -179,14 +179,12 @@ public sealed record ConsolidationResult(
 /// cancellation can stop a walk before its first anchor, so a pre-cancelled scan over three entries
 /// compared nothing at all and reported three pairs examined.
 ///
-/// WHAT "EXAMINED" GUARANTEES. On a pass that ran to the end of its window the two cost numbers are
-/// equal and both exact — the scan's pair loop has no early exit, so an exhausted stream has visited
-/// every slot of the window. On a CANCELLED pass <see cref="PairsExamined"/> is a lower bound: the
-/// slots up to and including the last pair the scan was handed, and zero when it was handed none.
-/// The pair source stops at an anchor boundary and reports no progress of its own, and an anchor
-/// whose whole row fell below the threshold yields nothing, so the walk past the last delivered pair
-/// is not observable from outside it. Under-reporting is the honest direction for a number read as
-/// cost, and <see cref="PairScanIncomplete"/> is always set alongside it.
+/// WHAT "EXAMINED" GUARANTEES. It is exact on completed and cancelled production scans. The detector
+/// reports once after each complete anchor row, including rows and row suffixes with no
+/// above-threshold yield; cancellation is observed only before the next anchor. A pre-cancelled scan
+/// therefore reports zero, while a mid-window cancellation reports every completed logical pair
+/// slot and none from the unstarted suffix. <see cref="PairScanIncomplete"/> is always set alongside
+/// cancellation.
 /// </summary>
 public sealed record AutoLinkResult(
     [property: JsonPropertyName("namespace")] string Namespace,

@@ -66,6 +66,13 @@ public sealed class CognitiveIndex : IDisposable
     /// </summary>
     public event EventHandler<(string Namespace, string Id)>? EntryDeleted;
 
+    /// <summary>
+    /// Fires after a tenant + namespace partition is removed. Internal maintenance consumers use
+    /// the normalized key to retract per-partition derived state in O(1), including when deletion
+    /// leaves no live namespace whose future scan could drive cleanup.
+    /// </summary>
+    internal event Action<NsKey>? NamespaceRemoved;
+
     public CognitiveIndex(IStorageProvider persistence, MemoryLimitsConfig? limits = null, MetricsCollector? metrics = null)
     {
         _store = new NamespaceStore(persistence, _bm25);
@@ -1309,6 +1316,8 @@ public sealed class CognitiveIndex : IDisposable
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        int removed;
+        bool namespaceRemoved = false;
         nsLock.EnterWriteLock();
         try
         {
@@ -1317,19 +1326,33 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is null || nsEntries.Count == 0)
             {
                 _store.RemoveNamespace(key);
-                return 0;
+                namespaceRemoved = true;
+                removed = 0;
             }
-
-            var ids = nsEntries.Keys.ToList();
-            // Remove first so snapshot-based providers observe the post-delete state when their
-            // save is scheduled. This clears only the selected partition's BM25/HNSW indexes.
-            _store.RemoveNamespace(key);
-            foreach (var id in ids)
-                _store.ScheduleEntryDelete(ns, id, key.Tenant);
-
-            return ids.Count;
+            else
+            {
+                var ids = nsEntries.Keys.ToList();
+                // Remove first so snapshot-based providers observe the post-delete state when their
+                // save is scheduled. This clears only the selected partition's BM25/HNSW indexes.
+                _store.RemoveNamespace(key);
+                namespaceRemoved = true;
+                foreach (var id in ids)
+                    _store.ScheduleEntryDelete(ns, id, key.Tenant);
+                removed = ids.Count;
+            }
         }
-        finally { nsLock.ExitWriteLock(); }
+        finally
+        {
+            nsLock.ExitWriteLock();
+
+            // Outside the partition lock so a maintenance subscriber can never invert index
+            // locking. Kept in the finally so a provider failure while scheduling individual row
+            // deletes cannot leave derived state naming a partition already removed from memory.
+            // Internal subscribers are synchronous and must remain O(1).
+            if (namespaceRemoved)
+                NamespaceRemoved?.Invoke(key);
+        }
+        return removed;
     }
 
     /// <summary>

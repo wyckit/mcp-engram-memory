@@ -50,14 +50,16 @@ jobs:
   pack:
     needs: build-and-test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
 
       - name: Restore dependencies
         run: dotnet restore McpEngramMemory.slnx
@@ -65,11 +67,22 @@ jobs:
       - name: Pack Core library
         run: dotnet pack src/McpEngramMemory.Core/McpEngramMemory.Core.csproj -c Release -o ./artifacts
 
+      - name: Pack ONNX synthesis library
+        run: dotnet pack src/McpEngramMemory.Synthesis.Onnx/McpEngramMemory.Synthesis.Onnx.csproj -c Release -o ./artifacts
+
       - name: Pack global tool
         run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o ./artifacts
 
+      - name: Verify package versions
+        shell: bash
+        run: |
+          test -f ./artifacts/McpEngramMemory.Core.2.0.0.nupkg
+          test -f ./artifacts/McpEngramMemory.Synthesis.Onnx.2.0.0.nupkg
+          test -f ./artifacts/McpEngramMemory.2.0.0.nupkg
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main'
         with:
           name: nuget-packages
           path: ./artifacts/*.nupkg

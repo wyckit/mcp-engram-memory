@@ -91,13 +91,11 @@ namespace McpEngramMemory.Tests;
 /// pair-slot count is computed before the first anchor runs, and cancellation stops the walk on an
 /// anchor boundary — possibly the first — so a pre-cancelled three-entry scan compared nothing and
 /// reported three pairs examined. Work done and work budgeted are separate fields now, and the
-/// examined figure is exact for a completed window and never over-stated for a cancelled one.
+/// examined figure is exact for completed and cancelled production detector walks.
 ///
-/// THE RETRACTION THAT COST MORE THAN THE LEAK (23): reconciling every cursor against a listing of
-/// the tenant's live namespaces, on a method the background sweep calls once per namespace, is
-/// O(K^2) per sweep. It is one cursor per scan now, round-robin, which reaches every cursor in one
-/// pass and is asserted on a counted seam — a timing over six namespaces cannot tell linear from
-/// quadratic.
+/// THE RETRACTION THAT COST MORE THAN THE LEAK (23): scan-driven reconciliation cannot bound dead
+/// state when live K falls to zero, and any per-scan listing makes a K-namespace sweep quadratic.
+/// Namespace deletion now retracts its exact normalized cursor key directly in O(1).
 /// </summary>
 public class AutoLinkCapAccountingTests : IDisposable
 {
@@ -145,6 +143,7 @@ public class AutoLinkCapAccountingTests : IDisposable
 
     public void Dispose()
     {
+        _scanner.Dispose();
         _index.Dispose();
         _persistence.Dispose();
         if (Directory.Exists(_testDataPath))
@@ -1131,7 +1130,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         }
 
         scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, window, _) => Source(window));
+            pairs: (_, _, window, _, _) => Source(window));
 
         var a = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);  // A
         var d = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);  // D
@@ -1170,7 +1169,7 @@ public class AutoLinkCapAccountingTests : IDisposable
 
         var starts = new List<int>();
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, window, _) =>
+            pairs: (_, _, window, _, _) =>
             {
                 starts.Add(window.StartAnchor);
                 return Array.Empty<(string, string, float)>();
@@ -1222,7 +1221,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         }
 
         scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (candidates, _, _, _) => Source(candidates));
+            pairs: (candidates, _, _, _, _) => Source(candidates));
 
         var tenantScan = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
 
@@ -1460,9 +1459,8 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// deleted namespace is never scanned again, so it can never come back to drop its own cursor;
     /// the dictionary is monotonic in the (tenant, namespace) pairs EVER scanned.
     ///
-    /// The reconciliation is one cursor per scan now rather than a full pass per scan (test 23), so
-    /// what this pins is the retraction itself: the doomed namespace's cursor is the only one held
-    /// when the next scan runs, so that scan's single probe is the one that reaches it.
+    /// The deletion lifecycle hook retracts the exact normalized key synchronously; the following
+    /// scan is a control that creates only the live namespace's cursor.
     /// </summary>
     [Fact]
     public void ACursorForADeletedNamespace_IsDroppedByTheNextScanOfThatTenant()
@@ -1486,7 +1484,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     }
 
     /// <summary>
-    /// The second removal path, and the one the reconciliation cannot reach: a namespace that still
+    /// The second removal path, which a namespace-deletion hook cannot reach: a namespace that still
     /// EXISTS — so the tenant's listing still names it — but no longer holds two entries a pairwise
     /// scan can use. There is no pair space for a cursor to point into, so the cursor is dead state.
     /// Both of ScanExclusive's early returns carry the same removal, for the same reason.
@@ -1511,8 +1509,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// OVER-CORRECTION CONTROL for both removals. A cleanup that dropped LIVE cursors would restart
     /// every budgeted namespace at anchor 0 on every scan — which is the starvation the cursor
     /// exists to prevent, reintroduced by its own cleanup, and invisible in every count a caller
-    /// sees. So the third scan of a namespace must still resume where its first one stopped, across
-    /// an intervening scan of a different namespace that ran the reconciliation.
+    /// sees. So the third scan of a namespace must still resume where its first one stopped.
     /// </summary>
     [Fact]
     public void CursorsForNamespacesThatStillExist_SurviveAndKeepAdvancing()
@@ -1524,7 +1521,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         var starts = new List<(string Ns, int Start)>();
         string scanning = "";
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, window, _) =>
+            pairs: (_, _, window, _, _) =>
             {
                 starts.Add((scanning, window.StartAnchor));
                 return Array.Empty<(string, string, float)>();
@@ -1575,7 +1572,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         }
 
         scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, _, _) => Source());
+            pairs: (_, _, _, _, _) => Source());
 
         var canonical = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
 
@@ -1604,7 +1601,7 @@ public class AutoLinkCapAccountingTests : IDisposable
 
         var starts = new List<int>();
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, window, _) =>
+            pairs: (_, _, window, _, _) =>
             {
                 starts.Add(window.StartAnchor);
                 return Array.Empty<(string, string, float)>();
@@ -1657,7 +1654,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         }
 
         scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (candidates, _, _, _) => Source(candidates));
+            pairs: (candidates, _, _, _, _) => Source(candidates));
 
         var mine = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
 
@@ -1685,7 +1682,7 @@ public class AutoLinkCapAccountingTests : IDisposable
 
         var starts = new List<int>();
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, window, _) =>
+            pairs: (_, _, window, _, _) =>
             {
                 starts.Add(window.StartAnchor);
                 return Array.Empty<(string, string, float)>();
@@ -1809,62 +1806,127 @@ public class AutoLinkCapAccountingTests : IDisposable
         Assert.True(result.PairScanIncomplete);
     }
 
-    // -- 23. RECONCILING THE CURSORS MAY NOT COST THE NAMESPACE COUNT --
+    /// <summary>
+    /// Production-path cancellation accounting for both detector implementations. The progress
+    /// hook cancels after the first complete anchor, whose whole row is deliberately below the
+    /// threshold and therefore yields nothing. The old last-yield inference reported zero for this
+    /// real work. Pre-cancelled and uncancelled scans are controls over the same candidate set.
+    /// </summary>
+    [Theory]
+    [InlineData(4, false)]
+    [InlineData(DuplicateDetector.LowRankPivot, true)]
+    public void ProductionDetectorPaths_ReportExactCompletedRowsAcrossCancellation(
+        int candidateCount, bool expectSpectral)
+    {
+        foreach (var candidate in SyntheticCandidates(candidateCount))
+            _index.Upsert(candidate.Entry);
+
+        long planned = (long)candidateCount * (candidateCount - 1) / 2;
+
+        using (var preCancelled = new CancellationTokenSource())
+        using (var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector()))
+        {
+            preCancelled.Cancel();
+            var before = scanner.Scan(ScanNs, threshold: 2f, maxNewEdges: 0, tenantId: Tenant,
+                maxPairComparisons: 0, cancellationToken: preCancelled.Token);
+            Assert.Equal(0L, before.PairsExamined);
+            Assert.Equal(planned, before.PairSlotsPlanned);
+        }
+
+        using (var midWindow = new CancellationTokenSource())
+        {
+            PairScanProgress? completed = null;
+            using var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+                pairs: null, logger: null, onScanProbe: null,
+                onPairScanProgress: progress =>
+                {
+                    completed = progress;
+                    midWindow.Cancel();
+                });
+
+            var middle = scanner.Scan(ScanNs, threshold: 2f, maxNewEdges: 0, tenantId: Tenant,
+                maxPairComparisons: 0, cancellationToken: midWindow.Token);
+
+            Assert.NotNull(completed);
+            Assert.Equal(expectSpectral, completed.Value.Spectral);
+            Assert.Equal(candidateCount - 1L, middle.PairsExamined);
+            Assert.Equal(0, middle.PairsAboveThreshold);
+            Assert.Equal(planned, middle.PairSlotsPlanned);
+            Assert.True(middle.PairScanIncomplete);
+        }
+
+        PairScanProgress? finalProgress = null;
+        using (var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+                   pairs: null, logger: null, onScanProbe: null,
+                   onPairScanProgress: progress => finalProgress = progress))
+        {
+            var complete = scanner.Scan(ScanNs, threshold: 2f, maxNewEdges: 0, tenantId: Tenant,
+                maxPairComparisons: 0);
+            Assert.Equal(planned, complete.PairsExamined);
+            Assert.Equal(planned, complete.PairSlotsPlanned);
+            Assert.False(complete.PairScanIncomplete);
+        }
+        Assert.NotNull(finalProgress);
+        Assert.Equal(expectSpectral, finalProgress.Value.Spectral);
+
+        // Cancellation after the last non-empty triangular row is not an interrupted scan. The
+        // final anchor owns zero slots, so every pair has already been examined when this fires.
+        using var afterComplete = new CancellationTokenSource();
+        long completedSlots = 0;
+        using var completedScanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: null, logger: null, onScanProbe: null,
+            onPairScanProgress: progress =>
+            {
+                completedSlots += progress.PairSlotsCompleted;
+                if (completedSlots >= planned)
+                    afterComplete.Cancel();
+            });
+        var cancelledAfterWork = completedScanner.Scan(
+            ScanNs, threshold: 2f, maxNewEdges: 0, tenantId: Tenant,
+            maxPairComparisons: 0, cancellationToken: afterComplete.Token);
+        Assert.Equal(planned, cancelledAfterWork.PairsExamined);
+        Assert.False(cancelledAfterWork.PairScanIncomplete);
+    }
+
+    // -- 23. CURSOR RETRACTION BELONGS TO NAMESPACE LIFECYCLE --
 
     /// <summary>
-    /// The retraction added in round 20 was a full reconciliation on EVERY scan: walk the cursor
-    /// dictionary, list every live namespace of the tenant, diff. The background sweep calls Scan
-    /// once per namespace, so a host with K namespaces paid K listings of K namespaces per sweep —
-    /// O(K^2) work and O(K^2) allocation on the job whose whole justification is that it is cheap
-    /// enough to run unattended every six hours. The fix for the leak was the next finding.
-    ///
-    /// Asserted on a COUNTED SEAM rather than a stopwatch: a timing over six namespaces cannot tell
-    /// linear from quadratic, and the failure only becomes visible at a scale no unit test runs at.
-    /// CursorReconcileInspections counts the namespaces whose liveness reconciliation probed, so the
-    /// old shape reports K per scan on this exact fixture and the new one reports 1.
+    /// Steady-state scans preserve every live cursor without any scan-driven liveness pass. The old
+    /// full reconciliation listed K namespaces on each of K scans; the later one-key rotation was
+    /// O(1) per scan but left dead state unbounded when no future scan existed. Direct lifecycle
+    /// retraction needs neither mechanism.
     /// </summary>
     [Fact]
-    public void ReconcilingCursors_CostsOneNamespaceProbePerScan_HoweverManyNamespacesExist()
+    public void SteadyStateScans_PreserveLiveCursorsWithoutLifecycleCleanupWork()
     {
         const int namespaces = 6;
         for (int i = 0; i < namespaces; i++)
             PlantPairInNamespace($"ns-{i}", slot: 0, $"n{i}-a", $"n{i}-b", skew: 0.02f);
 
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, _, _) => Array.Empty<(string, string, float)>());
+            pairs: (_, _, _, _, _) => Array.Empty<(string, string, float)>());
 
         // A sweep: one scan per namespace, each stopping on its budget, so each leaves a cursor.
         for (int i = 0; i < namespaces; i++)
             scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
 
         Assert.Equal(namespaces, scanner.ResumeCursorCount);
-        long afterFirstSweep = scanner.CursorReconcileInspections;
-
         // A second sweep, with every cursor already in place — the steady state a long-lived host
         // spends its entire life in.
         for (int i = 0; i < namespaces; i++)
             scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
 
-        // THE ASSERTION THE OLD CODE FAILED: it inspected all six namespaces on each of the six
-        // scans, so this difference was 36 rather than 6 — and K^2 rather than K for any K.
-        Assert.Equal(namespaces, scanner.CursorReconcileInspections - afterFirstSweep);
-
-        // And it reconciled without retracting anything: every one of these namespaces is alive.
+        // No liveness listing or cursor walk runs on the scan hot path. Lifecycle deletion retracts
+        // the exact key directly instead.
         Assert.Equal(namespaces, scanner.ResumeCursorCount);
     }
 
     /// <summary>
-    /// OVER-CORRECTION CONTROL for the throttle, and the property the round-20 leak was about: one
-    /// probe per scan must still REACH every cursor, or the cheap reconciliation is no
-    /// reconciliation at all and the dictionary is monotonic again.
-    ///
-    /// The rotation is over cursors and a scan steps it once, so a dead cursor is retracted within
-    /// one full pass — two sweeps in the worst case, because the walk can be part-way through a pass
-    /// when the namespace dies. Bounded and counted rather than waited on: each iteration is one
-    /// scan, and the assertion is that the retraction happened inside that bound.
+    /// A deletion among many live cursors retracts only the exact dead key and preserves every live
+    /// one. No subsequent scan is required for the retraction.
     /// </summary>
     [Fact]
-    public void EveryCursorIsStillReached_SoADeadNamespacesCursorIsRetracted()
+    public void NamespaceDeletion_RetractsOnlyItsExactCursor()
     {
         const int namespaces = 6;
         const string doomed = "ns-3";
@@ -1872,7 +1934,7 @@ public class AutoLinkCapAccountingTests : IDisposable
             PlantPairInNamespace($"ns-{i}", slot: 0, $"n{i}-a", $"n{i}-b", skew: 0.02f);
 
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (_, _, _, _) => Array.Empty<(string, string, float)>());
+            pairs: (_, _, _, _, _) => Array.Empty<(string, string, float)>());
 
         for (int i = 0; i < namespaces; i++)
             scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
@@ -1882,17 +1944,75 @@ public class AutoLinkCapAccountingTests : IDisposable
         // again, so it can never come back to drop its own cursor.
         _index.DeleteAllInNamespace(doomed, Tenant);
 
-        int scans = 0;
-        while (scanner.ResumeCursorCount > namespaces - 1 && scans < 2 * namespaces)
-        {
-            scanner.Scan("ns-0", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
-            scans++;
-        }
-
-        // THE ASSERTION A THROTTLE THAT NEVER ADVANCED WOULD FAIL: probing the same cursor forever
-        // is O(1) per scan and reconciles nothing.
+        // No scan after deletion: exact-key lifecycle retraction has already completed.
         Assert.Equal(namespaces - 1, scanner.ResumeCursorCount);
         Assert.DoesNotContain(doomed, _index.GetNamespaces(Tenant));
+    }
+
+    /// <summary>
+    /// Bulk deletion retracts exact keys at the lifecycle boundary. The survivor count includes the
+    /// K=1 case that scan-driven rotation could eventually service and the K=0 case it never could:
+    /// after deleting the last namespace, no future scan exists to advance a cleanup cursor.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(0)]
+    public void BulkNamespaceDeletion_ImmediatelyBoundsResumeCursorsToLiveK(int survivors)
+    {
+        const int namespaces = 24;
+        for (int i = 0; i < namespaces; i++)
+            PlantPairInNamespace($"bulk-{i:D2}", slot: 0, $"b{i}-a", $"b{i}-b", skew: 0.02f);
+
+        using var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _, _) => Array.Empty<(string, string, float)>());
+        for (int i = 0; i < namespaces; i++)
+            scanner.Scan($"bulk-{i:D2}", 0.85f, 0, tenantId: Tenant, maxPairComparisons: 1);
+        Assert.Equal(namespaces, scanner.ResumeCursorCount);
+
+        for (int i = survivors; i < namespaces; i++)
+            _index.DeleteAllInNamespace($"bulk-{i:D2}", Tenant);
+
+        // No scan after deletion: the lifecycle hook itself must establish the bound.
+        Assert.Equal(survivors, scanner.ResumeCursorCount);
+    }
+
+    [Fact]
+    public void NamespaceDeletion_UsesTheNormalizedCursorKey()
+    {
+        const string ns = "normalized-delete";
+        PlantPairInNamespace(ns, slot: 0, "nd-a", "nd-b", skew: 0.02f);
+
+        using var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _, _) => Array.Empty<(string, string, float)>());
+        scanner.Scan(ns, 0.85f, 0, tenantId: "  acme  ", maxPairComparisons: 1);
+        Assert.Equal(1, scanner.ResumeCursorCount);
+
+        _index.DeleteAllInNamespace(ns, " acme ");
+        Assert.Equal(0, scanner.ResumeCursorCount);
+    }
+
+    /// <summary>
+    /// Deletion can race an already-running scan after it captured candidates. The lifecycle event
+    /// and the cursor write share a short gate, and the writer rechecks liveness under that gate, so
+    /// the stale scan cannot resurrect the deleted key after the event retracts it.
+    /// </summary>
+    [Fact]
+    public void NamespaceDeletedMidScan_CannotHaveItsCursorResurrected()
+    {
+        const string ns = "delete-mid-scan";
+        PlantPairInNamespace(ns, slot: 0, "dm-a", "dm-b", skew: 0.02f);
+
+        IEnumerable<(string IdA, string IdB, float Similarity)> DeleteDuringEnumeration()
+        {
+            _index.DeleteAllInNamespace(ns, Tenant);
+            yield break;
+        }
+
+        using var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _, _) => DeleteDuringEnumeration());
+        scanner.Scan(ns, 0.85f, 0, tenantId: Tenant, maxPairComparisons: 1);
+
+        Assert.Equal(0, scanner.ResumeCursorCount);
     }
 
     // ── fixtures ──
@@ -1920,7 +2040,7 @@ public class AutoLinkCapAccountingTests : IDisposable
         }
 
         var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
-            pairs: (candidates, _, _, _) => Source(candidates));
+            pairs: (candidates, _, _, _, _) => Source(candidates));
 
         return scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: Tenant,
             cancellationToken: cts.Token);
@@ -2038,7 +2158,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// still really consulted, so everything downstream of the ordering is the production path.
     /// </summary>
     private AutoLinkScanner ScannerOver(IEnumerable<(string IdA, string IdB, float Similarity)> script)
-        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _) => script);
+        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _, _) => script);
 
     /// <summary>
     /// As <see cref="ScannerOver"/>, plus the cost probe: everything the pair loop still held when
@@ -2050,7 +2170,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// </summary>
     private AutoLinkScanner ScannerOver(
         IEnumerable<(string IdA, string IdB, float Similarity)> script, Action<AutoLinkScanProbe> onProbe)
-        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _) => script,
+        => new(_index, _graph, new DuplicateDetector(), pairs: (_, _, _, _, _) => script,
             logger: null, onScanProbe: onProbe);
 
     /// <summary>
@@ -2068,10 +2188,10 @@ public class AutoLinkCapAccountingTests : IDisposable
     private AutoLinkScanner CountingScanner(Action onPass)
     {
         var detector = new DuplicateDetector();
-        return new AutoLinkScanner(_index, _graph, detector, pairs: (candidates, threshold, window, token) =>
+        return new AutoLinkScanner(_index, _graph, detector, pairs: (candidates, threshold, window, token, progress) =>
         {
             onPass();
-            return detector.StreamDuplicates(candidates, threshold, window, token);
+            return detector.StreamDuplicates(candidates, threshold, window, token, progress);
         });
     }
 
@@ -2084,7 +2204,7 @@ public class AutoLinkCapAccountingTests : IDisposable
     private AutoLinkScanner WindowedScannerOver(
         IReadOnlyDictionary<int, (string IdA, string IdB, float Similarity)[]> rowsByAnchor)
         => new(_index, _graph, new DuplicateDetector(),
-            pairs: (candidates, _, window, _) => EnumerateWindow(candidates.Count, window, rowsByAnchor));
+            pairs: (candidates, _, window, _, _) => EnumerateWindow(candidates.Count, window, rowsByAnchor));
 
     private static IEnumerable<(string IdA, string IdB, float Similarity)> EnumerateWindow(
         int count, PairScanWindow window,

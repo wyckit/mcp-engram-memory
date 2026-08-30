@@ -223,8 +223,11 @@ public class LifecycleFaultIsolationTests : IDisposable
     [Fact]
     public void GetBasis_CachesFailurePerGraphRevision()
     {
-        _index.Upsert(new CognitiveEntry("b_0", new[] { 1f, 0f }, "bad", "bad 0"));
-        _index.Upsert(new CognitiveEntry("b_1", new[] { 0f, 1f }, "bad", "bad 1"));
+        // Keep the controlled failure in a namespace that genuinely qualifies by node count.
+        // A below-threshold namespace has only bypass/lock state and is intentionally retracted by
+        // the next bounded cleanup step rather than negative-cached indefinitely.
+        for (int i = 0; i < MemoryDiffusionKernel.MinimumNodesForSpectral; i++)
+            _index.Upsert(new CognitiveEntry($"b_{i}", new[] { i + 1f, 1f }, "bad", $"bad {i}"));
 
         var kernel = new ThrowingDiffusionKernel(_index, _graph, failingNs: "bad");
 

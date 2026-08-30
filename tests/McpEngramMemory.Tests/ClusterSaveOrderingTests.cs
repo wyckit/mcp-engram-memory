@@ -217,6 +217,66 @@ public sealed class ClusterSaveOrderingTests : IDisposable
         Assert.Equal(live.MemberCount, persisted.MemberIds.Count);
     }
 
+    /// <summary>
+    /// A centroid computed by an older single-cluster update may not be published onto the member
+    /// list installed by a newer update that completed through the save-registration gap.
+    /// </summary>
+    [Fact]
+    public void AnOlderUpdateCannotPublishItsCentroidOntoANewerMemberList()
+    {
+        var store = new ClusterCapturingStore(_persistence);
+        var clusters = new ClusterManager(_index, store);
+
+        Assert.Contains("Created", clusters.CreateCluster("c1", Ns, new[] { "m1", "m2" }, "one", Tenant));
+
+        clusters.OnBeforeScheduleSave = () =>
+        {
+            clusters.OnBeforeScheduleSave = null;
+            Assert.Contains("Updated",
+                clusters.UpdateCluster("c1", null, new[] { "m1" }, null, Tenant));
+        };
+
+        Assert.Contains("Updated",
+            clusters.UpdateCluster("c1", new[] { "m3" }, null, null, Tenant));
+        clusters.OnBeforeScheduleSave = null;
+
+        store.Commit();
+        var persisted = store.LoadClusters().Single(c => c.ClusterId == "c1");
+
+        Assert.Equal(new[] { "m2", "m3" }, persisted.MemberIds);
+        Assert.Equal(new[] { 0.5f, 1f }, persisted.Centroid);
+    }
+
+    /// <summary>
+    /// The batched centroid path used by cascade eviction has the same generation requirement as a
+    /// normal update. A nested edit wins both membership and centroid.
+    /// </summary>
+    [Fact]
+    public void AnOlderCascadeCannotPublishItsCentroidOntoANewerMemberList()
+    {
+        var store = new ClusterCapturingStore(_persistence);
+        var clusters = new ClusterManager(_index, store);
+
+        Assert.Contains("Created",
+            clusters.CreateCluster("c1", Ns, new[] { "m1", "m2", "m3" }, "one", Tenant));
+
+        clusters.OnBeforeScheduleSave = () =>
+        {
+            clusters.OnBeforeScheduleSave = null;
+            Assert.Contains("Updated",
+                clusters.UpdateCluster("c1", null, new[] { "m2" }, null, Tenant));
+        };
+
+        clusters.RemoveEntryFromAllClusters("m1", Tenant);
+        clusters.OnBeforeScheduleSave = null;
+
+        store.Commit();
+        var persisted = store.LoadClusters().Single(c => c.ClusterId == "c1");
+
+        Assert.Equal(new[] { "m3" }, persisted.MemberIds);
+        Assert.Equal(new[] { 1f, 1f }, persisted.Centroid);
+    }
+
     // ══════════════════════════════════════════════════════════════════════════════════════════
     // 2. A PROVIDER THAT WRITES TO THE INDEX WHILE IT IS BEING ASKED TO LOAD
     // ══════════════════════════════════════════════════════════════════════════════════════════

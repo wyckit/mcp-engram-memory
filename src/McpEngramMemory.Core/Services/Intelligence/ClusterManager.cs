@@ -220,6 +220,19 @@ public sealed class ClusterManager
     /// </summary>
     internal Action? OnValidatedUnderFence;
 
+    /// <summary>
+    /// TEST SEAM: invoked after a read projection has admitted a bare id and immediately before the
+    /// id is used (resolved or counted). A deterministic test plants an ambiguity crossing in the
+    /// exact interval the optimistic end-of-projection revision check must invalidate.
+    /// </summary>
+    internal Action? OnTopologyReadAdmitted;
+
+    /// <summary>
+    /// One retry is enough to rebuild after a single crossing. A tenant whose attribution keeps
+    /// moving fails closed rather than spinning a principal-facing read indefinitely.
+    /// </summary>
+    private const int AttributionReadAttempts = 2;
+
     /// <summary>Total number of clusters, across all tenants.</summary>
     public int ClusterCount
     {
@@ -302,7 +315,7 @@ public sealed class ClusterManager
         // Compute centroid outside cluster lock AND outside the fence: it resolves through _index,
         // which has its own locks and whose lazy load asks for the fence's exclusive side.
         var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenant, guard);
-        ApplyCentroid(key, centroid, guard, tenant);
+        ApplyCentroid(key, memberIdsCopy, centroid, guard, tenant);
 
         // The count of what was actually stored, not of what was asked for. A cluster that reports
         // three members and holds two is a lie, and the difference is the same one bit the guard
@@ -325,7 +338,8 @@ public sealed class ClusterManager
     /// computation between them MUST NOT run inside the fence — see the class remarks.
     /// </summary>
     private void ApplyCentroid(
-        (string Tenant, string Id) key, float[]? centroid, TopologyGuard.Sweep guard, string tenant)
+        (string Tenant, string Id) key, List<string> expectedMemberIds,
+        float[]? centroid, TopologyGuard.Sweep guard, string tenant)
     {
         bool published = false;
         var fence = _index.EnterAttributionFence(tenant);
@@ -337,7 +351,13 @@ public sealed class ClusterManager
                 if (AttributionMovedSince(guard, tenant))
                     return;
 
-                if (_clusters.TryGetValue(key, out var c))
+                // Attribution freshness is only half of a derived-state write. The centroid was
+                // computed from expectedMemberIds outside this lock; a newer cluster mutation can
+                // replace that immutable list without moving the attribution revision. Published
+                // member lists are never mutated, so reference identity is an exact, allocation-free
+                // membership generation token. A mismatch means the newer mutator owns the centroid.
+                if (_clusters.TryGetValue(key, out var c)
+                    && ReferenceEquals(c.MemberIds, expectedMemberIds))
                 {
                     Publish(key, Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId));
                     published = true;
@@ -434,7 +454,7 @@ public sealed class ClusterManager
 
         // Compute centroid outside cluster lock and outside the fence, apply it under both.
         var centroid = ComputeCentroidFromMembers(memberIdsCopy, tenant, guard);
-        ApplyCentroid(key, centroid, guard, tenant);
+        ApplyCentroid(key, memberIdsCopy, centroid, guard, tenant);
 
         return $"Updated cluster '{clusterId}' ({memberCount} members).";
     }
@@ -522,80 +542,96 @@ public sealed class ClusterManager
     /// </summary>
     public GetClusterResult? GetCluster(string clusterId, string tenantId)
     {
-        // Snapshot cluster info under lock, resolve entries outside
-        string? clusterLabel;
-        string clusterNs;
-        List<string> memberIds;
-        string? summaryEntryId;
-
         // The tenant arrives raw from the principal, while the map is keyed by SemanticCluster's
         // normalized TenantId. Comparing the two forms is the split-brain that makes a tenant's own
         // cluster look absent to it, so normalize before the lookup rather than after.
         var tenant = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
-        try
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
         {
-            EnsureLoaded();
-            if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
-                return null;
+            // Snapshot cluster info under lock, resolve entries outside.
+            string? clusterLabel;
+            string clusterNs;
+            List<string> memberIds;
+            string? summaryEntryId;
 
-            clusterLabel = cluster.Label;
-            clusterNs = cluster.Ns;
-            memberIds = cluster.MemberIds.ToList();
-            summaryEntryId = cluster.SummaryEntryId;
-        }
-        finally { _lock.ExitUpgradeableReadLock(); }
+            _lock.EnterUpgradeableReadLock();
+            try
+            {
+                EnsureLoaded();
+                if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
+                    return null;
 
-        // One sweep for the whole projection, built after the cluster lock is released: the guard
-        // resolves through CognitiveIndex, and a per-member test would re-list the tenant's
-        // namespaces once per member.
-        var guard = TopologyGuard.ForSweep(_index, tenant);
+                clusterLabel = cluster.Label;
+                clusterNs = cluster.Ns;
+                memberIds = cluster.MemberIds.ToList();
+                summaryEntryId = cluster.SummaryEntryId;
+            }
+            finally { _lock.ExitUpgradeableReadLock(); }
 
-        // Resolve members and summary outside cluster lock, scoped to the tenant. The screen runs
-        // BEFORE the resolve, so an unattributable id never becomes an entry at all.
-        var resolvedMembers = new List<CognitiveEntry>();
-        int memberCount = 0;
-        foreach (var memberId in memberIds)
-        {
-            if (!guard.IsTopologySafe(memberId)) continue;
-            memberCount++;
+            // One sweep for the whole projection, built after the cluster lock is released: the
+            // guard resolves through CognitiveIndex, and a per-member test would re-list the
+            // tenant's namespaces once per member.
+            var guard = TopologyGuard.ForSweep(_index, tenant);
 
-            var entry = ResolveEntry(memberId, tenant);
-            if (entry is not null)
-                resolvedMembers.Add(entry);
-        }
+            // Resolve members and summary outside cluster lock, scoped to the tenant. The screen
+            // runs BEFORE the resolve, and the revision validation below makes the two steps one
+            // optimistic read: a crossing between them discards the whole projection.
+            var resolvedMembers = new List<CognitiveEntry>();
+            int memberCount = 0;
+            foreach (var memberId in memberIds)
+            {
+                if (!guard.IsTopologySafe(memberId)) continue;
+                OnTopologyReadAdmitted?.Invoke();
+                memberCount++;
 
-        var members = resolvedMembers
-            .Select(e => new CognitiveEntryInfo(e.Id, e.Text, e.Ns, e.Category, e.LifecycleState))
-            .ToList();
+                var entry = ResolveEntry(memberId, tenant);
+                if (entry is not null)
+                    resolvedMembers.Add(entry);
+            }
 
-        CognitiveSearchResult? summaryEntry = null;
-        CognitiveEntry? summaryEnt = null;
-        // The summary node is reached by the bare id "summary:{clusterId}" like any other member,
-        // so it gets the same screen: a tenant that holds that id twice would otherwise have the
-        // wrong copy's TEXT served as this cluster's summary.
-        if (summaryEntryId is not null && guard.IsTopologySafe(summaryEntryId))
-        {
-            summaryEnt = ResolveEntry(summaryEntryId, tenant);
+            var members = resolvedMembers
+                .Select(e => new CognitiveEntryInfo(e.Id, e.Text, e.Ns, e.Category, e.LifecycleState))
+                .ToList();
+
+            CognitiveSearchResult? summaryEntry = null;
+            CognitiveEntry? summaryEnt = null;
+            // The summary node is reached by the bare id "summary:{clusterId}" like any other member,
+            // so it gets the same screen: a tenant that holds that id twice would otherwise have the
+            // wrong copy's TEXT served as this cluster's summary.
+            if (summaryEntryId is not null && guard.IsTopologySafe(summaryEntryId))
+            {
+                OnTopologyReadAdmitted?.Invoke();
+                summaryEnt = ResolveEntry(summaryEntryId, tenant);
+                if (summaryEnt is not null)
+                    summaryEntry = new CognitiveSearchResult(summaryEnt.Id, summaryEnt.Text, 0f, summaryEnt.LifecycleState,
+                        summaryEnt.ActivationEnergy, summaryEnt.Category, summaryEnt.Metadata, summaryEnt.IsSummaryNode, summaryEnt.SourceClusterId);
+            }
+
+            // Staleness: summary is stale if cluster membership changed since summary was stored.
+            // Compared over the members already resolved above — re-resolving would re-admit exactly
+            // the ids the screen just excluded, and a CreatedAt comparison against a withheld twin is
+            // still that twin answering a question about this cluster.
+            bool isStale = false;
             if (summaryEnt is not null)
-                summaryEntry = new CognitiveSearchResult(summaryEnt.Id, summaryEnt.Text, 0f, summaryEnt.LifecycleState,
-                    summaryEnt.ActivationEnergy, summaryEnt.Category, summaryEnt.Metadata, summaryEnt.IsSummaryNode, summaryEnt.SourceClusterId);
+            {
+                var summaryCreatedAt = summaryEnt.CreatedAt;
+                isStale = resolvedMembers.Any(member => member.CreatedAt > summaryCreatedAt);
+            }
+
+            var result = new GetClusterResult(clusterId, clusterLabel, clusterNs,
+                memberCount, members, summaryEntry, isStale);
+
+            // Reads can close the TOCTOU optimistically because their provisional result is
+            // discardable. If no crossing occurred from the sweep capture through this final read,
+            // the result linearizes here. A crossing after this read linearizes after the result;
+            // one before it invalidates every resolved entry and triggers one fresh projection.
+            if (!AttributionMovedSince(guard, tenant))
+                return result;
         }
 
-        // Staleness: summary is stale if cluster membership changed since summary was stored.
-        // Compared over the members already resolved above — re-resolving would re-admit exactly
-        // the ids the screen just excluded, and a CreatedAt comparison against a withheld twin is
-        // still that twin answering a question about this cluster.
-        bool isStale = false;
-        if (summaryEnt is not null)
-        {
-            var summaryCreatedAt = summaryEnt.CreatedAt;
-            isStale = resolvedMembers.Any(member => member.CreatedAt > summaryCreatedAt);
-        }
-
-        return new GetClusterResult(clusterId, clusterLabel, clusterNs,
-            memberCount, members, summaryEntry, isStale);
+        // Continuous tenant-wide attribution churn must not make a principal-facing read spin.
+        return null;
     }
 
     /// <summary>
@@ -610,35 +646,53 @@ public sealed class ClusterManager
     {
         var tenant = Tenancy.Normalize(tenantId);
 
-        // Snapshot under the lock, count outside it: counting consults the guard, the guard
-        // resolves through CognitiveIndex, and this class never holds the cluster lock across
-        // index work.
-        List<(string ClusterId, string? Label, List<string> MemberIds, bool HasSummary)> snapshot;
-        _lock.EnterUpgradeableReadLock();
-        try
+        for (int attempt = 0; attempt < AttributionReadAttempts; attempt++)
         {
-            EnsureLoaded();
-            snapshot = _clusters.Values
-                .Where(c => c.Ns == ns && c.TenantId == tenant)
-                .Select(c => (
-                    ClusterId: c.ClusterId,
-                    Label: c.Label,
-                    MemberIds: c.MemberIds.ToList(),
-                    HasSummary: c.SummaryEntryId is not null))
-                .ToList();
+            // Snapshot under the lock, count outside it: counting consults the guard, the guard
+            // resolves through CognitiveIndex, and this class never holds the cluster lock across
+            // index work.
+            List<(string ClusterId, string? Label, List<string> MemberIds, bool HasSummary)> snapshot;
+            _lock.EnterUpgradeableReadLock();
+            try
+            {
+                EnsureLoaded();
+                snapshot = _clusters.Values
+                    .Where(c => c.Ns == ns && c.TenantId == tenant)
+                    .Select(c => (
+                        ClusterId: c.ClusterId,
+                        Label: c.Label,
+                        MemberIds: c.MemberIds.ToList(),
+                        HasSummary: c.SummaryEntryId is not null))
+                    .ToList();
+            }
+            finally { _lock.ExitUpgradeableReadLock(); }
+
+            if (snapshot.Count == 0)
+                return Array.Empty<ClusterSummaryInfo>();
+
+            // One sweep for every cluster in the listing — the same id recurs across clusters, and
+            // the memo answers each repeat for free.
+            var guard = TopologyGuard.ForSweep(_index, tenant);
+            var result = new List<ClusterSummaryInfo>(snapshot.Count);
+            foreach (var cluster in snapshot)
+            {
+                int memberCount = 0;
+                foreach (var memberId in cluster.MemberIds)
+                {
+                    if (!guard.IsTopologySafe(memberId)) continue;
+                    OnTopologyReadAdmitted?.Invoke();
+                    memberCount++;
+                }
+
+                result.Add(new ClusterSummaryInfo(
+                    cluster.ClusterId, cluster.Label, memberCount, cluster.HasSummary));
+            }
+
+            if (!AttributionMovedSince(guard, tenant))
+                return result;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
 
-        if (snapshot.Count == 0)
-            return Array.Empty<ClusterSummaryInfo>();
-
-        // One sweep for every cluster in the listing — the same id recurs across clusters, and the
-        // memo answers each repeat for free.
-        var guard = TopologyGuard.ForSweep(_index, tenant);
-        return snapshot
-            .Select(c => new ClusterSummaryInfo(
-                c.ClusterId, c.Label, c.MemberIds.Count(guard.IsTopologySafe), c.HasSummary))
-            .ToList();
+        return Array.Empty<ClusterSummaryInfo>();
     }
 
     /// <summary>
@@ -687,9 +741,10 @@ public sealed class ClusterManager
     /// reaching the primitive directly cannot skip it, and the centroid this recomputes reads the
     /// OTHER members of every affected cluster — nodes no argument names.
     ///
-    /// Pass the <c>guard</c> overload a sweep shared with the OTHER cascade primitive for the same
-    /// id — <see cref="Graph.KnowledgeGraph.RemoveAllEdgesForEntry(string, string,
-    /// TopologyGuard.Sweep)"/> — so one namespace listing covers both halves of that id's purge.
+    /// The cascade passes this overload a sweep captured immediately before cluster eviction. It is
+    /// intentionally NOT the sweep used by the preceding graph primitive: graph persistence is
+    /// scheduled after that primitive releases its fence, and an unrelated crossing in the gap
+    /// would make a reused sweep stale and silently skip this cleanup.
     ///
     /// SHARING A SWEEP ACROSS MANY IDS IS A DIFFERENT PROPOSITION AND IS NOT WHAT THIS IS FOR. A
     /// sweep carries ONE <see cref="TopologyGuard.Sweep.AttributionRevision"/>, and every mutator
@@ -793,9 +848,10 @@ public sealed class ClusterManager
         // Phase 2: Recompute centroids outside cluster lock AND outside the fence
         if (affectedClusters.Count == 0) return;
 
-        var centroids = new List<(string clusterId, float[]? centroid)>();
+        var centroids = new List<(string clusterId, List<string> expectedMemberIds, float[]? centroid)>();
         foreach (var (clusterId, updated) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
+            centroids.Add((clusterId, updated.MemberIds,
+                ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
 
         // Phase 3: Apply centroids under the fence and the cluster lock — see ApplyCentroids.
         ApplyCentroids(centroids, guard, tenant);
@@ -811,7 +867,8 @@ public sealed class ClusterManager
     /// pay a round trip per affected cluster.
     /// </summary>
     private void ApplyCentroids(
-        List<(string ClusterId, float[]? Centroid)> centroids, TopologyGuard.Sweep guard, string tenant)
+        List<(string ClusterId, List<string> ExpectedMemberIds, float[]? Centroid)> centroids,
+        TopologyGuard.Sweep guard, string tenant)
     {
         bool published = false;
         var fence = _index.EnterAttributionFence(tenant);
@@ -823,9 +880,10 @@ public sealed class ClusterManager
                 if (AttributionMovedSince(guard, tenant))
                     return;
 
-                foreach (var (clusterId, centroid) in centroids)
+                foreach (var (clusterId, expectedMemberIds, centroid) in centroids)
                 {
-                    if (_clusters.TryGetValue((tenant, clusterId), out var c))
+                    if (_clusters.TryGetValue((tenant, clusterId), out var c)
+                        && ReferenceEquals(c.MemberIds, expectedMemberIds))
                     {
                         Publish((tenant, clusterId), Replace(c, c.MemberIds, c.Label, centroid, c.SummaryEntryId));
                         published = true;
@@ -934,9 +992,10 @@ public sealed class ClusterManager
         // Recompute centroids outside the lock AND outside the fence
         if (affectedClusters.Count == 0) return 0;
 
-        var centroids = new List<(string clusterId, float[]? centroid)>();
+        var centroids = new List<(string clusterId, List<string> expectedMemberIds, float[]? centroid)>();
         foreach (var (clusterId, updated) in affectedClusters)
-            centroids.Add((clusterId, ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
+            centroids.Add((clusterId, updated.MemberIds,
+                ComputeCentroidFromMembers(updated.MemberIds, tenant, guard)));
 
         ApplyCentroids(centroids, guard, tenant);
 
