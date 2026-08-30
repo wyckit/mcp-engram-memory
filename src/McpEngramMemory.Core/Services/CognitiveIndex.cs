@@ -231,6 +231,99 @@ public sealed class CognitiveIndex : IDisposable
         => _store.AttributionRevisionFor(Tenancy.Normalize(tenantId));
 
     /// <summary>
+    /// Take the SHARED side of <paramref name="tenantId"/>'s attribution fence, and hold it across
+    /// a topology mutation's final attribution validation AND the mutation itself.
+    ///
+    /// THIS IS THE GUARANTEE THAT <see cref="AttributionRevisionFor"/> IS NOT. The counter says
+    /// whether attribution moved before it was read; it says nothing about the interval between
+    /// that read and the write it was read for, and nothing in this index coordinates with
+    /// <see cref="Graph.KnowledgeGraph"/>'s or <see cref="Intelligence.ClusterManager"/>'s locks —
+    /// so a twin could land after the comparison and before the mutation, and the mutation would
+    /// publish a bare id two entries answer to. Under the shared side no id in the tenant can cross
+    /// the ambiguity boundary at all, because the crossing takes the EXCLUSIVE side
+    /// (<c>NamespaceStore.TrackCandidate</c> / <c>UntrackCandidate</c>, the two places a crossing is
+    /// detected). So a revision compare made under this hold stays true for as long as it is held,
+    /// which turns a narrowed race into no race.
+    ///
+    /// CONTRACT FOR THE HOLDER, and it is what keeps the fence deadlock-free:
+    ///  - Take it OUTERMOST — before the graph or cluster write lock, released after it.
+    ///  - Call NOTHING on this index while holding it except <see cref="AttributionRevisionFor"/>,
+    ///    which is a lock-free dictionary read. Every other entry point can take a per-partition
+    ///    lock or trigger a lazy store load, and a load TRACKS what it materializes, which is a
+    ///    request for the exclusive side of this same fence. Materialize persisted state before
+    ///    taking the fence, not under it.
+    ///  - Never nest. The underlying primitive is non-recursive, so re-entry throws rather than
+    ///    deadlocking; no mutator calls another mutator, which is what makes that a safety net
+    ///    rather than a live hazard.
+    ///  - A mutator spanning several tenants takes their fences in ORDINAL TENANT ORDER, so two
+    ///    such mutators can never hold half of each other's set.
+    ///
+    /// RETURNS THE INSTANCE IT ENTERED, and the caller MUST release through that reference rather
+    /// than by naming the tenant again. A release that re-resolves the fence by key is a release
+    /// against whatever the dictionary holds at that later moment, and the two can differ: teardown
+    /// unpublishes fences, and an accessor that mints on miss would then hand the holder a
+    /// brand-new lock to call ExitReadLock on. That throws
+    /// <see cref="SynchronizationLockException"/> out of the holder's finally block — replacing the
+    /// mutator's return value with an exception — while the fence it actually holds keeps its
+    /// reader forever and every crossing waiting on that fence's exclusive side sleeps forever,
+    /// each one still holding its own partition write lock. Holding the reference makes the release
+    /// exact by construction instead of by re-derivation.
+    ///
+    /// Pairs with <see cref="ExitAttributionFence"/> in a finally. Internal because it is a
+    /// concurrency contract between this index and the two topology writers in this assembly, not
+    /// something a tool or a host should be reaching for.
+    /// </summary>
+    /// <param name="tenantId">Required. "" is the legacy partition, not a wildcard.</param>
+    /// <returns>The fence whose shared side is now held — release it with
+    /// <see cref="ExitAttributionFence"/>.</returns>
+    /// <exception cref="ObjectDisposedException">This index has been disposed.</exception>
+    internal ReaderWriterLockSlim EnterAttributionFence(string tenantId)
+    {
+        var fence = _store.AttributionFenceFor(Tenancy.Normalize(tenantId));
+        fence.EnterReadLock();
+        return fence;
+    }
+
+    /// <summary>
+    /// Release the shared side taken by <see cref="EnterAttributionFence"/>, through the instance
+    /// that call returned.
+    ///
+    /// Takes the fence rather than the tenant so there is no lookup to get wrong and no way to
+    /// release a lock other than the one held — see <see cref="EnterAttributionFence"/> for what a
+    /// re-resolving release did. Static for the same reason: releasing needs nothing from this
+    /// index, and a signature that asked for something from it would invite the lookup back.
+    /// </summary>
+    internal static void ExitAttributionFence(ReaderWriterLockSlim fence)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        fence.ExitReadLock();
+    }
+
+    /// <summary>
+    /// TEST SEAM: how many threads are currently blocked waiting for the EXCLUSIVE side of a
+    /// tenant's attribution fence. Zero when the tenant has no fence at all.
+    ///
+    /// It exists so a concurrency test can rendezvous on a CONDITION rather than on a delay. The
+    /// property being tested is "an ambiguity-changing entry write cannot land between a topology
+    /// mutator's validation and its mutation", and the only deterministic way to observe that from
+    /// outside is to suspend the mutator at that exact point and watch the interfering write pile
+    /// up against the fence. A sleep would prove nothing; this is a state the test can wait on.
+    ///
+    /// Resolves without minting: a diagnostic read must not be the thing that publishes a fence.
+    /// </summary>
+    internal int AttributionFenceWaitingWriters(string tenantId)
+        => _store.TryGetAttributionFence(Tenancy.Normalize(tenantId)) is { } fence
+            ? fence.WaitingWriteCount
+            : 0;
+
+    /// <summary>
+    /// TEST SEAM: how many tenant fences are still published. Pairs with
+    /// <see cref="DisposalContendedFenceCount"/> to state that a fence held across
+    /// <see cref="Dispose"/> was LEFT IN PLACE rather than unpublished under its holder.
+    /// </summary>
+    internal int AttributionFenceCount => _store.AttributionFenceCount;
+
+    /// <summary>
     /// All distinct tenant ids in the store (includes the legacy tenant "" when legacy data exists).
     /// Loads every persisted namespace first so background maintenance can cover every tenant.
     /// </summary>
@@ -1415,6 +1508,18 @@ public sealed class CognitiveIndex : IDisposable
         }
         _nsLocks.Clear();
         DisposalContendedLockCount = skipped;
+
+        // The per-tenant attribution fences, on the same best-effort terms and for the same reason:
+        // a fence still held by a maintenance pass that outlived the shutdown timeout throws, and
+        // an escape here abandons the persistence flush. Deliberately NOT folded into
+        // DisposalContendedLockCount — that figure names contended NAMESPACE locks, which is what
+        // the disposal tests assert on, and quietly widening it would change what they measure.
+        //
+        // The count is KEPT rather than discarded. A discarded return value is an unobservable
+        // outcome, and "a fence was held when the index was torn down" is exactly the state whose
+        // handling has to be pinned by a test: the holder must still be able to release, through
+        // the reference it captured, against a fence this walk left published.
+        DisposalContendedFenceCount = _store.DisposeAttributionFences();
     }
 
     /// <summary>
@@ -1424,6 +1529,18 @@ public sealed class CognitiveIndex : IDisposable
     /// cares can read it after disposing, and the disposal tests assert on it.
     /// </summary>
     public int DisposalContendedLockCount { get; private set; }
+
+    /// <summary>
+    /// How many per-tenant attribution fences were still held when <see cref="Dispose"/> ran, and
+    /// so were left both undisposed and PUBLISHED. Separate from
+    /// <see cref="DisposalContendedLockCount"/>, which counts namespace locks: the two answer
+    /// different questions and the disposal tests assert on them separately.
+    ///
+    /// Non-zero means a topology mutator was mid-flight at teardown. That is survivable by design —
+    /// the mutator releases through the reference it captured, so the fence it holds must still be
+    /// the instance it entered, which is why a contended fence is never unpublished.
+    /// </summary>
+    public int DisposalContendedFenceCount { get; private set; }
 
     // ── Internal Helpers ──
 

@@ -156,17 +156,37 @@ public sealed record ConsolidationResult(
 /// space was covered. It names nothing the caller did not name, so it is not an oracle: the caller
 /// already had to hold write access to this namespace to ask.
 ///
-/// TWO PAIR COUNTS, AND NEITHER STANDS IN FOR THE OTHER. <see cref="PairsExamined"/> is the WORK: the
-/// pair slots this pass's window covered, in the same unit — and now the same type — as the
-/// <c>maxPairComparisons</c> budget that bounds it. <see cref="PairsAboveThreshold"/> is the FIND:
-/// how many of those pairs cleared the similarity threshold. For several rounds there was one field,
-/// named for the first and holding the second, because the counter sat in a loop the pair stream
-/// only feeds with pairs that already passed. In a steady-state namespace those differ by three to
-/// five orders of magnitude — 40 neighbours found across 18,000,000 comparisons — and the smaller
-/// one does not even move monotonically with the work: a namespace of near-duplicates reports a
-/// large number for the identical walk that reports a tiny one when nothing matches. It was the only
-/// cost number this subsystem published, and an operator tuning <c>maxPairComparisons</c> against it
-/// was reading how much it found, not how much it did.
+/// THREE PAIR COUNTS, AND NONE OF THEM STANDS IN FOR ANOTHER.
+///
+/// <see cref="PairsExamined"/> is the WORK DONE: pair slots this pass actually walked, in the same
+/// unit — and the same type — as the <c>maxPairComparisons</c> budget that bounds it.
+///
+/// <see cref="PairSlotsPlanned"/> is the WORK BUDGETED: the slots this pass's window covers, which
+/// is what the budget bought and what a completed pass spends in full. It is what an operator sizing
+/// <c>maxPairComparisons</c> reads, and it is a property of the window rather than of the run —
+/// computed before the first anchor, so it is available whether the pass ran or not.
+///
+/// <see cref="PairsAboveThreshold"/> is the FIND: how many of the pairs walked cleared the
+/// similarity threshold.
+///
+/// For several rounds there was ONE field for all of this. It was named for the work and held the
+/// find, because the counter sat in a loop the pair stream only feeds with pairs that already
+/// passed; in a steady-state namespace those differ by three to five orders of magnitude — 40
+/// neighbours found across 18,000,000 comparisons — and the find does not even move monotonically
+/// with the work, since a namespace of near-duplicates reports a large number for the identical walk
+/// that reports a tiny one when nothing matches. It was then named for the work and held the PLAN,
+/// which is the same class of error one step along: the plan is computed before enumeration, and
+/// cancellation can stop a walk before its first anchor, so a pre-cancelled scan over three entries
+/// compared nothing at all and reported three pairs examined.
+///
+/// WHAT "EXAMINED" GUARANTEES. On a pass that ran to the end of its window the two cost numbers are
+/// equal and both exact — the scan's pair loop has no early exit, so an exhausted stream has visited
+/// every slot of the window. On a CANCELLED pass <see cref="PairsExamined"/> is a lower bound: the
+/// slots up to and including the last pair the scan was handed, and zero when it was handed none.
+/// The pair source stops at an anchor boundary and reports no progress of its own, and an anchor
+/// whose whole row fell below the threshold yields nothing, so the walk past the last delivered pair
+/// is not observable from outside it. Under-reporting is the honest direction for a number read as
+/// cost, and <see cref="PairScanIncomplete"/> is always set alongside it.
 /// </summary>
 public sealed record AutoLinkResult(
     [property: JsonPropertyName("namespace")] string Namespace,
@@ -178,10 +198,11 @@ public sealed record AutoLinkResult(
     [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0,
     [property: JsonPropertyName("pairScanIncomplete")] bool PairScanIncomplete = false,
     [property: JsonPropertyName("scanAlreadyInProgress")] bool ScanAlreadyInProgress = false,
-    // Appended rather than placed beside PairsExamined where it belongs: the positional constructor
+    // Appended rather than placed beside PairsExamined where they belong: the positional constructor
     // is public and callers pass the leading parameters by position, so inserting one in the middle
     // silently re-binds their arguments.
-    [property: JsonPropertyName("pairsAboveThreshold")] int PairsAboveThreshold = 0);
+    [property: JsonPropertyName("pairsAboveThreshold")] int PairsAboveThreshold = 0,
+    [property: JsonPropertyName("pairSlotsPlanned")] long PairSlotsPlanned = 0);
 
 /// <summary>
 /// System overview statistics.

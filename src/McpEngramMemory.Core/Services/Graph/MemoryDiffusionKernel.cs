@@ -96,6 +96,14 @@ public class MemoryDiffusionKernel
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
     /// <summary>
+    /// The rotation <see cref="ReconcileOneCachedPartition"/> walks, one partition per
+    /// <see cref="GetBasis"/> call, and the gate that keeps two concurrent calls from stepping it at
+    /// once. Null between passes.
+    /// </summary>
+    private readonly object _reconcileGate = new();
+    private IEnumerator<KeyValuePair<string, CachedBasis>>? _reconcileWalk;
+
+    /// <summary>
     /// Negative cache: namespaces whose basis computation threw, keyed by the graph AND attribution
     /// revisions at failure time. The eigensolver RNG is seeded from
     /// <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is deterministic per
@@ -149,10 +157,22 @@ public class MemoryDiffusionKernel
     /// </summary>
     private CachedBasis? GetCachedBasis(string ns, string tenantId, int topK)
     {
+        // NORMALIZED ONCE, HERE, and every use below is of this value. The key was composed from
+        // the RAW argument while the two revision reads on the next lines normalized internally, so
+        // a padded tenant cached a basis under one key and compared it against another tenant's
+        // revisions — and Invalidate, which composed the key the same raw way, missed the copy the
+        // warmup service and the search path were actually reading. The warmup service reaches this
+        // through CognitiveIndex.GetAllTenants, which returns store tenants and is therefore always
+        // the canonical spelling; a principal-supplied tenant need not be.
+        tenantId = Tenancy.Normalize(tenantId);
+
         // Cache/lock/failure keys are the (tenant, ns) partition key so a tenant's basis never
         // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
         // legacy cache keys are unchanged.
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
+
+        // Retraction first, and exactly one partition of it — see ReconcileOneCachedPartition.
+        ReconcileOneCachedPartition();
 
         // Both revisions are read BEFORE the data they describe is snapshotted, and this ordering
         // is load-bearing rather than incidental. A mutation landing between the read and the
@@ -307,6 +327,11 @@ public class MemoryDiffusionKernel
     /// </summary>
     public DiffusionStats? GetStats(string ns, string tenantId)
     {
+        // Normalized here as well as inside GetCachedBasis: the freshness compare below reads the
+        // two revisions directly, and comparing a cached entry against another spelling's counters
+        // reports staleness that is an artefact of the key rather than of the data.
+        tenantId = Tenancy.Normalize(tenantId);
+
         if (GetCachedBasis(ns, tenantId, DefaultTopK) is not { } cached) return null;
         var basis = cached.Basis;
         bool stale = !IsFresh(cached, _graph.RevisionFor(tenantId), _index.AttributionRevisionFor(tenantId));
@@ -322,12 +347,133 @@ public class MemoryDiffusionKernel
             stale);
     }
 
-    /// <summary>Drop the cached basis (and any negative-cached failure) for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
+    /// <summary>
+    /// Drop the cached basis (and any negative-cached failure) for a namespace. Next
+    /// <see cref="GetBasis"/> will recompute.
+    ///
+    /// Normalizes the tenant, like every other entry point here: a forced invalidate composed from a
+    /// padded spelling silently addressed a different cache slot from the one the warmup service and
+    /// the search path read, so it appeared to work and cleared nothing.
+    /// </summary>
     public void Invalidate(string ns, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
-        _cache.TryRemove(pk, out _);
-        _failedRevisions.TryRemove(pk, out _);
+        Retract(NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns));
+    }
+
+    /// <summary>
+    /// How many partitions the cache currently holds a basis or a cached failure for.
+    ///
+    /// The seam for the one property that is otherwise invisible: this dictionary must SHRINK when
+    /// the namespaces behind it go away. A retained entry is a <see cref="DiffusionBasis"/> of
+    /// NodeCount x TopK floats plus its eigenvalues — orders of magnitude larger than the int cursor
+    /// that motivated the equivalent retraction in <c>AutoLinkScanner</c> — and nothing about it is
+    /// visible in a result, in the graph or in a timing until the process is out of memory.
+    /// </summary>
+    internal int CachedPartitionCount => _cache.Count;
+
+    /// <summary>
+    /// Forget everything keyed to one partition: the basis, the negative-cached failure, and the
+    /// per-partition compute lock.
+    ///
+    /// Dropping the lock is safe while another thread holds it. The lock exists only to keep two
+    /// callers from eigensolving the same partition at once; a thread that arrives after the removal
+    /// takes a fresh object and may compute concurrently with the holder, and both then write the
+    /// same cache slot with a basis computed from the same revisions. Wasted work, never a wrong
+    /// answer. Keeping the object instead would leave the one structure here that is never retracted.
+    /// </summary>
+    private void Retract(string partitionKey)
+    {
+        _cache.TryRemove(partitionKey, out _);
+        _failedRevisions.TryRemove(partitionKey, out _);
+        _nsLocks.TryRemove(partitionKey, out _);
+    }
+
+    /// <summary>
+    /// Reconcile exactly ONE cached partition against the store, and never more than one.
+    ///
+    /// THE RETRACTION. Nothing tells a DI singleton that a namespace was torn down.
+    /// <c>CognitiveIndex</c> raises no namespace-removal event — <c>EntryDeleted</c> fires per entry
+    /// and not at all from <c>DeleteAllInNamespace</c>, which is the path <c>purge_debates</c> takes
+    /// — and <see cref="Invalidate"/> is called from the diffusion tools and nowhere else, never
+    /// from any teardown path. So a namespace that qualified once, was warmed by
+    /// <c>DiffusionKernelWarmupService</c>, and was then deleted leaves its whole eigenbasis
+    /// resident: the doesn't-qualify branch in <see cref="GetCachedBasis"/> can never reach it,
+    /// because nothing ever asks for that partition's basis again. A host churning one debate
+    /// namespace per conversation accumulates one basis per debate, monotonically, in a process
+    /// designed to run for weeks.
+    ///
+    /// THE COST BOUND, which is why this is a rotation rather than a sweep. The warmup service calls
+    /// <see cref="GetBasis"/> once per namespace per cycle, so anything done here that is linear in
+    /// the number of cached partitions is quadratic per cycle. One partition per call, round-robin,
+    /// gives "reconcile the whole cache once per warmup cycle" without this type having to know what
+    /// a cycle is: there is at most one cache entry per (tenant, namespace), and a cycle steps the
+    /// rotation once per namespace. Per call it is one enumerator step and one partition count — no
+    /// listing, no allocation. This is the same shape, and the same argument, as
+    /// <c>AutoLinkScanner.ReconcileOneResumeCursor</c>.
+    ///
+    /// The probe is <c>CountInNamespace</c>, the same predicate <see cref="ComputeBasis"/> applies:
+    /// a partition below <see cref="MinimumNodesForSpectral"/> cannot produce a basis, so a cached
+    /// one for it is dead state whether the namespace was deleted or merely shrank. Over-removal is
+    /// harmless — the next request recomputes — which is what makes it safe to probe a key another
+    /// thread is currently computing for.
+    /// </summary>
+    private void ReconcileOneCachedPartition()
+    {
+        if (!TryTakeNextCachedPartition(out var pk, out var ns, out var tenant)) return;
+
+        if (_index.CountInNamespace(ns, tenant) < MinimumNodesForSpectral)
+            Retract(pk);
+    }
+
+    /// <summary>
+    /// The next partition of the rotation, resuming where the last call left it and starting a fresh
+    /// pass when it is exhausted.
+    ///
+    /// The enumerator is held across calls, which is the whole point: restarting it per call would
+    /// reconcile the first partition forever and never reach the rest.
+    /// <c>ConcurrentDictionary</c>'s enumerator is explicitly safe to hold while the dictionary is
+    /// mutated — it may miss a key added after it was taken and may surface one removed since — and
+    /// both are harmless: a missed key is reconciled next pass, and a stale key resolves to a
+    /// partition probe whose retraction is a no-op.
+    ///
+    /// The lock covers the enumerator step and nothing else. The partition probe takes a read lock
+    /// inside <c>CognitiveIndex</c> and is deliberately outside this gate, so the gate is never held
+    /// across another component's lock and cannot join a cycle.
+    /// </summary>
+    private bool TryTakeNextCachedPartition(out string partitionKey, out string ns, out string tenant)
+    {
+        lock (_reconcileGate)
+        {
+            var walk = _reconcileWalk;
+            if (walk is null || !walk.MoveNext())
+            {
+                walk?.Dispose();
+                walk = ((IEnumerable<KeyValuePair<string, CachedBasis>>)_cache).GetEnumerator();
+
+                if (!walk.MoveNext())
+                {
+                    // Nothing cached: drop the enumerator rather than keeping an exhausted one, so
+                    // the next call starts a pass that can see entries written since.
+                    walk.Dispose();
+                    _reconcileWalk = null;
+                    partitionKey = ns = tenant = string.Empty;
+                    return false;
+                }
+
+                _reconcileWalk = walk;
+            }
+
+            partitionKey = walk.Current.Key;
+        }
+
+        // Split back into its two components OUTSIDE the gate. The basis records the namespace it
+        // was built for, which is the half a probe needs, and the tenant is whatever precedes the
+        // separator — exactly how PartitionKey composed it, and unambiguous because
+        // ValidatePartitionComponent refuses a separator in either half.
+        int sep = partitionKey.IndexOf(Tenancy.PartitionSeparator);
+        tenant = sep < 0 ? string.Empty : partitionKey.Substring(0, sep);
+        ns = sep < 0 ? partitionKey : partitionKey.Substring(sep + 1);
+        return true;
     }
 
     // ── internals ─────────────────────────────────────────────────────────────

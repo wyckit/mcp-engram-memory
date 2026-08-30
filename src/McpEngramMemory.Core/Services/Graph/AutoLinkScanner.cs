@@ -17,8 +17,15 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// because successive windows tile the pair space instead of repeating one prefix of it.
 ///
 /// It yields only pairs that CLEAR the threshold. A consumer counting the loop body therefore counts
-/// hits and not comparisons, which is why the comparison count is derived from the window instead
-/// (see <see cref="AutoLinkScanner"/>) and why the two are reported separately.
+/// hits and not comparisons, which is why the comparison count comes from the window rather than
+/// from the loop (see <see cref="AutoLinkScanner"/>) and why the two are reported separately.
+///
+/// It also reports NO PROGRESS of its own — a cancelled walk simply stops, and an anchor whose whole
+/// row fell below the threshold yields nothing at all — so the only thing a consumer can witness
+/// about how far a cancelled walk got is the last pair it was handed. That is why
+/// <see cref="AutoLinkResult.PairsExamined"/> is exact for a completed window and a lower bound for
+/// a cancelled one, and why the window's planned size is reported separately rather than in its
+/// place.
 ///
 /// ANCHOR-MAJOR, as a cost hint and not as a correctness precondition. Both detector paths walk one
 /// anchor's row at a time and yield the anchor as <c>IdA</c>, so a consumer memoizing anything keyed
@@ -46,7 +53,8 @@ internal delegate IEnumerable<(string IdA, string IdB, float Similarity)> PairSt
 /// <see cref="PairsAboveThreshold"/> is how many pairs the stream yielded, which is how many cleared
 /// the similarity threshold. It is NOT the comparison count: the stream filters before it yields, so
 /// in a steady-state namespace this is three to five orders of magnitude below the work done. The
-/// work is <see cref="AutoLinkResult.PairsExamined"/>, derived from the window.
+/// work is <see cref="AutoLinkResult.PairsExamined"/>; what the window budgeted for is
+/// <see cref="AutoLinkResult.PairSlotsPlanned"/>, and the two differ whenever a scan is cancelled.
 ///
 /// <see cref="Retained"/> is how many candidates the ranking buffer still held when the loop ended.
 /// The retention that mattered was a set keyed by PAIR, which is quadratic in the namespace; this
@@ -145,15 +153,20 @@ internal readonly record struct AutoLinkScanProbe(
 /// reaches on its own, and the reason a 0.85 threshold finds anything at all — very nearly all of
 /// them are admissible.
 ///
-/// WHAT THE SCAN REPORTS AS ITS COST is the pairs it EXAMINED, which is the window's pair slots and
-/// is derived from the window rather than counted in the loop. The pair stream yields only what
-/// clears the threshold, so a counter in the loop body counts hits; it carried the name "pairs
-/// examined" for several rounds while reporting a number that in steady state is three to five
-/// orders of magnitude smaller, and that does not even move monotonically with the work done. Both
-/// are reported now, separately and under their own names: see <see cref="AutoLinkResult"/>.
+/// WHAT THE SCAN REPORTS AS ITS COST is the pairs it EXAMINED, and that is a different number from
+/// both the pairs that MATCHED and the pairs it PLANNED to examine. The pair stream yields only what
+/// clears the threshold, so a counter in the loop body counts hits; that counter carried the name
+/// "pairs examined" for several rounds while reporting a number three to five orders of magnitude
+/// smaller in steady state, and one that does not even move monotonically with the work done. It was
+/// then replaced by the window's pair-slot count — which is what the pass was BUDGETED, computed
+/// before a single anchor had run, and so was reported in full by a scan that cancellation stopped
+/// before the first one. Three numbers, three names: see <see cref="AutoLinkResult"/>.
 ///
-/// One scan per (tenant, namespace) runs at a time. This is a singleton reachable from both the
-/// background sweep and the tool, and the resume cursor is read, advanced and written as three
+/// One scan per (tenant, namespace) runs at a time, and (tenant, namespace) means the CANONICAL
+/// tenant id — <see cref="Scan"/> normalizes once at the entry point, because the index normalizes
+/// downstream and this type's own keys did not, so "acme" and " acme " named one logical partition
+/// and two different keys. This is a singleton reachable from both the background sweep and the
+/// tool, and the resume cursor is read, advanced and written as three
 /// steps, so two overlapping scans could roll progress backwards onto a window that had already
 /// been paid for — and would meanwhile be running the same quadratic walk twice. The second caller
 /// is turned away rather than queued, and says so: see
@@ -265,6 +278,13 @@ public sealed class AutoLinkScanner
     /// <summary>
     /// The (tenant, namespace) keys a scan is currently inside. Presence is the lock.
     ///
+    /// THE TENANT HALF IS THE CANONICAL ID, and that is a precondition of this being a lock at all.
+    /// Every index operation downstream normalizes for itself, so two spellings of one tenant reach
+    /// the same partition; a key built from the raw argument put them in different slots, and the
+    /// mutual exclusion below then admitted both of them to the same quadratic walk over the same
+    /// mutable graph, each with its own resume cursor. <see cref="Scan"/> normalizes once, before
+    /// this key is composed, and nothing past that point sees the caller's spelling.
+    ///
     /// This type is a SINGLETON reachable from two places at once — the six-hourly
     /// <see cref="AutoLinkBackgroundService"/> and the <c>auto_link</c> tool — over a resume cursor
     /// that is read, advanced and written as three separate steps. Two scans of one key could
@@ -315,17 +335,40 @@ public sealed class AutoLinkScanner
     ///
     /// - A namespace that no longer holds two scannable entries has no pair space to be part-way
     ///   through, so its cursor describes nothing and is dropped on the way out of the early return.
-    /// - <see cref="ForgetCursorsForDeadNamespaces"/> drops the cursors of namespaces the tenant no
-    ///   longer has at all. That is the case the first path cannot reach: a deleted namespace is
-    ///   never scanned again, so it would never come back to have its own cursor removed. Debate
+    /// - <see cref="ReconcileOneResumeCursor"/> drops the cursors of namespaces that no longer hold
+    ///   a pair at all. That is the case the first path cannot reach: a deleted namespace is never
+    ///   scanned again, so it would never come back to have its own cursor removed. Debate
     ///   namespaces make it concrete — <c>active-debate-{sessionId}</c>, one per session, deleted on
     ///   a TTL by <c>purge_debates</c>, and none of them starting with '_' so the sweep scans every
     ///   one of them.
     ///
     /// Together those bound the dictionary by the namespaces that currently hold a pair worth
     /// scanning, rather than by every (tenant, namespace) ever scanned.
+    ///
+    /// The keys are CANONICAL tenant ids. <see cref="Scan"/> normalizes once at the entry point and
+    /// nothing below it re-derives a key from a caller's spelling, which is what stops " acme " and
+    /// "acme" from keeping two cursors into one logical partition and rolling each other back.
     /// </summary>
     private readonly ConcurrentDictionary<(string Tenant, string Namespace), int> _resumeAnchors = new();
+
+    /// <summary>
+    /// The rotation <see cref="ReconcileOneResumeCursor"/> walks, one key per scan, and the gate
+    /// that keeps two concurrent scans from stepping it at once. Null between passes.
+    /// </summary>
+    private readonly object _reconcileGate = new();
+    private IEnumerator<KeyValuePair<(string Tenant, string Namespace), int>>? _reconcileWalk;
+
+    /// <summary>
+    /// Namespaces whose liveness the cursor reconciliation has probed, over the life of this
+    /// scanner. The seam for the one property that is otherwise invisible: reconciliation cost must
+    /// not grow with the number of namespaces.
+    ///
+    /// Counted rather than timed, because a timing cannot state it. The reconciliation this replaced
+    /// probed every live namespace of the tenant on EVERY scan, and the background sweep calls
+    /// <see cref="Scan"/> once per namespace — so a sweep of K namespaces did K x K of these while
+    /// looking, in a stopwatch, like a job that had got slightly slower.
+    /// </summary>
+    private long _cursorReconcileInspections;
 
     /// <summary>
     /// How many resume cursors are held. For the test that has to state that this dictionary
@@ -333,6 +376,9 @@ public sealed class AutoLinkScanner
     /// large enough to matter, exactly like the numbers on <see cref="AutoLinkScanProbe"/>.
     /// </summary>
     internal int ResumeCursorCount => _resumeAnchors.Count;
+
+    /// <inheritdoc cref="_cursorReconcileInspections"/>
+    internal long CursorReconcileInspections => Interlocked.Read(ref _cursorReconcileInspections);
 
     public AutoLinkScanner(
         CognitiveIndex index,
@@ -377,19 +423,41 @@ public sealed class AutoLinkScanner
     /// <param name="ns">Namespace to scan.</param>
     /// <param name="threshold">Similarity threshold override; pass <c>threshold: null</c> to use the namespace's <see cref="DecayConfig.AutoLinkSimilarityThreshold"/>. Required so tenantId never sits behind a nullable slot an old positional call could silently shift into.</param>
     /// <param name="maxNewEdges">Per-scan cap on edges the graph ACCEPTS, not on candidates offered; pass <c>maxNewEdges: null</c> for <see cref="DefaultMaxNewEdgesPerScan"/>. Required for the same reason as <paramref name="threshold"/>. Clamped into [0, <see cref="MaxNewEdgesPerScanHardCap"/>] and logged when it is — the cap sizes this scan's ranking buffer and pending-edge list, so it is a memory bound and cannot be left to the caller.</param>
-    /// <param name="tenantId">Tenant partition to scan. Pass "" for the legacy partition.</param>
+    /// <param name="tenantId">Tenant partition to scan. Pass "" for the legacy partition. Normalized once here and never again, so every key and every downstream call in one scan names the same partition — see the body.</param>
     /// <param name="maxScanEntries">Upper bound on entries fed to the quadratic pairwise stage in one pass; 0 disables it. Anything skipped is reported in the result.</param>
-    /// <param name="maxPairComparisons">Cosine comparisons this pass will make before deferring the rest to the next scan, which resumes where this one stopped; 0 or less disables the bound. That a pass stopped early is reported as <see cref="AutoLinkResult.PairScanIncomplete"/>, and what it spent — in this same unit — as <see cref="AutoLinkResult.PairsExamined"/>.</param>
+    /// <param name="maxPairComparisons">Cosine comparisons this pass will make before deferring the rest to the next scan, which resumes where this one stopped; 0 or less disables the bound. That a pass stopped early is reported as <see cref="AutoLinkResult.PairScanIncomplete"/>, what the window planned to spend — in this same unit — as <see cref="AutoLinkResult.PairSlotsPlanned"/>, and what it actually spent as <see cref="AutoLinkResult.PairsExamined"/>.</param>
     /// <param name="cancellationToken">Stops the pairwise walk between anchors. A cancelled scan writes what it already ranked and leaves its resume cursor untouched, so the window it abandoned is the window the next scan starts on.</param>
     public AutoLinkResult Scan(string ns, float? threshold, int? maxNewEdges,
         string tenantId, int maxScanEntries = DefaultMaxScanEntries,
         long maxPairComparisons = DefaultMaxPairComparisons,
         CancellationToken cancellationToken = default)
     {
+        // NORMALIZED ONCE, HERE, AND NOWHERE ELSE IN THE SCAN.
+        //
+        // Everything downstream of this method normalizes for itself — CognitiveIndex, GraphEdge,
+        // TopologyGuard all run Tenancy.Normalize on whatever they are handed — but the two keys
+        // this type owns did not, and they are the keys that make a scan exclusive and resumable.
+        // "acme" and " acme " name ONE logical partition to the index and TWO different keys here,
+        // so a pair of scans spelling the tenant differently walked the same quadratic pair space
+        // at the same time, over the same mutable graph, each keeping its own resume cursor and
+        // each rolling the other's progress back. That is exactly the overlap _scansInFlight exists
+        // to refuse, arriving through the spelling of an argument.
+        //
+        // Normalizing at the entry point rather than at each use site is the fix, and the shape of
+        // it is load-bearing: per-use-site normalization is what let the in-flight key and the
+        // cursor key drift apart in the first place, and it fails open every time a new key is
+        // added. Below this line `tenant` is the only tenant id in scope, and `tenantId` is not
+        // used again.
+        //
+        // It also moves the validation Normalize performs (over-length, partition-key control
+        // characters) AHEAD of the in-flight key, so a rejected tenant id can never leave a key
+        // behind that wedges its namespace shut.
+        string tenant = Tenancy.Normalize(tenantId);
+
         // One scan per (tenant, namespace) at a time — see _scansInFlight for why, and for why the
         // loser is turned away instead of queued. Acquired around the WHOLE scan because the thing
         // being protected is not the cursor write, it is read-compute-write as one step.
-        var key = (tenantId, ns);
+        var key = (tenant, ns);
         if (!_scansInFlight.TryAdd(key, 0))
         {
             // Honest, and honest in the caller's own terms: nothing was examined and nothing was
@@ -404,7 +472,7 @@ public sealed class AutoLinkScanner
 
         try
         {
-            return ScanExclusive(ns, threshold, maxNewEdges, tenantId, maxScanEntries,
+            return ScanExclusive(ns, threshold, maxNewEdges, tenant, maxScanEntries,
                 maxPairComparisons, cancellationToken);
         }
         finally
@@ -423,16 +491,16 @@ public sealed class AutoLinkScanner
     /// reason.
     /// </summary>
     private AutoLinkResult ScanExclusive(string ns, float? threshold, int? maxNewEdges,
-        string tenantId, int maxScanEntries,
+        string tenant, int maxScanEntries,
         long maxPairComparisons,
         CancellationToken cancellationToken)
     {
-        // Retraction first, and for this tenant only: the sweep visits every tenant every cycle, so
-        // scoping it to the one being scanned still reconciles the whole dictionary once per cycle
-        // while costing a scan nothing it does not already pay. See _resumeAnchors.
-        ForgetCursorsForDeadNamespaces(tenantId);
+        // Retraction first, and exactly ONE cursor of it. See ReconcileOneResumeCursor for why a
+        // scan may not reconcile the whole dictionary: this runs once per namespace per sweep, and
+        // anything it does that is linear in the namespace count is quadratic in the sweep.
+        ReconcileOneResumeCursor();
 
-        var entries = _index.GetAllInNamespace(ns, tenantId: tenantId);
+        var entries = _index.GetAllInNamespace(ns, tenantId: tenant);
         var nonSummary = new List<CognitiveEntry>(entries.Count);
         foreach (var e in entries)
             if (!e.IsSummaryNode && e.Vector.Length > 0) nonSummary.Add(e);
@@ -441,7 +509,7 @@ public sealed class AutoLinkScanner
         {
             // Fewer than two scannable entries: there is no pair space for a cursor to point into,
             // so a cursor here is dead state. One TryRemove on a path that is already returning.
-            _resumeAnchors.TryRemove((tenantId, ns), out _);
+            _resumeAnchors.TryRemove((tenant, ns), out _);
             return new AutoLinkResult(ns, nonSummary.Count, 0, 0, 0, false);
         }
 
@@ -470,7 +538,7 @@ public sealed class AutoLinkScanner
         {
             // Same reasoning as above: no pair space, so no cursor. Reached separately because a
             // namespace can hold entries that are all zero-norm and never become candidates.
-            _resumeAnchors.TryRemove((tenantId, ns), out _);
+            _resumeAnchors.TryRemove((tenant, ns), out _);
             return new AutoLinkResult(ns, candidates.Count, 0, 0, 0, false, notScanned);
         }
 
@@ -502,22 +570,33 @@ public sealed class AutoLinkScanner
         // so budget/candidates anchors cost at most the budget. At least one anchor always runs — an
         // anchor is indivisible, so a budget below one namespace-width buys one row rather than
         // nothing, and a scan that examined nothing could never advance its own cursor.
-        int startAnchor = _resumeAnchors.TryGetValue((tenantId, ns), out var stored)
+        int startAnchor = _resumeAnchors.TryGetValue((tenant, ns), out var stored)
             ? stored % candidates.Count
             : 0;
         int maxAnchors = maxPairComparisons <= 0
             ? candidates.Count
             : (int)Math.Clamp(maxPairComparisons / candidates.Count, 1, candidates.Count);
 
-        // WHAT THIS PASS COSTS, in the unit its budget is spent in — derived from the window, not
-        // counted in the loop, because the loop cannot see a comparison. The pair stream filters
-        // before it yields (see PairStream), so a counter in the loop body counts pairs that CLEARED
-        // the threshold. That number carried the name "pairs examined" through several rounds while
-        // being, in a steady-state namespace, three to five orders of magnitude below the work done
-        // — and it does not even move monotonically with that work, since a namespace of
-        // near-duplicates reports a large number for the same walk that reports a tiny one when
-        // nothing matches. Both numbers are reported now, each under its own name.
-        long pairsExamined = PairSlotsInWindow(candidates.Count, startAnchor, maxAnchors);
+        // WHAT THIS PASS WAS BUDGETED, in the unit the budget is spent in — the window's pair
+        // slots, derived from the window rather than counted in the loop because the loop cannot
+        // see a comparison. The pair stream filters before it yields (see PairStream), so a counter
+        // in the loop body counts pairs that CLEARED the threshold; that number carried the name
+        // "pairs examined" through several rounds while being, in a steady-state namespace, three
+        // to five orders of magnitude below the work done, and it does not even move monotonically
+        // with that work.
+        //
+        // PLANNED, NOT EXAMINED, and that distinction is the whole of this variable. It is computed
+        // before a single anchor has run, and cancellation can stop the walk before the first one:
+        // a pre-cancelled scan over three entries did no comparison at all and reported three pairs
+        // examined. What was actually examined is settled after the loop, below.
+        long plannedSlots = PairSlotsInWindow(candidates.Count, startAnchor, maxAnchors);
+
+        // The last pair the loop took delivery of, held as two references and resolved to candidate
+        // indices only on the cancelled path. See SlotsExaminedThrough: this is the only witness the
+        // scan has to how far into its window the walk actually got, because the pair source reports
+        // no progress of its own and yields nothing for an anchor whose row was all misses.
+        string? lastPairIdA = null;
+        string? lastPairIdB = null;
 
         int pairsAboveThreshold = 0;
         int skippedExisting = 0;
@@ -585,11 +664,18 @@ public sealed class AutoLinkScanner
         {
             pairsAboveThreshold++;
 
+            // Recorded BEFORE any filter below can `continue` past it: taking delivery of a pair
+            // means the slots up to and including it were walked, whatever the scan then decides
+            // about the pair. Two reference stores per yielded pair and no allocation — and yielded
+            // pairs are the small number here, not the compared ones.
+            lastPairIdA = idA;
+            lastPairIdB = idB;
+
             // Canonical direction: lex-smaller id is the source. This makes
             // re-scans deterministic — we always try to add the same edge.
             var (src, dst) = string.CompareOrdinal(idA, idB) < 0 ? (idA, idB) : (idB, idA);
 
-            guard ??= TopologyGuard.ForSweep(_index, tenantId);
+            guard ??= TopologyGuard.ForSweep(_index, tenant);
 
             // Screened as the EDGE that would be written — both endpoints, the same predicate
             // AddEdges will apply — and BEFORE the slot is taken; that ordering is the fix. A
@@ -613,7 +699,7 @@ public sealed class AutoLinkScanner
             // this row shares. Canonicalizing first would key the memo on min(idA, idB), which
             // changes within a single row and is what made the old memo grow toward one entry per
             // candidate. The question is unaffected — one node's adjacency covers both directions.
-            if (HasAnyEdgeBetween(idA, idB, tenantId, guard, neighbors))
+            if (HasAnyEdgeBetween(idA, idB, tenant, guard, neighbors))
             {
                 skippedExisting++;
                 continue;
@@ -666,7 +752,7 @@ public sealed class AutoLinkScanner
         {
             var (src, dst, sim) = ranked[i];
             edgesMaterialized++;
-            pending.Add(new GraphEdge(src, dst, "similar_to", sim, null, tenantId));
+            pending.Add(new GraphEdge(src, dst, "similar_to", sim, null, tenant));
         }
 
         _onScanProbe?.Invoke(new AutoLinkScanProbe(
@@ -695,6 +781,35 @@ public sealed class AutoLinkScanner
         bool cancelled = cancellationToken.IsCancellationRequested;
         bool pairScanIncomplete = maxAnchors < candidates.Count || cancelled;
 
+        // WHAT THE PASS ACTUALLY EXAMINED, which is not what it planned to.
+        //
+        // Uncancelled, the two are the same number and it is EXACT: the loop above has no break, so
+        // it runs until the stream is exhausted, and an exhausted stream has visited every slot of
+        // its window. Nothing else can end the walk early.
+        //
+        // Cancelled, they are not, and the difference is the whole defect. Both detector paths test
+        // the token once per ANCHOR, before that anchor's row runs, so a cancelled walk stops on an
+        // anchor boundary having done a prefix of the window — possibly an empty prefix, which is
+        // the reviewed case: a pre-cancelled three-entry scan compared nothing and reported three
+        // pairs examined, because this number was the window's size and was computed before
+        // enumeration began.
+        //
+        // A cancelled scan therefore reports the slots it can ATTEST to: everything up to and
+        // including the last pair it took delivery of, and zero when it took none. That is a lower
+        // bound rather than the exact figure — an anchor whose whole row fell below the threshold
+        // yields nothing, so it is walked invisibly — and it is deliberately the honest direction to
+        // be wrong in for a number an operator reads as cost. The exact figure is not available to
+        // this type: PairStream reports no progress, and asking it to would mean either a per-anchor
+        // call (which re-pays the spectral set-up per row) or a per-pair position probe in the
+        // innermost loop of the subsystem.
+        //
+        // What the window BUDGETED is still reported, under its own name — see
+        // AutoLinkResult.PairSlotsPlanned — so nothing an operator tuning maxPairComparisons needs
+        // was taken away; it just stopped being labelled as work done.
+        long pairsExamined = cancelled
+            ? SlotsExaminedThrough(candidates, startAnchor, lastPairIdA, lastPairIdB)
+            : plannedSlots;
+
         // WHERE THE NEXT SCAN STARTS, and the one rule that keeps a budget from becoming the
         // starvation it is supposed to be safe from.
         //
@@ -711,7 +826,7 @@ public sealed class AutoLinkScanner
         // - Cancellation. The window was abandoned rather than examined, so advancing past it would
         //   step over pairs no scan looked at.
         if (!cancelled && (!hitCap || created == 0))
-            _resumeAnchors[(tenantId, ns)] = (startAnchor + maxAnchors) % candidates.Count;
+            _resumeAnchors[(tenant, ns)] = (startAnchor + maxAnchors) % candidates.Count;
 
         // The log MAY name refusals where a reply may not: this runs as background maintenance with
         // no caller, so the count cannot become an "a twin exists somewhere in your tenant" oracle —
@@ -720,22 +835,27 @@ public sealed class AutoLinkScanner
         // carries no such field for the same reason inverted: it does reach a caller.
         if (created > 0 || refusedUnattributable > 0 || declinedAtWrite > 0 || pairScanIncomplete)
         {
-            // Both numbers, and neither standing in for the other. The sentence used to read "{n}
-            // pairs examined over anchors ..." off the yield counter, asserting that a count of
-            // above-threshold HITS was the work done over that anchor range — the sentence an
-            // operator reads when a six-hourly sweep is slow and they are deciding whether the
-            // pairwise stage is worth tuning.
+            // THREE numbers, and none of them standing in for another. The sentence used to read
+            // "{n} pairs examined over anchors ..." off the yield counter, asserting that a count
+            // of above-threshold HITS was the work done over that anchor range. It was then given
+            // the window's size instead, which is the work the pass was BUDGETED and is what a
+            // cancelled pass conspicuously did not do. So the examined figure and the planned
+            // figure are printed side by side, and the cancellation note says which of the two the
+            // operator should trust — the sentence they read when a six-hourly sweep is slow and
+            // they are deciding whether the pairwise stage is worth tuning.
             _logger?.LogInformation(
-                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Declined} declined at write (endpoint became ambiguous, or the pair was linked, mid-scan), {Skipped} skipped (existing edge), {AboveThreshold} pairs above threshold out of {Examined} examined over anchors {Start}..+{Anchors} of {Total}{CapNote}{BudgetNote}.",
+                "Auto-link scan ns={Namespace}: {Created} new similar_to edges, {Refused} refused (endpoint not attributable to a single entry), {Declined} declined at write (endpoint became ambiguous, or the pair was linked, mid-scan), {Skipped} skipped (existing edge), {AboveThreshold} pairs above threshold out of {Examined} examined of {Planned} planned over anchors {Start}..+{Anchors} of {Total}{CapNote}{BudgetNote}{CancelNote}.",
                 ns, created, refusedUnattributable, declinedAtWrite, skippedExisting,
-                pairsAboveThreshold, pairsExamined,
+                pairsAboveThreshold, pairsExamined, plannedSlots,
                 startAnchor, maxAnchors, candidates.Count,
                 hitCap ? " (hit cap)" : "",
-                pairScanIncomplete ? " (pair scan incomplete; next scan resumes where this one stopped)" : "");
+                pairScanIncomplete ? " (pair scan incomplete; next scan resumes where this one stopped)" : "",
+                cancelled ? " (cancelled mid-window; examined is a lower bound on the slots walked)" : "");
         }
 
         return new AutoLinkResult(ns, candidates.Count, pairsExamined, created, skippedExisting,
-            hitCap, notScanned, pairScanIncomplete, PairsAboveThreshold: pairsAboveThreshold);
+            hitCap, notScanned, pairScanIncomplete, PairsAboveThreshold: pairsAboveThreshold,
+            PairSlotsPlanned: plannedSlots);
     }
 
     /// <summary>
@@ -777,37 +897,162 @@ public sealed class AutoLinkScanner
     }
 
     /// <summary>
-    /// Drop the resume cursors of namespaces <paramref name="tenantId"/> no longer has.
+    /// How far into its window the walk demonstrably got, as pair slots, from the last pair the
+    /// scan took delivery of.
     ///
-    /// The retraction this type never had. Nothing tells a DI singleton that a namespace was torn
-    /// down — the candidate index, the BM25/HNSW indexes and the diffusion kernel each retract their
-    /// own per-partition state and none of them reaches here — and a deleted namespace is never
-    /// scanned again, so it can never come back to drop its own cursor. Without this the dictionary
-    /// is monotonic in the number of (tenant, namespace) pairs EVER scanned, in a process designed
-    /// to run for weeks; a host churning debate namespaces accumulates dead keys forever.
+    /// Both detector paths walk triangularly — the partner index runs strictly after the anchor
+    /// index, in CANDIDATE-index space on either path — so the anchor of a delivered pair is the
+    /// smaller of its two candidate indices whatever order the source presented the ids in. This
+    /// does not lean on the anchor-major property, which <see cref="PairStream"/> states as a cost
+    /// hint rather than a correctness precondition.
     ///
-    /// Scoped to the tenant being scanned so a scan pays only for its own partition, which is enough
-    /// to reconcile everything: the sweep visits every tenant every cycle, so a dead cursor outlives
-    /// its namespace by at most one sweep. The listing is skipped entirely when this tenant holds no
-    /// cursors, so a first scan pays nothing.
+    /// Given that anchor, the slots walked are the anchors that came before it in the window's
+    /// rotated order, plus the position of the partner within the anchor's own row.
     ///
-    /// Over-removal is harmless by this cursor's own contract — losing one costs a repeat of one
-    /// window, never a pair no scan reaches — which is why a listing that raced a namespace's
-    /// creation could not do damage even if it lost.
+    /// Zero when the ids do not resolve. That is a test seam scripting pairs the candidate list does
+    /// not contain, and zero is the right answer there for the same reason it is the right answer
+    /// for a pre-cancelled scan: nothing about the walk was witnessed.
+    ///
+    /// The linear resolution is paid on the CANCELLED path only, once per scan. A dictionary built
+    /// up front would be an allocation sized by the namespace on every scan, to serve a case that
+    /// happens at shutdown.
     /// </summary>
-    private void ForgetCursorsForDeadNamespaces(string tenantId)
+    private static long SlotsExaminedThrough(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        int startAnchor, string? idA, string? idB)
     {
-        if (_resumeAnchors.IsEmpty) return;
+        if (idA is null || idB is null) return 0;
 
-        HashSet<string>? live = null;
-        foreach (var (key, _) in _resumeAnchors)
+        int indexA = -1, indexB = -1;
+        for (int i = 0; i < candidates.Count; i++)
         {
-            if (!string.Equals(key.Tenant, tenantId, StringComparison.Ordinal)) continue;
-            // Built on the first cursor this tenant owns and not before: GetNamespaces materializes
-            // every persisted partition, and a scan with nothing to reconcile must not pay for it.
-            live ??= new HashSet<string>(_index.GetNamespaces(tenantId), StringComparer.Ordinal);
-            if (!live.Contains(key.Namespace))
-                _resumeAnchors.TryRemove(key, out _);
+            string id = candidates[i].Entry.Id;
+            if (indexA < 0 && string.Equals(id, idA, StringComparison.Ordinal)) indexA = i;
+            else if (indexB < 0 && string.Equals(id, idB, StringComparison.Ordinal)) indexB = i;
+            if (indexA >= 0 && indexB >= 0) break;
+        }
+        if (indexA < 0 || indexB < 0) return 0;
+
+        int anchor = Math.Min(indexA, indexB);
+        int partner = Math.Max(indexA, indexB);
+
+        // Where this anchor sits in the window's visit order, which starts at startAnchor and wraps
+        // once. startAnchor is already reduced modulo the candidate count by the caller.
+        int rowsBefore = anchor - startAnchor;
+        if (rowsBefore < 0) rowsBefore += candidates.Count;
+
+        // Whole rows behind it, plus this row's slots up to and including the partner: the anchor's
+        // row is (anchor, anchor+1) .. (anchor, count-1), so the partner sits at position
+        // partner - anchor within it.
+        return PairSlotsInWindow(candidates.Count, startAnchor, rowsBefore) + (partner - anchor);
+    }
+
+    /// <summary>
+    /// Reconcile exactly ONE resume cursor against the store, and never more than one.
+    ///
+    /// THE RETRACTION, AND ITS COST BOUND, WHICH ARE TWO SEPARATE REQUIREMENTS.
+    ///
+    /// The retraction first. Nothing tells a DI singleton that a namespace was torn down — the
+    /// candidate index, the BM25/HNSW indexes and the diffusion kernel each retract their own
+    /// per-partition state and none of them reaches here — and a deleted namespace is never scanned
+    /// again, so it can never come back to drop its own cursor. Without a retraction the dictionary
+    /// is monotonic in the (tenant, namespace) pairs EVER scanned, in a process designed to run for
+    /// weeks; a host churning debate namespaces accumulates dead keys forever.
+    ///
+    /// The cost bound second, and it is what this shape exists for. The retraction was a full
+    /// reconciliation: it walked the cursor dictionary and listed every live namespace of the tenant
+    /// on every call. <see cref="Scan"/> is called ONCE PER NAMESPACE by the background sweep, so
+    /// anything it does that is linear in the namespace count is quadratic per sweep — K listings of
+    /// K namespaces, each one materializing a list, on the job whose entire purpose is to be cheap
+    /// enough to run unattended. The cure was worse than the leak it cured.
+    ///
+    /// So one cursor per scan, round-robin, and the arithmetic of that is exactly what is wanted:
+    /// there is at most one cursor per (tenant, namespace), the sweep calls Scan once per namespace,
+    /// so a sweep of K live namespaces steps this rotation K times. That is "reconcile once per
+    /// sweep" without this type having to know what a sweep is, when one starts, or which tenants it
+    /// covers.
+    ///
+    /// WORST CASE, stated precisely. Per scan it is O(1): one enumerator step and one partition
+    /// probe, no listing and no allocation. For a dead cursor it is two sweeps rather than one — the
+    /// rotation is over CURSORS (K live plus D dead) while a sweep only steps it K times, and the
+    /// walk may be part-way through a pass when a namespace dies. D is itself bounded by K: a cursor
+    /// exists only for a namespace some scan visited, so at most K appear between two sweeps, and a
+    /// sweep retracts up to K. The dictionary is therefore O(K) and a dead key outlives its
+    /// namespace by at most two sweeps, against one for the listing this replaces — half a day on
+    /// the six-hourly cadence, to stop paying K listings of K namespaces every cycle.
+    ///
+    /// A DIRECT RETRACTION FROM NAMESPACE DELETION WOULD BE STRICTLY BETTER and is not reachable:
+    /// <c>CognitiveIndex</c> raises no namespace-removal event (<c>EntryDeleted</c> fires per entry
+    /// and not at all from <c>DeleteAllInNamespace</c>, which is the path <c>purge_debates</c>
+    /// takes), and this type is not on any teardown path. If such a hook is ever added, it replaces
+    /// the rotation with an O(1) removal and this method goes away.
+    ///
+    /// The probe is <c>CountInNamespace</c> rather than a namespace listing on purpose: it is one
+    /// partition read lock and one dictionary lookup, it allocates nothing, and it does not force
+    /// the store-wide materialization <c>GetNamespaces(tenant)</c> performs. Fewer than two entries
+    /// is the same predicate the scan's own early returns apply — a partition that cannot form a
+    /// pair has no pair space for a cursor to point into — so there is one rule here rather than
+    /// two.
+    ///
+    /// Over-removal is harmless by this cursor's own contract: losing one costs a repeat of one
+    /// window, never a pair no scan reaches. That is what makes it safe to probe a key belonging to
+    /// a scan running concurrently on another thread — that scan re-writes its cursor on the way
+    /// out — and safe for the enumerator to be walking a snapshot that a resize has left behind.
+    /// </summary>
+    private void ReconcileOneResumeCursor()
+    {
+        if (!TryTakeNextCursorKey(out var key)) return;
+
+        Interlocked.Increment(ref _cursorReconcileInspections);
+        if (_index.CountInNamespace(key.Namespace, key.Tenant) < 2)
+            _resumeAnchors.TryRemove(key, out _);
+    }
+
+    /// <summary>
+    /// The next key of the rotation, resuming the walk where the last scan left it and starting a
+    /// fresh pass when it is exhausted.
+    ///
+    /// The enumerator is held across calls, which is the whole point: restarting it per scan would
+    /// reconcile the first cursor forever and never reach the rest. <c>ConcurrentDictionary</c>'s
+    /// enumerator is explicitly safe to hold while the dictionary is mutated — it may miss a key
+    /// added after it was taken, and may surface one removed since — and both of those are harmless
+    /// here: a missed key is reconciled on the next pass, and a stale key resolves to a partition
+    /// probe whose removal is a no-op.
+    ///
+    /// The lock covers the enumerator step and nothing else. The partition probe — which takes a
+    /// read lock of its own inside <c>CognitiveIndex</c> — is deliberately outside it, so this gate
+    /// is never held across another component's lock and cannot participate in a cycle. The one
+    /// allocation is a fresh enumerator per full pass, not per scan.
+    /// </summary>
+    private bool TryTakeNextCursorKey(out (string Tenant, string Namespace) key)
+    {
+        lock (_reconcileGate)
+        {
+            var walk = _reconcileWalk;
+            if (walk is null || !walk.MoveNext())
+            {
+                walk?.Dispose();
+
+                // Through the interface rather than the concrete method, so this binds to the same
+                // enumerator on every target framework in this project's matrix.
+                walk = ((IEnumerable<KeyValuePair<(string Tenant, string Namespace), int>>)_resumeAnchors)
+                    .GetEnumerator();
+
+                if (!walk.MoveNext())
+                {
+                    // No cursors at all: drop the enumerator rather than keeping an exhausted one,
+                    // so the next scan starts a pass that can see cursors written since.
+                    walk.Dispose();
+                    _reconcileWalk = null;
+                    key = ("", "");
+                    return false;
+                }
+
+                _reconcileWalk = walk;
+            }
+
+            key = walk.Current.Key;
+            return true;
         }
     }
 
@@ -860,7 +1105,7 @@ public sealed class AutoLinkScanner
     /// number of times. It holds ONE node — see <see cref="NeighborMemo"/> for why it may not hold
     /// more — so this must be called with the id the pair stream put first.
     /// </summary>
-    private bool HasAnyEdgeBetween(string anchor, string other, string tenantId,
+    private bool HasAnyEdgeBetween(string anchor, string other, string tenant,
         TopologyGuard.Sweep guard, NeighborMemo memo)
     {
         if (!string.Equals(memo.Node, anchor, StringComparison.Ordinal))
@@ -877,7 +1122,7 @@ public sealed class AutoLinkScanner
             memo.Reads++;
             // One node's adjacency covers both directions, so there is no need to fetch the other's
             // and union.
-            foreach (var edge in _graph.GetStoredEdgesForEntry(anchor, tenantId: tenantId))
+            foreach (var edge in _graph.GetStoredEdgesForEntry(anchor, tenantId: tenant))
             {
                 if (!guard.IsEdgeUsable(edge)) continue;
                 if (edge.SourceId == anchor) memo.Neighbors.Add(edge.TargetId);

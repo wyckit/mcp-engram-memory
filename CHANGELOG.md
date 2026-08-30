@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Changed — BREAKING
 
+- **`AutoLinkResult` gained three trailing positional members** — `PairScanIncomplete`,
+  `ScanAlreadyInProgress`, and the reworked `PairsExamined` semantics. As a positional record this
+  is source-compatible but **binary-breaking** for a consumer compiled against an earlier
+  `McpEngramMemory.Core`: the constructor arity changed, so a recompile is required. The same
+  hazard was recorded for this type once before in this file. `PairsExamined` also changed meaning
+  twice during review and now reports comparison slots actually completed — including partial
+  windows under cancellation — not pairs offered and not above-threshold hits; a caller reading it
+  as "candidate pairs" will read a different number for the same corpus.
+- **New public surface on `McpEngramMemory.Core`** (additive, but it is a packaged assembly, so it
+  is a compatibility commitment): `EdgeAddMode`, an optional `mode` parameter on
+  `KnowledgeGraph.AddEdges`, `TopologyGuard.Sweep.TenantId`, `AutoLinkScanner`'s
+  `maxPairComparisons` / `CancellationToken` parameters and `DefaultMaxPairComparisons`, and
+  `CognitiveIndex.DisposalContendedFenceCount`.
 - **`tenantId` is now required on all Core retrieval and scoping APIs** — 55 methods across
   `CognitiveIndex`, `KnowledgeGraph`, `MemoryDiffusionKernel`, `AutoLinkScanner`, `AccretionScanner`,
   `ClusterManager`, `LifecycleEngine`, `SpectralRetrievalReranker`, `NamespaceRegistry`,

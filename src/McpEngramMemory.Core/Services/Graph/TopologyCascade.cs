@@ -29,6 +29,26 @@ public static class TopologyCascade
     ///
     /// Both branches run the same resolution and the same guard, so a dry run can no longer report
     /// a different figure from the purge it is previewing.
+    ///
+    /// ONE SWEEP PER ID, SHARED BY THAT ID'S TWO PRIMITIVES — never one sweep for the whole purge,
+    /// and the two halves of that sentence are load-bearing in opposite directions.
+    ///
+    /// Shared between the primitives, because building two identical sweeps for one id cost two full
+    /// namespace listings — a LINQ pass over every (tenant, ns) partition in the process, plus a
+    /// list, plus two attribution-fence acquire/release cycles — on a path whose stated design goal
+    /// is that the dry run and the purge cost the same. Both mutators expose a guard overload for
+    /// exactly this, and both assert that the sweep's tenant matches theirs.
+    ///
+    /// NOT shared across ids, even though the same overloads would allow it and their older
+    /// documentation invited it. A <see cref="TopologyGuard.Sweep"/> carries ONE attribution
+    /// revision, captured when it was built, and every mutator holding it fails closed the instant
+    /// that value goes stale. A batch-wide sweep therefore converts a single unrelated crossing
+    /// anywhere in the tenant — an ordinary <c>remember</c> of an id that already exists in another
+    /// namespace — into a silent no-op for every REMAINING id of the purge, while
+    /// <c>DeleteAllInNamespace</c> still removes those entries: edges and memberships left dangling
+    /// against entries that no longer exist, <see cref="CascadeOutcome.EdgesRemoved"/> undercounting,
+    /// <see cref="CascadeOutcome.IdsSkippedAmbiguous"/> not moving, and no error raised. Per id, one
+    /// crossing costs at most the id it raced.
     /// </summary>
     public static CascadeOutcome CascadeAll(
         CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters,
@@ -72,8 +92,11 @@ public static class TopologyCascade
 
             if (apply)
             {
-                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId: tenantId);
-                clusters.RemoveEntryFromAllClusters(id, tenantId: tenantId);
+                // One sweep for this id, handed to both primitives — see the remarks above for why
+                // the unit is the id and not the batch.
+                var guard = TopologyGuard.ForSweep(index, tenantId);
+                edgesRemoved += graph.RemoveAllEdgesForEntry(id, tenantId: tenantId, guard);
+                clusters.RemoveEntryFromAllClusters(id, tenantId: tenantId, guard);
             }
             else
             {

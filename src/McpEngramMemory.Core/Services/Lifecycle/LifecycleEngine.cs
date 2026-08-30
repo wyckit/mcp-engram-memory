@@ -38,18 +38,32 @@ public sealed class LifecycleEngine
     /// forgotten argument is a compile error, not a silent fall-through to defaults — pass
     /// <c>null</c> to leave a knob unchanged, and pass <c>""</c> as <paramref name="tenantId"/>
     /// to target the legacy partition.
+    ///
+    /// NORMALIZES THE TENANT FIRST, and both entry points here must, because the map is keyed one
+    /// way and read another. <see cref="NamespaceStore.PartitionKey(string, string)"/> validates but
+    /// deliberately does not normalize, while <see cref="DecayConfig"/>'s constructor DOES —
+    /// and <see cref="EnsureConfigsLoaded"/> re-keys the whole map from that normalized property on
+    /// every reload. So a padded tenant wrote one key and every reader used another:
+    /// <c>AutoLinkBackgroundService</c> reads through <see cref="CognitiveIndex.GetAllTenants"/>,
+    /// which returns store tenants and is therefore normalized, so an operator's
+    /// <c>EnableAutoLink: false</c> written under <c>" acme "</c> simply never reached the sweep
+    /// that was supposed to obey it — no error, no restart needed, the opt-out just did nothing.
+    /// After a restart the padded spelling then missed its own row too, and the next write created a
+    /// SECOND row that composed to the same key on the following boot. <c>IPrincipalContext</c> is
+    /// an extension point with no normalization of its own, so a padded claim value reaches here.
     /// </summary>
     public DecayConfig SetDecayConfig(string ns, float? decayRate, float? reinforcementWeight,
         float? stmThreshold, float? archiveThreshold,
         bool? useSpectralDecay, float? subdiffusiveExponent, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        string tenant = Tenancy.Normalize(tenantId);
+        string pk = NamespaceStore.PartitionKey(tenant, ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();
             if (!_decayConfigs.TryGetValue(pk, out var config))
             {
-                config = new DecayConfig(ns, tenantId: tenantId);
+                config = new DecayConfig(ns, tenantId: tenant);
                 _decayConfigs[pk] = config;
             }
 
@@ -65,10 +79,17 @@ public sealed class LifecycleEngine
         }
     }
 
-    /// <summary>Get the decay config for a namespace, or null if using defaults. Pass "" as <paramref name="tenantId"/> for the legacy partition.</summary>
+    /// <summary>
+    /// Get the decay config for a namespace, or null if using defaults. Pass "" as
+    /// <paramref name="tenantId"/> for the legacy partition.
+    ///
+    /// Normalizes first, for the reason spelled out on <see cref="SetDecayConfig"/>: the map is
+    /// re-keyed from the normalized <see cref="DecayConfig.TenantId"/> on every reload, so a raw
+    /// spelling reads a key that only ever existed until the next load.
+    /// </summary>
     public DecayConfig? GetDecayConfig(string ns, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        string pk = NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();

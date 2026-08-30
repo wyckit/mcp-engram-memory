@@ -78,6 +78,26 @@ namespace McpEngramMemory.Tests;
 ///
 /// THE CURSOR THAT NEVER SHRANK (20): one write site, no removal site, on a singleton in a process
 /// that runs for weeks.
+///
+/// AND THREE MORE, each of which is a previous round's fix seen from one step back.
+///
+/// THE KEYS THAT WERE NOT KEYS (21): the in-flight key and the resume cursor were built from the
+/// caller's SPELLING of the tenant id while everything downstream normalized. "acme" and " acme "
+/// therefore named one logical partition and two different keys, so the mutual exclusion of test 16
+/// admitted both scans and the rotation of test 10 was split in two. Fixed at the entry point rather
+/// than at each use site, because per-use-site normalization is what let the two keys drift apart.
+///
+/// THE COST NUMBER, AGAIN (22): the counter that once held the FIND now held the PLAN. The window's
+/// pair-slot count is computed before the first anchor runs, and cancellation stops the walk on an
+/// anchor boundary — possibly the first — so a pre-cancelled three-entry scan compared nothing and
+/// reported three pairs examined. Work done and work budgeted are separate fields now, and the
+/// examined figure is exact for a completed window and never over-stated for a cancelled one.
+///
+/// THE RETRACTION THAT COST MORE THAN THE LEAK (23): reconciling every cursor against a listing of
+/// the tenant's live namespaces, on a method the background sweep calls once per namespace, is
+/// O(K^2) per sweep. It is one cursor per scan now, round-robin, which reaches every cursor in one
+/// pass and is asserted on a counted seam — a timing over six namespaces cannot tell linear from
+/// quadratic.
 /// </summary>
 public class AutoLinkCapAccountingTests : IDisposable
 {
@@ -1439,6 +1459,10 @@ public class AutoLinkCapAccountingTests : IDisposable
     /// starting with '_' so the sweep scans every one, and purge_debates deletes them on a TTL. A
     /// deleted namespace is never scanned again, so it can never come back to drop its own cursor;
     /// the dictionary is monotonic in the (tenant, namespace) pairs EVER scanned.
+    ///
+    /// The reconciliation is one cursor per scan now rather than a full pass per scan (test 23), so
+    /// what this pins is the retraction itself: the doomed namespace's cursor is the only one held
+    /// when the next scan runs, so that scan's single probe is the one that reaches it.
     /// </summary>
     [Fact]
     public void ACursorForADeletedNamespace_IsDroppedByTheNextScanOfThatTenant()
@@ -1514,7 +1538,393 @@ public class AutoLinkCapAccountingTests : IDisposable
         Assert.Equal(new[] { (other, 0), (ScanNs, 0), (other, 1) }, starts);
     }
 
+    // -- 21. THE TENANT ID IS NORMALIZED ONCE, OR THE KEYS THIS TYPE OWNS ARE NOT KEYS --
+
+    /// <summary>
+    /// Every index operation downstream of Scan normalizes the tenant id for itself, so "acme" and
+    /// " acme " reach ONE logical partition. The two keys this type owns did not: the in-flight key
+    /// and the resume cursor were both composed from the raw argument.
+    ///
+    /// The consequence is not cosmetic. _scansInFlight is the mutual exclusion that makes the resume
+    /// cursor's read-advance-write one step and stops two scans running the same quadratic walk at
+    /// once; keyed on the spelling, it admitted both of them. This is the same overlap test 16 pins,
+    /// reached through an argument rather than through a second caller.
+    ///
+    /// Deterministic by the same seam: the alias scan is launched from inside the canonical scan's
+    /// own lazy pair source, so the canonical scan is genuinely suspended mid-enumeration when it
+    /// runs. No delay, no threads, and no run in which the two miss each other.
+    /// </summary>
+    [Fact]
+    public void AnAliasSpellingOfTheTenant_IsSerializedAgainstTheCanonicalScan()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"q{slot}-a", $"q{slot}-b", skew: 0.02f);
+
+        AutoLinkScanner scanner = null!;
+        AutoLinkResult? alias = null;
+        bool interleaveOnce = true;
+
+        IEnumerable<(string IdA, string IdB, float Similarity)> Source()
+        {
+            if (interleaveOnce)
+            {
+                interleaveOnce = false;
+                alias = scanner.Scan(ScanNs, 0.85f, 1, tenantId: $"  {Tenant}  ", maxPairComparisons: 8);
+            }
+            yield break;
+        }
+
+        scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _) => Source());
+
+        var canonical = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
+
+        Assert.False(canonical.ScanAlreadyInProgress);
+        Assert.NotNull(alias);
+
+        // THE ASSERTION THE OLD CODE FAILED: the alias took a different in-flight key, was admitted,
+        // and walked the same window over the same mutable graph at the same time.
+        Assert.True(alias!.ScanAlreadyInProgress);
+        Assert.True(alias.PairScanIncomplete);
+        Assert.Equal(0L, alias.PairsExamined);
+        Assert.Equal(0L, alias.PairSlotsPlanned);
+    }
+
+    /// <summary>
+    /// The other key, and the one whose damage is silent: three spellings of one tenant kept three
+    /// resume cursors into one partition's anchor space, so every scan started at anchor 0 and the
+    /// rotation never advanced. That is the starvation the cursor exists to prevent, reintroduced by
+    /// the spelling of an argument, and invisible in every count a caller sees.
+    /// </summary>
+    [Fact]
+    public void AliasSpellingsOfOneTenant_ShareOneResumeCursorAndKeepAdvancing()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"q{slot}-a", $"q{slot}-b", skew: 0.02f);
+
+        var starts = new List<int>();
+        var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, window, _) =>
+            {
+                starts.Add(window.StartAnchor);
+                return Array.Empty<(string, string, float)>();
+            });
+
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: $" {Tenant}", maxPairComparisons: 8);
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: $"{Tenant}\t", maxPairComparisons: 8);
+
+        // THE ASSERTION THE OLD CODE FAILED: it observed 0, 0, 0 and held three cursors.
+        Assert.Equal(new[] { 0, 1, 2 }, starts);
+        Assert.Equal(1, scanner.ResumeCursorCount);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the normalization. Tenant ids are CASE-SENSITIVE by
+    /// Tenancy.Normalize's own contract — folding case there would silently merge two distinct
+    /// tenants — so "ACME" must keep its own in-flight key and its own cursor while "acme" is
+    /// mid-scan. A normalization that reached further than trimming would let one tenant's
+    /// background sweep suppress another's scans and spend its rotation.
+    /// </summary>
+    [Fact]
+    public void ATenantThatMerelyLooksAlike_RunsWhileThisOneIsInFlight()
+    {
+        const string lookalike = "ACME";
+        for (int slot = 0; slot < 4; slot++)
+        {
+            PlantPair(slot, $"q{slot}-a", $"q{slot}-b", skew: 0.02f);
+            PlantPairIn(lookalike, slot, $"U{slot}-a", $"U{slot}-b", skew: 0.02f);
+        }
+
+        AutoLinkScanner scanner = null!;
+        AutoLinkResult? other = null;
+        bool interleaveOnce = true;
+
+        IEnumerable<(string IdA, string IdB, float Similarity)> Source(
+            IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates)
+        {
+            if (string.Equals(candidates[0].Entry.TenantId, lookalike, StringComparison.Ordinal))
+            {
+                yield return ("U0-a", "U0-b", 0.95f);
+                yield break;
+            }
+
+            if (interleaveOnce)
+            {
+                interleaveOnce = false;
+                other = scanner.Scan(ScanNs, 0.85f, 1, tenantId: lookalike, maxPairComparisons: 8);
+            }
+        }
+
+        scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (candidates, _, _, _) => Source(candidates));
+
+        var mine = scanner.Scan(ScanNs, 0.85f, 1, tenantId: Tenant, maxPairComparisons: 8);
+
+        Assert.False(mine.ScanAlreadyInProgress);
+        Assert.NotNull(other);
+        Assert.False(other!.ScanAlreadyInProgress);
+        Assert.Equal(1, other.EdgesCreated);
+        AssertLinkedIn(lookalike, "U0-a", "U0-b");
+
+        // Two tenants, two cursors. One would mean the rotation of one partition was being spent on
+        // the other's anchors.
+        Assert.Equal(2, scanner.ResumeCursorCount);
+    }
+
+    /// <summary>
+    /// THE LEGACY MIRROR of the normalization. Every blank spelling — "", spaces, a tab — is the
+    /// pre-tenancy partition, so all of them must land on the one key and the one cursor that
+    /// partition has always had.
+    /// </summary>
+    [Fact]
+    public void InTheLegacyPartition_EveryBlankSpelling_SharesOneCursor()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPairIn(LegacyTenant, slot, $"L{slot}-a", $"L{slot}-b", skew: 0.02f);
+
+        var starts = new List<int>();
+        var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, window, _) =>
+            {
+                starts.Add(window.StartAnchor);
+                return Array.Empty<(string, string, float)>();
+            });
+
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: LegacyTenant, maxPairComparisons: 8);
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: "   ", maxPairComparisons: 8);
+        scanner.Scan(ScanNs, 0.85f, 1, tenantId: "\t", maxPairComparisons: 8);
+
+        Assert.Equal(new[] { 0, 1, 2 }, starts);
+        Assert.Equal(1, scanner.ResumeCursorCount);
+    }
+
+    // -- 22. THE COST REPORTED IS WORK DONE, NOT WORK PLANNED --
+
+    /// <summary>
+    /// The reviewed case, reproduced exactly: three entries, a token cancelled before the scan
+    /// starts, and a report of three pairs examined for a pass that compared nothing.
+    ///
+    /// PairsExamined was the window's pair-slot count, computed before enumeration began. Both
+    /// detector paths test the token once per ANCHOR, before that anchor's row runs, so a
+    /// pre-cancelled walk yields break on its first anchor and does no comparison at all. This is
+    /// the second honesty defect on this one counter — it previously held the count of pairs that
+    /// MATCHED — and the deterministic seam is the token itself: no delay, no threads, and no run
+    /// in which the walk gets further than it should.
+    /// </summary>
+    [Fact]
+    public void APreCancelledScan_ReportsNoWorkDone_AndSaysWhatItPlanned()
+    {
+        PlantNearIdenticalCluster(3);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = _scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: Tenant,
+            cancellationToken: cts.Token);
+
+        // THE ASSERTION THE OLD CODE FAILED: it reported 3.
+        Assert.Equal(0L, result.PairsExamined);
+
+        // The planned window is still reported, under a name that says what it is. An operator
+        // sizing maxPairComparisons needs it; they just must not read it as work done.
+        Assert.Equal(3L, result.PairSlotsPlanned);
+
+        Assert.Equal(0, result.PairsAboveThreshold);
+        Assert.Equal(0, result.EdgesCreated);
+        Assert.True(result.PairScanIncomplete);
+    }
+
+    /// <summary>
+    /// Cancellation ARRIVING MID-WINDOW, which is the case a pre-cancellation test cannot reach: the
+    /// walk has done real work and must be credited with it, but not with the rest of the window.
+    ///
+    /// The pairs are scripted BY CANDIDATE INDEX rather than by id, because the candidate list is
+    /// built from a dictionary's enumeration order and the arithmetic here is about positions. The
+    /// last pair delivered sits at anchor 2, three slots into its row; anchors 0 and 1 own 7 and 6
+    /// slots, so 16 slots were walked out of the 28 the window planned.
+    ///
+    /// Deterministic: the cancel happens inside the lazy source, between one yield and the end of
+    /// the enumeration, which is precisely where the detector's own per-anchor check would end the
+    /// walk. No delay, no polling, no pair of threads that could miss each other.
+    /// </summary>
+    [Fact]
+    public void AScanCancelledMidWindow_IsCreditedOnlyWithTheSlotsItWalked()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"c{slot}-a", $"c{slot}-b", skew: 0.02f);
+
+        using var cts = new CancellationTokenSource();
+        var result = ScanOverScriptedPositions(cts, cancelAtEnd: true);
+
+        // THE ASSERTION THE OLD CODE FAILED: it reported 28, the whole window, for a walk that
+        // stopped three slots into its third anchor.
+        Assert.Equal(16L, result.PairsExamined);
+        Assert.Equal(28L, result.PairSlotsPlanned);
+        Assert.True(result.PairScanIncomplete);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for both cancellation cases, and the one that keeps the number
+    /// useful. A pass that was NOT cancelled ran to the end of its window — the pair loop has no
+    /// early exit, so an exhausted stream has visited every slot — and must report the whole window
+    /// as examined however few pairs it was handed. A change that derived "examined" from delivered
+    /// pairs unconditionally would report 16 here and quietly make the subsystem's only cost number
+    /// track its find rate again, which is the round-17 defect.
+    /// </summary>
+    [Fact]
+    public void AnUncancelledScanOverTheSameTwoPairs_ReportsTheWholeWindowAsExamined()
+    {
+        for (int slot = 0; slot < 4; slot++)
+            PlantPair(slot, $"c{slot}-a", $"c{slot}-b", skew: 0.02f);
+
+        using var cts = new CancellationTokenSource();
+        var result = ScanOverScriptedPositions(cts, cancelAtEnd: false);
+
+        Assert.Equal(28L, result.PairsExamined);
+        Assert.Equal(28L, result.PairSlotsPlanned);
+        Assert.Equal(2, result.PairsAboveThreshold);
+        Assert.False(result.PairScanIncomplete);
+    }
+
+    /// <summary>
+    /// THE LEGACY MIRROR of the honesty fix: the pre-tenancy partition reports the same two numbers
+    /// the same way. Four candidates, six planned slots, and a pre-cancelled pass credited with none
+    /// of them.
+    /// </summary>
+    [Fact]
+    public void InTheLegacyPartition_APreCancelledScan_AlsoReportsNoWorkDone()
+    {
+        for (int slot = 0; slot < 2; slot++)
+            PlantPairIn(LegacyTenant, slot, $"L{slot}-a", $"L{slot}-b", skew: 0.02f);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = _scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: LegacyTenant,
+            cancellationToken: cts.Token);
+
+        Assert.Equal(0L, result.PairsExamined);
+        Assert.Equal(6L, result.PairSlotsPlanned);
+        Assert.True(result.PairScanIncomplete);
+    }
+
+    // -- 23. RECONCILING THE CURSORS MAY NOT COST THE NAMESPACE COUNT --
+
+    /// <summary>
+    /// The retraction added in round 20 was a full reconciliation on EVERY scan: walk the cursor
+    /// dictionary, list every live namespace of the tenant, diff. The background sweep calls Scan
+    /// once per namespace, so a host with K namespaces paid K listings of K namespaces per sweep —
+    /// O(K^2) work and O(K^2) allocation on the job whose whole justification is that it is cheap
+    /// enough to run unattended every six hours. The fix for the leak was the next finding.
+    ///
+    /// Asserted on a COUNTED SEAM rather than a stopwatch: a timing over six namespaces cannot tell
+    /// linear from quadratic, and the failure only becomes visible at a scale no unit test runs at.
+    /// CursorReconcileInspections counts the namespaces whose liveness reconciliation probed, so the
+    /// old shape reports K per scan on this exact fixture and the new one reports 1.
+    /// </summary>
+    [Fact]
+    public void ReconcilingCursors_CostsOneNamespaceProbePerScan_HoweverManyNamespacesExist()
+    {
+        const int namespaces = 6;
+        for (int i = 0; i < namespaces; i++)
+            PlantPairInNamespace($"ns-{i}", slot: 0, $"n{i}-a", $"n{i}-b", skew: 0.02f);
+
+        var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _) => Array.Empty<(string, string, float)>());
+
+        // A sweep: one scan per namespace, each stopping on its budget, so each leaves a cursor.
+        for (int i = 0; i < namespaces; i++)
+            scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
+
+        Assert.Equal(namespaces, scanner.ResumeCursorCount);
+        long afterFirstSweep = scanner.CursorReconcileInspections;
+
+        // A second sweep, with every cursor already in place — the steady state a long-lived host
+        // spends its entire life in.
+        for (int i = 0; i < namespaces; i++)
+            scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
+
+        // THE ASSERTION THE OLD CODE FAILED: it inspected all six namespaces on each of the six
+        // scans, so this difference was 36 rather than 6 — and K^2 rather than K for any K.
+        Assert.Equal(namespaces, scanner.CursorReconcileInspections - afterFirstSweep);
+
+        // And it reconciled without retracting anything: every one of these namespaces is alive.
+        Assert.Equal(namespaces, scanner.ResumeCursorCount);
+    }
+
+    /// <summary>
+    /// OVER-CORRECTION CONTROL for the throttle, and the property the round-20 leak was about: one
+    /// probe per scan must still REACH every cursor, or the cheap reconciliation is no
+    /// reconciliation at all and the dictionary is monotonic again.
+    ///
+    /// The rotation is over cursors and a scan steps it once, so a dead cursor is retracted within
+    /// one full pass — two sweeps in the worst case, because the walk can be part-way through a pass
+    /// when the namespace dies. Bounded and counted rather than waited on: each iteration is one
+    /// scan, and the assertion is that the retraction happened inside that bound.
+    /// </summary>
+    [Fact]
+    public void EveryCursorIsStillReached_SoADeadNamespacesCursorIsRetracted()
+    {
+        const int namespaces = 6;
+        const string doomed = "ns-3";
+        for (int i = 0; i < namespaces; i++)
+            PlantPairInNamespace($"ns-{i}", slot: 0, $"n{i}-a", $"n{i}-b", skew: 0.02f);
+
+        var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (_, _, _, _) => Array.Empty<(string, string, float)>());
+
+        for (int i = 0; i < namespaces; i++)
+            scanner.Scan($"ns-{i}", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
+        Assert.Equal(namespaces, scanner.ResumeCursorCount);
+
+        // The namespace goes the way purge_debates takes an expired debate. It is never scanned
+        // again, so it can never come back to drop its own cursor.
+        _index.DeleteAllInNamespace(doomed, Tenant);
+
+        int scans = 0;
+        while (scanner.ResumeCursorCount > namespaces - 1 && scans < 2 * namespaces)
+        {
+            scanner.Scan("ns-0", 0.85f, 1, tenantId: Tenant, maxPairComparisons: 1);
+            scans++;
+        }
+
+        // THE ASSERTION A THROTTLE THAT NEVER ADVANCED WOULD FAIL: probing the same cursor forever
+        // is O(1) per scan and reconciles nothing.
+        Assert.Equal(namespaces - 1, scanner.ResumeCursorCount);
+        Assert.DoesNotContain(doomed, _index.GetNamespaces(Tenant));
+    }
+
     // ── fixtures ──
+
+    /// <summary>
+    /// Two pairs delivered by CANDIDATE POSITION — the first slot of anchor 0, then the third slot
+    /// of anchor 2 — with the token optionally cancelled where the detector's own per-anchor check
+    /// would have ended the walk.
+    ///
+    /// By position and not by id, because the candidate list comes out of a ConcurrentDictionary and
+    /// its order is a hash-bucket walk. The claim under test is arithmetic over anchor and partner
+    /// INDICES, so the fixture has to name indices; naming ids would make the expected slot count
+    /// depend on which bucket a planted entry happened to land in.
+    /// </summary>
+    private AutoLinkResult ScanOverScriptedPositions(CancellationTokenSource cts, bool cancelAtEnd)
+    {
+        IEnumerable<(string IdA, string IdB, float Similarity)> Source(
+            IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates)
+        {
+            yield return (candidates[0].Entry.Id, candidates[1].Entry.Id, 0.99f);
+            yield return (candidates[2].Entry.Id, candidates[5].Entry.Id, 0.99f);
+
+            if (cancelAtEnd)
+                cts.Cancel();
+        }
+
+        var scanner = new AutoLinkScanner(_index, _graph, new DuplicateDetector(),
+            pairs: (candidates, _, _, _) => Source(candidates));
+
+        return scanner.Scan(ScanNs, threshold: 0.85f, maxNewEdges: 10, tenantId: Tenant,
+            cancellationToken: cts.Token);
+    }
 
     /// <summary>
     /// Every ordered flood pair, generated lazily, then the one viable pair. Lazy because the point

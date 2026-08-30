@@ -150,6 +150,78 @@ internal sealed class NamespaceStore
     // that the extra rebuilds cost less than a per-namespace variant that has to decide, under the
     // stripe, which namespaces a bucket named at the instant its size changed.
     private readonly ConcurrentDictionary<string, long> _attributionRevisions = new();
+    // THE ATTRIBUTION FENCE: one reader/writer primitive per tenant, and the only thing in this
+    // process that makes an attribution decision safe to ACT on rather than merely fresh when it
+    // was taken.
+    //
+    // The counter above is a freshness signal and nothing more. A topology writer samples it, then
+    // mutates; between the sample and the mutation a twin can still land, because nothing
+    // serializes a candidate-index write against a graph or cluster write. Sampling narrows that
+    // interval, it does not close it — a narrower race is still a race, and the writer that loses
+    // it publishes a bare id two entries answer to.
+    //
+    // So the two sides are made mutually exclusive:
+    //   SHARED  — every topology mutation (KnowledgeGraph's five mutators, ClusterManager's four),
+    //             held across its final attribution validation AND its mutation. Shared, because
+    //             topology writers do not conflict with each other over attribution; they each
+    //             have their own lock for their own structure.
+    //   EXCLUSIVE — an index write that CHANGES AMBIGUITY, which is exactly the (tenant, id)
+    //             1 <-> 2 crossing detected in TrackCandidate / UntrackCandidate below. Held
+    //             across the bucket mutation and its BumpAttribution, so a writer holding the
+    //             shared side cannot observe the counter before the crossing and the placement
+    //             after it.
+    //
+    // An ordinary entry write crosses no boundary and takes NEITHER side — see the two-phase shape
+    // of TrackCandidate. That is not an optimization but the difference between a fence and a
+    // global write serializer: making every upsert take the exclusive side would queue every entry
+    // write in a tenant behind every graph write in it.
+    //
+    // LOCK ORDER, AND IT IS ASYMMETRIC. An earlier draft of this remark said the fence is simply
+    // "the outermost lock in the process"; it is outermost on one side only, and the difference is
+    // what decides how a long hold is felt elsewhere, so it is stated rather than smoothed over.
+    //
+    //   SHARED side — OUTERMOST. Taken before the holder's own structural lock (graph lock,
+    //     cluster lock) and released after it. Nothing reachable while it is held acquires a
+    //     partition lock, a load lock or the sweep lock, and nothing reachable while it is held
+    //     loads, calls a storage provider, or allocates per element.
+    //
+    //   EXCLUSIVE side — INNERMOST. It is taken from Track/UntrackCandidate, which already run
+    //     under a partition lock in WRITE mode (CognitiveIndex.Upsert/UpsertBatch/Delete/
+    //     RecordAccess/SetLifecycleState/SetActivationEnergyAndState/DeleteAllInNamespace/
+    //     RebuildEmbeddings), under a partition lock in READ mode (Search/FindDuplicates/
+    //     GetStateCounts, each of which holds it across EnsureLoaded -> LoadEntries), under
+    //     _loadLocks[ns], or — via LoadAll — under the process-global sweep lock. The real order
+    //     there is {partition or load or sweep lock} -> fence -> stripe.
+    //
+    // NO CYCLE, and that is a deduction rather than a hope: no fence holder ever asks for a
+    // partition lock, a load lock or the sweep lock, so the two orders share no edge and cannot
+    // close one. Deadlock-freedom does not depend on the asymmetry going away.
+    //
+    // WHAT THE ASYMMETRY COSTS, because it is real and only bounded, never absent: a crossing waits
+    // for the fence while HOLDING a partition lock, and ReaderWriterLockSlim prefers writers — so
+    // every later reader of that partition queues behind the blocked crossing. A long shared hold
+    // therefore reads as unavailability of a namespace the shared holder never named. The
+    // mitigation has to live on the shared side, where the hold is, and it does: KnowledgeGraph
+    // .AddEdges — the one fenced section whose size is chosen by a caller — releases and retakes
+    // the fence every AddEdgesFenceChunk edges instead of spanning the whole batch, and every other
+    // fenced section is bounded by structures this process already holds in memory.
+    //
+    // Per tenant, deliberately: attribution IS a tenant-scoped predicate, so a crossing in tenant A
+    // must not stall tenant B's topology writes. That separation holds for the fences themselves;
+    // it is NOT a claim about _loadLocks, which are per namespace and not per tenant, so one
+    // namespace holding rows for two tenants materializes both under one monitor. Keyed by the
+    // NORMALIZED tenant, which every accessor guarantees, or two spellings would fence against two
+    // different locks.
+    //
+    // Non-recursive by construction (ReaderWriterLockSlim's default policy): re-entering either
+    // side on one thread throws rather than silently nesting, which is the behaviour wanted — no
+    // mutator here calls another mutator, and that is a property worth having enforced rather than
+    // documented.
+    private readonly ConcurrentDictionary<string, ReaderWriterLockSlim> _attributionFences = new();
+    // Raised by DisposeAttributionFences before it walks, read by AttributionFenceFor. An int
+    // rather than a bool so Volatile.Read/Write matches the shape CognitiveIndex already uses for
+    // its own _disposedFlag.
+    private int _fencesDisposedFlag;
     // BM25/HNSW sub-indexes are keyed by the composed partition-key STRING (see PartitionKey).
     private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
     private readonly ConcurrentDictionary<string, object> _loadLocks = new();
@@ -673,6 +745,111 @@ internal sealed class NamespaceStore
         => _attributionRevisions.AddOrUpdate(tenantId, 1L, static (_, current) => current + 1);
 
     /// <summary>
+    /// The attribution fence for one tenant — see the field remarks for what each side means and
+    /// which side is outermost.
+    ///
+    /// <paramref name="tenantId"/> must already be normalized. Every caller reaches this through
+    /// <see cref="CognitiveIndex"/>, which normalizes; keying on a raw spelling would hand out a
+    /// second lock for the same tenant, and two writers fencing against two different locks are
+    /// not fenced at all.
+    ///
+    /// DISPOSAL-GUARDED, exactly the way <c>CognitiveIndex.NsLock</c> is, and for a sharper reason
+    /// than leak avoidance. An unguarded <c>GetOrAdd</c> MINTS A FRESH FENCE after teardown has
+    /// run: a crossing arriving late would then take the exclusive side of a lock no topology
+    /// mutator holds the shared side of — exclusion against nobody — and republish it into a
+    /// dictionary teardown had already walked, where nothing would ever dispose it. Throwing is the
+    /// answer every other entry point on a disposed index gives, and it is reachable only after
+    /// teardown, because every path into here first passes a partition lock that throws sooner.
+    ///
+    /// A lost <c>GetOrAdd</c> race discards an unused <see cref="ReaderWriterLockSlim"/>. That
+    /// instance was never entered, so it holds no waiter events and nothing to release — the type
+    /// allocates those lazily on contention — and it is unreachable the moment the winner is
+    /// published.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">
+    /// Teardown has run, or begins to run during this call — including the window between the
+    /// pre-check and publication, where a just-orphaned instance is reclaimed inline.
+    /// </exception>
+    internal ReaderWriterLockSlim AttributionFenceFor(string tenantId)
+    {
+        if (Volatile.Read(ref _fencesDisposedFlag) != 0)
+            throw new ObjectDisposedException(nameof(NamespaceStore));
+
+        // Hot path — the fence is already published. No allocation on any crossing after the first.
+        if (_attributionFences.TryGetValue(tenantId, out var existing))
+            return existing;
+
+        var created = new ReaderWriterLockSlim();
+        var published = _attributionFences.GetOrAdd(tenantId, created);
+
+        if (Volatile.Read(ref _fencesDisposedFlag) != 0)
+        {
+            // Teardown ran between the pre-check and the GetOrAdd. If WE published, yank it back
+            // out and dispose it, so a fence created after teardown cannot outlive it.
+            if (ReferenceEquals(published, created) &&
+                ((ICollection<KeyValuePair<string, ReaderWriterLockSlim>>)_attributionFences)
+                    .Remove(new KeyValuePair<string, ReaderWriterLockSlim>(tenantId, created)))
+            {
+                created.Dispose();
+            }
+            throw new ObjectDisposedException(nameof(NamespaceStore));
+        }
+
+        if (!ReferenceEquals(published, created))
+            created.Dispose();
+
+        return published;
+    }
+
+    /// <summary>
+    /// The published fence for a tenant, or null when there is none. For DIAGNOSTIC reads only: a
+    /// probe must never be the thing that mints a fence, or reading a counter would publish a lock
+    /// into a dictionary teardown may already have walked past.
+    /// </summary>
+    internal ReaderWriterLockSlim? TryGetAttributionFence(string tenantId)
+        => _attributionFences.TryGetValue(tenantId, out var fence) ? fence : null;
+
+    /// <summary>
+    /// Best-effort teardown of every tenant's fence, mirroring what <see cref="CognitiveIndex"/>
+    /// already does for its per-namespace locks: a fence still held by a maintenance pass that
+    /// outlived the host's shutdown timeout throws on Dispose, and letting that escape would
+    /// abandon the persistence flush. Returns how many were skipped for that reason.
+    ///
+    /// A SKIPPED FENCE STAYS PUBLISHED, and that is the whole difference between best-effort and
+    /// destructive. It was skipped precisely because a thread still holds it; unpublishing it would
+    /// leave that holder's release resolving a key that is no longer there — which, with a
+    /// <c>GetOrAdd</c> accessor, silently resurrected a brand-new lock and called ExitReadLock on
+    /// it, throwing out of the holder's finally block while the real fence kept its reader and any
+    /// waiting crossing slept forever. Only fences this actually disposed are unpublished, removed
+    /// by (key, value) so a fence minted between the walk and the removal is not evicted in place
+    /// of the one that was disposed.
+    ///
+    /// The flag is raised FIRST, so nothing can publish a new fence behind the walk.
+    /// </summary>
+    internal int DisposeAttributionFences()
+    {
+        Volatile.Write(ref _fencesDisposedFlag, 1);
+
+        int skipped = 0;
+        foreach (var kv in _attributionFences)
+        {
+            try
+            {
+                kv.Value.Dispose();
+                ((ICollection<KeyValuePair<string, ReaderWriterLockSlim>>)_attributionFences).Remove(kv);
+            }
+            catch (SynchronizationLockException) { skipped++; }
+        }
+        return skipped;
+    }
+
+    /// <summary>
+    /// How many tenant fences are still published. The seam a disposal test needs to state that a
+    /// CONTENDED fence was LEFT IN PLACE rather than cleared out from under the thread holding it.
+    /// </summary>
+    internal int AttributionFenceCount => _attributionFences.Count;
+
+    /// <summary>
     /// The stripe that serializes publication and retirement for one candidate key. Hashing the
     /// whole key rather than the id alone keeps two tenants that legitimately share an id from
     /// colliding on the same stripe more often than chance.
@@ -690,25 +867,90 @@ internal sealed class NamespaceStore
     private void TrackCandidate(string entryId, string ns, string tenantId)
     {
         var key = (tenantId, entryId);
+
+        // TWO PHASES, AND THE SPLIT IS THE POINT. Almost every entry write crosses no ambiguity
+        // boundary — a first placement (0 -> 1) and a re-placement into a namespace the id already
+        // occupies change nothing a topology consumer can observe — and those must NOT take the
+        // exclusive side of the fence, or every upsert in a tenant would serialize against every
+        // graph and cluster write in it. Phase one performs exactly those placements and reports
+        // false, having changed nothing, when the placement would cross.
+        if (TryTrackWithoutCrossing(key, ns))
+            return;
+
+        // THE CROSSING. This placement makes a (tenant, id) ambiguous, which unmakes every edge and
+        // every cluster membership that names it. A topology mutator holding the SHARED side of the
+        // fence has already validated its sweep against the current attribution revision and is
+        // partway through writing bare ids it judged attributable, so the crossing waits for it —
+        // that mutual exclusion, not the revision compare, is what closes the window.
+        //
+        // The fence is taken OUTSIDE the stripe and released after it. That direction is
+        // one-directional everywhere: fence, then stripe, never the reverse — see the field
+        // remarks for the whole-process argument, including which side of the fence is outermost.
+        var fence = AttributionFenceFor(tenantId);
+        fence.EnterWriteLock();
+        try
+        {
+            lock (CandidateStripe(key))
+            {
+                // Fetching the bucket and writing into it is one atomic step against a retirement,
+                // so the instance written here is still the published one when the stripe is
+                // released. No post-write re-check can substitute for that: a retirement evaluates
+                // emptiness BEFORE the write and unpublishes AFTER it, so the re-check passes and
+                // the placement is lost anyway. That ordering is what the previous lock-free
+                // version could not close.
+                var bucket = _idCandidates.GetOrAdd(key, static _ => new ConcurrentDictionary<string, byte>());
+
+                // Re-decided here rather than trusted from phase one, because phase one released
+                // the stripe: the crossing it predicted may have evaporated (the twin deleted, or
+                // this same placement made by another thread). A crossing needs the bucket to have
+                // held exactly one namespace before this placement, so an empty one cannot produce
+                // it — and under the stripe an empty published bucket is precisely the one GetOrAdd
+                // just created, because retirement never leaves a live empty instance behind.
+                bool couldCross = !bucket.IsEmpty;
+                if (bucket.TryAdd(ns, 0) && couldCross && bucket.Count == 2)
+                    BumpAttribution(tenantId);
+            }
+        }
+        finally { fence.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// Phase one of <see cref="TrackCandidate"/>: publish the placement when it provably crosses no
+    /// ambiguity boundary, and otherwise leave the index untouched and say so.
+    ///
+    /// Everything it does is done under the stripe, so the decision and the write it authorizes
+    /// cannot be separated by another placement or retirement of the same key. Returning false is a
+    /// promise that NOTHING was written — the caller re-does the whole step under the fence, and a
+    /// half-applied placement here would be published without the exclusion it needs.
+    ///
+    /// <c>ContainsKey</c> is asked before <c>Count</c> deliberately: it is a lock-free probe and the
+    /// re-placement of an existing entry — the hot upsert path — answers it true, while
+    /// <c>Count</c> takes every lock of the inner dictionary. A first placement reaches neither,
+    /// because the key misses.
+    /// </summary>
+    private bool TryTrackWithoutCrossing((string Tenant, string Id) key, string ns)
+    {
         lock (CandidateStripe(key))
         {
-            // Fetching the bucket and writing into it is one atomic step against a retirement, so
-            // the instance written here is still the published one when the stripe is released. No
-            // post-write re-check can substitute for that: a retirement evaluates emptiness BEFORE
-            // the write and unpublishes AFTER it, so the re-check passes and the placement is lost
-            // anyway. That ordering is what the previous lock-free version could not close.
-            var bucket = _idCandidates.GetOrAdd(key, _ => new ConcurrentDictionary<string, byte>());
+            if (_idCandidates.TryGetValue(key, out var bucket))
+            {
+                // The crossing is 1 -> 2, and only that: the id occupies exactly one namespace and
+                // this placement names a different one. 2 -> 3 leaves an already-ambiguous id
+                // ambiguous and changes nothing any consumer can observe, so it stays on this path.
+                if (!bucket.ContainsKey(ns) && bucket.Count == 1)
+                    return false;
 
-            // A crossing needs the bucket to have held exactly one namespace before this placement,
-            // so an empty one cannot produce it — and under the stripe an empty published bucket is
-            // precisely the one GetOrAdd just created, because retirement never leaves a live empty
-            // instance behind. Read before the add, and paired with TryAdd rather than the indexer
-            // so a re-upsert into a namespace the id already occupies is recognisably a no-op.
-            // Between them, the two ordinary write paths — first placement and re-placement — reach
-            // neither the size read nor the bump.
-            bool couldCross = !bucket.IsEmpty;
-            if (bucket.TryAdd(ns, 0) && couldCross && bucket.Count == 2)
-                BumpAttribution(tenantId);
+                bucket.TryAdd(ns, 0);
+                return true;
+            }
+
+            // No bucket: this is the id's first placement in the tenant, 0 -> 1, which crosses
+            // nothing — an id one entry answers to is attributable. GetOrAdd rather than an
+            // indexer write so the shape matches the fenced path exactly.
+            _idCandidates
+                .GetOrAdd(key, static _ => new ConcurrentDictionary<string, byte>())
+                .TryAdd(ns, 0);
+            return true;
         }
     }
 
@@ -721,31 +963,76 @@ internal sealed class NamespaceStore
     private void UntrackCandidate(string entryId, string ns, string tenantId)
     {
         var key = (tenantId, entryId);
+
+        // Two phases, exactly as in TrackCandidate and for the same reason: the ordinary delete
+        // (the id's only placement, 1 -> 0) crosses nothing and must not take the exclusive side.
+        if (TryUntrackWithoutCrossing(key, ns))
+            return;
+
+        // THE CROSSING, 2 -> 1: an ambiguous id becomes attributable again. It matters in the same
+        // way as the other direction — a topology mutator that judged this id UNSAFE and skipped it
+        // must not have its skip re-decided underneath it — so it takes the exclusive side too.
+        var fence = AttributionFenceFor(tenantId);
+        fence.EnterWriteLock();
+        try
+        {
+            lock (CandidateStripe(key))
+            {
+                if (!_idCandidates.TryGetValue(key, out var bucket))
+                    return;
+
+                bool removed = bucket.TryRemove(ns, out _);
+                if (!bucket.IsEmpty)
+                {
+                    // Re-decided under the stripe rather than trusted from phase one, which
+                    // released it. Only a placement that was actually there can shrink the bucket,
+                    // and a shrink lands on the boundary only when exactly one namespace is left —
+                    // the move back from ambiguous to attributable. Emptying the bucket entirely
+                    // (1 -> 0) crosses nothing: an id no entry answers to was never ambiguous.
+                    if (removed && bucket.Count == 1)
+                        BumpAttribution(tenantId);
+                    return;
+                }
+
+                // Plain TryRemove, not the value-matching overload used in RemoveNamespace. Under
+                // the stripe no other thread can have published a different bucket for this key, so
+                // there is nothing left for a value match to protect — and it never protected the
+                // case that mattered, since the observed instance and the instance a racing
+                // placement just wrote into are the same object.
+                _idCandidates.TryRemove(key, out _);
+            }
+        }
+        finally { fence.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// Phase one of <see cref="UntrackCandidate"/>, mirroring <see cref="TryTrackWithoutCrossing"/>:
+    /// retire the placement when it provably crosses no ambiguity boundary, and otherwise leave the
+    /// index untouched and say so.
+    ///
+    /// The crossing is 2 -> 1 and only that. Emptying the bucket entirely (1 -> 0) crosses nothing —
+    /// an id no entry answers to was never ambiguous — and 3 -> 2 leaves an already-ambiguous id
+    /// ambiguous. A key that is not there at all removes nothing, so it crosses nothing either.
+    ///
+    /// Returning true is a promise the retirement is COMPLETE, including the bucket's own removal
+    /// once it is empty; returning false is a promise nothing was touched.
+    /// </summary>
+    private bool TryUntrackWithoutCrossing((string Tenant, string Id) key, string ns)
+    {
         lock (CandidateStripe(key))
         {
             if (!_idCandidates.TryGetValue(key, out var bucket))
-                return;
+                return true;
 
-            bool removed = bucket.TryRemove(ns, out _);
-            if (!bucket.IsEmpty)
-            {
-                // Only a placement that was actually there can shrink the bucket, and a shrink
-                // lands on the boundary only when exactly one namespace is left — the move back
-                // from ambiguous to attributable. Emptying the bucket entirely (1 -> 0) crosses
-                // nothing — an id no entry answers to was never ambiguous — so the ordinary
-                // single-placement delete skips this branch for the retirement below and never
-                // pays the size read.
-                if (removed && bucket.Count == 1)
-                    BumpAttribution(tenantId);
-                return;
-            }
+            // ContainsKey before Count for the same reason as the placement side: a delete naming a
+            // namespace the id does not occupy is a lock-free miss, while Count takes every lock of
+            // the inner dictionary.
+            if (bucket.ContainsKey(ns) && bucket.Count == 2)
+                return false;
 
-            // Plain TryRemove, not the value-matching overload used in RemoveNamespace. Under the
-            // stripe no other thread can have published a different bucket for this key, so there
-            // is nothing left for a value match to protect — and it never protected the case that
-            // mattered, since the observed instance and the instance a racing placement just wrote
-            // into are the same object.
-            _idCandidates.TryRemove(key, out _);
+            if (bucket.TryRemove(ns, out _) && bucket.IsEmpty)
+                _idCandidates.TryRemove(key, out _);
+            return true;
         }
     }
 

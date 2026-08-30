@@ -226,6 +226,19 @@ public sealed class IntelligenceTools
     {
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
+        // MERGING AN ENTRY WITH ITSELF IS NOT A MERGE, it is an archive of the entry the reply
+        // claims to be keeping. Both lookups below resolve to the one entry, so every step
+        // afterwards runs against a single object: the metadata union is a no-op, the access count
+        // doubles, the topology calls are asked to move a node onto itself, and PromoteMemory then
+        // archives the id the caller named as keepId. Refused here rather than left to Core —
+        // TransferEdges and TransferMembership each decline a self-transfer, but nothing there can
+        // stop the archival, and no caller means "archive this" when they write keepId.
+        //
+        // Ordinal, matching the id comparisons in Core: two ids that differ only by
+        // culture-sensitive equality are two entries everywhere else in this server.
+        if (string.Equals(keepId, archiveId, StringComparison.Ordinal))
+            return $"Error: Cannot merge entry '{keepId}' with itself.";
+
         var keepEntry = _index.Get(keepId, ns, tenantId: _access.TenantId);
         if (keepEntry is null)
             return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
@@ -258,7 +271,9 @@ public sealed class IntelligenceTools
 
         // Transfer graph edges from archived entry to kept entry (within this tenant). Both counts
         // below are whatever Core actually did, never what was attempted - that is what keeps the
-        // reply truthful when an ambiguous id made the transfer a no-op.
+        // reply truthful when an ambiguous id made the transfer a no-op. Core also refuses a
+        // self-transfer outright, so the keepId == archiveId case screened above cannot reach a
+        // rewrite of a node onto itself.
         int edgesTransferred = _graph.TransferEdges(archiveId, keepId, tenantId: _access.TenantId);
 
         // Transfer cluster memberships

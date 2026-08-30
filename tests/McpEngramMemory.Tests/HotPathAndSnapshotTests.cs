@@ -308,40 +308,57 @@ public sealed class HotPathAndSnapshotTests : IDisposable
     ///
     /// <c>StoreSummary</c> writes <c>SummaryEntryId</c> and the centroid phases write
     /// <c>Centroid</c>; both are single reference assignments, so neither can tear and neither ever
-    /// threw inside the serializer. That is exactly why they are worth pinning: they were writing
-    /// through into an already-captured snapshot silently, and a snapshot that acquires a summary id
-    /// and a centroid it was never meant to carry is a half-applied edit written out as though it
-    /// were whole. A save armed before the edit and fired after it would persist a cluster state
-    /// that never existed at any single instant.
+    /// threw inside the serializer. That is exactly why they are worth pinning: a snapshot that
+    /// acquires a summary id and a label it was never meant to carry is a half-applied edit written
+    /// out as though it were whole.
+    ///
+    /// WHAT "A SNAPSHOT" IS HAS CHANGED SINCE THIS TEST WAS WRITTEN, and the change is the point.
+    /// <see cref="ClusterManager"/> now hands persistence a METHOD GROUP that snapshots when the
+    /// debounce FIRES, rather than a list captured eagerly at registration time. It had to:
+    /// registration is last-write-wins over a full-replace blob, so with an eager capture two
+    /// overlapping mutators could capture in one order and register in the other, and the OLDER map
+    /// would be the one written — losing a whole cluster with no error, no log line, and no symptom
+    /// until the next restart. This test therefore no longer asserts that the provider armed by
+    /// <c>CreateCluster</c> is frozen at creation time; re-invoking a provider is deliberately a
+    /// FRESH look at the map. What it asserts is the property that actually protects the serializer:
+    /// the <see cref="SemanticCluster"/> objects a snapshot hands out are frozen, so an edit landing
+    /// after the snapshot cannot reach inside one.
     /// </summary>
     [Fact]
     public void ACapturedSnapshot_DoesNotAcquireLabelSummaryOrCentroidWrittenAfterIt()
     {
         _clusters.CreateCluster("c1", Ns, new[] { "a", "b" }, "before", tenantId: Tenant);
 
-        // The FIRST provider armed by CreateCluster — captured inside the write lock that stored the
-        // cluster, before the centroid was computed outside the lock and applied in a second lock
-        // section. That ordering is what makes the centroid observable here at all.
+        // Taken by invoking a registered provider — exactly what the debounce timer does. It sees
+        // the cluster as CreateCluster left it, centroid pass included, because that pass completes
+        // before CreateCluster returns.
         var atCreation = ClusterC1(_store.ClusterProviders[0]());
-        Assert.Null(atCreation.Centroid);
+        Assert.NotNull(atCreation.Centroid);
         Assert.Null(atCreation.SummaryEntryId);
         Assert.Equal("before", atCreation.Label);
         Assert.Equal(new[] { "a", "b" }, atCreation.MemberIds);
+
+        var centroidAtCreation = atCreation.Centroid;
 
         _clusters.StoreSummary("c1", "a summary", new[] { 1f, 1f, 1f }, tenantId: Tenant);
-        _clusters.UpdateCluster("c1", addIds: null, removeIds: null, label: "after", tenantId: Tenant);
+        _clusters.UpdateCluster("c1", addIds: new[] { "c" }, removeIds: null, label: "after", tenantId: Tenant);
 
-        Assert.Null(atCreation.Centroid);
+        // THE ISOLATION PROPERTY: every edit above published a REPLACEMENT cluster, so none of them
+        // reached the instance this snapshot is holding — which is what lets a serializer walk it on
+        // a pool thread minutes later.
+        Assert.Same(centroidAtCreation, atCreation.Centroid);
         Assert.Null(atCreation.SummaryEntryId);
         Assert.Equal("before", atCreation.Label);
         Assert.Equal(new[] { "a", "b" }, atCreation.MemberIds);
 
-        // The control: the edits really did land, so the assertions above are about isolation and
-        // not about the mutators quietly doing nothing.
-        var latest = ClusterC1(_store.ClusterProviders[^1]());
-        Assert.NotNull(latest.Centroid);
-        Assert.Equal("summary:c1", latest.SummaryEntryId);
-        Assert.Equal("after", latest.Label);
+        // THE DEFERRAL PROPERTY, and it is what makes last-registration-wins safe: the provider
+        // registered FIRST reports the LATEST state when it is invoked now. With an eager capture it
+        // would report the older map — and if that registration were the one that won the debounce,
+        // the older map is what would reach the store.
+        var replayed = ClusterC1(_store.ClusterProviders[0]());
+        Assert.Equal("summary:c1", replayed.SummaryEntryId);
+        Assert.Equal("after", replayed.Label);
+        Assert.Equal(new[] { "a", "b", "c" }, replayed.MemberIds);
     }
 
     /// <summary>
