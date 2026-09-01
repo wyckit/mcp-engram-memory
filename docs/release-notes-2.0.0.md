@@ -165,10 +165,10 @@ site already holds:
 var results = index.Search(vector, ns, k: 5);
 
 // After — name the argument; the placement rules mean positional calls fail loudly, not silently
-var results = index.Search(vector, ns, tenantId: principal.TenantId, k: 5);
+var scoped = index.Search(vector, ns, tenantId: principal.TenantId, k: 5);
 
 // Legacy single-tenant deployments state the legacy partition explicitly
-var results = index.Search(vector, ns, tenantId: "", k: 5);
+var legacy = index.Search(vector, ns, tenantId: "", k: 5);
 ```
 
 **Treat every `tenantId: ""` you add as a claim, not a fix.** It is the correct answer for a

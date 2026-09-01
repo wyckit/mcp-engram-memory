@@ -14,9 +14,9 @@
 
 **Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction detection, all running locally with zero external API.
 
-**2.0 makes the boundaries structural.** Isolation is no longer something you remember to pass: every Core retrieval and scoping API *requires* a tenant, the cognitive graph is partitioned end to end, and the governed Constitution filters every tool call. What used to be a convention you could silently forget is now a compile error.
+**2.0 makes the boundary explicit.** Tenant scope stops being a defaulted argument: 55 Core retrieval and scoping APIs now require `tenantId` with no default, positioned so that pre-2.0 positional calls fail to compile rather than silently rebinding. The compiler makes you *state* the scope — it does not choose one for you, and `tenantId: ""` still selects the legacy partition.
 
-- **Isolated by Construction** — tenant partitioning runs through storage, graph, clusters, lifecycle, diffusion, synthesis, and visualization. Edges never cross tenants; cross-namespace association *within* a tenant is preserved.
+- **Tenant-Partitioned Throughout** — partitioning runs through storage, graph, clusters, lifecycle, diffusion, synthesis, and visualization. Edges never cross tenants; cross-namespace association *within* a tenant is preserved.
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
 - **Contradiction Detection** — `find_contradictions` surfaces conflicting goals or architecture decisions on demand, so you can review and retire logic you've already reversed instead of letting the agent keep acting on it.
 - **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
@@ -255,9 +255,10 @@ Multi-tenancy is complete and, as of 2.0, mandatory at the API boundary. Memory 
 the cognitive graph, clusters, lifecycle, collapse history, diffusion/spectral retrieval,
 intelligence, maintenance, synthesis, and visualization are all tenant-partitioned: a tenant sees
 and mutates only its own data, and graph edges never cross tenants (cross-namespace association
-within a tenant is preserved). Core APIs take `tenantId` as a required argument, so scope is a
-decision the compiler makes you state rather than a default you can forget. Legacy empty-tenant
-deployments are byte-for-byte unchanged. See
+within a tenant is preserved). Core's retrieval and scoping APIs take `tenantId` as a required
+argument, so scope is a decision the compiler makes you state rather than a default you can forget —
+`""` remains a valid answer, and the legacy partition it names is a real dataset, so state it
+deliberately. Legacy empty-tenant deployments are byte-for-byte unchanged. See
 [Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and [Security](SECURITY.md).
 
 ## AI Assistant Setup
@@ -349,6 +350,7 @@ supports — roughly 500 MB. Keeping it separate means neither the `McpEngramMem
 > with a pointer to this package. In-process synthesis is for hosts embedding the Core library.
 
 ```csharp
+using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Storage;
 
