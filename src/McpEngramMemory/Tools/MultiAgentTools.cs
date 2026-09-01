@@ -112,7 +112,7 @@ public sealed class MultiAgentTools
 
         // Filter to namespaces the agent can access
         var accessible = nsList.Where(ns => _principal.IsSystem ||
-            _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId)).ToList();
+            _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId)).ToList();
         if (accessible.Count == 0)
             return "Error: no accessible namespaces in the provided list.";
 
@@ -153,7 +153,7 @@ public sealed class MultiAgentTools
             return "Error: agentId must not be empty.";
 
         using var timer = _metrics.StartTimer("share_namespace");
-        return _registry.Share(ns, _principal.AgentId, agentId, accessLevel, _principal.TenantId);
+        return _registry.Share(ns, _principal.AgentId, agentId, accessLevel, tenantId: _principal.TenantId);
     }
 
     [McpServerTool(Name = "unshare_namespace", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
@@ -168,7 +168,7 @@ public sealed class MultiAgentTools
             return "Error: agentId must not be empty.";
 
         using var timer = _metrics.StartTimer("unshare_namespace");
-        return _registry.Unshare(ns, _principal.AgentId, agentId, _principal.TenantId);
+        return _registry.Unshare(ns, _principal.AgentId, agentId, tenantId: _principal.TenantId);
     }
 
     [McpServerTool(Name = "list_shared", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -176,7 +176,7 @@ public sealed class MultiAgentTools
     public object ListShared()
     {
         using var timer = _metrics.StartTimer("list_shared");
-        var result = _registry.GetAccessibleNamespaces(_principal.AgentId, _principal.TenantId);
+        var result = _registry.GetAccessibleNamespaces(_principal.AgentId, tenantId: _principal.TenantId);
         return result.SharedNamespaces;
     }
 
@@ -185,6 +185,6 @@ public sealed class MultiAgentTools
     public object WhoAmI()
     {
         using var timer = _metrics.StartTimer("whoami");
-        return _registry.GetAccessibleNamespaces(_principal.AgentId, _principal.TenantId);
+        return _registry.GetAccessibleNamespaces(_principal.AgentId, tenantId: _principal.TenantId);
     }
 }

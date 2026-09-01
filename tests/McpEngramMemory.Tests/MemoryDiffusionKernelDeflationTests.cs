@@ -59,7 +59,7 @@ public class MemoryDiffusionKernelDeflationTests : IDisposable
         for (int i = 0; i < linked; i++) signal[$"link_{i:D3}"] = 0.5f + 0.01f * i;
         for (int i = 0; i < isolated; i++) signal[$"iso_{i:D2}"] = 1.0f + 0.1f * i;
 
-        var filtered = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda));
+        var filtered = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda), tenantId: "");
 
         // Isolated entries: exact identity pass-through (lambda_L = 0 singleton
         // component, exp(-0) = 1).
@@ -100,7 +100,7 @@ public class MemoryDiffusionKernelDeflationTests : IDisposable
         for (int i = 0; i < isolated; i++)
             _index.Upsert(new CognitiveEntry($"iso_{i:D2}", new[] { 100f + i, 0f }, ns, $"isolated {i}"));
 
-        var basis = _kernel.GetBasis(ns); // must not throw
+        var basis = _kernel.GetBasis(ns, tenantId: ""); // must not throw
         Assert.Null(basis);
     }
 
@@ -119,7 +119,7 @@ public class MemoryDiffusionKernelDeflationTests : IDisposable
         for (int i = 0; i < isolated; i++)
             _index.Upsert(new CognitiveEntry($"iso_{i:D2}", new[] { 100f + i, 0f }, ns, $"isolated {i}"));
 
-        var basis = _kernel.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(basis);
         Assert.Equal(linked, basis!.EntryIds.Count);
         foreach (var id in basis.EntryIds)

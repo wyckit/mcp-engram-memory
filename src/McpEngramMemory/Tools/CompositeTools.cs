@@ -72,8 +72,19 @@ public sealed class CompositeTools
     /// neither hijack the link nor blank it. Write access, not read, matches
     /// <c>GraphTools.LinkMemories</c>, which requires it on both endpoints.
     /// </summary>
-    private CognitiveEntry? ResolveLinkTarget(string targetId, string preferredNs) =>
-        EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
+    private CognitiveEntry? ResolveLinkTarget(string targetId, string preferredNs)
+    {
+        // Resolution authorizes the ENTRY. The edge, though, is written onto the bare-id graph
+        // node, which a same-id twin in a namespace this caller cannot see shares byte for byte —
+        // so authorizing through the twin we can resolve would still hang topology off the one we
+        // cannot. Topology therefore takes the ACL-blind tenant-wide test as well, the same
+        // posture GraphTools.LinkMemories and TopologyCascade already take. Both failures return
+        // null, so "no such id" and "that id has a twin somewhere" stay indistinguishable.
+        if (!BareIdTopology.IsTopologySafe(_index, targetId, _access.TenantId))
+            return null;
+
+        return EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
+    }
 
     [McpServerTool(Name = "remember", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Save a new memory with automatic duplicate detection and graph linking — the default way to store anything. Don't use `store_memory` directly unless you need to supply a raw embedding vector or skip duplicate checking.")]
@@ -124,15 +135,31 @@ public sealed class CompositeTools
         var related = existing.Count > 0 ? existing : _index.Search(
             vector, ns, k: 5, minScore: 0.65f, tenantId: _access.TenantId);
         var links = new List<string>();
+        // One sweep for the whole loop: the per-id overload re-lists the tenant's namespaces and
+        // that listing reloads the store, so guarding a result set id-by-id would cost one full
+        // reload per candidate. Both endpoints are tested — an edge lands on two bare nodes, and
+        // either of them may be shared with a twin this caller cannot see.
+        //
+        // The entry above is already durably stored, so a failed provider listing here must
+        // degrade to "no auto-linking" rather than erroring a write that happened — an error
+        // reply for a committed upsert makes the caller retry and duplicate the entry.
+        TopologyGuard.Sweep? topology = null;
+        try { topology = BareIdTopology.ForSweep(_index, _access.TenantId); }
+        catch (NamespaceEnumerationException) { actions.Add("auto-linking skipped (namespace listing unavailable)"); }
+        if (topology is not null)
+        {
+        bool selfLinkable = topology.IsTopologySafe(id);
         foreach (var result in related)
         {
             if (result.Id == id) continue;
             if (result.IsSummaryNode) continue;
             if (result.Score < 0.65f) continue;
+            if (!selfLinkable || !topology.IsTopologySafe(result.Id)) continue;
 
             var relation = result.Score >= 0.85f ? "similar_to" : "cross_reference";
             _graph.AddEdge(new GraphEdge(id, result.Id, relation, tenantId: _access.TenantId));
             links.Add($"{result.Id} ({relation}, {result.Score:F3})");
+        }
         }
 
         if (links.Count > 0)
@@ -190,13 +217,13 @@ public sealed class CompositeTools
         {
             var states = new HashSet<string> { "stm", "ltm" };
             IReadOnlyList<CognitiveSearchResult> results = hybrid
-                ? _index.HybridSearch(vector, query, ns, k, minScore, rerank: rerank,
-                    tenantId: _access.TenantId)
+                ? _index.HybridSearch(vector, query, ns, tenantId: _access.TenantId,
+                    k: k, minScore: minScore, rerank: rerank)
                 : (rerank
-                    ? _index.Rerank(query, _index.Search(vector, ns, k * 2, minScore,
-                        summaryFirst: summaryFirst, tenantId: _access.TenantId)).Take(k).ToList()
-                    : _index.Search(vector, ns, k, minScore, summaryFirst: summaryFirst,
-                        tenantId: _access.TenantId));
+                    ? _index.Rerank(query, _index.Search(vector, ns, tenantId: _access.TenantId,
+                        k: k * 2, minScore: minScore, summaryFirst: summaryFirst)).Take(k).ToList()
+                    : _index.Search(vector, ns, tenantId: _access.TenantId,
+                        k: k, minScore: minScore, summaryFirst: summaryFirst));
 
             // Expand with graph neighbors
             var expanded = expandGraph
@@ -214,8 +241,8 @@ public sealed class CompositeTools
                 // gate goes on the mutation and not on the call: a read-only grantee gets the
                 // same rows, scores and order, and only the reported LifecycleState changes —
                 // to the truth, since nothing was promoted.
-                var deepResults = _lifecycle.DeepRecall(vector, ns, k, minScore: 0.3f, resurrectionThreshold: 0.7f,
-                    tenantId: _access.TenantId, resurrect: _access.CanWrite(ns));
+                var deepResults = _lifecycle.DeepRecall(vector, ns, tenantId: _access.TenantId,
+                    k: k, minScore: 0.3f, resurrectionThreshold: 0.7f, resurrect: _access.CanWrite(ns));
                 if (deepResults.Count > results.Count ||
                     (deepResults.Count > 0 && (results.Count == 0 || deepResults[0].Score > results[0].Score)))
                 {
@@ -256,10 +283,10 @@ public sealed class CompositeTools
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
                 IReadOnlyList<CognitiveSearchResult> expertResults = hybrid
-                    ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace, k, minScore,
-                        rerank: rerank, tenantId: _access.TenantId)
-                    : _index.Search(vector, bestExpert.TargetNamespace, k, minScore,
-                        summaryFirst: summaryFirst, tenantId: _access.TenantId);
+                    ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace,
+                        tenantId: _access.TenantId, k: k, minScore: minScore, rerank: rerank)
+                    : _index.Search(vector, bestExpert.TargetNamespace, tenantId: _access.TenantId,
+                        k: k, minScore: minScore, summaryFirst: summaryFirst);
 
                 foreach (var r in expertResults)
                     _index.RecordAccess(r.Id, bestExpert.TargetNamespace, _access.TenantId);
@@ -335,17 +362,28 @@ public sealed class CompositeTools
         _access.ClaimOnWrite(ns);
         actions.Add("stored as ltm lesson");
 
+        // Steps 4 and 5 resolve bare ids and build a topology sweep, either of which can throw
+        // NamespaceEnumerationException when the provider's namespace listing fails. The
+        // reflection above is already durably stored, so linking must degrade rather than error
+        // the write that happened — an error reply here makes the caller retry and duplicate it.
+        try
+        {
         // 4. Auto-link to explicitly referenced memories. These ids come from the caller, not
         // from a search inside an already-authorized namespace, so each one is resolved and
         // authorized before an edge is drawn to it (see ResolveLinkTarget).
         if (relatedIdList is { Length: > 0 })
         {
             int skipped = 0;
+            // The reflection's own id is the source endpoint of every edge below, and it is a
+            // bare node too: if a twin of it exists elsewhere in the tenant, links drawn from it
+            // would attach to that twin's topology. Fail the whole block closed rather than
+            // per-target, and report it through the same aggregate count.
+            bool selfLinkable = BareIdTopology.IsTopologySafe(_index, id, _access.TenantId);
             foreach (var relatedId in relatedIdList)
             {
                 if (relatedId == id) continue;
 
-                if (ResolveLinkTarget(relatedId, ns) is null)
+                if (!selfLinkable || ResolveLinkTarget(relatedId, ns) is null)
                 {
                     skipped++;
                     continue;
@@ -367,11 +405,17 @@ public sealed class CompositeTools
         var related = _index.Search(vector, ns, k: 5, minScore: 0.7f,
             tenantId: _access.TenantId);
         int autoLinked = 0;
+        // Same guard as the explicit relatedIds above, and for the same reason — these targets
+        // came from a search this caller is authorized for, but the edge still lands on a bare
+        // node that a twin may share. One sweep for the loop; see BareIdTopology.
+        var topology = BareIdTopology.ForSweep(_index, _access.TenantId);
+        bool selfAutoLinkable = topology.IsTopologySafe(id);
         foreach (var r in related)
         {
             if (r.Id == id) continue;
             if (r.IsSummaryNode) continue;
             if (relatedIdList is not null && relatedIdList.Contains(r.Id)) continue;
+            if (!selfAutoLinkable || !topology.IsTopologySafe(r.Id)) continue;
             if (r.Score < 0.7f) continue;
 
             _graph.AddEdge(new GraphEdge(id, r.Id, "cross_reference", tenantId: _access.TenantId));
@@ -379,6 +423,11 @@ public sealed class CompositeTools
         }
         if (autoLinked > 0)
             actions.Add($"auto-linked to {autoLinked} related memor{(autoLinked == 1 ? "y" : "ies")}");
+        }
+        catch (NamespaceEnumerationException)
+        {
+            actions.Add("auto-linking skipped (namespace listing unavailable)");
+        }
 
         // 6. Search for past reflections to surface patterns
         var pastReflections = _index.Search(vector, ns, k: 3, minScore: 0.6f,
@@ -444,9 +493,19 @@ public sealed class CompositeTools
         var expanded = new List<CognitiveSearchResult>(results);
         float lowestScore = results.Min(r => r.Score);
 
+        // The seeds are entries the caller may read, but graph adjacency is keyed (tenant, id)
+        // with no namespace: an id the tenant holds in two namespaces names ONE node, shared with
+        // a twin the caller cannot see. Expanding through it would attach that twin's topology to
+        // this caller's hit, so an ambiguous seed contributes no neighbors. One sweep for the
+        // whole expansion — see BareIdTopology for why the test is ACL-blind and what it costs.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
         foreach (var result in results)
         {
-            var neighbors = _graph.GetNeighbors(result.Id, tenantId: _access.TenantId);
+            if (!topology.IsTopologySafe(result.Id)) continue;
+
+            var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
+                tenantId: _access.TenantId);
             foreach (var neighbor in neighbors.Neighbors)
             {
                 if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -510,7 +569,7 @@ public sealed class CompositeTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _spectral.Rerank(ns, scoreList, resolved, k * 3, tenantId: _access.TenantId);
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, tenantId: _access.TenantId, topK: k * 3);
 
         var output = new List<CognitiveSearchResult>(k);
         foreach (var (id, score) in reranked)
@@ -619,13 +678,19 @@ public sealed class CompositeTools
             componentOf.TryGetValue(c.Id, out var comp) && comp == dominantComponent);
         if (clusterMember is not null)
         {
+            // This BFS reads bare-id adjacency at every hop, so the guard belongs on each node
+            // whose neighbors we are about to read, not only on the root: a walk that starts
+            // unambiguous can still reach a node shared with an invisible twin and pull that
+            // twin's component in behind it. One sweep for the walk.
+            var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
             var queue = new Queue<string>();
             var fullClusterSeen = new HashSet<string> { clusterMember.Id };
             queue.Enqueue(clusterMember.Id);
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
+                if (!topology.IsTopologySafe(id)) continue;
+                var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (fullClusterSeen.Contains(n.Entry.Id)) continue;
@@ -633,7 +698,7 @@ public sealed class CompositeTools
                     queue.Enqueue(n.Entry.Id);
 
                     if (seen.Contains(n.Entry.Id)) continue;
-                    var entry = _index.Get(n.Entry.Id, ns, _access.TenantId);
+                    var entry = _index.Get(n.Entry.Id, ns, tenantId: _access.TenantId);
                     if (entry is null) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
@@ -663,6 +728,12 @@ public sealed class CompositeTools
         var componentOf = new Dictionary<string, int>(candidates.Count);
         int nextComponent = 0;
 
+        // Components are built from bare-id adjacency, so a node the tenant holds in two
+        // namespaces would merge two candidates through an edge that belongs to an invisible
+        // twin — and the dominant component that comes out of this drives which entries get
+        // boosted and which extra ones get surfaced. An unattributable node stays a singleton.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
         foreach (var c in candidates)
         {
             if (componentOf.ContainsKey(c.Id)) continue;
@@ -675,7 +746,8 @@ public sealed class CompositeTools
             while (queue.Count > 0)
             {
                 var id = queue.Dequeue();
-                var neighbors = _graph.GetNeighbors(id, direction: "both", tenantId: _access.TenantId);
+                if (!topology.IsTopologySafe(id)) continue;
+                var neighbors = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: _access.TenantId);
                 foreach (var n in neighbors.Neighbors)
                 {
                     if (!candidateIds.Contains(n.Entry.Id)) continue;

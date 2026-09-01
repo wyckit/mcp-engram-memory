@@ -23,7 +23,7 @@ public class QuantizedSearchTests
         var entry = new CognitiveEntry("e1", MakeVector(0.5f), "ns", lifecycleState: "stm");
         index.Upsert(entry);
 
-        var results = index.Search(MakeVector(0.5f), "ns", k: 1);
+        var results = index.Search(MakeVector(0.5f), "ns", tenantId: "", k: 1);
         Assert.Single(results);
         Assert.Equal("e1", results[0].Id);
     }
@@ -37,7 +37,7 @@ public class QuantizedSearchTests
         index.Upsert(new CognitiveEntry("e1", MakeVector(0.9f), "ns", lifecycleState: "ltm"));
         index.Upsert(new CognitiveEntry("e2", MakeVector(0.1f), "ns", lifecycleState: "ltm"));
 
-        var results = index.Search(MakeVector(0.9f), "ns", k: 2,
+        var results = index.Search(MakeVector(0.9f), "ns", tenantId: "", k: 2,
             includeStates: new HashSet<string> { "ltm" });
 
         Assert.Equal(2, results.Count);
@@ -55,7 +55,7 @@ public class QuantizedSearchTests
         index.Upsert(new CognitiveEntry("ltm1", MakeVector(0.9f), "ns", lifecycleState: "ltm"));
         index.Upsert(new CognitiveEntry("ltm2", MakeVector(0.1f), "ns", lifecycleState: "ltm"));
 
-        var results = index.Search(MakeVector(0.85f), "ns", k: 3);
+        var results = index.Search(MakeVector(0.85f), "ns", tenantId: "", k: 3);
         Assert.Equal(3, results.Count);
 
         // Both stm1 (0.8) and ltm1 (0.9) should be top-ranked
@@ -74,7 +74,7 @@ public class QuantizedSearchTests
         index.SetLifecycleState("e1", "ltm");
 
         // Should still be searchable with correct results
-        var results = index.Search(MakeVector(0.5f), "ns", k: 1,
+        var results = index.Search(MakeVector(0.5f), "ns", tenantId: "", k: 1,
             includeStates: new HashSet<string> { "ltm" });
         Assert.Single(results);
         Assert.Equal("e1", results[0].Id);
@@ -89,7 +89,7 @@ public class QuantizedSearchTests
         // Promote back to STM (should remove quantization)
         index.SetLifecycleState("e1", "stm");
 
-        var results = index.Search(MakeVector(0.5f), "ns", k: 1);
+        var results = index.Search(MakeVector(0.5f), "ns", tenantId: "", k: 1);
         Assert.Single(results);
         Assert.Equal("e1", results[0].Id);
     }
@@ -114,7 +114,7 @@ public class QuantizedSearchTests
             similar[i] += (float)(rng.NextDouble() * 0.01 - 0.005);
         index.Upsert(new CognitiveEntry("target", similar, "ns", lifecycleState: "ltm"));
 
-        var results = index.Search(targetVector, "ns", k: 5,
+        var results = index.Search(targetVector, "ns", tenantId: "", k: 5,
             includeStates: new HashSet<string> { "ltm" });
 
         // The very similar entry should be in top results
@@ -134,7 +134,7 @@ public class QuantizedSearchTests
         index.Upsert(new CognitiveEntry("e2", vDup, "ns", lifecycleState: "ltm"));
         index.Upsert(new CognitiveEntry("e3", MakeVector(-0.5f), "ns", lifecycleState: "ltm"));
 
-        var dups = index.FindDuplicates("ns", threshold: 0.99f,
+        var dups = index.FindDuplicates("ns", tenantId: "", threshold: 0.99f,
             includeStates: new HashSet<string> { "ltm" });
 
         Assert.Single(dups);
@@ -151,7 +151,7 @@ public class QuantizedSearchTests
         // SetActivationEnergyAndState with state transition to LTM
         index.SetActivationEnergyAndState("e1", -1.0f, "ltm");
 
-        var results = index.Search(MakeVector(0.5f), "ns", k: 1,
+        var results = index.Search(MakeVector(0.5f), "ns", tenantId: "", k: 1,
             includeStates: new HashSet<string> { "ltm" });
         Assert.Single(results);
         Assert.Equal("e1", results[0].Id);
@@ -200,7 +200,13 @@ file sealed class InMemoryStorageProvider : IStorageProvider
     public List<SemanticCluster> LoadClusters() => new();
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider) { }
     public List<CollapseRecord> LoadCollapseHistory() => new();
-    public void ScheduleSaveCollapseHistory(Func<List<CollapseRecord>> dataProvider) { }
+    public bool UpsertCollapseRecordSync(CollapseRecord record) => true;
+    public bool DeleteCollapseRecordSync(string collapseId) => true;
+    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration) => CollapseRecordCas.Applied;
+    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration) => CollapseRecordCas.AlreadyAbsent;
+    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record) { record = null; return true; }
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records) { records = new(); return true; }
+    public bool TryFlush() => true;
     public Dictionary<string, DecayConfig> LoadDecayConfigs() => new();
     public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider) { }
     public bool SupportsIncrementalWrites => false;

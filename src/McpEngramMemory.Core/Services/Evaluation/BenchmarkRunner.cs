@@ -78,17 +78,20 @@ public sealed class BenchmarkRunner
                 var queryVector = _embedding.Embed(query.QueryText);
 
                 var sw = Stopwatch.StartNew();
+                // The benchmark harness is single-tenant by design: its isolated __benchmark_
+                // namespaces live in the legacy ("") partition, so the explicit legacy tenant
+                // is the deliberate meaning here, not a forgotten default.
                 IReadOnlyList<CognitiveSearchResult> results = mode switch
                 {
                     SearchMode.Hybrid => _index.HybridSearch(
-                        queryVector, query.QueryText, ns, query.K),
+                        queryVector, query.QueryText, ns, tenantId: "", k: query.K),
                     SearchMode.HybridRerank => _index.HybridSearch(
-                        queryVector, query.QueryText, ns, query.K, rerank: true),
+                        queryVector, query.QueryText, ns, tenantId: "", k: query.K, rerank: true),
                     SearchMode.VectorRerank => _index.Rerank(
-                        query.QueryText, _index.Search(queryVector, ns, query.K * 2,
+                        query.QueryText, _index.Search(queryVector, ns, tenantId: "", k: query.K * 2,
                             summaryFirst: query.SummaryFirst))
                         .Take(query.K).ToList(),
-                    _ => _index.Search(queryVector, ns, query.K,
+                    _ => _index.Search(queryVector, ns, tenantId: "", k: query.K,
                         summaryFirst: query.SummaryFirst)
                 };
                 sw.Stop();
@@ -195,14 +198,15 @@ public sealed class BenchmarkRunner
                 var queryVector = queryVectors[i];
 
                 var sw = Stopwatch.StartNew();
+                // Same as Run(): the isolated benchmark namespace lives in the legacy ("") partition.
                 IReadOnlyList<CognitiveSearchResult> results = mode switch
                 {
-                    SearchMode.Hybrid => _index.HybridSearch(queryVector, query.QueryText, ns, query.K),
-                    SearchMode.HybridRerank => _index.HybridSearch(queryVector, query.QueryText, ns, query.K, rerank: true),
+                    SearchMode.Hybrid => _index.HybridSearch(queryVector, query.QueryText, ns, tenantId: "", k: query.K),
+                    SearchMode.HybridRerank => _index.HybridSearch(queryVector, query.QueryText, ns, tenantId: "", k: query.K, rerank: true),
                     SearchMode.VectorRerank => _index.Rerank(query.QueryText,
-                        _index.Search(queryVector, ns, query.K * 2, summaryFirst: query.SummaryFirst))
+                        _index.Search(queryVector, ns, tenantId: "", k: query.K * 2, summaryFirst: query.SummaryFirst))
                         .Take(query.K).ToList(),
-                    _ => _index.Search(queryVector, ns, query.K, summaryFirst: query.SummaryFirst)
+                    _ => _index.Search(queryVector, ns, tenantId: "", k: query.K, summaryFirst: query.SummaryFirst)
                 };
                 sw.Stop();
 

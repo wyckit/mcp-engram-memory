@@ -38,7 +38,7 @@ public sealed class ClusterTools
         try
         {
             var ids = memberIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            return _clusters.CreateCluster(clusterId, ns, ids, label, _access.TenantId);
+            return _clusters.CreateCluster(clusterId, ns, ids, label, tenantId: _access.TenantId);
         }
         catch (Exception ex)
         {
@@ -56,14 +56,21 @@ public sealed class ClusterTools
     {
         // Cluster ownership isn't known until the cluster itself is resolved (within this tenant).
         // Same reply shape as a genuine miss - a distinct denial would confirm the cluster exists in
-        // a namespace this caller cannot see.
-        var clusterNs = _clusters.GetCluster(clusterId, _access.TenantId)?.Namespace;
+        // a namespace this caller cannot see. GetClusterNamespace, not the full GetCluster
+        // projection: the gate needs only the namespace, and the optimistic projection can
+        // return null under tenant-wide attribution churn — refusing a write the fenced
+        // mutation itself would have admitted.
+        var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
         var addIds = addMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var removeIds = removeMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        return _clusters.UpdateCluster(clusterId, addIds, removeIds, label, _access.TenantId);
+        // The authorized namespace rides INTO the mutation and is re-compared under the same
+        // lock that publishes the edit — a cluster recreated in another namespace between the
+        // gate above and this write refuses instead of being mutated under stale authority.
+        return _clusters.UpdateClusterInNs(clusterId, addIds, removeIds, label, tenantId: _access.TenantId,
+            onlyIfNs: clusterNs);
     }
 
     [McpServerTool(Name = "store_cluster_summary", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -73,7 +80,8 @@ public sealed class ClusterTools
         [Description("Generated summary text.")] string summaryText,
         [Description("Embedding of the summary.")] float[]? summaryVector = null)
     {
-        var clusterNs = _clusters.GetCluster(clusterId, _access.TenantId)?.Namespace;
+        // GetClusterNamespace for the gate, like update_cluster — see the comment there.
+        var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
@@ -81,7 +89,9 @@ public sealed class ClusterTools
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        var result = _clusters.StoreSummary(clusterId, summaryText, resolved, _access.TenantId);
+        // onlyIfNs: authorization bound to the mutation — see update_cluster.
+        var result = _clusters.StoreSummaryInNs(clusterId, summaryText, resolved, tenantId: _access.TenantId,
+            onlyIfNs: clusterNs);
         if (result.StartsWith("Error:")) return result;
 
         _access.ClaimOnWrite(clusterNs);
@@ -93,14 +103,29 @@ public sealed class ClusterTools
     public object GetCluster(
         [Description("Cluster ID.")] string clusterId)
     {
-        var result = _clusters.GetCluster(clusterId, _access.TenantId);
+        var result = _clusters.GetCluster(clusterId, tenantId: _access.TenantId);
         if (result is null || !_access.CanRead(result.Namespace))
             return $"Cluster '{clusterId}' not found.";
 
-        // Members can live outside the cluster's own namespace if they were added by id, so filter
-        // them independently against the caller's read access.
-        var visibleMembers = result.Members.Where(m => _access.CanRead(m.Namespace)).ToList();
-        return result with { Members = visibleMembers };
+        // Two independent tests stand between a stored membership and this reply, and only one of
+        // them belongs at the tool.
+        //
+        // ATTRIBUTION is settled in Core. Membership is keyed (tenant, id) with no namespace, so an
+        // id the tenant holds in two namespaces names ONE bucket shared by two entries;
+        // ClusterManager's projection therefore withholds such a member before it ever reaches here.
+        // That test is ACL-blind and could not be made at this layer even if it were repeated: the
+        // twin that makes the bucket shared is exactly the one this caller cannot see, and the bare
+        // id resolves to whichever twin the locator picks — quite possibly the CALLER'S OWN readable
+        // one, which would then be presented as a member of somebody else's cluster and pass every
+        // check below.
+        //
+        // ACCESS is genuinely this tool's, because it is the only layer that has a principal. A
+        // member that survived Core's projection is attributable to exactly one entry, so its
+        // Namespace is authoritative and CanRead on it means what it says. It is not implied by the
+        // read check on the cluster above: members added by id can live outside the cluster's own
+        // namespace. ProjectForPrincipal applies it, and carries the member count and the staleness
+        // bit along with it so that nothing describing the member set outlives the filter.
+        return ProjectForPrincipal(result);
     }
 
     [McpServerTool(Name = "list_clusters", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -109,6 +134,84 @@ public sealed class ClusterTools
         [Description("Namespace.")] string ns)
     {
         if (!_access.CanRead(ns)) return Array.Empty<ClusterSummaryInfo>();
-        return _clusters.ListClusters(ns, _access.TenantId);
+
+        var listed = _clusters.ListClusters(ns, tenantId: _access.TenantId);
+        if (listed.Count == 0) return Array.Empty<ClusterSummaryInfo>();
+
+        // The listing carries the same two facts get_cluster does — how many members, and whether a
+        // summary is there to be had — so it has to be narrowed by the same principal, through the
+        // same projection. Reporting Core's ACL-blind figures here would re-open the disclosure one
+        // tool over: a caller who cannot see a member in get_cluster would simply read its existence
+        // off list_clusters instead, which is the cheaper call of the two.
+        //
+        // A member carries its namespace only once it has been RESOLVED, so an honest count costs
+        // the per-member index lookups get_cluster already pays, once per cluster. That cost is
+        // taken deliberately. There is no cheaper exact shape available at this layer: Core cannot
+        // pre-filter (it has no principal), and a security-relevant count must not be approximated —
+        // any figure larger than the visible list is the oracle, and any figure smaller is a lie.
+        var projected = new List<ClusterSummaryInfo>(listed.Count);
+        foreach (var info in listed)
+        {
+            // A cluster the listing named but whose projection cannot be produced is dropped, not
+            // reported with a fabricated zero: an unavailable projection is not an empty one, and a
+            // zero count would describe a member set nobody enumerated.
+            var detail = _clusters.GetCluster(info.ClusterId, tenantId: _access.TenantId);
+            if (detail is null) continue;
+
+            var visible = ProjectForPrincipal(detail);
+            projected.Add(info with
+            {
+                MemberCount = visible.MemberCount,
+                // HasSummary advertises a summary this caller can actually obtain from get_cluster.
+                // Left as "a summary id is stored", it would report true for one get_cluster
+                // withholds — the "an entry you cannot see answers to this id" bit, restated as a
+                // flag instead of as a count.
+                HasSummary = visible.SummaryEntry is not null,
+            });
+        }
+
+        return projected;
+    }
+
+    /// <summary>
+    /// Narrow a cluster to what this principal may read, and make every field that DESCRIBES the
+    /// member set agree with the members actually handed back. One projection serves both
+    /// get_cluster and list_clusters so the two can never disagree about a cluster's size.
+    ///
+    /// <c>MemberCount</c> is recomputed here rather than carried through, and it is the same defect
+    /// the find_contradictions count already cost once: a count taken before a filter and returned
+    /// beside the filtered payload states precisely what the filter withheld. Core's figure is
+    /// correct at Core's layer — it counts topology-attributable memberships and has no principal to
+    /// filter by — so the recomputation belongs at the one layer that has one.
+    ///
+    /// Counting the list the caller receives is also what keeps the three outcomes indistinguishable
+    /// that must stay so: a member that resolves to nothing, one in a namespace this caller cannot
+    /// read, and one Core withheld as unattributable are now all simply absent — from the list and
+    /// from the count alike. Core keeps its own divergence between MemberCount and Members for a
+    /// dangling member, which is a statement about storage rather than about a principal; the
+    /// divergence stops here, where a principal could read a suppression off it.
+    /// </summary>
+    private GetClusterResult ProjectForPrincipal(GetClusterResult result)
+    {
+        var visibleMembers = result.Members.Where(m => _access.CanRead(m.Namespace)).ToList();
+
+        // Staleness is a one-bit claim about the members' timestamps, and Core computed it over the
+        // members it resolved — including the ones just withheld. Reported as-is it says "something
+        // you may not read is newer than this summary", which is the same disclosure as the count.
+        //
+        // It is therefore reported only when the visible projection IS the whole projection, in
+        // which case Core's bit already describes exactly these members and needs no recomputation.
+        // Otherwise it is withheld as false, and false is the only available answer rather than a
+        // chosen one: staleness needs each member's CreatedAt, and withholding a member withholds
+        // its timestamp with it. No oracle survives the choice — the withholding branch is a
+        // constant, and false is equally reachable when nothing was withheld at all.
+        var isStale = visibleMembers.Count == result.Members.Count && result.IsStale;
+
+        return result with
+        {
+            MemberCount = visibleMembers.Count,
+            Members = visibleMembers,
+            IsStale = isStale,
+        };
     }
 }

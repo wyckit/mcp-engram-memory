@@ -69,7 +69,7 @@ public class GraphToolsTests : IDisposable
 
         Assert.Contains("Linked", result);
 
-        var neighbors = _graph.GetNeighbors("a", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "outgoing", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal(0.7f, neighbors.Neighbors[0].Edge.Weight);
         Assert.Equal("test link", neighbors.Neighbors[0].Edge.Metadata["reason"]);
@@ -103,7 +103,7 @@ public class GraphToolsTests : IDisposable
         var result = _tools.UnlinkMemories("a", "b", relation: "similar_to");
         Assert.Contains("Removed", result);
 
-        var neighbors = _graph.GetNeighbors("a", direction: "outgoing");
+        var neighbors = _graph.GetNeighbors("a", relation: null, direction: "outgoing", tenantId: "");
         Assert.Single(neighbors.Neighbors);
         Assert.Equal("elaborates", neighbors.Neighbors[0].Edge.Relation);
     }

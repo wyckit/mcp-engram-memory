@@ -8,7 +8,14 @@ namespace McpEngramMemory.Tools;
 
 /// <summary>
 /// MCP tools for cognitive lifecycle management. Every operation is scoped to the caller's tenant
-/// (<see cref="NamespaceAccess.TenantId"/>); the legacy tenant ("") behaves exactly as before.
+/// (<see cref="NamespaceAccess.TenantId"/>).
+///
+/// The legacy tenant ("") is a partition, not a privilege level. Identified ACL principals
+/// routinely operate in it, and only the DEFAULT AGENT is unisolated — that is
+/// <see cref="NamespaceAccess.IsLegacyUnisolated"/>, which additionally requires
+/// <see cref="AgentIdentity.DefaultAgentId"/>. No check in this class may be relaxed on an
+/// empty tenant id alone; doing so hands every identified legacy principal the exemption
+/// intended for the single-user deployment.
 /// </summary>
 [McpServerToolType]
 public sealed class LifecycleTools
@@ -26,23 +33,31 @@ public sealed class LifecycleTools
         _access = access;
     }
 
-    /// <summary>Resolve an entry by id within the caller's tenant (fast legacy locator for tenant "").</summary>
-    private CognitiveEntry? Resolve(string id) =>
-        _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
+    /// <summary>
+    /// Resolve a bare id to a writable entry within the caller's tenant — see
+    /// <see cref="EntryAccessResolver"/> for the semantics. Both consumers (PromoteMemory and
+    /// MemoryFeedback) are writes, so the write predicate is the right verb here.
+    /// <paramref name="preferredNs"/> is the caller's disambiguation: an id the tenant legally
+    /// holds in two writable namespaces resolves to nothing bare, and without a namespace
+    /// parameter neither twin could ever be promoted or given feedback again.
+    /// </summary>
+    private CognitiveEntry? Resolve(string id, string? preferredNs = null)
+        => _access.ResolveWritableEntry(_index, id, preferredNs);
 
     [McpServerTool(Name = "promote_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
     public string PromoteMemory(
         [Description("Entry ID.")] string id,
-        [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
+        [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState,
+        [Description("Namespace holding the entry. Optional; supply it to disambiguate when the same ID exists in more than one namespace of your tenant.")] string? ns = null)
     {
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
-        var existing = Resolve(id);
-        if (existing is null || !_access.CanWrite(existing.Ns))
+        var existing = Resolve(id, ns);
+        if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
-        var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, _access.TenantId);
+        var result = _lifecycle.PromoteMemory(id, targetState, existing.Ns, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(existing.Ns);
         return result;
@@ -78,8 +93,9 @@ public sealed class LifecycleTools
         // Auto-resurrection is a write that this tool performs on the caller's behalf, so it is
         // gated separately - a read-only grantee gets the same rows, scores and order, and only
         // the reported LifecycleState differs, because nothing was actually moved to STM.
-        return _lifecycle.DeepRecall(resolved, ns, k, minScore, resurrectionThreshold,
-            queryText: text, hybrid: hybrid, rerank: rerank, tenantId: _access.TenantId,
+        return _lifecycle.DeepRecall(resolved, ns, tenantId: _access.TenantId,
+            k: k, minScore: minScore, resurrectionThreshold: resurrectionThreshold,
+            queryText: text, hybrid: hybrid, rerank: rerank,
             resurrect: _access.CanWrite(ns));
     }
 
@@ -88,17 +104,30 @@ public sealed class LifecycleTools
     public object MemoryFeedback(
         [Description("Entry ID to provide feedback on.")] string id,
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
-        [Description("Optional namespace for threshold config lookup.")] string? ns = null)
+        [Description("Namespace holding the entry. Optional; supply it to disambiguate when the same ID exists in more than one namespace of your tenant. The entry that receives the feedback, and the decay thresholds applied to it, both come from the namespace the ID resolves to.")] string? ns = null)
     {
-        var existing = Resolve(id);
-        if (existing is null || !_access.CanWrite(existing.Ns))
+        // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
+        // "exists but you can't touch it" - a distinct denial would confirm the id exists.
+        // `ns` participates only as EntryAccessResolver's preferred namespace: it is checked
+        // with the same write predicate as any other candidate, and the mutation below still
+        // targets exactly the (tenant, ns, id) the resolution authorized — so a caller-chosen
+        // namespace can never authorize one entry and mutate a different one.
+        var existing = Resolve(id, ns);
+        if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
-        // For a tenant caller the entry is resolved within its own namespace (the caller's `ns` is
-        // only a config hint and may point elsewhere, which would spuriously fail resolution).
-        // Legacy callers keep the original behavior (null ns -> bare id lookup, default thresholds).
-        string? feedbackNs = _access.TenantId.Length == 0 ? ns : existing.Ns;
-        var result = _lifecycle.ApplyFeedback(id, delta, feedbackNs, _access.TenantId);
+        // existing.Ns is the ONLY legal target, because it is the only namespace this call
+        // authorized. Ids are unique per (tenant, namespace), so forwarding any other namespace
+        // authorizes one entry and mutates a different one - and `ns` is caller-controlled, which
+        // makes the victim caller-chosen. The caller's `ns` therefore reaches Core only as
+        // existing.Ns — the resolution above already folded it in as the preferred namespace and
+        // re-checked it with the write predicate, so target and authorization cannot diverge.
+        // ApplyFeedback derives thresholds from the same namespace it mutates.
+        //
+        // In particular this must not be relaxed for an empty tenant. "" is the legacy PARTITION,
+        // which identified ACL principals share; the unisolated principal is the default agent,
+        // and it needs no relaxation here because its predicate already admits every namespace.
+        var result = _lifecycle.ApplyFeedback(id, delta, existing.Ns, tenantId: _access.TenantId);
         if (result is null)
             return $"Error: Entry '{id}' not found.";
 
@@ -113,14 +142,15 @@ public sealed class LifecycleTools
         [Description("Below this, STM demotes to LTM (default: 2.0).")] float stmThreshold = 2.0f,
         [Description("Below this, LTM archives (default: -5.0).")] float archiveThreshold = -5.0f)
     {
-        return _lifecycle.RunDecayCycle(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
-            tenantId: _access.TenantId);
+        return _lifecycle.RunDecayCycle(ns, tenantId: _access.TenantId,
+            decayRate: decayRate, reinforcementWeight: reinforcementWeight,
+            stmThreshold: stmThreshold, archiveThreshold: archiveThreshold);
     }
 
     public ConsolidationResult RunConsolidation(
         [Description("Namespace to consolidate, or '*' for every non-system namespace.")] string ns)
     {
-        return _lifecycle.RunConsolidationPass(ns, _access.TenantId);
+        return _lifecycle.RunConsolidationPass(ns, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "configure_decay", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
@@ -140,7 +170,7 @@ public sealed class LifecycleTools
             return NamespaceAccess.WriteDenied(ns);
 
         var config = _lifecycle.SetDecayConfig(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,
-            useSpectralDecay, subdiffusiveExponent, _access.TenantId);
+            useSpectralDecay, subdiffusiveExponent, tenantId: _access.TenantId);
         return config;
     }
 

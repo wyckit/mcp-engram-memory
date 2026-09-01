@@ -44,6 +44,14 @@ public static class EntryAccessResolver
     ///
     /// Fails closed by construction — when the namespace cannot be established, nothing is
     /// returned to touch.
+    ///
+    /// The namespaces considered come from <see cref="CognitiveIndex.GetNamespacesContaining"/>,
+    /// which names only the ones actually holding the id, rather than from the tenant's full
+    /// namespace list. That is a cost change, not a semantic one: a namespace without the id could
+    /// never have matched and could never have contributed ambiguity, so the outcome is identical
+    /// while the work drops from one partition read per namespace to one or two. Property (1) is
+    /// unaffected — the candidate list is namespaces, not entries, and the predicate is still what
+    /// decides whether any of them is looked into.
     /// </summary>
     /// <param name="index">Index to resolve against.</param>
     /// <param name="id">Bare entry id, as carried by a graph edge or cluster membership.</param>
@@ -73,7 +81,7 @@ public static class EntryAccessResolver
         }
 
         CognitiveEntry? match = null;
-        foreach (var ns in index.GetNamespaces(tenantId))
+        foreach (var ns in index.GetNamespacesContaining(id, tenantId))
         {
             // Filter first, then look. Reversing these two lines would make an inaccessible
             // namespace able to turn a valid resolution into an ambiguous one, which is a
@@ -81,6 +89,9 @@ public static class EntryAccessResolver
             if (!canAccess(ns))
                 continue;
 
+            // Still null-checked even though every candidate held the id when the index was read:
+            // the index is maintained outside the per-partition locks, so a concurrent delete can
+            // retire a placement between the lookup and this read. Fail closed on the stale one.
             var candidate = index.Get(id, ns, tenantId);
             if (candidate is null)
                 continue;

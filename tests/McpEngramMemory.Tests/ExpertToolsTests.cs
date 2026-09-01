@@ -82,7 +82,7 @@ public class ExpertToolsTests : IDisposable
     {
         _tools.CreateExpert("secure_dev", "Application security specialist.");
 
-        var entry = _index.Get("secure_dev", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("secure_dev", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("ltm", entry!.LifecycleState);
         Assert.True(entry.IsSummaryNode);
@@ -146,12 +146,12 @@ public class ExpertToolsTests : IDisposable
         string persona = "A DevOps engineer specializing in CI/CD pipelines.";
         _tools.CreateExpert("devops_eng", persona);
 
-        var before = _index.Get("devops_eng", ExpertDispatcher.SystemNamespace);
+        var before = _index.Get("devops_eng", ExpertDispatcher.SystemNamespace, tenantId: "");
         int initialCount = before!.AccessCount;
 
         _tools.DispatchTask(persona, threshold: 0.5f);
 
-        var after = _index.Get("devops_eng", ExpertDispatcher.SystemNamespace);
+        var after = _index.Get("devops_eng", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.True(after!.AccessCount > initialCount);
     }
 
@@ -237,7 +237,7 @@ public class ExpertToolsTests : IDisposable
         // Expert entries use IsSummaryNode=true + LTM, which exempts them from:
         // - LifecycleEngine.RunDecayCycle (skips IsSummaryNode entries)
         // - AccretionScanner.ScanNamespace (skips IsSummaryNode entries)
-        var entry = _index.Get("hidden_expert", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("hidden_expert", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.True(entry!.IsSummaryNode);
         Assert.Equal("ltm", entry.LifecycleState);

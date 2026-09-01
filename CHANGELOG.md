@@ -2,7 +2,91 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [Unreleased] (2.0.0)
+
+### Changed — BREAKING
+
+- **`AutoLinkResult` gained four trailing positional members** — `PairScanIncomplete`,
+  `ScanAlreadyInProgress`, `PairsAboveThreshold`, and `PairSlotsPlanned`. Its existing
+  `PairsExamined` member changed from `int` to `long` and changed meaning twice during review; it now
+  reports comparison slots actually completed, including exact partial-window progress under
+  cancellation, rather than pairs offered or above-threshold hits. This is **source- and
+  binary-breaking**: the generated positional constructor/deconstructor signatures changed, and
+  source that assigned or overload-resolved the old `int` property may require an explicit update.
+  Consumers must recompile for 2.0.0 and should use `PairSlotsPlanned` for the window budget and
+  `PairsAboveThreshold` for the find count.
+- **New public surface on `McpEngramMemory.Core`** (additive, but it is a packaged assembly, so it
+  is a compatibility commitment): `EdgeAddMode`, an optional `mode` parameter on
+  `KnowledgeGraph.AddEdges`, `TopologyGuard.Sweep.TenantId`, `AutoLinkScanner`'s
+  `maxPairComparisons` / `CancellationToken` parameters and `DefaultMaxPairComparisons`, and
+  `CognitiveIndex.DisposalContendedFenceCount`.
+- **`tenantId` is now required on all Core retrieval and scoping APIs** — 55 methods across
+  `CognitiveIndex`, `KnowledgeGraph`, `MemoryDiffusionKernel`, `AutoLinkScanner`, `AccretionScanner`,
+  `ClusterManager`, `LifecycleEngine`, `SpectralRetrievalReranker`, `NamespaceRegistry`,
+  `SpreadingActivationService`, and `SynthesisEngine`. The old `tenantId = ""` default was not a
+  sentinel: `""` is the legacy partition, a real readable/writable dataset, so a forgotten tenant
+  argument compiled clean and silently degraded to cross-tenant legacy scope (it did, twice —
+  `SynthesisEngine` and `DiffusionKernelWarmupService`, both caught in the PR #18 security review).
+  The compiler now finds every omission.
+  - **Migration:** recompile and, at each error, pass the tenant the call site already holds —
+    named: `tenantId: myTenant`, or `tenantId: ""` where legacy scope is the deliberate meaning.
+    Treat every `tenantId: ""` you add as a claim, not a fix.
+  - **Placement is anti-rebinding by construction.** Where optionals preceded `tenantId`, it moved
+    to just after the required parameters — but only into slots previously occupied by an
+    `int`/`float`/`bool`, so every pre-2.0 positional call fails to compile (type or
+    missing-argument error) instead of silently rebinding. On methods where a string or nullable
+    parameter sat in the way — `GetNeighbors`, `RemoveEdges`, `SearchMultiple`, `CreateCluster`,
+    `UpdateCluster`, `Scan`, `SetDecayConfig`, `PromoteMemory`, `ApplyFeedback`,
+    `SynthesizeNamespaceAsync`, `HasAccess` — those parameters became required instead, because
+    moving `tenantId` past them would have let old positional calls bind a relation, label, query,
+    or access level into the tenant slot: the exact bug class this release removes.
+  - `DeepRecall` keeps `resurrect` trailing and optional (defaults `true`; benchmark IR baselines
+    unchanged); `SynthesizeNamespaceAsync` keeps `ct` trailing and optional.
+    `PromoteMemory`/`ApplyFeedback` also lost their `ns` defaults — `ns: ""` / `ns: null` now
+    selects the legacy bare-id locator explicitly.
+  - `DiffusionKernelWarmupService` now sweeps `GetAllTenants()` → `GetNamespaces(tenant)` →
+    `GetBasis(ns, tenantId: tenant)`, so every tenant's bases are pre-warmed. Previously it
+    enumerated namespaces with the no-tenant overload and warmed every one of them as the legacy
+    partition — the second incident above — which warmed the wrong `(tenant, ns)` partition for
+    every identified tenant and left them paying a foreground eigendecomposition on first use.
+    Fault isolation stays on the partition now that a tenant loop wraps the namespace loop:
+    neither a failing basis nor an unreadable tenant's namespace enumeration aborts the sweep for
+    the partitions after it. A per-partition warning names both tenant and namespace; a failure to
+    enumerate a tenant's namespaces at all can only name the tenant, since no namespace has been
+    established at that point. Tenant discovery
+    costs a full `NamespaceStore.LoadAll` that the old no-tenant enumeration did not pay; it is
+    idempotent per namespace, and it runs on the background thread after the existing 5s startup
+    delay, so the startup path is unaffected.
+- **Bare-id resolution converged on `EntryAccessResolver`** in `link_memories`/`unlink_memories`,
+  `promote_memory`, `memory_feedback`, and `get_memory`'s edge filter. Legacy (single-tenant)
+  resolution changes from "whatever the global id→ns map happens to hold" to "unique match among
+  visible namespaces": an id that exists in more than one namespace now refuses to resolve (same
+  reply as not-found) rather than acting on an arbitrary twin, and for identified agents an
+  invisible same-id entry can no longer blank or hijack resolution of the one they may see.
+  Deployments with unique ids — the normal case — see no change; new tests pin the delta
+  deliberately.
+- Removed the incorrect comment in `CoreMemoryTools` claiming the graph/cluster DTOs carry no
+  namespace field (`CognitiveEntryInfo` always did); that mistaken belief is what spawned the
+  duplicate resolvers now removed.
+
+### Fixed
+
+- **Attributable topology reads are now revision-consistent.** Graph and cluster projections use a
+  bounded optimistic retry and publish only if the tenant's attribution revision stayed fixed
+  through the whole projection; continuous churn fails closed. Cascade deletion takes a fresh
+  sweep for each fenced graph/cluster primitive, and centroid publication is conditional on the
+  exact immutable member-list generation it was computed from.
+- **Auto-link progress and lifecycle accounting are exact and bounded.** Production direct and
+  spectral pair walks report completed logical comparison slots once per anchor, so cancellation
+  no longer over- or under-states `PairsExamined`. Namespace deletion retracts the exact normalized
+  resume-cursor key synchronously—including deletion down to zero namespaces—and cannot race an
+  in-flight scan into resurrecting it.
+- **Diffusion-kernel retained state is fully retractable.** The bounded per-call rotation now covers
+  positive bases, negative-cached failures, and lock-only bypasses. In-flight computation and
+  retraction use publication ordering that cannot leave a basis outside the cleanup registry.
+- **The 2.0.0 package set is checked before merge.** CI packs and verifies Core, optional ONNX
+  synthesis, and the global tool on pull requests; main-branch artifact upload remains gated to
+  successful builds and tests.
 
 ## [1.6.0] - 2026-08-27
 

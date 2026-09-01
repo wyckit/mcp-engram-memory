@@ -124,7 +124,7 @@ public class VisualizationToolsTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", [0.5f, 0.5f], "ns1", "alpha", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("b", [0.5f, 0.5f], "ns1", "beta",  lifecycleState: "ltm"));
-        _clusters.CreateCluster("c1", "ns1", ["a", "b"], "Test Cluster");
+        _clusters.CreateCluster("c1", "ns1", ["a", "b"], "Test Cluster", tenantId: "");
 
         var snap = _tools.GetGraphSnapshot("ns1");
 

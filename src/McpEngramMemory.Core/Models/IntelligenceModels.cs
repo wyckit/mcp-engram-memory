@@ -140,7 +140,11 @@ public sealed class DecayConfig
         string? tenantId = null)
     {
         Ns = ns;
-        TenantId = Tenancy.Normalize(tenantId);
+        // This ctor doubles as the JSON (read) constructor, so it must normalize without
+        // validating — Tenancy.Normalize throws, and a validating deserializer makes one
+        // poisoned row render every stored config unloadable. Tenant VALIDATION for new
+        // configs happens at the service boundaries, which normalize before constructing.
+        TenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
         DecayRate = decayRate;
         ReinforcementWeight = reinforcementWeight;
         StmThreshold = stmThreshold;
@@ -223,13 +227,86 @@ public sealed class CollapseRecord
     [JsonPropertyName("collapsedAt")]
     public DateTimeOffset CollapsedAt { get; }
 
+    /// <summary>
+    /// The archive CLAIMS this collapse holds, keyed by member id — each mapped to the
+    /// <see cref="CognitiveEntry.LifecycleRevision"/> reserved for that member's archive
+    /// transition and persisted here BEFORE the transition runs. A claim is inert until the
+    /// CAS archive actually installs its revision: a reservation whose transition never fired
+    /// (crash, CAS refusal) matches no entry and restores nothing. The pair is the ownership
+    /// token an undo needs whole: membership says THIS collapse claimed the member, and the
+    /// revision says the archived state standing NOW is the very transition this collapse
+    /// installed — any later lifecycle work, even one that re-archived the member, moved the
+    /// revision and forfeits the restore. Cumulative across attempts (a retry re-claims with a
+    /// fresh reservation, overwriting the stale one). Null on records persisted before the
+    /// field existed; an undo then falls back to the current-state heuristic.
+    /// </summary>
+    [JsonPropertyName("appliedLifecycleRevisions")]
+    public Dictionary<string, long>? AppliedLifecycleRevisions { get; }
+
+    /// <summary>
+    /// The lifecycle witness each claimed member carried WHEN ITS ARCHIVE WAS PLANNED, keyed by
+    /// member id — the other half of the claim in <see cref="AppliedLifecycleRevisions"/>. The
+    /// archive CAS fires only from this exact witness (and the recorded state), so an entry
+    /// that moved through any transition — or was replaced by a fresh upsert landing on the
+    /// same state, the ABA a state-only compare absorbs — between the plan and the effect makes
+    /// the archive refuse rather than the receipt lie. Persisted with the claim so the durable
+    /// record names the FULL transition it authorizes (from state S at witness E, to archived,
+    /// installing R); a retry re-plans from fresh reads rather than replaying these, so the
+    /// field is evidence for the archive and for audit, never an input to recovery. Null on
+    /// records persisted before the field existed.
+    /// </summary>
+    [JsonPropertyName("expectedLifecycleRevisions")]
+    public Dictionary<string, long>? ExpectedLifecycleRevisions { get; }
+
+    /// <summary>
+    /// Monotonic per-lineage write counter: every durable write of this record (the intent
+    /// record, the claims record) carries the previous generation plus one. It exists for the
+    /// UNDO'S FINAL DELETE, which must be a compare-and-delete: an undo that read the record at
+    /// generation G may only remove the record still AT G — an executor that persisted new
+    /// claims in between moved the generation, and deleting over it would discard receipts the
+    /// undo never processed. Zero on records persisted before the field existed (their next
+    /// write moves them to one).
+    /// </summary>
+    [JsonPropertyName("generation")]
+    public long Generation { get; }
+
+    /// <summary>
+    /// The INCARNATION WITNESS of the cluster this collapse created (or adopted from its own
+    /// prior attempt): the <see cref="SemanticCluster.CreationStamp"/> minted when the intent
+    /// record fixed the collapse's identity, before the cluster existed. Cleanup compares it
+    /// atomically — cluster removal, membership eviction and the summary delete all fire only
+    /// against a resident that still carries this stamp — so a SAME-NAMESPACE recreation of
+    /// the (public) cluster id is spared: it exists under a different stamp this record never
+    /// minted. Null on records persisted before the field existed; those keep the id-only
+    /// legacy compares.
+    /// </summary>
+    [JsonPropertyName("clusterStamp")]
+    public string? ClusterStamp { get; }
+
+    /// <summary>
+    /// The <see cref="SemanticCluster.InstanceId"/> of the PHYSICAL cluster object THIS
+    /// attempt created or adopted — re-persisted per attempt, unlike the lineage-level
+    /// <see cref="ClusterStamp"/> which every retry reuses. The record's summary cleanup
+    /// compares it: a stale branch operating from an older record view then spares the LIVE
+    /// summary a concurrent retry published under the same lineage stamp, because the retry's
+    /// intent persist advanced the record with ITS fresh instance first. Null on records
+    /// persisted before the field existed; those fall back to the stamp-only compare.
+    /// </summary>
+    [JsonPropertyName("clusterInstance")]
+    public string? ClusterInstance { get; }
+
     [JsonConstructor]
     public CollapseRecord(
         string collapseId, string clusterId, string summaryEntryId,
         string ns, List<string> memberIds,
         Dictionary<string, string> previousStates,
         DateTimeOffset collapsedAt,
-        string? tenantId = null)
+        string? tenantId = null,
+        Dictionary<string, long>? appliedLifecycleRevisions = null,
+        Dictionary<string, long>? expectedLifecycleRevisions = null,
+        long generation = 0,
+        string? clusterStamp = null,
+        string? clusterInstance = null)
     {
         CollapseId = collapseId;
         ClusterId = clusterId;
@@ -238,14 +315,28 @@ public sealed class CollapseRecord
         MemberIds = memberIds;
         PreviousStates = previousStates;
         CollapsedAt = collapsedAt;
-        TenantId = Tenancy.Normalize(tenantId);
+        // Read path: normalize only, never validate (see CognitiveEntry's read constructor) —
+        // a validating deserializer makes one poisoned row unloadable, and for RECEIPTS the
+        // blast radius is worst of all: the lenient loader would drop every valid receipt in
+        // the file and the strict reader would refuse all collapse execution and undo.
+        TenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
+        AppliedLifecycleRevisions = appliedLifecycleRevisions;
+        ExpectedLifecycleRevisions = expectedLifecycleRevisions;
+        Generation = generation;
+        ClusterStamp = clusterStamp;
+        ClusterInstance = clusterInstance;
     }
 
     public CollapseRecord(
         string collapseId, string clusterId, string summaryEntryId,
         string ns, List<string> memberIds,
         Dictionary<string, string> previousStates,
-        string? tenantId = null)
+        string? tenantId = null,
+        Dictionary<string, long>? appliedLifecycleRevisions = null,
+        Dictionary<string, long>? expectedLifecycleRevisions = null,
+        long generation = 0,
+        string? clusterStamp = null,
+        string? clusterInstance = null)
     {
         CollapseId = collapseId;
         ClusterId = clusterId;
@@ -255,5 +346,34 @@ public sealed class CollapseRecord
         PreviousStates = previousStates;
         CollapsedAt = DateTimeOffset.UtcNow;
         TenantId = Tenancy.Normalize(tenantId);
+        AppliedLifecycleRevisions = appliedLifecycleRevisions;
+        ExpectedLifecycleRevisions = expectedLifecycleRevisions;
+        Generation = generation;
+        ClusterStamp = clusterStamp;
+        ClusterInstance = clusterInstance;
     }
+}
+
+/// <summary>
+/// Outcome of the conditional (generation-compared) collapse-record operations — the delete
+/// (<see cref="Services.Storage.IStorageProvider.DeleteCollapseRecordSync(string, long)"/>) and
+/// the upsert
+/// (<see cref="Services.Storage.IStorageProvider.UpsertCollapseRecordSync(CollapseRecord, long?)"/>).
+/// Both are compare-and-swap at the store: they take effect only against the exact generation
+/// the caller read, which is what lets an executor's terminal commit and an undoer's terminal
+/// delete serialize through the record itself rather than through any in-memory gate.
+/// </summary>
+public enum CollapseRecordCas
+{
+    /// <summary>The record stood at the expected generation and the operation took effect.</summary>
+    Applied,
+    /// <summary>No record with the id exists. For a delete, the goal state already holds; for
+    /// an upsert expecting a live generation, the record was concurrently removed and nothing
+    /// was written.</summary>
+    AlreadyAbsent,
+    /// <summary>A record exists at a DIFFERENT generation: someone wrote it since the caller
+    /// read it. Nothing changed; the caller must re-read and re-process before retrying.</summary>
+    GenerationMoved,
+    /// <summary>The store could not read, validate, or commit; nothing changed. Retryable.</summary>
+    StoreFailed,
 }

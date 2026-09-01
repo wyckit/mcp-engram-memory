@@ -211,7 +211,7 @@ public class RetrievalImprovementTests : IDisposable
             text: "AccretionScanner handles decay and collapse of aging entries");
         index.Upsert(entry);
 
-        var retrieved = index.Get("e1", "test");
+        var retrieved = index.Get("e1", "test", tenantId: "");
         Assert.NotNull(retrieved);
         Assert.NotNull(retrieved!.Keywords);
         Assert.Contains("maintenance", retrieved.Keywords!, StringComparison.OrdinalIgnoreCase);
@@ -227,7 +227,7 @@ public class RetrievalImprovementTests : IDisposable
             text: "some text", keywords: "explicit-keywords");
         index.Upsert(entry);
 
-        var retrieved = index.Get("e1", "test");
+        var retrieved = index.Get("e1", "test", tenantId: "");
         Assert.NotNull(retrieved);
         Assert.Equal("explicit-keywords", retrieved!.Keywords);
     }

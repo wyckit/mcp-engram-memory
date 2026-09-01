@@ -34,7 +34,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Equal("engineering", result.ExpertId);
         Assert.Equal("domain_engineering", result.TargetNamespace);
 
-        var entry = _index.Get("engineering", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("engineering", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("ltm", entry!.LifecycleState);
         Assert.True(entry.IsSummaryNode);
@@ -53,7 +53,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Equal("backend", result.ExpertId);
         Assert.Equal("domain_backend", result.TargetNamespace);
 
-        var entry = _index.Get("backend", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("backend", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("branch", entry!.Metadata["level"]);
         Assert.Equal("engineering", entry.Metadata["parentNodeId"]);
@@ -66,7 +66,7 @@ public class HierarchicalRoutingTests : IDisposable
         _dispatcher.CreateDomainNode("backend", "Backend development", "branch", "engineering");
         _dispatcher.CreateDomainNode("frontend", "Frontend development", "branch", "engineering");
 
-        var parentEntry = _index.Get("engineering", ExpertDispatcher.SystemNamespace);
+        var parentEntry = _index.Get("engineering", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(parentEntry);
         var childIds = parentEntry!.Metadata["childNodeIds"].Split(',', StringSplitOptions.RemoveEmptyEntries);
         Assert.Contains("backend", childIds);
@@ -132,12 +132,12 @@ public class HierarchicalRoutingTests : IDisposable
         // Create a leaf expert under the branch
         _dispatcher.CreateExpert("db_engineer", sharedDesc);
         // Link the leaf to the branch
-        var leafEntry = _index.Get("db_engineer", ExpertDispatcher.SystemNamespace);
+        var leafEntry = _index.Get("db_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         leafEntry!.Metadata["parentNodeId"] = "backend";
         leafEntry.Metadata["level"] = "leaf";
         _index.Upsert(leafEntry);
         // Update parent's childNodeIds
-        var branchEntry = _index.Get("backend", ExpertDispatcher.SystemNamespace);
+        var branchEntry = _index.Get("backend", ExpertDispatcher.SystemNamespace, tenantId: "");
         branchEntry!.Metadata["childNodeIds"] = "db_engineer";
         _index.Upsert(branchEntry);
 
@@ -219,11 +219,11 @@ public class HierarchicalRoutingTests : IDisposable
         _dispatcher.CreateExpert("api_dev", "API developer");
 
         // Link leaf to branch
-        var leafEntry = _index.Get("api_dev", ExpertDispatcher.SystemNamespace);
+        var leafEntry = _index.Get("api_dev", ExpertDispatcher.SystemNamespace, tenantId: "");
         leafEntry!.Metadata["parentNodeId"] = "backend";
         leafEntry.Metadata["level"] = "leaf";
         _index.Upsert(leafEntry);
-        var branchEntry = _index.Get("backend", ExpertDispatcher.SystemNamespace);
+        var branchEntry = _index.Get("backend", ExpertDispatcher.SystemNamespace, tenantId: "");
         branchEntry!.Metadata["childNodeIds"] += (string.IsNullOrEmpty(branchEntry.Metadata["childNodeIds"]) ? "" : ",") + "api_dev";
         _index.Upsert(branchEntry);
 
@@ -290,7 +290,7 @@ public class HierarchicalRoutingTests : IDisposable
         // Experts created with the original CreateExpert have no level metadata
         _dispatcher.CreateExpert("old_expert", "An expert created without hierarchy.");
 
-        var entry = _index.Get("old_expert", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("old_expert", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         // Should NOT have level metadata
         Assert.False(entry!.Metadata.ContainsKey("level"));
@@ -405,7 +405,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Equal("science", typed.ExpertId);
         Assert.Equal("domain_science", typed.TargetNamespace);
 
-        var entry = index.Get("science", ExpertDispatcher.SystemNamespace);
+        var entry = index.Get("science", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("root", entry!.Metadata["level"]);
         index.Dispose();
@@ -424,12 +424,12 @@ public class HierarchicalRoutingTests : IDisposable
         tools.CreateExpert("eng_root", "Engineering domain", level: "root");
         tools.CreateExpert("go_dev", "A Go developer", level: "leaf", parentNodeId: "eng_root");
 
-        var leafEntry = index.Get("go_dev", ExpertDispatcher.SystemNamespace);
+        var leafEntry = index.Get("go_dev", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(leafEntry);
         Assert.Equal("leaf", leafEntry!.Metadata["level"]);
         Assert.Equal("eng_root", leafEntry.Metadata["parentNodeId"]);
 
-        var parentEntry = index.Get("eng_root", ExpertDispatcher.SystemNamespace);
+        var parentEntry = index.Get("eng_root", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.Contains("go_dev", parentEntry!.Metadata["childNodeIds"]);
         index.Dispose();
     }
@@ -552,7 +552,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Equal("engineering", typed.Placement.ParentNodeId);
 
         // Verify the leaf is actually linked
-        var entry = index.Get("api_dev", ExpertDispatcher.SystemNamespace);
+        var entry = index.Get("api_dev", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("leaf", entry!.Metadata["level"]);
         Assert.Equal("engineering", entry.Metadata["parentNodeId"]);
@@ -580,7 +580,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Null(typed.Placement);
 
         // But leaf should still be linked
-        var entry = index.Get("go_dev", ExpertDispatcher.SystemNamespace);
+        var entry = index.Get("go_dev", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("engineering", entry!.Metadata["parentNodeId"]);
         index.Dispose();
@@ -606,7 +606,7 @@ public class HierarchicalRoutingTests : IDisposable
         Assert.Null(typed.Placement.ParentNodeId);
 
         // Expert should not be linked to anything
-        var entry = index.Get("solo_expert", ExpertDispatcher.SystemNamespace);
+        var entry = index.Get("solo_expert", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.False(entry!.Metadata.ContainsKey("parentNodeId"));
         index.Dispose();
@@ -657,7 +657,13 @@ file sealed class InMemoryStorageProvider : IStorageProvider
     public List<SemanticCluster> LoadClusters() => new();
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider) { }
     public List<CollapseRecord> LoadCollapseHistory() => new();
-    public void ScheduleSaveCollapseHistory(Func<List<CollapseRecord>> dataProvider) { }
+    public bool UpsertCollapseRecordSync(CollapseRecord record) => true;
+    public bool DeleteCollapseRecordSync(string collapseId) => true;
+    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration) => CollapseRecordCas.Applied;
+    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration) => CollapseRecordCas.AlreadyAbsent;
+    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record) { record = null; return true; }
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records) { records = new(); return true; }
+    public bool TryFlush() => true;
     public Dictionary<string, DecayConfig> LoadDecayConfigs() => new();
     public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider) { }
     public bool SupportsIncrementalWrites => false;

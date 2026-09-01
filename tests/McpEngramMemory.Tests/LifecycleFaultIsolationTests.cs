@@ -56,7 +56,7 @@ public class LifecycleFaultIsolationTests : IDisposable
 
         // Stored-config path with no stored config defaults useSpectral=true
         // whenever a kernel is injected — so "bad" hits the throwing kernel.
-        var result = lifecycle.RunDecayCycle("*", useStoredConfig: true);
+        var result = lifecycle.RunDecayCycle("*", tenantId: "", useStoredConfig: true);
 
         // (a) Other namespaces still decayed: 0-10h backdate at decayRate 0.1 with
         // stm multiplier 3.0 gives debt 3, AccessCount 1 => AE = 1 - 3 = -2.
@@ -95,7 +95,7 @@ public class LifecycleFaultIsolationTests : IDisposable
         var kernel = new ThrowingDiffusionKernel(_index, _graph, failingNs: "bad");
         var lifecycle = new LifecycleEngine(_index, _persistence, kernel);
 
-        var result = lifecycle.RunConsolidationPass("*");
+        var result = lifecycle.RunConsolidationPass("*", tenantId: "");
 
         Assert.Equal(new[] { "bad" }, result.FailedNamespaces);
         Assert.Equal(1, result.ProcessedNamespaces);
@@ -223,13 +223,16 @@ public class LifecycleFaultIsolationTests : IDisposable
     [Fact]
     public void GetBasis_CachesFailurePerGraphRevision()
     {
-        _index.Upsert(new CognitiveEntry("b_0", new[] { 1f, 0f }, "bad", "bad 0"));
-        _index.Upsert(new CognitiveEntry("b_1", new[] { 0f, 1f }, "bad", "bad 1"));
+        // Keep the controlled failure in a namespace that genuinely qualifies by node count.
+        // A below-threshold namespace has only bypass/lock state and is intentionally retracted by
+        // the next bounded cleanup step rather than negative-cached indefinitely.
+        for (int i = 0; i < MemoryDiffusionKernel.MinimumNodesForSpectral; i++)
+            _index.Upsert(new CognitiveEntry($"b_{i}", new[] { i + 1f, 1f }, "bad", $"bad {i}"));
 
         var kernel = new ThrowingDiffusionKernel(_index, _graph, failingNs: "bad");
 
-        Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad"));
-        var second = Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad"));
+        Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad", tenantId: ""));
+        var second = Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad", tenantId: ""));
 
         Assert.Equal(1, kernel.ComputeAttempts);
         Assert.Contains("previously failed", second.Message);
@@ -237,7 +240,7 @@ public class LifecycleFaultIsolationTests : IDisposable
         // A graph mutation bumps KnowledgeGraph.Revision and re-arms one retry.
         _graph.AddEdge(new GraphEdge("b_0", "b_1", "similar_to", 1.0f));
 
-        Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad"));
+        Assert.Throws<InvalidOperationException>(() => kernel.GetBasis("bad", tenantId: ""));
         Assert.Equal(2, kernel.ComputeAttempts);
     }
 
@@ -294,7 +297,10 @@ public class LifecycleFaultIsolationTests : IDisposable
             _failingNs = failingNs;
         }
 
-        protected override DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId = "")
+        // No default on tenantId: the base signature dropped its fail-open "" default,
+        // and a default re-added on an override would re-open that surface for calls
+        // made through this static type.
+        protected override DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId)
         {
             if (ns == _failingNs)
             {

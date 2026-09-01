@@ -94,8 +94,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Contains("Stored entry", result);
 
         // The first write atomically claims an empty namespace for the identified principal.
-        Assert.True(_registry.HasAccess("alice", AliceNs));
-        Assert.False(_registry.HasAccess("bob", AliceNs));
+        Assert.True(_registry.HasAccess("alice", AliceNs, requiredLevel: "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("bob", AliceNs, requiredLevel: "read", tenantId: ""));
     }
 
     [Fact]
@@ -145,7 +145,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.NotNull(_index.Get("alice-secret"));
         // The edge cascade used to run before the existence check, so an unauthorized caller
         // could strip an entry's edges even while failing to delete it.
-        Assert.NotEmpty(_graph.GetEdgesForEntry("alice-secret"));
+        Assert.NotEmpty(_graph.GetEdgesForEntry("alice-secret", tenantId: ""));
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Contains("Stored entry", Core("alice").StoreMemory(
             "alice-secret-2", AliceNs, "second private launch code"));
         _graph.AddEdge(new GraphEdge("alice-secret", "alice-secret-2", "similar_to"));
-        _clusters.CreateCluster("alice-cluster", AliceNs, ["alice-secret", "alice-secret-2"]);
+        _clusters.CreateCluster("alice-cluster", AliceNs, ["alice-secret", "alice-secret-2"], label: null, tenantId: "");
 
         var global = Admin("bob").CognitiveStats();
         var directProbe = Admin("bob").CognitiveStats(AliceNs);
@@ -258,7 +258,7 @@ public class NamespaceAclEnforcementTests : IDisposable
             CreatedAt = DateTimeOffset.UtcNow.AddHours(-48)
         };
         _index.Upsert(entry);
-        _registry.ClaimOwnershipOnWrite(debateNs, "alice");
+        _registry.ClaimOwnershipOnWrite(debateNs, "alice", tenantId: "");
 
         var dryRun = Assert.IsType<PurgeDebatesResult>(
             await Admin("bob").PurgeDebates(maxAgeHours: 24, dryRun: true));
@@ -268,7 +268,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Equal(0, dryRun.NamespacesAffected);
         Assert.Empty(dryRun.Namespaces);
         Assert.Equal(0, execute.NamespacesAffected);
-        Assert.NotNull(_index.Get("debate-alice-node", debateNs));
+        Assert.NotNull(_index.Get("debate-alice-node", debateNs, tenantId: ""));
     }
 
     [Fact]
@@ -299,8 +299,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Equal(1, Admin("bob", "tenant-b").CognitiveStats().TotalEntries);
 
         Assert.Contains("Deleted entry", tenantA.DeleteMemory(id));
-        Assert.Null(_index.Get(id, ns, "tenant-a"));
-        Assert.Equal("tenant B secret", _index.Get(id, ns, "tenant-b")?.Text);
+        Assert.Null(_index.Get(id, ns, tenantId: "tenant-a"));
+        Assert.Equal("tenant B secret", _index.Get(id, ns, tenantId: "tenant-b")?.Text);
     }
 
     [Fact]
@@ -312,17 +312,17 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Contains("Stored entry", Core("bob", "tenant-b").StoreMemory(
             "b", ns, "owned independently by B"));
 
-        Assert.True(_registry.HasAccess("alice", ns, "write", "tenant-a"));
-        Assert.False(_registry.HasAccess("bob", ns, "write", "tenant-a"));
-        Assert.True(_registry.HasAccess("bob", ns, "write", "tenant-b"));
-        Assert.False(_registry.HasAccess("alice", ns, "write", "tenant-b"));
+        Assert.True(_registry.HasAccess("alice", ns, "write", tenantId: "tenant-a"));
+        Assert.False(_registry.HasAccess("bob", ns, "write", tenantId: "tenant-a"));
+        Assert.True(_registry.HasAccess("bob", ns, "write", tenantId: "tenant-b"));
+        Assert.False(_registry.HasAccess("alice", ns, "write", tenantId: "tenant-b"));
     }
 
     [Fact]
     public void SharedNamespace_BecomesReadableByTheGrantee()
     {
         AliceStoresSecret();
-        _registry.Share(AliceNs, "alice", "bob", "read");
+        _registry.Share(AliceNs, "alice", "bob", "read", tenantId: "");
 
         var bobSearch = Core("bob").SearchMemory(ns: AliceNs, text: "launch code");
 
@@ -339,8 +339,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         var tools = Core(AgentIdentity.DefaultAgentId);
         Assert.Contains("Stored entry", tools.StoreMemory("d1", "default-ns", "ordinary note"));
 
-        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "default-ns"));
-        Assert.False(_registry.HasAccess("someone-else", "default-ns"),
+        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "default-ns", requiredLevel: "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("someone-else", "default-ns", requiredLevel: "read", tenantId: ""),
             "identified principals must not take over legacy content; ownership requires an administrative migration");
     }
 
@@ -369,14 +369,14 @@ public class NamespaceAclEnforcementTests : IDisposable
         // Returning its id is the same class of disclosure as an edge to a private endpoint,
         // one level of indirection out: it names a grouping Bob cannot read and tells him his
         // own entry was filed alongside content he cannot see.
-        _clusters.CreateCluster("alice-topic-cluster", AliceNs, ["alice-secret", "bob-public"]);
+        _clusters.CreateCluster("alice-topic-cluster", AliceNs, ["alice-secret", "bob-public"], label: null, tenantId: "");
         // Same-namespace membership, the ordinary case.
-        _clusters.CreateCluster("bob-topic-cluster", bobNs, ["bob-public"]);
+        _clusters.CreateCluster("bob-topic-cluster", bobNs, ["bob-public"], label: null, tenantId: "");
         // Over-correction control: a cluster in a DIFFERENT namespace that Bob can read. The
         // gate is CanRead(cluster.Ns) — the predicate ClusterTools.GetCluster already applies —
         // and not equality with entry.Ns. Filtering on equality would pass the exploit assertion
         // below while silently deleting cross-namespace clustering for everyone.
-        _clusters.CreateCluster("bob-crossns-cluster", bobArchiveNs, ["bob-public", "bob-older"]);
+        _clusters.CreateCluster("bob-crossns-cluster", bobArchiveNs, ["bob-public", "bob-older"], label: null, tenantId: "");
 
         var result = Assert.IsType<GetMemoryResult>(Admin("bob").GetMemory("bob-public"));
 
@@ -410,8 +410,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         // (a) No edge was drawn. relatedIds arrive as bare ids with no namespace attached, so
         // linking without resolving-then-authorizing writes an edge onto an object the caller
         // was never entitled to touch.
-        Assert.Empty(_graph.GetEdgesForEntry("alice-secret"));
-        Assert.Empty(_graph.GetEdgesForEntry(probe.Id));
+        Assert.Empty(_graph.GetEdgesForEntry("alice-secret", tenantId: ""));
+        Assert.Empty(_graph.GetEdgesForEntry(probe.Id, tenantId: ""));
 
         // (b) The two replies are identical once the namespace this test itself varied is
         // normalized away. THIS EQUALITY IS THE SECURITY PROPERTY. Asserting merely that the
@@ -441,29 +441,32 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Equal("stored", result.Status);
         Assert.Contains("linked to bob-note", result.Actions);
         Assert.DoesNotContain(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
-        Assert.Contains(_graph.GetEdgesForEntry(result.Id),
+        Assert.Contains(_graph.GetEdgesForEntry(result.Id, tenantId: ""),
             e => e.TargetId == "bob-note" && e.Relation == "elaborates");
     }
 
     [Fact]
-    public void Reflect_LinksOwnEntryEvenWhenTheSameIdExistsInAPrivateNamespace()
+    public void Reflect_RefusesToLinkASharedIdEvenWhenTheCallerOwnsAVisibleTwin()
     {
         // An id is not an identity — entries are identified by (tenant, namespace, id) and ids
-        // are unique only per (tenant, namespace). So a bare relatedId can name several entries
-        // at once, and how the resolver breaks that tie is itself a disclosure channel.
+        // are unique only per (tenant, namespace). Resolution can pick the twin Bob owns, and for
+        // an ENTRY-scoped operation that is the right answer. An edge is not entry-scoped: graph
+        // adjacency is keyed (tenant, id) with no namespace, so all three twins below share ONE
+        // node. Linking to "the one Bob can write" would hang Bob's edge off Alice's private
+        // entry as well — authorize A, mutate B. Topology therefore fails closed on a tenant-wide
+        // duplicate, ACL-blind, exactly as GraphTools.LinkMemories and TopologyCascade do.
+        //
+        // This test asserted the opposite until the second review of PR #22: it pinned the link
+        // SUCCEEDING, which is the behaviour the reviewer identified as the bypass. Namespace-
+        // qualified endpoints (issue #19) are what make linking safe again.
         const string sharedId = "postmortem-notes";
         const string bobNs = "bob-work";
         const string bobArchiveNs = "bob-archive";
 
         Assert.Contains("Stored entry", Core("alice").StoreMemory(
             sharedId, AliceNs, "alice's private postmortem"));
-        Assert.False(_registry.HasAccess("bob", AliceNs, "write"));
+        Assert.False(_registry.HasAccess("bob", AliceNs, "write", tenantId: ""));
 
-        // A second twin Bob CAN write. Without the preferredNs short-circuit the resolution is
-        // ambiguous among namespaces Bob is entitled to and collapses to null, so a legitimate
-        // link silently disappears; with it, the namespace the call site is already authorized
-        // for wins. Alice's invisible twin must contribute neither a match nor an ambiguity
-        // signal — "your link did nothing" would otherwise announce that a private twin exists.
         Assert.Contains("Stored entry", Core("bob").StoreMemory(
             sharedId, bobArchiveNs, "bob's older copy"));
         Assert.Contains("Stored entry", Core("bob").StoreMemory(
@@ -473,11 +476,51 @@ public class NamespaceAclEnforcementTests : IDisposable
             "the postmortem missed the rollback step", bobNs, "twin-id",
             relatedIds: RelatedIds(sharedId)));
 
+        // The reflection itself still stores — only the edge is withheld.
         Assert.Equal("stored", result.Status);
-        Assert.Contains($"linked to {sharedId}", result.Actions);
+        Assert.DoesNotContain(result.Actions, a => a.Contains($"linked to {sharedId}", StringComparison.Ordinal));
+        Assert.Empty(_graph.GetEdgesForEntry(result.Id, tenantId: ""));
+
+        // Alice's entry gains nothing: no edge was hung off the shared node.
+        Assert.Empty(_graph.GetEdgesForEntry(sharedId, tenantId: ""));
+
+        // The refusal is reported as the same aggregate count as a genuine miss, with no id and
+        // no reason — otherwise "not linkable" would announce that a twin exists somewhere.
+        Assert.Contains(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
+
+        // The comparison call goes in a different namespace Bob also owns: reflect short-circuits
+        // with "duplicate_warning" when a prior reflection on a similar topic already lives in the
+        // target namespace, and that path returns before the linking block runs at all. Asserting
+        // the status keeps a future dedup change from silently turning this into a vacuous test.
+        var absent = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "an unrelated lesson about cache invalidation", bobArchiveNs, "absent-id",
+            relatedIds: RelatedIds("no-such-id-anywhere")));
+        Assert.Equal("stored", absent.Status);
+        Assert.Equal(
+            result.Actions.Single(a => a.Contains("skipped", StringComparison.Ordinal)),
+            absent.Actions.Single(a => a.Contains("skipped", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Reflect_StillLinksWhenTheTargetIdIsUniqueInTheTenant()
+    {
+        // OVER-CORRECTION CONTROL for the test above: the guard refuses DUPLICATED ids, not
+        // linking. With no twin anywhere, Bob's link must still be drawn.
+        const string uniqueId = "rollback-runbook";
+        const string bobNs = "bob-work";
+
+        Assert.Contains("Stored entry", Core("bob").StoreMemory(
+            uniqueId, bobNs, "bob's runbook"));
+
+        var result = Assert.IsType<ReflectResult>(Composite("bob").Reflect(
+            "the runbook needs a rollback step", bobNs, "unique-id",
+            relatedIds: RelatedIds(uniqueId)));
+
+        Assert.Equal("stored", result.Status);
+        Assert.Contains($"linked to {uniqueId}", result.Actions);
         Assert.DoesNotContain(result.Actions, a => a.Contains("skipped", StringComparison.Ordinal));
-        Assert.Contains(_graph.GetEdgesForEntry(result.Id),
-            e => e.TargetId == sharedId && e.Relation == "elaborates");
+        Assert.Contains(_graph.GetEdgesForEntry(result.Id, tenantId: ""),
+            e => e.TargetId == uniqueId && e.Relation == "elaborates");
     }
 
     [Fact]
@@ -503,7 +546,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         // order, and the only thing that changes is that the reported state is the truth.
         Assert.Contains("cold storage rollback retrospective", Json(result));
         Assert.All(result.Results, r => Assert.Equal("archived", r.LifecycleState));
-        Assert.Equal("archived", _index.Get("alice-archived-note", archiveNs)?.LifecycleState);
+        Assert.Equal("archived", _index.Get("alice-archived-note", archiveNs, tenantId: "")?.LifecycleState);
     }
 
     [Fact]
@@ -521,7 +564,7 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Equal("deep_recall", result.Strategy);
         Assert.NotEmpty(result.Results);
         Assert.All(result.Results, r => Assert.Equal("stm", r.LifecycleState));
-        Assert.Equal("stm", _index.Get("alice-archived-note", archiveNs)?.LifecycleState);
+        Assert.Equal("stm", _index.Get("alice-archived-note", archiveNs, tenantId: "")?.LifecycleState);
     }
 
     /// <summary>
@@ -534,8 +577,8 @@ public class NamespaceAclEnforcementTests : IDisposable
         Assert.Contains("Stored entry", Core("alice").StoreMemory(
             "alice-archived-note", archiveNs, "cold storage rollback retrospective",
             lifecycleState: "archived"));
-        Assert.Equal("shared", _registry.Share(archiveNs, "alice", "bob", grantBobLevel).Status);
-        Assert.True(_registry.HasAccess("bob", archiveNs));
-        Assert.Equal(grantBobLevel == "write", _registry.HasAccess("bob", archiveNs, "write"));
+        Assert.Equal("shared", _registry.Share(archiveNs, "alice", "bob", grantBobLevel, tenantId: "").Status);
+        Assert.True(_registry.HasAccess("bob", archiveNs, requiredLevel: "read", tenantId: ""));
+        Assert.Equal(grantBobLevel == "write", _registry.HasAccess("bob", archiveNs, "write", tenantId: ""));
     }
 }

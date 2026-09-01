@@ -33,18 +33,37 @@ public sealed class LifecycleEngine
     /// <summary>All distinct tenant ids in the store — used by background maintenance to cover every tenant.</summary>
     public IReadOnlyList<string> GetAllTenants() => _index.GetAllTenants();
 
-    /// <summary>Set or update a per-namespace decay configuration.</summary>
-    public DecayConfig SetDecayConfig(string ns, float? decayRate = null, float? reinforcementWeight = null,
-        float? stmThreshold = null, float? archiveThreshold = null,
-        bool? useSpectralDecay = null, float? subdiffusiveExponent = null, string tenantId = "")
+    /// <summary>
+    /// Set or update a per-namespace decay configuration. Every knob is required so that a
+    /// forgotten argument is a compile error, not a silent fall-through to defaults — pass
+    /// <c>null</c> to leave a knob unchanged, and pass <c>""</c> as <paramref name="tenantId"/>
+    /// to target the legacy partition.
+    ///
+    /// NORMALIZES THE TENANT FIRST, and both entry points here must, because the map is keyed one
+    /// way and read another. <see cref="NamespaceStore.PartitionKey(string, string)"/> validates but
+    /// deliberately does not normalize, while <see cref="DecayConfig"/>'s constructor DOES —
+    /// and <see cref="EnsureConfigsLoaded"/> re-keys the whole map from that normalized property on
+    /// every reload. So a padded tenant wrote one key and every reader used another:
+    /// <c>AutoLinkBackgroundService</c> reads through <see cref="CognitiveIndex.GetAllTenants"/>,
+    /// which returns store tenants and is therefore normalized, so an operator's
+    /// <c>EnableAutoLink: false</c> written under <c>" acme "</c> simply never reached the sweep
+    /// that was supposed to obey it — no error, no restart needed, the opt-out just did nothing.
+    /// After a restart the padded spelling then missed its own row too, and the next write created a
+    /// SECOND row that composed to the same key on the following boot. <c>IPrincipalContext</c> is
+    /// an extension point with no normalization of its own, so a padded claim value reaches here.
+    /// </summary>
+    public DecayConfig SetDecayConfig(string ns, float? decayRate, float? reinforcementWeight,
+        float? stmThreshold, float? archiveThreshold,
+        bool? useSpectralDecay, float? subdiffusiveExponent, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        string tenant = Tenancy.Normalize(tenantId);
+        string pk = NamespaceStore.PartitionKey(tenant, ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();
             if (!_decayConfigs.TryGetValue(pk, out var config))
             {
-                config = new DecayConfig(ns, tenantId: tenantId);
+                config = new DecayConfig(ns, tenantId: tenant);
                 _decayConfigs[pk] = config;
             }
 
@@ -60,10 +79,17 @@ public sealed class LifecycleEngine
         }
     }
 
-    /// <summary>Get the decay config for a namespace, or null if using defaults.</summary>
-    public DecayConfig? GetDecayConfig(string ns, string tenantId = "")
+    /// <summary>
+    /// Get the decay config for a namespace, or null if using defaults. Pass "" as
+    /// <paramref name="tenantId"/> for the legacy partition.
+    ///
+    /// Normalizes first, for the reason spelled out on <see cref="SetDecayConfig"/>: the map is
+    /// re-keyed from the normalized <see cref="DecayConfig.TenantId"/> on every reload, so a raw
+    /// spelling reads a key that only ever existed until the next load.
+    /// </summary>
+    public DecayConfig? GetDecayConfig(string ns, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
+        string pk = NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns);
         lock (_configLock)
         {
             EnsureConfigsLoaded();
@@ -89,20 +115,44 @@ public sealed class LifecycleEngine
     /// </summary>
     public DecayCycleResult RunDecayCycle(
         string ns,
+        string tenantId,
         float decayRate = 0.1f,
         float reinforcementWeight = 1.0f,
         float stmThreshold = 2.0f,
         float archiveThreshold = -5.0f,
-        bool useStoredConfig = false,
-        string tenantId = "")
+        bool useStoredConfig = false)
     {
-        var allNamespaces = ns == "*" ? _index.GetNamespaces(tenantId) : new[] { ns };
-
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
         var spectralFallbackNamespaces = new List<string>();
         var failedNamespaces = new List<string>();
         int processedCount = 0;
+
+        // Expand "*" inside its own containment: namespace enumeration fails closed, and the
+        // background services run every tenant inside one try — a throw here would abort decay
+        // for every tenant ordered after this one, while the per-namespace try below never
+        // engages because the failure precedes the loop. Report the failed expansion through
+        // the same channel a failed namespace uses.
+        IReadOnlyList<string> allNamespaces;
+        if (ns == "*")
+        {
+            try { allNamespaces = _index.GetNamespaces(tenantId); }
+            catch (Exception ex) when (ex is NamespaceEnumerationException or ArgumentException)
+            {
+                // ArgumentException: a tenant loaded FROM the store can fail the validating
+                // Tenancy.Normalize inside GetNamespaces (over-long, pre-validation rows) —
+                // the background services feed GetAllTenants() output straight in here, and
+                // an escaped throw aborts every tenant queued after this one, every cycle.
+                _logger?.LogWarning(ex, "Decay cycle could not enumerate the tenant's namespaces; skipping its pass.");
+                failedNamespaces.Add("*");
+                return new DecayCycleResult(0, 0, 0, stmToLtmIds, ltmToArchivedIds, 0,
+                    spectralFallbackNamespaces, failedNamespaces);
+            }
+        }
+        else
+        {
+            allNamespaces = new[] { ns };
+        }
 
         foreach (var currentNs in allNamespaces)
         {
@@ -121,7 +171,7 @@ public sealed class LifecycleEngine
 
                 if (useStoredConfig)
                 {
-                    var config = GetDecayConfig(currentNs, tenantId);
+                    var config = GetDecayConfig(currentNs, tenantId: tenantId);
                     if (config is not null)
                     {
                         effectiveDecayRate = config.DecayRate;
@@ -145,7 +195,7 @@ public sealed class LifecycleEngine
                 }
 
                 // GetAllInNamespace returns a snapshot list — safe to iterate
-                var entries = _index.GetAllInNamespace(currentNs, tenantId);
+                var entries = _index.GetAllInNamespace(currentNs, tenantId: tenantId);
                 var nonSummary = new List<CognitiveEntry>(entries.Count);
                 foreach (var e in entries)
                     if (!e.IsSummaryNode) nonSummary.Add(e);
@@ -185,7 +235,7 @@ public sealed class LifecycleEngine
                     try
                     {
                         appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
-                            lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)), tenantId);
+                            lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)), tenantId: tenantId);
                     }
                     catch (Exception ex)
                     {
@@ -216,7 +266,7 @@ public sealed class LifecycleEngine
                             break;
                     }
 
-                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState, currentNs, tenantId);
+                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState, currentNs, tenantId: tenantId);
                 }
             }
             catch (Exception ex)
@@ -266,8 +316,8 @@ public sealed class LifecycleEngine
     /// nothing to add over the regular decay cycle.
     /// </summary>
     /// <param name="ns">Namespace to consolidate, or "*" for every non-system namespace.</param>
-    /// <param name="tenantId">Tenant partition to consolidate; "" is the legacy tenant.</param>
-    public ConsolidationResult RunConsolidationPass(string ns, string tenantId = "")
+    /// <param name="tenantId">Tenant partition to consolidate; pass "" for the legacy partition.</param>
+    public ConsolidationResult RunConsolidationPass(string ns, string tenantId)
     {
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
@@ -284,7 +334,25 @@ public sealed class LifecycleEngine
             return new ConsolidationResult(0, 1, 0, 0, 0, stmToLtmIds, ltmToArchivedIds, Array.Empty<string>());
         }
 
-        var allNamespaces = ns == "*" ? _index.GetNamespaces(tenantId) : new[] { ns };
+        // Same containment as RunDecayCycle: a fail-closed enumeration must cost this tenant's
+        // pass, not every tenant queued after it in the background service's single try.
+        IReadOnlyList<string> allNamespaces;
+        if (ns == "*")
+        {
+            try { allNamespaces = _index.GetNamespaces(tenantId); }
+            catch (Exception ex) when (ex is NamespaceEnumerationException or ArgumentException)
+            {
+                // ArgumentException: see RunDecayCycle — a stored pre-validation tenant can
+                // fail the validating normalize; contained here, not in the service's try.
+                _logger?.LogWarning(ex, "Consolidation pass could not enumerate the tenant's namespaces; skipping its pass.");
+                failedNamespaces.Add("*");
+                return new ConsolidationResult(0, 0, 0, 0, 0, stmToLtmIds, ltmToArchivedIds, failedNamespaces);
+            }
+        }
+        else
+        {
+            allNamespaces = new[] { ns };
+        }
 
         foreach (var currentNs in allNamespaces)
         {
@@ -297,14 +365,14 @@ public sealed class LifecycleEngine
 
             try
             {
-                var config = GetDecayConfig(currentNs, tenantId) ?? new DecayConfig(currentNs, tenantId: tenantId);
+                var config = GetDecayConfig(currentNs, tenantId: tenantId) ?? new DecayConfig(currentNs, tenantId: tenantId);
                 if (!config.EnableConsolidation)
                 {
                     skippedNamespaces++;
                     continue;
                 }
 
-                var entries = _index.GetAllInNamespace(currentNs, tenantId);
+                var entries = _index.GetAllInNamespace(currentNs, tenantId: tenantId);
                 var nonSummary = new List<CognitiveEntry>(entries.Count);
                 foreach (var e in entries)
                     if (!e.IsSummaryNode) nonSummary.Add(e);
@@ -333,7 +401,7 @@ public sealed class LifecycleEngine
                 // Long-time heat kernel diffusion: exp(-t * lambda).
                 float t = config.ConsolidationDiffusionTime;
                 var smoothed = _diffusion.ApplySpectralFilter(currentNs, activation,
-                    lambda => MathF.Exp(-lambda * t), tenantId);
+                    lambda => MathF.Exp(-lambda * t), tenantId: tenantId);
 
                 // Apply topology-driven transitions.
                 foreach (var entry in nonSummary)
@@ -344,11 +412,11 @@ public sealed class LifecycleEngine
                     switch (entry.LifecycleState)
                     {
                         case "stm" when smoothAE >= config.ConsolidationPromotionThreshold:
-                            if (_index.SetLifecycleState(entry.Id, "ltm", currentNs, tenantId))
+                            if (_index.SetLifecycleState(entry.Id, "ltm", currentNs, tenantId: tenantId))
                                 stmToLtmIds.Add(entry.Id);
                             break;
                         case "ltm" when smoothAE < config.ConsolidationArchiveThreshold:
-                            if (_index.SetLifecycleState(entry.Id, "archived", currentNs, tenantId))
+                            if (_index.SetLifecycleState(entry.Id, "archived", currentNs, tenantId: tenantId))
                                 ltmToArchivedIds.Add(entry.Id);
                             break;
                     }
@@ -381,26 +449,78 @@ public sealed class LifecycleEngine
     }
 
     /// <summary>Promote (or demote) an entry to a specific lifecycle state.</summary>
-    public string PromoteMemory(string id, string targetState, string ns = "", string tenantId = "")
+    /// <param name="id">Entry ID.</param>
+    /// <param name="targetState">Target lifecycle state: "stm", "ltm", or "archived".</param>
+    /// <param name="ns">Namespace for exact resolution; pass "" to resolve the bare id across the tenant's own namespaces (fails closed on ambiguity).</param>
+    /// <param name="tenantId">Tenant partition; pass "" for the legacy partition. Consumed by both branches.</param>
+    public string PromoteMemory(string id, string targetState, string ns, string tenantId)
+        => PromoteMemory(id, targetState, ns, tenantId, out _);
+
+    /// <summary>
+    /// As the four-argument overload, additionally reporting the entry's
+    /// <see cref="CognitiveEntry.LifecycleRevision"/> as of THIS transition — captured inside the
+    /// index's partition write lock, so a reversal receipt built from it names exactly the
+    /// transition this call performed. 0 when the promotion failed.
+    /// </summary>
+    public string PromoteMemory(string id, string targetState, string ns, string tenantId, out long lifecycleRevision)
     {
+        lifecycleRevision = 0;
         if (targetState is not ("stm" or "ltm" or "archived"))
             return $"Error: Invalid target state '{targetState}'. Use 'stm', 'ltm', or 'archived'.";
 
-        // When a namespace is supplied the lookup is tenant-scoped; a bare id (ns == "") stays on
-        // the legacy locator path so single-tenant callers are unchanged.
+        // When a namespace is supplied the lookup is (tenant, ns, id)-exact; an explicit ns == ""
+        // resolves the bare id across the TENANT'S OWN namespaces. Neither ns nor tenantId
+        // defaults — a forgotten argument must be a compile error, not a silent fall-through —
+        // and the tenant is consumed on BOTH branches: the old global locator silently discarded
+        // the required tenantId when ns was empty, so a tenant-scoped call could resolve (and
+        // mutate) an entry in a partition it never named.
         bool scoped = ns.Length != 0;
-        var entry = scoped ? _index.Get(id, ns, tenantId) : _index.Get(id);
+        var entry = scoped ? _index.Get(id, ns, tenantId: tenantId) : _index.GetForTenant(id, tenantId);
         if (entry is null)
             return $"Error: Entry '{id}' not found.";
 
         var previousState = entry.LifecycleState;
-        bool updated = scoped
-            ? _index.SetLifecycleState(id, targetState, ns, tenantId)
-            : _index.SetLifecycleState(id, targetState);
+        // entry.Ns == ns on the scoped branch, and on the unscoped one it is the single namespace
+        // the resolution just established — so the mutation always lands on the resolved entry.
+        bool updated = _index.SetLifecycleState(id, targetState, entry.Ns, tenantId: tenantId, out lifecycleRevision);
         if (!updated)
             return $"Error: Failed to update state for '{id}'.";
 
         return $"Entry '{id}' transitioned: {previousState} -> {targetState}.";
+    }
+
+    /// <summary>
+    /// Promote BOUND TO THE OCCUPATION THE CALLER VALIDATED: the transition fires only while
+    /// the entry is still in <paramref name="expectedState"/> AND its
+    /// <see cref="CognitiveEntry.LifecycleRevision"/> is still
+    /// <paramref name="expectedLifecycleRevision"/>, compared and applied under one partition
+    /// write lock.
+    ///
+    /// The unconditioned overload re-reads the entry and transitions whatever it finds. That
+    /// is right for a caller acting on the entry as it is now, and wrong for one that screened
+    /// an entry earlier and is acting on that judgement: between the screen and the call the
+    /// slot can be re-occupied, and the transition would then land on an entry that was never
+    /// examined — a cluster summary, or a member a collapse receipt is holding at a lifecycle
+    /// revision this transition would move out from under it.
+    ///
+    /// Returns false when the entry has moved. The caller must treat that as "not mine to
+    /// change" rather than as a failure to retry blindly.
+    /// </summary>
+    public bool TryPromoteMemory(
+        string id, string targetState, string ns, string tenantId,
+        string expectedState, long expectedLifecycleRevision)
+    {
+        if (targetState is not ("stm" or "ltm" or "archived"))
+            return false;
+        if (ns.Length == 0)
+            return false;
+
+        return _index.TryTransitionLifecycle(
+            id, ns, tenantId,
+            fromState: expectedState,
+            toState: targetState,
+            installRevision: _index.ReserveLifecycleRevision(),
+            expectedRevision: expectedLifecycleRevision);
     }
 
     /// <summary>
@@ -410,15 +530,19 @@ public sealed class LifecycleEngine
     /// </summary>
     /// <param name="id">Entry ID.</param>
     /// <param name="delta">Feedback delta: positive values reinforce, negative values suppress. Clamped to [-10, 10].</param>
-    /// <param name="ns">Optional namespace hint for config lookup and tenant-scoped resolution.</param>
-    /// <param name="tenantId">Tenant partition; "" is the legacy tenant. Only used when <paramref name="ns"/> is supplied.</param>
-    public FeedbackResult? ApplyFeedback(string id, float delta, string? ns = null, string tenantId = "")
+    /// <param name="ns">Namespace for config lookup and exact resolution; pass null to resolve the bare id across the tenant's own namespaces (fails closed on ambiguity).</param>
+    /// <param name="tenantId">Tenant partition; pass "" for the legacy partition. Consumed by both branches.</param>
+    public FeedbackResult? ApplyFeedback(string id, float delta, string? ns, string tenantId)
     {
         delta = Math.Clamp(delta, -10f, 10f);
 
-        // When a namespace is supplied the entry is resolved tenant-scoped; a null ns keeps the
-        // legacy bare-id path.
-        var entry = ns is not null ? _index.Get(id, ns, tenantId) : _index.Get(id);
+        // When a namespace is supplied the entry is resolved (tenant, ns, id)-exact; an explicit
+        // null ns resolves the bare id across the TENANT'S OWN namespaces. Neither ns nor
+        // tenantId defaults — a forgotten argument must be a compile error, not a silent
+        // fall-through — and the tenant is consumed on BOTH branches: the old global locator
+        // silently discarded the required tenantId when ns was null, so a tenant-scoped call
+        // could resolve (and mutate) an entry in a partition it never named.
+        var entry = ns is not null ? _index.Get(id, ns, tenantId: tenantId) : _index.GetForTenant(id, tenantId);
         if (entry is null)
             return null;
 
@@ -429,8 +553,9 @@ public sealed class LifecycleEngine
         // Positive feedback also records an access (boosts decay resistance)
         if (delta > 0)
         {
-            if (ns is not null) _index.RecordAccess(id, ns, tenantId);
-            else _index.RecordAccess(id);
+            // entry.Ns == ns on the scoped branch; on the unscoped one it is the single namespace
+            // the resolution established. Either way the access lands on the resolved entry.
+            _index.RecordAccess(id, entry.Ns, tenantId: tenantId);
         }
 
         // Resolve thresholds from stored config or defaults
@@ -438,7 +563,7 @@ public sealed class LifecycleEngine
         float archiveThreshold = -5.0f;
         if (ns is not null)
         {
-            var config = GetDecayConfig(ns, tenantId);
+            var config = GetDecayConfig(ns, tenantId: tenantId);
             if (config is not null)
             {
                 stmThreshold = config.StmThreshold;
@@ -464,8 +589,7 @@ public sealed class LifecycleEngine
                 break;
         }
 
-        if (ns is not null) _index.SetActivationEnergyAndState(id, newEnergy, newState, ns, tenantId);
-        else _index.SetActivationEnergyAndState(id, newEnergy, newState);
+        _index.SetActivationEnergyAndState(id, newEnergy, newState, entry.Ns, tenantId: tenantId);
 
         string finalState = newState ?? previousState;
         return new FeedbackResult(id, previousEnergy, newEnergy, previousState, finalState, newState is not null);
@@ -479,16 +603,17 @@ public sealed class LifecycleEngine
     /// and gets the same rows without the side effect. The parameter is trailing and defaults to
     /// true so every existing caller — including the benchmark runners that drive the UseLifecycle
     /// ablation and whose IR baselines would otherwise shift — keeps its current behaviour with no
-    /// argument change.
+    /// argument change. <c>tenantId</c> is required and sits directly after <c>ns</c> (tenant-qualified
+    /// identity first, tuning knobs after); it does not disturb the trailing <c>resurrect</c> default.
     /// </remarks>
     public IReadOnlyList<CognitiveSearchResult> DeepRecall(
-        float[] vector, string ns, int k = 10, float minScore = 0.3f,
+        float[] vector, string ns, string tenantId, int k = 10, float minScore = 0.3f,
         float resurrectionThreshold = 0.7f,
-        string? queryText = null, bool hybrid = false, bool rerank = false, string tenantId = "",
+        string? queryText = null, bool hybrid = false, bool rerank = false,
         bool resurrect = true)
     {
-        var results = _index.SearchAllStates(vector, ns, k, minScore,
-            queryText: queryText, hybrid: hybrid, rerank: rerank, tenantId: tenantId);
+        var results = _index.SearchAllStates(vector, ns, tenantId: tenantId, k: k, minScore: minScore,
+            queryText: queryText, hybrid: hybrid, rerank: rerank);
 
         // Read-only path. Only the write is withheld, never the rows: the archived entries are
         // returned exactly as found, so an unprivileged caller's result set is indistinguishable
@@ -501,8 +626,8 @@ public sealed class LifecycleEngine
         {
             if (result.LifecycleState == "archived" && result.Score >= resurrectionThreshold)
             {
-                _index.SetLifecycleState(result.Id, "stm", ns, tenantId);
-                _index.RecordAccess(result.Id, ns, tenantId);
+                _index.SetLifecycleState(result.Id, "stm", ns, tenantId: tenantId);
+                _index.RecordAccess(result.Id, ns, tenantId: tenantId);
                 // Return with updated lifecycle state
                 updatedResults.Add(result with { LifecycleState = "stm" });
             }
@@ -518,9 +643,35 @@ public sealed class LifecycleEngine
     private void EnsureConfigsLoaded()
     {
         if (_configsLoaded || _persistence is null) return;
+        // The provider's map is ALREADY partition-keyed — every backend builds it with
+        // NamespaceStore.DecayConfigsByPartition, whose unchecked composer exists precisely
+        // to key rows a pre-validation store poisoned. Re-composing here through the
+        // validating PartitionKey turned one such row back into a throw on every
+        // lifecycle-touching call — the exact brick the recovery path was built to prevent.
+        //
+        // One screen still applies: a row whose OWN components would fail partition
+        // validation is dropped (with a warning), never installed. Such a row is unreachable
+        // by any valid caller under its true identity — but its UNCHECKED key can alias a
+        // key a valid caller legitimately composes (a separator inside a legacy ns collides
+        // with tenant+separator+ns), and installing it would let the poisoned row silently
+        // govern, and absorb SetDecayConfig writes for, another tenant's namespace.
         var configs = _persistence.LoadDecayConfigs();
-        foreach (var config in configs.Values)
-            _decayConfigs[NamespaceStore.PartitionKey(config.TenantId, config.Ns)] = config;
+        foreach (var kv in configs)
+        {
+            try
+            {
+                Tenancy.ValidatePartitionComponent(kv.Value.TenantId, nameof(DecayConfig.TenantId));
+                Tenancy.ValidatePartitionComponent(kv.Value.Ns, nameof(DecayConfig.Ns));
+            }
+            catch (ArgumentException ex)
+            {
+                _logger?.LogWarning(ex,
+                    "Dropping a stored decay config whose tenant or namespace fails partition validation — " +
+                    "no valid caller can address it, and its key could alias another tenant's namespace.");
+                continue;
+            }
+            _decayConfigs[kv.Key] = kv.Value;
+        }
         _configsLoaded = true;
     }
 

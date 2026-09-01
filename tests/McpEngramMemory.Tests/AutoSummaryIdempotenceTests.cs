@@ -82,14 +82,14 @@ public sealed class AutoSummaryIdempotenceTests : IDisposable
 
         // First scan: cluster + summary created.
         var first = new ClusterManager(_index, _persistence);
-        _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: first, embedding: _embedding);
+        _scanner.ScanNamespace(ns, tenantId: "", minPoints: 2, autoSummarize: true, clusters: first, embedding: _embedding);
         Assert.Equal(1, SummaryCount(ns));
 
         // A fresh ClusterManager with no clusters loaded stands in for the real failure: the
         // process died before the debounced cluster save flushed, so on restart the summary entry
         // is present in the index and the cluster that produced it is not.
         var afterRestart = new ClusterManager(_index, _persistence);
-        _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: afterRestart, embedding: _embedding);
+        _scanner.ScanNamespace(ns, tenantId: "", minPoints: 2, autoSummarize: true, clusters: afterRestart, embedding: _embedding);
 
         Assert.Equal(1, SummaryCount(ns));
     }
@@ -102,7 +102,7 @@ public sealed class AutoSummaryIdempotenceTests : IDisposable
         var clusters = new ClusterManager(_index, _persistence);
 
         for (int i = 0; i < 3; i++)
-            _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: clusters, embedding: _embedding);
+            _scanner.ScanNamespace(ns, tenantId: "", minPoints: 2, autoSummarize: true, clusters: clusters, embedding: _embedding);
 
         Assert.Equal(1, SummaryCount(ns));
     }
@@ -114,10 +114,10 @@ public sealed class AutoSummaryIdempotenceTests : IDisposable
         SeedTightCluster(ns, 4);
 
         var a = new ClusterManager(_index, _persistence);
-        var firstScan = _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: a, embedding: _embedding);
+        var firstScan = _scanner.ScanNamespace(ns, tenantId: "", minPoints: 2, autoSummarize: true, clusters: a, embedding: _embedding);
 
         var b = new ClusterManager(_index, _persistence);
-        var secondScan = _scanner.ScanNamespace(ns, minPoints: 2, autoSummarize: true, clusters: b, embedding: _embedding);
+        var secondScan = _scanner.ScanNamespace(ns, tenantId: "", minPoints: 2, autoSummarize: true, clusters: b, embedding: _embedding);
 
         Assert.NotNull(firstScan.AutoSummaries);
         Assert.NotNull(secondScan.AutoSummaries);

@@ -49,6 +49,42 @@ public sealed class CognitiveEntry
     [JsonPropertyName("createdAt")]
     public DateTimeOffset CreatedAt { get; set; }
 
+    /// <summary>
+    /// Occupancy witness, stamped by <c>CognitiveIndex</c> on every upsert — an EQUALITY-ONLY
+    /// token, never ordered. Two occupations of the same (tenant, ns, id) slot always carry
+    /// different values — unlike <see cref="CreatedAt"/>, which a same-tick replacement can
+    /// repeat — so destructive maintenance can target exactly the version it staged. The
+    /// stamping counter is seeded from a random 62-bit value at index start (see the rationale
+    /// at the counters in <c>CognitiveIndex</c>): uniqueness holds across restarts AND across
+    /// live processes sharing a store, but values are monotonic only within one process
+    /// lifetime — nothing may compare them for order. In-place mutations (lifecycle, access
+    /// counts, energy) deliberately do NOT move it: it witnesses replacement, not activity.
+    /// 0 marks data persisted before the field existed.
+    ///
+    /// The setter is internal: a witness a caller can rewrite is not a witness. Only
+    /// <c>CognitiveIndex</c> stamps it (and the serializer restores it); a caller that needs
+    /// the value later must copy the NUMBER at observation time — the object in the index map
+    /// is live, and holding it does not freeze this property.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("revision")]
+    public long Revision { get; internal set; }
+
+    /// <summary>
+    /// Lifecycle witness, moved by <c>CognitiveIndex</c> whenever
+    /// <see cref="LifecycleState"/> actually TRANSITIONS (never on energy or access updates,
+    /// and never on a set to the state already held) — an EQUALITY-ONLY token like
+    /// <see cref="Revision"/>, randomly seeded per process and never ordered.
+    /// <see cref="Revision"/> deliberately ignores in-place activity, so reversal logic needs
+    /// this second witness: an undo that archived an entry may restore it only while this
+    /// value still equals the one its own archive installed — any later transition, manual or
+    /// automatic, means the archived state belongs to newer work. Internal setter for the same
+    /// reason as <see cref="Revision"/>; 0 marks data persisted before the field existed.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("lifecycleRevision")]
+    public long LifecycleRevision { get; internal set; }
+
     [JsonPropertyName("lastAccessedAt")]
     public DateTimeOffset LastAccessedAt { get; set; }
 
@@ -64,6 +100,28 @@ public sealed class CognitiveEntry
 
     [JsonPropertyName("sourceClusterId")]
     public string? SourceClusterId { get; set; }
+
+    /// <summary>
+    /// The <see cref="SemanticCluster.CreationStamp"/> of the cluster incarnation this summary
+    /// was stored FOR — set by <c>ClusterManager.StoreSummary</c> from the resident cluster.
+    /// A conditional summary delete compares it so a replacement summary, stored by a
+    /// recreated same-id cluster, is never taken down by the old incarnation's cleanup. Null
+    /// on non-summary entries and on summaries persisted before the field existed.
+    /// </summary>
+    [JsonPropertyName("sourceClusterStamp")]
+    public string? SourceClusterStamp { get; set; }
+
+    /// <summary>
+    /// The <see cref="SemanticCluster.InstanceId"/> of the exact PHYSICAL cluster object this
+    /// summary was admitted by — set by <c>ClusterManager.StoreSummary</c> under the cluster
+    /// lock. The lineage stamp above is REUSED across a collapse retry's re-created cluster,
+    /// so stamp equality cannot distinguish "the object that admitted me" from "a later object
+    /// of my lineage"; the instance can, and the summary CAS, the publish fence and the
+    /// ownership read screens compare it. Null on non-summary entries and on summaries
+    /// persisted before the field existed.
+    /// </summary>
+    [JsonPropertyName("sourceClusterInstance")]
+    public string? SourceClusterInstance { get; set; }
 
     public CognitiveEntry(
         string id,

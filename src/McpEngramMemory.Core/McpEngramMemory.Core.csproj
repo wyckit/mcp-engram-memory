@@ -11,7 +11,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Core</PackageId>
-    <Version>1.6.0</Version>
+    <Version>2.0.0</Version>
     <Authors>wyckit</Authors>
     <Company>wyckit</Company>
     <Copyright>Copyright (c) 2026 WyckIt</Copyright>
@@ -27,6 +27,13 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- This assembly ships as a NuGet package, so its public surface is a semver commitment.
+         Seams that exist only so a test can drive a deterministic pass stay internal and are
+         reached through here, rather than being widened to public for the test's convenience. -->
+    <InternalsVisibleTo Include="McpEngramMemory.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />

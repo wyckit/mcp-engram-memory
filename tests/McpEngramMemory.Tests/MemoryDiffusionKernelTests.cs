@@ -46,7 +46,7 @@ public class MemoryDiffusionKernelTests : IDisposable
         const int perCluster = 8;
         SeedClusteredGraph(ns, clusters, perCluster, withinDensity: 0.6f);
 
-        var basis = _kernel.GetBasis(ns, topK: 8);
+        var basis = _kernel.GetBasis(ns, tenantId: "", topK: 8);
         Assert.NotNull(basis);
         Assert.Equal(clusters * perCluster, basis!.NodeCount);
 
@@ -101,7 +101,7 @@ public class MemoryDiffusionKernelTests : IDisposable
         const string ns = "heat";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var basis = _kernel.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(basis);
 
         var signal = new Dictionary<string, float>();
@@ -115,7 +115,7 @@ public class MemoryDiffusionKernelTests : IDisposable
         for (int k = 0; k < dts.Length; k++)
         {
             float dt = dts[k];
-            var filtered = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
+            var filtered = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt), tenantId: "");
             float ns2 = 0f;
             foreach (var id in basis.EntryIds) ns2 += filtered[id] * filtered[id];
             outNormSq[k] = ns2;
@@ -150,7 +150,7 @@ public class MemoryDiffusionKernelTests : IDisposable
         const string ns = "frac";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var basis = _kernel.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(basis);
 
         var signal = new Dictionary<string, float>();
@@ -158,8 +158,8 @@ public class MemoryDiffusionKernelTests : IDisposable
         signal[basis.EntryIds[0]] = 1f;
 
         const float dt = 1.0f;
-        var standard = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt));
-        var subdiff = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-MathF.Pow(lambda, 0.7f) * dt));
+        var standard = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-lambda * dt), tenantId: "");
+        var subdiff = _kernel.ApplySpectralFilter(ns, signal, lambda => MathF.Exp(-MathF.Pow(lambda, 0.7f) * dt), tenantId: "");
 
         float diffSq = 0f;
         foreach (var id in basis.EntryIds)
@@ -182,20 +182,20 @@ public class MemoryDiffusionKernelTests : IDisposable
         const string ns = "invalidate";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
 
-        var first = _kernel.GetBasis(ns);
+        var first = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(first);
         long firstRev = first!.GraphRevision;
         var firstComputedAt = first.ComputedAt;
 
         // Cache hit: same revision, same instance.
-        var cached = _kernel.GetBasis(ns);
+        var cached = _kernel.GetBasis(ns, tenantId: "");
         Assert.Same(first, cached);
 
         // Sleep ensures ComputedAt strictly advances past resolution noise.
         Thread.Sleep(20);
         _graph.AddEdge(new GraphEdge("c0_0", "c1_0", "similar_to", 0.5f));
 
-        var second = _kernel.GetBasis(ns);
+        var second = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(second);
         Assert.True(second!.GraphRevision > firstRev,
             $"Basis should be recomputed at higher revision; was {firstRev}, now {second.GraphRevision}.");
@@ -212,13 +212,18 @@ public class MemoryDiffusionKernelTests : IDisposable
     public void ParallelGetBasisAcrossNamespacesSucceeds()
     {
         const int nsCount = 10;
+        // Distinct ids per namespace: this test is about concurrent computation across namespaces,
+        // not about id collision. Sharing bare ids across all ten would make every endpoint
+        // ambiguous and every basis correctly null, so the test would pass or fail for a reason
+        // that has nothing to do with parallelism.
         for (int n = 0; n < nsCount; n++)
-            SeedClusteredGraph($"par_{n}", clusters: 4, perCluster: 8, withinDensity: 0.5f);
+            SeedClusteredGraph($"par_{n}", clusters: 4, perCluster: 8, withinDensity: 0.5f,
+                idPrefix: $"par{n}_");
 
         var bases = new DiffusionBasis?[nsCount];
         Parallel.For(0, nsCount, n =>
         {
-            bases[n] = _kernel.GetBasis($"par_{n}");
+            bases[n] = _kernel.GetBasis($"par_{n}", tenantId: "");
         });
 
         for (int n = 0; n < nsCount; n++)
@@ -241,7 +246,7 @@ public class MemoryDiffusionKernelTests : IDisposable
             _index.Upsert(new CognitiveEntry($"t_{i}", new[] { 1f, 0f }, ns, $"entry {i}"));
         _graph.AddEdge(new GraphEdge("t_0", "t_1", "similar_to"));
 
-        var basis = _kernel.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns, tenantId: "");
         Assert.Null(basis);
     }
 
@@ -254,7 +259,7 @@ public class MemoryDiffusionKernelTests : IDisposable
     {
         const string ns = "ortho";
         SeedClusteredGraph(ns, clusters: 4, perCluster: 8, withinDensity: 0.5f);
-        var basis = _kernel.GetBasis(ns, topK: 8);
+        var basis = _kernel.GetBasis(ns, tenantId: "", topK: 8);
         Assert.NotNull(basis);
 
         int n = basis!.NodeCount;
@@ -292,7 +297,7 @@ public class MemoryDiffusionKernelTests : IDisposable
         for (int i = 0; i < 8; i++)
             _graph.AddEdge(new GraphEdge($"c0_{i}", $"c1_{i}", "contradicts", 1.0f));
 
-        var basis = _kernel.GetBasis(ns);
+        var basis = _kernel.GetBasis(ns, tenantId: "");
         Assert.NotNull(basis);
 
         // Two disconnected components -> multiplicity 2 at eigenvalue 0.
@@ -310,13 +315,27 @@ public class MemoryDiffusionKernelTests : IDisposable
     /// <paramref name="addBridges"/> is true, one weak edge is added between consecutive clusters
     /// to keep the graph connected.
     /// </summary>
-    private void SeedClusteredGraph(string ns, int clusters, int perCluster, float withinDensity, bool addBridges = true)
+    /// <summary>
+    /// Seed a clustered graph in one namespace.
+    ///
+    /// <paramref name="idPrefix"/> exists for the multi-namespace tests: entry ids are unique only
+    /// per (tenant, namespace), so seeding the same bare ids into several namespaces of one tenant
+    /// makes every one of them ambiguous, and the basis is built from the ATTRIBUTABLE edge view —
+    /// which withholds an edge whose endpoint id names more than one entry. A caller seeding several
+    /// namespaces therefore has to give them distinct ids, or it is exercising the fail-closed path
+    /// rather than the one it means to test. That path has its own coverage in
+    /// DiffusionAttributionTests.
+    /// </summary>
+    private void SeedClusteredGraph(string ns, int clusters, int perCluster, float withinDensity,
+        bool addBridges = true, string idPrefix = "")
     {
         var rng = new Random(12345);
+        string Id(int c, int i) => $"{idPrefix}c{c}_{i}";
+
         for (int c = 0; c < clusters; c++)
         {
             for (int i = 0; i < perCluster; i++)
-                _index.Upsert(new CognitiveEntry($"c{c}_{i}", new[] { (float)c, (float)i }, ns, $"cluster {c} member {i}"));
+                _index.Upsert(new CognitiveEntry(Id(c, i), new[] { (float)c, (float)i }, ns, $"cluster {c} member {i}"));
         }
 
         for (int c = 0; c < clusters; c++)
@@ -324,13 +343,13 @@ public class MemoryDiffusionKernelTests : IDisposable
             for (int i = 0; i < perCluster; i++)
                 for (int j = i + 1; j < perCluster; j++)
                     if (rng.NextDouble() < withinDensity)
-                        _graph.AddEdge(new GraphEdge($"c{c}_{i}", $"c{c}_{j}", "similar_to", 1.0f));
+                        _graph.AddEdge(new GraphEdge(Id(c, i), Id(c, j), "similar_to", 1.0f));
         }
 
         if (addBridges)
         {
             for (int c = 0; c + 1 < clusters; c++)
-                _graph.AddEdge(new GraphEdge($"c{c}_0", $"c{c + 1}_0", "cross_reference", 0.1f));
+                _graph.AddEdge(new GraphEdge(Id(c, 0), Id(c + 1, 0), "cross_reference", 0.1f));
         }
     }
 }

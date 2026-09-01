@@ -54,13 +54,13 @@ public sealed class IntelligenceTools
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             : new HashSet<string> { "stm", "ltm" };
 
-        var raw = _index.FindDuplicates(ns, threshold, category, states, tenantId: _access.TenantId);
+        var raw = _index.FindDuplicates(ns, tenantId: _access.TenantId, threshold: threshold, category: category, includeStates: states);
 
         var pairs = new List<DuplicatePair>(raw.Count);
         foreach (var (idA, idB, sim) in raw)
         {
-            var a = _index.Get(idA, ns, _access.TenantId);
-            var b = _index.Get(idB, ns, _access.TenantId);
+            var a = _index.Get(idA, ns, tenantId: _access.TenantId);
+            var b = _index.Get(idB, ns, tenantId: _access.TenantId);
             if (a is null || b is null) continue;
 
             pairs.Add(new DuplicatePair(
@@ -69,7 +69,7 @@ public sealed class IntelligenceTools
                 sim));
         }
 
-        var scannedCount = _index.CountInNamespace(ns, _access.TenantId);
+        var scannedCount = _index.CountInNamespace(ns, tenantId: _access.TenantId);
         return new DuplicateDetectionResult(scannedCount, pairs, threshold);
     }
 
@@ -84,7 +84,7 @@ public sealed class IntelligenceTools
             return new ContradictionResult(Array.Empty<ContradictionInfo>(), 0, 0);
 
         // Part 1: Get explicit contradiction edges from the knowledge graph (this tenant)
-        var graphContradictions = _graph.GetContradictions(ns, _access.TenantId);
+        var graphContradictions = _graph.GetContradictions(ns, tenantId: _access.TenantId);
         var contradictions = new List<ContradictionInfo>();
         var knownPairs = new HashSet<(string, string)>();
 
@@ -132,7 +132,7 @@ public sealed class IntelligenceTools
             var resolved = new (CognitiveEntry? Entry, float Norm)[results.Count];
             for (int i = 0; i < results.Count; i++)
             {
-                var entry = _index.Get(results[i].Id, ns, _access.TenantId);
+                var entry = _index.Get(results[i].Id, ns, tenantId: _access.TenantId);
                 resolved[i] = (entry, entry is not null ? VectorMath.Norm(entry.Vector) : 0f);
             }
 
@@ -176,25 +176,61 @@ public sealed class IntelligenceTools
     {
         // Resolve the collapse's namespace before touching anything (within this tenant) - same
         // reply shape as a genuine miss for both "doesn't exist" and "exists but you can't touch it".
-        var ns = _scanner.GetCollapseRecordNs(collapseId, _access.TenantId);
+        var ns = _scanner.GetCollapseRecordNs(collapseId, tenantId: _access.TenantId);
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: No collapse record found for '{collapseId}'.";
 
-        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, _access.TenantId);
+        var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(ns);
         return result;
     }
 
+    /// <summary>Caller-facing projection of a collapse record. Recovery internals — the
+    /// incarnation stamp the destructive cleanup compares, the applied/expected witness maps,
+    /// the generation — are deliberately OMITTED: they are ownership tokens, not data, and the
+    /// stamp in particular must never be handed to a caller who could replay it into a forged
+    /// cluster incarnation.</summary>
+    public sealed record CollapseRecordInfo(
+        string CollapseId, string ClusterId, string SummaryEntryId, string Ns,
+        IReadOnlyList<string> MemberIds, IReadOnlyDictionary<string, string> PreviousStates,
+        DateTimeOffset CollapsedAt);
+
     [McpServerTool(Name = "list_collapse_history", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("List all reversible collapse records for a namespace.")]
-    public IReadOnlyList<CollapseRecord> ListCollapseHistory(
+    public IReadOnlyList<CollapseRecordInfo> ListCollapseHistory(
         [Description("Namespace to list collapse history for.")] string ns)
     {
-        if (!_access.CanRead(ns)) return Array.Empty<CollapseRecord>();
-        return _scanner.GetCollapseHistory(ns, _access.TenantId);
+        if (!_access.CanRead(ns)) return Array.Empty<CollapseRecordInfo>();
+        return _scanner.GetCollapseHistory(ns, tenantId: _access.TenantId)
+            .Select(r => new CollapseRecordInfo(
+                r.CollapseId, r.ClusterId, r.SummaryEntryId, r.Ns,
+                r.MemberIds, r.PreviousStates, r.CollapsedAt))
+            .ToList();
     }
 
+    /// <summary>
+    /// Merge two entries the caller can write in one namespace.
+    ///
+    /// Two different objects are touched here and they are authorized differently. The ENTRY work
+    /// - metadata union, access-count roll-up, archival - is namespace-qualified through
+    /// <c>_index.Get(id, ns, tenant)</c> and the <c>CanWrite(ns)</c> gate above it, so it can only
+    /// ever land on the two entries the caller named in the namespace they hold.
+    ///
+    /// The TOPOLOGY work is not namespace-qualified and cannot be: graph adjacency and cluster
+    /// membership are keyed (tenant, bare id), so <c>TransferEdges</c>/<c>TransferMembership</c>
+    /// reach every same-id entry in the tenant. That is what let a caller who created writable
+    /// twins of two ids rewire another principal's private graph through this tool. The fix is not
+    /// a gate here: <see cref="KnowledgeGraph"/> and <see cref="ClusterManager"/> now decline an
+    /// ambiguous bare id themselves, so this path is covered along with every other writer.
+    ///
+    /// Deliberately no tool-level refusal on top of that. Refusing the whole merge when an id is
+    /// ambiguous would deny a caller a legitimate, correctly-authorized operation on their OWN two
+    /// entries merely because someone else in the tenant happens to hold the same id - and it
+    /// would announce that fact. The reply stays honest instead by reporting the counts Core
+    /// actually returned: a merge that moved no topology says it moved none, which is exactly what
+    /// merging two unlinked entries has always said.
+    /// </summary>
     [McpServerTool(Name = "merge_memories", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Merge two duplicate entries into one. Keeps first entry's vector, combines metadata/access counts, transfers edges and clusters, archives the second. Use after detect_duplicates.")]
     public string MergeMemories(
@@ -204,13 +240,47 @@ public sealed class IntelligenceTools
     {
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
-        var keepEntry = _index.Get(keepId, ns, _access.TenantId);
-        if (keepEntry is null)
-            return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
+        // MERGING AN ENTRY WITH ITSELF IS NOT A MERGE, it is an archive of the entry the reply
+        // claims to be keeping. Both lookups below resolve to the one entry, so every step
+        // afterwards runs against a single object: the metadata union is a no-op, the access count
+        // doubles, the topology calls are asked to move a node onto itself, and PromoteMemory then
+        // archives the id the caller named as keepId. Refused here rather than left to Core —
+        // TransferEdges and TransferMembership each decline a self-transfer, but nothing there can
+        // stop the archival, and no caller means "archive this" when they write keepId.
+        //
+        // Ordinal, matching the id comparisons in Core: two ids that differ only by
+        // culture-sensitive equality are two entries everywhere else in this server.
+        if (string.Equals(keepId, archiveId, StringComparison.Ordinal))
+            return $"Error: Cannot merge entry '{keepId}' with itself.";
 
-        var archiveEntry = _index.Get(archiveId, ns, _access.TenantId);
-        if (archiveEntry is null)
+        if (_index.Get(keepId, ns, tenantId: _access.TenantId) is null)
+            return $"Error: Entry '{keepId}' not found in namespace '{ns}'.";
+        if (_index.Get(archiveId, ns, tenantId: _access.TenantId) is null)
             return $"Error: Entry '{archiveId}' not found in namespace '{ns}'.";
+
+        // Capture detached copies and explicit witnesses under one partition read lock. Revision
+        // identifies the occupation, while lifecycle/access/energy fields witness the in-place
+        // changes Revision deliberately does not move.
+        if (!_index.TryCaptureMergeEntries(
+                keepId, archiveId, ns, _access.TenantId,
+                out var keepSnapshot, out var archiveSnapshot)
+            || keepSnapshot is null || archiveSnapshot is null)
+            return "Error: One of the entries changed while the merge was being prepared; nothing was merged. Re-read and retry.";
+
+        var keepEntry = keepSnapshot.Entry;
+        var archiveEntry = archiveSnapshot.Entry;
+
+        // MACHINERY-OWNED and RECEIPT-HELD entries refuse the merge outright. A cluster
+        // summary's slot is written only through the incarnation-conditioned store — a merge
+        // upserting over it (or archiving it) would bypass that machinery entirely. An
+        // ARCHIVED entry is potentially held by a collapse receipt whose restore CAS expects
+        // the entry's CURRENT LifecycleRevision; the merge's upsert mints a fresh one, after
+        // which the undo's restore refuses and the member is stranded archived with its
+        // receipt consumed. Undo the collapse (or promote the entry) first.
+        if (keepEntry.IsSummaryNode || archiveEntry.IsSummaryNode)
+            return "Error: Cluster summaries are machinery-owned and cannot be merged; re-summarize the cluster instead.";
+        if (keepEntry.LifecycleState == "archived" || archiveEntry.LifecycleState == "archived")
+            return "Error: Archived entries can be held by collapse receipts and cannot be merged; undo the collapse or promote the entry first.";
 
         // Merge metadata: union of keys, keep entry's value wins on conflict
         var mergedMeta = new Dictionary<string, string>(keepEntry.Metadata ?? new());
@@ -230,24 +300,33 @@ public sealed class IntelligenceTools
             keepEntry.CreatedAt, keepEntry.LastAccessedAt,
             keepEntry.AccessCount + archiveEntry.AccessCount,
             keepEntry.ActivationEnergy, keepEntry.IsSummaryNode, keepEntry.SourceClusterId,
-            keywords: keepEntry.Keywords, tenantId: keepEntry.TenantId);
-        _index.Upsert(updated);
+            keywords: keepEntry.Keywords, tenantId: keepEntry.TenantId)
+        {
+            // Summary OWNERSHIP survives the merge: a kept entry that happens to be a
+            // cluster summary must keep its stamp and instance, or the ownership read
+            // screens stop serving it and its record's conditioned cleanup stops matching.
+            SourceClusterStamp = keepEntry.SourceClusterStamp,
+            SourceClusterInstance = keepEntry.SourceClusterInstance
+        };
+        // Preflight topology without mutation. The coherent commit then holds the namespace
+        // partition write lock through both entry updates and both topology publications, nested
+        // in the established partition -> attribution fence -> graph -> cluster order. There is no
+        // keep-first or topology-first failure image: every validation that can decline precedes
+        // the first write. The old similar_to trace is deliberately omitted because an edge added
+        // after the critical section would reopen the exact unbound topology window being closed.
+        var topology = _graph.PrepareMergeTopology(
+            archiveId, keepId, _access.TenantId, ns, _clusters);
+        if (topology is null
+            || !_index.TryCommitMerge(
+                keepSnapshot, archiveSnapshot, updated, topology, _graph, _clusters,
+                out var committed)
+            || committed is null)
+            return "Error: An entry or its topology changed while the merge was being prepared; nothing was merged. Re-read and retry.";
+
         _access.ClaimOnWrite(ns);
 
-        // Transfer graph edges from archived entry to kept entry (within this tenant)
-        int edgesTransferred = _graph.TransferEdges(archiveId, keepId, _access.TenantId);
-
-        // Transfer cluster memberships
-        int clustersTransferred = _clusters.TransferMembership(archiveId, keepId, _access.TenantId);
-
-        // Archive the duplicate via lifecycle engine
-        _lifecycle.PromoteMemory(archiveId, "archived", ns, _access.TenantId);
-
-        // Add traceability edge
-        _graph.AddEdge(new GraphEdge(keepId, archiveId, "similar_to", 1.0f, null, _access.TenantId));
-
         return $"Merged '{archiveId}' into '{keepId}'. " +
-               $"Transferred {edgesTransferred} edge(s), {clustersTransferred} cluster(s), " +
+               $"Transferred {committed.EdgesTransferred} edge(s), {committed.ClustersTransferred} cluster(s), " +
                $"{metaKeysMerged} metadata key(s). Archived '{archiveId}'.";
     }
 }

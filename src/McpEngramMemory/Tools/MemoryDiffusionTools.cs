@@ -33,16 +33,16 @@ public sealed class MemoryDiffusionTools
         // denied write reuses that same shape rather than a distinct error.
         if (!_access.CanWrite(ns)) return null;
 
-        if (force) _kernel.Invalidate(ns, _access.TenantId);
-        _ = _kernel.GetBasis(ns, topK, _access.TenantId);
-        return _kernel.GetStats(ns, _access.TenantId);
+        if (force) _kernel.Invalidate(ns, tenantId: _access.TenantId);
+        _ = _kernel.GetBasis(ns, tenantId: _access.TenantId, topK: topK);
+        return _kernel.GetStats(ns, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "diffusion_stats", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Diagnostics for the cached diffusion basis of a namespace, without forcing recomputation if absent.")]
     public DiffusionStats? DiffusionStats(
         [Description("Namespace to inspect.")] string ns) =>
-        _access.CanRead(ns) ? _kernel.GetStats(ns, _access.TenantId) : null;
+        _access.CanRead(ns) ? _kernel.GetStats(ns, tenantId: _access.TenantId) : null;
 
     [McpServerTool(Name = "invalidate_diffusion", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Drop the cached diffusion basis for a namespace. Use after manual graph surgery or if you suspect drift.")]
@@ -51,7 +51,7 @@ public sealed class MemoryDiffusionTools
     {
         if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
 
-        _kernel.Invalidate(ns, _access.TenantId);
+        _kernel.Invalidate(ns, tenantId: _access.TenantId);
         return $"Invalidated diffusion basis for namespace '{ns}'.";
     }
 }

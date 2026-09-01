@@ -14,6 +14,10 @@ public sealed class ExpertDispatcher
     /// Hidden system namespace for expert profiles. The underscore prefix exempts it
     /// from PersistenceManager.GetPersistedNamespaces(), making it invisible to
     /// background services (decay, accretion) while still persisting to disk.
+    ///
+    /// The dispatcher carries no tenant: the meta-index and the expert/domain namespaces
+    /// it searches live in the legacy ("") tenant partition by design, so every index
+    /// call below names <c>tenantId: ""</c> explicitly rather than relying on a default.
     /// </summary>
     public const string SystemNamespace = "_system_experts";
 
@@ -62,7 +66,7 @@ public sealed class ExpertDispatcher
         float[] queryVector, int topK = 3, float threshold = DefaultThreshold)
     {
         var results = _index.Search(
-            queryVector, SystemNamespace, k: topK, minScore: 0f,
+            queryVector, SystemNamespace, tenantId: "", k: topK, minScore: 0f,
             includeStates: new HashSet<string> { "ltm" });
 
         if (results.Count == 0 || results[0].Score < threshold)
@@ -121,7 +125,7 @@ public sealed class ExpertDispatcher
     /// </summary>
     public ExpertMatch? GetExpert(string expertId)
     {
-        var entry = _index.Get(expertId, SystemNamespace);
+        var entry = _index.Get(expertId, SystemNamespace, tenantId: "");
         if (entry is null) return null;
 
         string targetNamespace = entry.Metadata.GetValueOrDefault("targetNamespace") ?? $"expert_{expertId}";
@@ -132,7 +136,7 @@ public sealed class ExpertDispatcher
     /// Check if an expert already exists in the meta-index.
     /// </summary>
     public bool ExpertExists(string expertId)
-        => _index.Get(expertId, SystemNamespace) is not null;
+        => _index.Get(expertId, SystemNamespace, tenantId: "") is not null;
 
     /// <summary>
     /// List all registered experts in the meta-index.
@@ -182,7 +186,7 @@ public sealed class ExpertDispatcher
         // Verify parent exists if specified
         if (parentNodeId is not null)
         {
-            var parentEntry = _index.Get(parentNodeId, SystemNamespace);
+            var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
             if (parentEntry is null)
                 throw new ArgumentException($"Parent node '{parentNodeId}' does not exist.", nameof(parentNodeId));
         }
@@ -251,7 +255,7 @@ public sealed class ExpertDispatcher
 
             // Search the best expert's namespace for context
             var context = experts.Count > 0
-                ? _index.Search(queryVector, experts[0].TargetNamespace, k: topK)
+                ? _index.Search(queryVector, experts[0].TargetNamespace, tenantId: "", k: topK)
                 : Array.Empty<CognitiveSearchResult>();
 
             return new HierarchicalRouteResult("routed", Array.Empty<DomainNode>(), experts, context);
@@ -282,7 +286,7 @@ public sealed class ExpertDispatcher
             }
 
             var context = experts.Count > 0
-                ? _index.Search(queryVector, experts[0].TargetNamespace, k: topK)
+                ? _index.Search(queryVector, experts[0].TargetNamespace, tenantId: "", k: topK)
                 : Array.Empty<CognitiveSearchResult>();
 
             return new HierarchicalRouteResult("routed", Array.Empty<DomainNode>(), experts, context);
@@ -377,7 +381,7 @@ public sealed class ExpertDispatcher
         var contextResults = new List<CognitiveSearchResult>();
         foreach (var expert in matchedLeafExperts)
         {
-            var results = _index.Search(queryVector, expert.TargetNamespace, k: topK);
+            var results = _index.Search(queryVector, expert.TargetNamespace, tenantId: "", k: topK);
             contextResults.AddRange(results);
         }
 
@@ -428,10 +432,10 @@ public sealed class ExpertDispatcher
     /// </summary>
     public bool LinkToParent(string expertId, string parentNodeId)
     {
-        var entry = _index.Get(expertId, SystemNamespace);
+        var entry = _index.Get(expertId, SystemNamespace, tenantId: "");
         if (entry is null) return false;
 
-        var parentEntry = _index.Get(parentNodeId, SystemNamespace);
+        var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
         if (parentEntry is null) return false;
 
         // Unlink from previous parent if any
@@ -549,7 +553,7 @@ public sealed class ExpertDispatcher
     /// </summary>
     private void RemoveChildFromParent(string parentNodeId, string childNodeId)
     {
-        var parentEntry = _index.Get(parentNodeId, SystemNamespace);
+        var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
         if (parentEntry is null) return;
 
         string existing = parentEntry.Metadata.GetValueOrDefault("childNodeIds") ?? "";
@@ -622,7 +626,7 @@ public sealed class ExpertDispatcher
     /// </summary>
     private void AddChildToParent(string parentNodeId, string childNodeId)
     {
-        var parentEntry = _index.Get(parentNodeId, SystemNamespace);
+        var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
         if (parentEntry is null) return;
 
         string existing = parentEntry.Metadata.GetValueOrDefault("childNodeIds") ?? "";

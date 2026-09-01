@@ -32,7 +32,7 @@ public class LifecycleEngineTests : IDisposable
     public void PromoteMemory_ChangesState()
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
-        var result = _lifecycle.PromoteMemory("a", "ltm");
+        var result = _lifecycle.PromoteMemory("a", "ltm", ns: "", tenantId: "");
         Assert.Contains("stm -> ltm", result);
         Assert.Equal("ltm", _index.Get("a")!.LifecycleState);
     }
@@ -41,14 +41,14 @@ public class LifecycleEngineTests : IDisposable
     public void PromoteMemory_InvalidState_ReturnsError()
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test"));
-        var result = _lifecycle.PromoteMemory("a", "invalid");
+        var result = _lifecycle.PromoteMemory("a", "invalid", ns: "", tenantId: "");
         Assert.StartsWith("Error:", result);
     }
 
     [Fact]
     public void PromoteMemory_NotFound_ReturnsError()
     {
-        var result = _lifecycle.PromoteMemory("missing", "ltm");
+        var result = _lifecycle.PromoteMemory("missing", "ltm", ns: "", tenantId: "");
         Assert.StartsWith("Error:", result);
     }
 
@@ -60,7 +60,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(entry);
 
         // Run decay with very aggressive settings so that the entry with 0 access count demotes
-        var result = _lifecycle.RunDecayCycle("test", decayRate: 100f, stmThreshold: 100f);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, stmThreshold: 100f);
         Assert.Equal(1, result.StmToLtm);
         Assert.Contains("a", result.StmToLtmIds);
     }
@@ -72,7 +72,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(entry);
 
         // Very aggressive thresholds
-        var result = _lifecycle.RunDecayCycle("test", decayRate: 100f, archiveThreshold: 100f);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, archiveThreshold: 100f);
         Assert.Equal(1, result.LtmToArchived);
         Assert.Contains("a", result.LtmToArchivedIds);
     }
@@ -83,7 +83,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "work", lifecycleState: "stm"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f }, "personal", lifecycleState: "stm"));
 
-        var result = _lifecycle.RunDecayCycle("*", decayRate: 100f, stmThreshold: 100f);
+        var result = _lifecycle.RunDecayCycle("*", tenantId: "", decayRate: 100f, stmThreshold: 100f);
         Assert.Equal(2, result.StmToLtm);
     }
 
@@ -96,7 +96,7 @@ public class LifecycleEngineTests : IDisposable
         };
         _index.Upsert(entry);
 
-        var result = _lifecycle.RunDecayCycle("test", decayRate: 100f, stmThreshold: 100f);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, stmThreshold: 100f);
         Assert.Equal(0, result.ProcessedCount);
     }
 
@@ -108,7 +108,7 @@ public class LifecycleEngineTests : IDisposable
         for (int i = 0; i < 50; i++)
             _index.RecordAccess("a");
 
-        var result = _lifecycle.RunDecayCycle("test", decayRate: 0.01f, stmThreshold: 2.0f);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 0.01f, stmThreshold: 2.0f);
         Assert.Equal(0, result.StmToLtm); // Should stay in STM
     }
 
@@ -118,7 +118,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
         _index.Upsert(new CognitiveEntry("b", new[] { 1f, 0.01f }, "test", lifecycleState: "archived"));
 
-        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", minScore: 0f);
+        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", minScore: 0f);
         Assert.Equal(2, results.Count);
     }
 
@@ -127,7 +127,7 @@ public class LifecycleEngineTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
 
-        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         // Entry should be resurrected to STM
         var entry = _index.Get("a");
@@ -140,7 +140,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 0f, 1f }, "test", lifecycleState: "archived"));
 
         // Search with a very different vector
-        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.9f, minScore: -1f);
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.9f, minScore: -1f);
 
         var entry = _index.Get("a");
         Assert.Equal("archived", entry!.LifecycleState);
@@ -157,7 +157,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
         var before = _index.Get("a")!.AccessCount;
 
-        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         var after = _index.Get("a")!.AccessCount;
         Assert.True(after > before, $"Expected AccessCount to increment on resurrection; before={before}, after={after}");
@@ -174,7 +174,7 @@ public class LifecycleEngineTests : IDisposable
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "archived"));
 
-        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        var results = _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         var resurrected = Assert.Single(results);
         Assert.Equal("stm", resurrected.LifecycleState);
@@ -191,7 +191,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("b", new[] { 0.99f, 0.01f }, "test", lifecycleState: "archived"));
         _index.Upsert(new CognitiveEntry("c", new[] { 0.98f, 0.02f }, "test", lifecycleState: "archived"));
 
-        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         Assert.Equal("stm", _index.Get("a")!.LifecycleState);
         Assert.Equal("stm", _index.Get("b")!.LifecycleState);
@@ -209,7 +209,7 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("ltm-entry", new[] { 1f, 0f }, "test", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("stm-entry", new[] { 0.99f, 0.01f }, "test", lifecycleState: "stm"));
 
-        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", resurrectionThreshold: 0.5f);
+        _lifecycle.DeepRecall(new float[] { 1f, 0f }, "test", tenantId: "", resurrectionThreshold: 0.5f);
 
         Assert.Equal("ltm", _index.Get("ltm-entry")!.LifecycleState);
         Assert.Equal("stm", _index.Get("stm-entry")!.LifecycleState);
@@ -222,13 +222,13 @@ public class LifecycleEngineTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
 
         // First cycle: STM → LTM (aggressive decay)
-        var result1 = _lifecycle.RunDecayCycle("test", decayRate: 100f, stmThreshold: 100f, archiveThreshold: -99999f);
+        var result1 = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, stmThreshold: 100f, archiveThreshold: -99999f);
         Assert.Equal(1, result1.StmToLtm);
         Assert.Equal(0, result1.LtmToArchived);
         Assert.Equal("ltm", _index.Get("a")!.LifecycleState);
 
         // Second cycle: LTM → Archived (very aggressive archive threshold)
-        var result2 = _lifecycle.RunDecayCycle("test", decayRate: 100f, stmThreshold: 100f, archiveThreshold: 100f);
+        var result2 = _lifecycle.RunDecayCycle("test", tenantId: "", decayRate: 100f, stmThreshold: 100f, archiveThreshold: 100f);
         Assert.Equal(0, result2.StmToLtm);
         Assert.Equal(1, result2.LtmToArchived);
         Assert.Equal("archived", _index.Get("a")!.LifecycleState);

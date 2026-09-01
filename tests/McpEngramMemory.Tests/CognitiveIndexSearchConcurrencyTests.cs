@@ -54,6 +54,7 @@ public class CognitiveIndexSearchConcurrencyTests : IDisposable
             Query = _embedding.Embed("concurrency search race retrieval contention"),
             QueryText = "concurrency search race retrieval contention",
             Namespace = ns,
+            TenantId = "",
             K = 10,
             Hybrid = true,
             Rerank = true,
@@ -102,7 +103,7 @@ public class CognitiveIndexSearchConcurrencyTests : IDisposable
                     int i = round % seedCount;
                     _index.Upsert(MakeEntry(i, ns));    // re-index existing id → BM25 Remove+Add
                     int j = (round + seedCount / 2) % seedCount;
-                    _index.Delete($"e{j:D4}", ns);      // BM25 Remove
+                    _index.Delete($"e{j:D4}", ns, tenantId: "");   // BM25 Remove
                     _index.Upsert(MakeEntry(j, ns));    // BM25 Add back
                     Interlocked.Add(ref writeOps, 3);
                     round++;

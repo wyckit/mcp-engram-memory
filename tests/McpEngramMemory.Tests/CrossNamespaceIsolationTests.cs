@@ -60,12 +60,12 @@ public class CrossNamespaceIsolationTests : IDisposable
     public void CrossNamespaceIsolation_NoLeak()
     {
         // Agent_A owns namespace X and writes a uniquely-tokened secret there.
-        _registry.EnsureOwnership(NsX, "agent-a");
+        _registry.EnsureOwnership(NsX, "agent-a", tenantId: "");
         var secretText = $"Production database root password is {SecretToken} do not share";
         _index.Upsert(MakeEntry("a-secret", NsX, secretText));
 
         // Agent_B owns namespace Y and writes unrelated content there.
-        _registry.EnsureOwnership(NsY, "agent-b");
+        _registry.EnsureOwnership(NsY, "agent-b", tenantId: "");
         var benignText = "Quarterly planning notes about the sprint roadmap and team capacity";
         _index.Upsert(MakeEntry("b-note", NsY, benignText));
 
@@ -82,14 +82,14 @@ public class CrossNamespaceIsolationTests : IDisposable
         Assert.DoesNotContain(nsYEntries, e => e.Id == "a-secret");
 
         // ── 2. Vector search scoped to Y must never return A's secret. ──
-        var vectorHits = _index.Search(leakQueryVector, NsY, k: 50, includeStates: allStates);
+        var vectorHits = _index.Search(leakQueryVector, NsY, tenantId: "", k: 50, includeStates: allStates);
         Assert.DoesNotContain(vectorHits, r => ContainsSecret(r.Text));
         Assert.DoesNotContain(vectorHits, r => r.Id == "a-secret");
 
         // ── 3. Hybrid (BM25 + vector) search scoped to Y must never return A's secret. ──
         // BM25 keyword matching on the literal token is the most aggressive leak vector.
         var hybridHits = _index.HybridSearch(
-            leakQueryVector, secretText, NsY, k: 50, includeStates: allStates);
+            leakQueryVector, secretText, NsY, tenantId: "", k: 50, includeStates: allStates);
         Assert.DoesNotContain(hybridHits, r => ContainsSecret(r.Text));
         Assert.DoesNotContain(hybridHits, r => r.Id == "a-secret");
 
@@ -114,11 +114,11 @@ public class CrossNamespaceIsolationTests : IDisposable
         Assert.DoesNotContain(nsXEntries, e => e.Id == "b-note");
         Assert.DoesNotContain(nsXEntries, e => e.Text == benignText);
 
-        var inverseVectorHits = _index.Search(benignQueryVector, NsX, k: 50, includeStates: allStates);
+        var inverseVectorHits = _index.Search(benignQueryVector, NsX, tenantId: "", k: 50, includeStates: allStates);
         Assert.DoesNotContain(inverseVectorHits, r => r.Id == "b-note");
 
         var inverseHybridHits = _index.HybridSearch(
-            benignQueryVector, benignText, NsX, k: 50, includeStates: allStates);
+            benignQueryVector, benignText, NsX, tenantId: "", k: 50, includeStates: allStates);
         Assert.DoesNotContain(inverseHybridHits, r => r.Id == "b-note");
 
         // ── Sanity: each agent CAN see its own content in its own namespace (the isolation

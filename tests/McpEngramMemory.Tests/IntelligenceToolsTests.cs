@@ -179,11 +179,11 @@ public class IntelligenceToolsTests : IDisposable
         Assert.Contains("Merged", result);
 
         // Verify dup is archived
-        var dupEntry = _index.Get("dup", "test");
+        var dupEntry = _index.Get("dup", "test", tenantId: "");
         Assert.Equal("archived", dupEntry!.LifecycleState);
 
         // Verify keep is still active
-        var keepEntry = _index.Get("keep", "test");
+        var keepEntry = _index.Get("keep", "test", tenantId: "");
         Assert.NotEqual("archived", keepEntry!.LifecycleState);
     }
 
@@ -221,26 +221,26 @@ public class IntelligenceToolsTests : IDisposable
         _graph.AddEdge(new GraphEdge("other", "dup", "depends_on"));
 
         // Create cluster with dup as member
-        _clusters.CreateCluster("c1", "test", new[] { "dup", "other" });
+        _clusters.CreateCluster("c1", "test", new[] { "dup", "other" }, label: null, tenantId: "");
 
         // Merge
         var result = _tools.MergeMemories("keep", "dup", "test");
         Assert.DoesNotContain("Error:", result);
 
         // Verify access count transferred: keep started at 1, dup had 3 → keep should have 4
-        var keepEntry = _index.Get("keep", "test");
+        var keepEntry = _index.Get("keep", "test", tenantId: "");
         Assert.True(keepEntry!.AccessCount >= 4);
 
         // Verify dup is archived
-        var archived = _index.Get("dup", "test");
+        var archived = _index.Get("dup", "test", tenantId: "");
         Assert.Equal("archived", archived!.LifecycleState);
 
         // Verify edges were transferred — keep now has edges
-        var keepEdges = _graph.GetEdgesForEntry("keep");
+        var keepEdges = _graph.GetEdgesForEntry("keep", tenantId: "");
         Assert.True(keepEdges.Count >= 2);
 
         // Verify cluster membership was transferred
-        var clusters = _clusters.GetClustersForEntry("keep");
+        var clusters = _clusters.GetClustersForEntry("keep", tenantId: "");
         Assert.Contains("c1", clusters);
     }
 }

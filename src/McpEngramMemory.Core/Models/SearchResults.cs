@@ -132,15 +132,75 @@ public sealed record ConsolidationResult(
 /// Result of an auto-link scan: a periodic background pass that adds
 /// <c>similar_to</c> edges between high-cosine-similarity pairs so the diffusion
 /// kernel and consolidation operate on a richer graph topology.
+///
+/// A scan can stop for three different reasons and all three are separately expressible, because
+/// collapsing any two of them produces a report a caller cannot act on.
+/// <see cref="HitMaxEdgeCap"/> means the cap was binding — more admissible candidates were found
+/// than it would spend. <see cref="PairScanIncomplete"/> means this pass examined only part of the
+/// namespace's pair space and the next scan resumes where it stopped. Both false means the scan saw
+/// every pair and wrote every one it could: only then does "no edges created" mean "nothing left to
+/// link". <see cref="EntriesNotScanned"/> is the fourth and oldest of these bounds, and unlike the
+/// other two it is not resumed — those entries wait for the namespace to shrink or for a wider
+/// <c>maxScanEntries</c>.
+///
+/// <see cref="ScanAlreadyInProgress"/> is the fifth, and it is a report about a scan that did not
+/// happen rather than about one that stopped early: another scan of this same (tenant, namespace)
+/// was already running, so this call loaded no entries, examined no pairs, wrote no edges and left
+/// the resume cursor exactly where the running scan will put it. Only one scan per namespace runs
+/// at a time — the scanner is a singleton shared by the background sweep and the tool, and its
+/// resume cursor is not read-modify-written atomically, so overlapping scans could roll progress
+/// backwards and pay for the same quadratic window twice. The loser is told rather than queued:
+/// waiting would put an interactive call behind a background sweep and then have it redo the window
+/// that sweep just finished. The flag always arrives with <see cref="PairScanIncomplete"/> set, so
+/// the rule above survives unchanged — both completeness flags false still means the whole pair
+/// space was covered. It names nothing the caller did not name, so it is not an oracle: the caller
+/// already had to hold write access to this namespace to ask.
+///
+/// THREE PAIR COUNTS, AND NONE OF THEM STANDS IN FOR ANOTHER.
+///
+/// <see cref="PairsExamined"/> is the WORK DONE: pair slots this pass actually walked, in the same
+/// unit — and the same type — as the <c>maxPairComparisons</c> budget that bounds it.
+///
+/// <see cref="PairSlotsPlanned"/> is the WORK BUDGETED: the slots this pass's window covers, which
+/// is what the budget bought and what a completed pass spends in full. It is what an operator sizing
+/// <c>maxPairComparisons</c> reads, and it is a property of the window rather than of the run —
+/// computed before the first anchor, so it is available whether the pass ran or not.
+///
+/// <see cref="PairsAboveThreshold"/> is the FIND: how many of the pairs walked cleared the
+/// similarity threshold.
+///
+/// For several rounds there was ONE field for all of this. It was named for the work and held the
+/// find, because the counter sat in a loop the pair stream only feeds with pairs that already
+/// passed; in a steady-state namespace those differ by three to five orders of magnitude — 40
+/// neighbours found across 18,000,000 comparisons — and the find does not even move monotonically
+/// with the work, since a namespace of near-duplicates reports a large number for the identical walk
+/// that reports a tiny one when nothing matches. It was then named for the work and held the PLAN,
+/// which is the same class of error one step along: the plan is computed before enumeration, and
+/// cancellation can stop a walk before its first anchor, so a pre-cancelled scan over three entries
+/// compared nothing at all and reported three pairs examined.
+///
+/// WHAT "EXAMINED" GUARANTEES. It is exact on completed and cancelled production scans. The detector
+/// reports once after each complete anchor row, including rows and row suffixes with no
+/// above-threshold yield; cancellation is observed only before the next anchor. A pre-cancelled scan
+/// therefore reports zero, while a mid-window cancellation reports every completed logical pair
+/// slot and none from the unstarted suffix. <see cref="PairScanIncomplete"/> is always set alongside
+/// cancellation.
 /// </summary>
 public sealed record AutoLinkResult(
     [property: JsonPropertyName("namespace")] string Namespace,
     [property: JsonPropertyName("scannedEntries")] int ScannedEntries,
-    [property: JsonPropertyName("pairsExamined")] int PairsExamined,
+    [property: JsonPropertyName("pairsExamined")] long PairsExamined,
     [property: JsonPropertyName("edgesCreated")] int EdgesCreated,
     [property: JsonPropertyName("edgesSkippedExisting")] int EdgesSkippedExisting,
     [property: JsonPropertyName("hitMaxEdgeCap")] bool HitMaxEdgeCap,
-    [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0);
+    [property: JsonPropertyName("entriesNotScanned")] int EntriesNotScanned = 0,
+    [property: JsonPropertyName("pairScanIncomplete")] bool PairScanIncomplete = false,
+    [property: JsonPropertyName("scanAlreadyInProgress")] bool ScanAlreadyInProgress = false,
+    // Appended rather than placed beside PairsExamined where they belong: the positional constructor
+    // is public and callers pass the leading parameters by position, so inserting one in the middle
+    // silently re-binds their arguments.
+    [property: JsonPropertyName("pairsAboveThreshold")] int PairsAboveThreshold = 0,
+    [property: JsonPropertyName("pairSlotsPlanned")] long PairSlotsPlanned = 0);
 
 /// <summary>
 /// System overview statistics.

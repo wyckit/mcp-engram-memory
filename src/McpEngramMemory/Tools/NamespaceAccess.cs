@@ -43,10 +43,10 @@ public sealed class NamespaceAccess
     public bool IsLegacyUnisolated => _principal.IsLegacyUnisolated;
 
     public bool CanRead(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
 
     public bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "write", tenantId: _principal.TenantId);
 
     /// <summary>
     /// Claim ownership of a namespace on write. A no-op for the default agent, so servers
@@ -54,7 +54,7 @@ public sealed class NamespaceAccess
     /// <see cref="NamespaceRegistry.ClaimOwnershipOnWrite"/> for why that matters.
     /// </summary>
     public void ClaimOnWrite(string ns) =>
-        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
+        _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, tenantId: _principal.TenantId);
 
     /// <summary>Reply for a denied read. Indistinguishable from "there is nothing here".</summary>
     public static string ReadDenied(string ns) => $"No accessible memories in namespace '{ns}'.";
@@ -89,7 +89,7 @@ public sealed class NamespaceAccess
     /// namespace, so a same-id entry elsewhere in the tenant cannot hijack or blank the result.
     /// </summary>
     public CognitiveEntry? ResolveReadableEntry(CognitiveIndex index, string id, string? preferredNs = null)
-        => EntryAccessResolver.Resolve(index, id, TenantId, CanRead, preferredNs);
+        => EntryAccessResolver.Resolve(index, id, tenantId: TenantId, CanRead, preferredNs);
 
     /// <summary>
     /// Resolve a bare id to a writable entry inside this principal's tenant, or null.
@@ -100,5 +100,5 @@ public sealed class NamespaceAccess
     /// verb against the right object.
     /// </summary>
     public CognitiveEntry? ResolveWritableEntry(CognitiveIndex index, string id, string? preferredNs = null)
-        => EntryAccessResolver.Resolve(index, id, TenantId, CanWrite, preferredNs);
+        => EntryAccessResolver.Resolve(index, id, tenantId: TenantId, CanWrite, preferredNs);
 }

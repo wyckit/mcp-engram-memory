@@ -21,8 +21,8 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///
 /// Construction. For namespace <c>ns</c>:
 /// 1. Snapshot entry ids in stable order from <see cref="CognitiveIndex.GetAllInNamespace(string)"/>.
-/// 2. Snapshot the edge list from <see cref="KnowledgeGraph.GetAllEdges()"/>, filter
-///    to edges whose endpoints are both in <c>ns</c> and whose relation is in
+/// 2. Snapshot the ATTRIBUTABLE edge list from <see cref="KnowledgeGraph.GetAllEdges(string)"/>,
+///    filter to edges whose endpoints are both in <c>ns</c> and whose relation is in
 ///    <see cref="PositiveRelations"/> (parent_child, cross_reference, similar_to,
 ///    elaborates, depends_on). The <c>contradicts</c> relation is excluded so the
 ///    weight matrix W stays non-negative and the Laplacian L = I - D^(-1/2) W D^(-1/2)
@@ -42,12 +42,18 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///    convert to the smallest eigenpairs of L via lambda_L = 1 - lambda_M and
 ///    sort ascending.
 ///
-/// Cache invalidation is revision-based: each cached basis records the
-/// <see cref="KnowledgeGraph.Revision"/> at the time of computation; any subsequent
-/// edge mutation increments the live revision, and the next <see cref="GetBasis"/>
-/// call detects the divergence and recomputes. Recomputation runs synchronously
-/// under a per-namespace lock — concurrent calls for the same namespace serialize,
-/// but different namespaces compute independently.
+/// Cache invalidation is revision-based on TWO revisions, and one of them is not
+/// about edges at all. <see cref="KnowledgeGraph.RevisionFor"/> says which edges
+/// exist; <see cref="CognitiveIndex.AttributionRevisionFor"/> says which of them are
+/// usable. A same-id twin inserted into another namespace of the tenant writes no
+/// edge, so the graph revision does not move — while every edge naming that id drops
+/// out of the attributable view. Watching only the graph revision therefore kept
+/// serving a basis whose edges the view no longer returns, which is the worst
+/// direction to be stale in: the retained copy is the one still holding somebody
+/// else's topology. Each cached basis records both revisions and
+/// <see cref="GetBasis"/> recomputes when either diverges. Recomputation runs
+/// synchronously under a per-namespace lock — concurrent calls for the same namespace
+/// serialize, but different namespaces compute independently.
 /// </summary>
 public class MemoryDiffusionKernel
 {
@@ -76,19 +82,48 @@ public class MemoryDiffusionKernel
     private readonly KnowledgeGraph _graph;
     private readonly ILogger<MemoryDiffusionKernel>? _logger;
 
-    private readonly ConcurrentDictionary<string, DiffusionBasis> _cache = new();
+    /// <summary>
+    /// A cached basis together with the attribution revision it was computed under.
+    ///
+    /// Carried here rather than on <see cref="DiffusionBasis"/> because the basis's own
+    /// <see cref="DiffusionBasis.GraphRevision"/> answers only half the freshness question —
+    /// which edges existed — and the half it omits is the one an entry write can change
+    /// without touching the graph at all.
+    /// </summary>
+    private readonly record struct CachedBasis(DiffusionBasis Basis, long AttributionRevision);
+
+    private readonly ConcurrentDictionary<string, CachedBasis> _cache = new();
     private readonly ConcurrentDictionary<string, object> _nsLocks = new();
 
     /// <summary>
-    /// Negative cache: namespaces whose basis computation threw, keyed by the
-    /// <see cref="KnowledgeGraph.Revision"/> at failure time. The eigensolver RNG
-    /// is seeded from <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is
-    /// deterministic per (namespace, revision) — re-running the expensive
-    /// eigensolve before the graph changes would repay the full cost for a
-    /// guaranteed-identical failure. Instead <see cref="GetBasis"/> rethrows a
-    /// cheap exception until the revision moves, which re-arms exactly one retry.
+    /// Every partition that owns retractable kernel state. This registry deliberately sits beside
+    /// the state dictionaries instead of deriving its walk from any one of them: a partition can
+    /// hold a positive basis, a negative-cached failure, or only its per-namespace compute lock
+    /// after a legitimate too-small/sparse bypass. All three must eventually disappear when the
+    /// namespace does.
     /// </summary>
-    private readonly ConcurrentDictionary<string, (long Revision, string Message)> _failedRevisions = new();
+    private readonly ConcurrentDictionary<string, byte> _retractablePartitions = new();
+
+    /// <summary>
+    /// The rotation <see cref="ReconcileOneRetractablePartition"/> walks, one partition per
+    /// <see cref="GetBasis"/> call, and the gate that keeps two concurrent calls from stepping it at
+    /// once. Null between passes.
+    /// </summary>
+    private readonly object _reconcileGate = new();
+    private IEnumerator<KeyValuePair<string, byte>>? _reconcileWalk;
+
+    /// <summary>
+    /// Negative cache: namespaces whose basis computation threw, keyed by the graph AND attribution
+    /// revisions at failure time. The eigensolver RNG is seeded from
+    /// <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is deterministic per
+    /// (namespace, revision) — re-running the expensive eigensolve before the inputs change would
+    /// repay the full cost for a guaranteed-identical failure. Instead <see cref="GetBasis"/>
+    /// rethrows a cheap exception until one of the revisions moves, which re-arms exactly one
+    /// retry. Attribution is in the key for the same reason it is in the positive cache: a twin
+    /// insert changes which edges the computation is handed while leaving the graph revision — and
+    /// so the RNG seed and the determinism argument — exactly where they were.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, (long Revision, long AttributionRevision, string Message)> _failedRevisions = new();
 
     public MemoryDiffusionKernel(
         CognitiveIndex index,
@@ -102,29 +137,65 @@ public class MemoryDiffusionKernel
 
     /// <summary>
     /// Return the top-K diffusion basis for <paramref name="ns"/>, recomputing if
-    /// the cache is missing, stale (graph revision diverged), or has fewer
-    /// eigenpairs than requested. Returns <c>null</c> if the namespace is too
-    /// small or sparsely linked to qualify (see <see cref="MinimumNodesForSpectral"/>
-    /// and <see cref="MinimumEdgesForSpectral"/>) — callers should fall back to
-    /// non-spectral behavior in that case.
+    /// the cache is missing, stale (either the graph revision or the attribution
+    /// revision diverged), or has fewer eigenpairs than requested. Returns
+    /// <c>null</c> if the namespace is too small or sparsely linked to qualify (see
+    /// <see cref="MinimumNodesForSpectral"/> and <see cref="MinimumEdgesForSpectral"/>)
+    /// — callers should fall back to non-spectral behavior in that case.
+    ///
+    /// A namespace whose ids the tenant also holds elsewhere reaches that same
+    /// <c>null</c>, because none of its edges are attributable and the basis is built
+    /// from the attributable view alone. Deliberate, and deliberately spelled the same
+    /// way as too-small: a distinct answer would tell the caller that a twin exists in
+    /// a namespace it was never shown.
     ///
     /// Failure handling: if computation throws, the failure is negative-cached
-    /// per graph revision and cheaply rethrown until the graph changes, keeping
+    /// against both revisions and cheaply rethrown until one of them moves, keeping
     /// the failure visible to callers every cycle without repaying the
     /// eigensolve for a deterministic re-failure. Rethrowing (rather than
     /// returning <c>null</c>) is deliberate — <c>null</c> would be
     /// indistinguishable from a legitimate too-small-namespace bypass.
     /// </summary>
-    public DiffusionBasis? GetBasis(string ns, int topK = DefaultTopK, string tenantId = "")
+    public DiffusionBasis? GetBasis(string ns, string tenantId, int topK = DefaultTopK)
+        => GetCachedBasis(ns, tenantId, topK)?.Basis;
+
+    /// <summary>
+    /// <see cref="GetBasis"/> plus the attribution revision the returned basis was computed under,
+    /// which only <see cref="GetStats"/> needs — a caller cannot recover it from
+    /// <see cref="DiffusionBasis"/>, which records the graph revision alone.
+    /// </summary>
+    private CachedBasis? GetCachedBasis(string ns, string tenantId, int topK)
     {
+        // NORMALIZED ONCE, HERE, and every use below is of this value. The key was composed from
+        // the RAW argument while the two revision reads on the next lines normalized internally, so
+        // a padded tenant cached a basis under one key and compared it against another tenant's
+        // revisions — and Invalidate, which composed the key the same raw way, missed the copy the
+        // warmup service and the search path were actually reading. The warmup service reaches this
+        // through CognitiveIndex.GetAllTenants, which returns store tenants and is therefore always
+        // the canonical spelling; a principal-supplied tenant need not be.
+        tenantId = Tenancy.Normalize(tenantId);
+
         // Cache/lock/failure keys are the (tenant, ns) partition key so a tenant's basis never
         // collides with another's. For the legacy tenant "" the partition key is exactly ns, so
         // legacy cache keys are unchanged.
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
+
+        // Retraction first, and exactly one partition of it — see
+        // ReconcileOneRetractablePartition.
+        ReconcileOneRetractablePartition();
+
+        // Both revisions are read BEFORE the data they describe is snapshotted, and this ordering
+        // is load-bearing rather than incidental. A mutation landing between the read and the
+        // snapshot leaves a recorded revision that is already behind, so the next call recomputes —
+        // wasteful and safe. Reading them after the snapshot inverts that: the basis would record a
+        // revision that already covers a change it does not contain, and nothing would ever
+        // recompute it.
         long currentRev = _graph.RevisionFor(tenantId);
+        long currentAttribution = _index.AttributionRevisionFor(tenantId);
+
         if (_cache.TryGetValue(pk, out var cached)
-            && cached.GraphRevision == currentRev
-            && (cached.TopK >= topK || cached.TopK >= cached.NodeCount))
+            && IsFresh(cached, currentRev, currentAttribution)
+            && (cached.Basis.TopK >= topK || cached.Basis.TopK >= cached.Basis.NodeCount))
         {
             // Either the cache has enough modes for the request, or it already
             // has the maximum possible (TopK was clamped to NodeCount). Either
@@ -132,48 +203,84 @@ public class MemoryDiffusionKernel
             return cached;
         }
 
-        if (_failedRevisions.TryGetValue(pk, out var failed) && failed.Revision == currentRev)
+        if (IsCachedFailure(pk, currentRev, currentAttribution, out var failed))
             throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
         var nsLock = _nsLocks.GetOrAdd(pk, _ => new object());
+        _retractablePartitions[pk] = 0;
         lock (nsLock)
         {
             currentRev = _graph.RevisionFor(tenantId);
+            currentAttribution = _index.AttributionRevisionFor(tenantId);
             if (_cache.TryGetValue(pk, out cached)
-                && cached.GraphRevision == currentRev
-                && cached.TopK >= topK)
+                && IsFresh(cached, currentRev, currentAttribution)
+                && cached.Basis.TopK >= topK)
             {
                 return cached;
             }
 
-            if (_failedRevisions.TryGetValue(pk, out failed) && failed.Revision == currentRev)
+            if (IsCachedFailure(pk, currentRev, currentAttribution, out failed))
                 throw new InvalidOperationException(FailureMessage(ns, currentRev, failed.Message));
 
             DiffusionBasis? built;
             try
             {
-                built = ComputeBasis(ns, topK, currentRev, tenantId);
+                built = ComputeBasis(ns, topK, currentRev, tenantId: tenantId);
             }
             catch (Exception ex)
             {
-                _failedRevisions[pk] = (currentRev, ex.Message);
+                _failedRevisions[pk] = (currentRev, currentAttribution, ex.Message);
+                // A concurrent reconciliation may have retracted this partition while the
+                // eigensolve was in flight. Publish the registry marker AFTER the failure so the
+                // newly retained state cannot become unreachable from future rotations.
+                _retractablePartitions[pk] = 0;
                 _logger?.LogWarning(ex,
-                    "Diffusion basis computation failed for ns={Namespace} at revision {Revision}; caching failure until the graph changes.",
-                    ns, currentRev);
+                    "Diffusion basis computation failed for ns={Namespace} at graph revision {Revision} / attribution revision {AttributionRevision}; caching failure until one of them changes.",
+                    ns, currentRev, currentAttribution);
                 throw;
             }
 
             _failedRevisions.TryRemove(pk, out _);
             if (built is not null)
-                _cache[pk] = built;
-            else
-                _cache.TryRemove(pk, out _);
-            return built;
+            {
+                var entry = new CachedBasis(built, currentAttribution);
+                _cache[pk] = entry;
+                // See the failure path above: publication precedes registration so a racing
+                // retract cannot strand the large basis outside the bounded cleanup rotation.
+                _retractablePartitions[pk] = 0;
+                return entry;
+            }
+
+            _cache.TryRemove(pk, out _);
+            // Even a legitimate bypass retains the per-partition compute lock. Track that
+            // lock-only state so a churned namespace does not grow _nsLocks without bound.
+            _retractablePartitions[pk] = 0;
+            return null;
         }
     }
 
+    /// <summary>
+    /// A cached basis is usable only while BOTH of its inputs still hold: the same edges exist, and
+    /// the same ones are attributable. Either revision moving means the attributable edge view can
+    /// differ from the one the basis was built on, and a basis is not inspectable for which of its
+    /// edges came from where — so divergence is a rebuild, never a partial repair.
+    /// </summary>
+    private static bool IsFresh(CachedBasis cached, long graphRevision, long attributionRevision)
+        => cached.Basis.GraphRevision == graphRevision
+           && cached.AttributionRevision == attributionRevision;
+
+    private bool IsCachedFailure(
+        string pk, long graphRevision, long attributionRevision,
+        out (long Revision, long AttributionRevision, string Message) failed)
+        => _failedRevisions.TryGetValue(pk, out failed)
+           && failed.Revision == graphRevision
+           && failed.AttributionRevision == attributionRevision;
+
+    // "its inputs" rather than naming the attribution revision: this string reaches a principal, and
+    // the two revisions are now what re-arms a retry, so the wording has to cover both without
+    // introducing a term whose only meaning is "somebody else holds this id too".
     private static string FailureMessage(string ns, long rev, string inner) =>
-        $"Diffusion basis computation for namespace '{ns}' previously failed at graph revision {rev} and the graph has not changed since: {inner}";
+        $"Diffusion basis computation for namespace '{ns}' previously failed at graph revision {rev} and its inputs have not changed since: {inner}";
 
     /// <summary>
     /// Apply a per-mode spectral filter to a per-entry signal — the kernel's
@@ -192,9 +299,9 @@ public class MemoryDiffusionKernel
         string ns,
         IReadOnlyDictionary<string, float> signal,
         Func<float, float> modeFilter,
-        string tenantId = "")
+        string tenantId)
     {
-        var basis = GetBasis(ns, DefaultTopK, tenantId);
+        var basis = GetBasis(ns, tenantId: tenantId, topK: DefaultTopK);
         if (basis is null) return signal;
 
         int n = basis.NodeCount;
@@ -226,12 +333,29 @@ public class MemoryDiffusionKernel
         return result;
     }
 
-    /// <summary>Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.</summary>
-    public DiffusionStats? GetStats(string ns, string tenantId = "")
+    /// <summary>
+    /// Diagnostics view of the cached basis (or a freshly-computed one) for <paramref name="ns"/>.
+    ///
+    /// <c>Stale</c> reports the same predicate <see cref="GetBasis"/> acts on, and reporting only
+    /// the graph half of it would have been a lie of exactly the kind this round is about: a basis
+    /// left behind by a twin insert has an equal graph revision and is nonetheless unusable, so it
+    /// would have shown as fresh.
+    ///
+    /// The attribution revision itself stays OUT of the returned record, deliberately. This reply
+    /// reaches a principal, and a tenant-wide counter that ticks when someone mints a same-id twin
+    /// is an oracle for exactly the fact the guard exists to withhold. One boolean derived from it
+    /// is not: it moves for an ordinary edge write too.
+    /// </summary>
+    public DiffusionStats? GetStats(string ns, string tenantId)
     {
-        var basis = GetBasis(ns, DefaultTopK, tenantId);
-        if (basis is null) return null;
-        bool stale = basis.GraphRevision != _graph.RevisionFor(tenantId);
+        // Normalized here as well as inside GetCachedBasis: the freshness compare below reads the
+        // two revisions directly, and comparing a cached entry against another spelling's counters
+        // reports staleness that is an artefact of the key rather than of the data.
+        tenantId = Tenancy.Normalize(tenantId);
+
+        if (GetCachedBasis(ns, tenantId, DefaultTopK) is not { } cached) return null;
+        var basis = cached.Basis;
+        bool stale = !IsFresh(cached, _graph.RevisionFor(tenantId), _index.AttributionRevisionFor(tenantId));
         return new DiffusionStats(
             ns,
             basis.NodeCount,
@@ -244,12 +368,158 @@ public class MemoryDiffusionKernel
             stale);
     }
 
-    /// <summary>Drop the cached basis (and any negative-cached failure) for a namespace. Next <see cref="GetBasis"/> will recompute.</summary>
-    public void Invalidate(string ns, string tenantId = "")
+    /// <summary>
+    /// Drop the cached basis (and any negative-cached failure) for a namespace. Next
+    /// <see cref="GetBasis"/> will recompute.
+    ///
+    /// Normalizes the tenant, like every other entry point here: a forced invalidate composed from a
+    /// padded spelling silently addressed a different cache slot from the one the warmup service and
+    /// the search path read, so it appeared to work and cleared nothing.
+    /// </summary>
+    public void Invalidate(string ns, string tenantId)
     {
-        string pk = NamespaceStore.PartitionKey(tenantId, ns);
-        _cache.TryRemove(pk, out _);
-        _failedRevisions.TryRemove(pk, out _);
+        Retract(NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns));
+    }
+
+    /// <summary>
+    /// How many partitions the positive cache currently holds a basis for.
+    ///
+    /// The seam for the one property that is otherwise invisible: this dictionary must SHRINK when
+    /// the namespaces behind it go away. A retained entry is a <see cref="DiffusionBasis"/> of
+    /// NodeCount x TopK floats plus its eigenvalues — orders of magnitude larger than the int cursor
+    /// that motivated the equivalent retraction in <c>AutoLinkScanner</c> — and nothing about it is
+    /// visible in a result, in the graph or in a timing until the process is out of memory.
+    /// </summary>
+    internal int CachedPartitionCount => _cache.Count;
+
+    /// <summary>Test diagnostics for the two non-basis forms of retained state.</summary>
+    internal int FailedPartitionCount => _failedRevisions.Count;
+    internal int ComputeLockPartitionCount => _nsLocks.Count;
+    internal int RetractablePartitionCount => _retractablePartitions.Count;
+
+    /// <summary>
+    /// Forget everything keyed to one partition: the basis, the negative-cached failure, the
+    /// cleanup-registry marker, the basis, the negative-cached failure, and the per-partition
+    /// compute lock.
+    ///
+    /// The marker is removed FIRST and every producer publishes its marker AFTER its retained
+    /// state. Those opposite orderings guarantee that a cache/failure/lock which wins a race with
+    /// retraction cannot be left untracked: if the producer's state write lands after the matching
+    /// state removal, its later marker write necessarily lands after the earlier marker removal.
+    /// A marker with no remaining state is cheap and the next rotation removes it unconditionally.
+    ///
+    /// Dropping the lock is safe while another thread holds it. The lock exists only to keep two
+    /// callers from eigensolving the same partition at once; a thread that arrives after the removal
+    /// takes a fresh object and may compute concurrently with the holder, and both then write the
+    /// same cache slot with a basis computed from the same revisions. Wasted work, never a wrong
+    /// answer. Keeping the object instead would leave the one structure here that is never retracted.
+    /// </summary>
+    private void Retract(string partitionKey)
+    {
+        _retractablePartitions.TryRemove(partitionKey, out _);
+        _cache.TryRemove(partitionKey, out _);
+        _failedRevisions.TryRemove(partitionKey, out _);
+        _nsLocks.TryRemove(partitionKey, out _);
+    }
+
+    /// <summary>
+    /// Reconcile exactly ONE retractable partition against the store, and never more than one.
+    ///
+    /// THE RETRACTION. Nothing tells a DI singleton that a namespace was torn down.
+    /// <c>CognitiveIndex</c> raises no namespace-removal event — <c>EntryDeleted</c> fires per entry
+    /// and not at all from <c>DeleteAllInNamespace</c>, which is the path <c>purge_debates</c> takes
+    /// — and <see cref="Invalidate"/> is called from the diffusion tools and nowhere else, never
+    /// from any teardown path. So a namespace that qualified once, was warmed by
+    /// <c>DiffusionKernelWarmupService</c>, and was then deleted leaves its whole eigenbasis
+    /// resident: the doesn't-qualify branch in <see cref="GetCachedBasis"/> can never reach it,
+    /// because nothing ever asks for that partition's basis again. A host churning one debate
+    /// namespace per conversation accumulates one basis per debate, monotonically, in a process
+    /// designed to run for weeks.
+    ///
+    /// LOCK-ONLY STATE. A too-small or too-sparse namespace returns no basis and no failure, but it
+    /// still acquired a compute lock. Such a partition has no expensive state worth retaining and
+    /// is retracted on sight, even if its entry count is above the node threshold.
+    ///
+    /// THE COST BOUND, which is why this is a rotation rather than a sweep. The warmup service calls
+    /// <see cref="GetBasis"/> once per namespace per cycle, so anything done here that is linear in
+    /// the number of retained partitions is quadratic per cycle. One partition per call, round-robin,
+    /// gives "reconcile all retained state once per warmup cycle" without this type having to know what
+    /// a cycle is: there is at most one registry entry per (tenant, namespace), and a cycle steps the
+    /// rotation once per namespace. Per call it is one enumerator step and one partition count — no
+    /// listing, no allocation. This is the same shape, and the same argument, as
+    /// <c>AutoLinkScanner.ReconcileOneResumeCursor</c>.
+    ///
+    /// The probe is <c>CountInNamespace</c>, the same predicate <see cref="ComputeBasis"/> applies:
+    /// a partition below <see cref="MinimumNodesForSpectral"/> cannot produce a basis, so a cached
+    /// one for it is dead state whether the namespace was deleted or merely shrank. Over-removal is
+    /// harmless — the next request recomputes — which is what makes it safe to probe a key another
+    /// thread is currently computing for.
+    /// </summary>
+    private void ReconcileOneRetractablePartition()
+    {
+        if (!TryTakeNextRetractablePartition(out var pk, out var ns, out var tenant)) return;
+
+        // A marker with neither a basis nor a failure represents only a compute lock (or the
+        // harmless marker-only residue of a retraction race). Neither is worth retaining.
+        if (!_cache.ContainsKey(pk) && !_failedRevisions.ContainsKey(pk))
+        {
+            Retract(pk);
+            return;
+        }
+
+        if (_index.CountInNamespace(ns, tenant) < MinimumNodesForSpectral)
+            Retract(pk);
+    }
+
+    /// <summary>
+    /// The next partition of the rotation, resuming where the last call left it and starting a fresh
+    /// pass when it is exhausted.
+    ///
+    /// The enumerator is held across calls, which is the whole point: restarting it per call would
+    /// reconcile the first partition forever and never reach the rest.
+    /// <c>ConcurrentDictionary</c>'s enumerator is explicitly safe to hold while the dictionary is
+    /// mutated — it may miss a key added after it was taken and may surface one removed since — and
+    /// both are harmless: a missed key is reconciled next pass, and a stale key resolves to a
+    /// partition probe whose retraction is a no-op.
+    ///
+    /// The lock covers the enumerator step and nothing else. The partition probe takes a read lock
+    /// inside <c>CognitiveIndex</c> and is deliberately outside this gate, so the gate is never held
+    /// across another component's lock and cannot join a cycle.
+    /// </summary>
+    private bool TryTakeNextRetractablePartition(out string partitionKey, out string ns, out string tenant)
+    {
+        lock (_reconcileGate)
+        {
+            var walk = _reconcileWalk;
+            if (walk is null || !walk.MoveNext())
+            {
+                walk?.Dispose();
+                walk = ((IEnumerable<KeyValuePair<string, byte>>)_retractablePartitions).GetEnumerator();
+
+                if (!walk.MoveNext())
+                {
+                    // Nothing cached: drop the enumerator rather than keeping an exhausted one, so
+                    // the next call starts a pass that can see entries written since.
+                    walk.Dispose();
+                    _reconcileWalk = null;
+                    partitionKey = ns = tenant = string.Empty;
+                    return false;
+                }
+
+                _reconcileWalk = walk;
+            }
+
+            partitionKey = walk.Current.Key;
+        }
+
+        // Split back into its two components OUTSIDE the gate. The basis records the namespace it
+        // was built for, which is the half a probe needs, and the tenant is whatever precedes the
+        // separator — exactly how PartitionKey composed it, and unambiguous because
+        // ValidatePartitionComponent refuses a separator in either half.
+        int sep = partitionKey.IndexOf(Tenancy.PartitionSeparator);
+        tenant = sep < 0 ? string.Empty : partitionKey.Substring(0, sep);
+        ns = sep < 0 ? partitionKey : partitionKey.Substring(sep + 1);
+        return true;
     }
 
     // ── internals ─────────────────────────────────────────────────────────────
@@ -259,7 +529,7 @@ public class MemoryDiffusionKernel
     /// namespace doesn't qualify. Virtual purely as a test seam so fault-isolation
     /// tests can inject deterministic failures — not intended as an extension point.
     /// </summary>
-    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId = "")
+    protected virtual DiffusionBasis? ComputeBasis(string ns, int topK, long graphRevision, string tenantId)
     {
         var entries = _index.GetAllInNamespace(ns, tenantId);
         if (entries.Count < MinimumNodesForSpectral)
@@ -276,6 +546,23 @@ public class MemoryDiffusionKernel
 
         // Build symmetric sparse adjacency restricted to this namespace and positive relations.
         // First pass: collect candidate edge weights keyed by ordered (i,j) with i<j.
+        //
+        // The ATTRIBUTABLE view, and it must stay that way. A GraphEdge carries no namespace, so a
+        // stored edge between ids X and Y is only a claim about two BARE ids. If the tenant holds X
+        // in two namespaces, the edge is unattributable: an edge created between another
+        // principal's private twins is byte-identical to one created between the entries here, and
+        // nothing on it distinguishes them. The `indexOf` filter below does not close that — it
+        // proves only that entries bearing those ids exist in this namespace, which is a candidate
+        // interpretation of the ids, never proof of the edge's origin. Building the basis from
+        // unattributable edges therefore imports another principal's topology into this namespace's
+        // retrieval ranking, and it does so invisibly: the endpoints never surface, they just
+        // silently decide which of THIS namespace's entries get boosted together.
+        //
+        // ACCEPTED CONSEQUENCE, stated rather than hidden: a deployment that reuses ids across
+        // namespaces of one tenant loses its diffusion basis for the affected namespaces until
+        // endpoints become namespace-qualified (issue #19). That is the fail-CLOSED outcome and it
+        // is the correct one — the behaviour it replaces bought those namespaces a basis by
+        // disclosing topology across a boundary they were never shown.
         var allEdges = _graph.GetAllEdges(tenantId);
         var weights = new Dictionary<(int Lo, int Hi), float>();
         int edgeCount = 0;

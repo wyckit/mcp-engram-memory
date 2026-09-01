@@ -58,12 +58,12 @@ public class AccretionBackgroundServiceTests : IDisposable
         // the first scan well past a fixed 200 ms window, leaving pending empty and the
         // test falsely failing. The healthy path completes in tens of ms, so polling only
         // relaxes the false-negative bound, not the test's discriminative power.
-        var pending = _scanner.GetPendingCollapses("test");
+        var pending = _scanner.GetPendingCollapses("test", tenantId: "");
         var sw = Stopwatch.StartNew();
         while (pending.Count == 0 && sw.Elapsed < TimeSpan.FromSeconds(10))
         {
             await Task.Delay(25);
-            pending = _scanner.GetPendingCollapses("test");
+            pending = _scanner.GetPendingCollapses("test", tenantId: "");
         }
 
         cts.Cancel();

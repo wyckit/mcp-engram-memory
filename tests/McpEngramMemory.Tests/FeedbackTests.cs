@@ -34,7 +34,7 @@ public class FeedbackTests : IDisposable
         var entry = CreateEntry("e1");
         _index.Upsert(entry);
 
-        var result = _lifecycle.ApplyFeedback("e1", 2.0f);
+        var result = _lifecycle.ApplyFeedback("e1", 2.0f, ns: null, tenantId: "");
 
         Assert.NotNull(result);
         Assert.Equal("e1", result.Id);
@@ -48,7 +48,7 @@ public class FeedbackTests : IDisposable
         var entry = CreateEntry("e1");
         _index.Upsert(entry);
 
-        var result = _lifecycle.ApplyFeedback("e1", -3.0f);
+        var result = _lifecycle.ApplyFeedback("e1", -3.0f, ns: null, tenantId: "");
 
         Assert.NotNull(result);
         Assert.Equal(-3f, result.NewActivationEnergy);
@@ -57,7 +57,7 @@ public class FeedbackTests : IDisposable
     [Fact]
     public void ApplyFeedback_NonExistentId_ReturnsNull()
     {
-        Assert.Null(_lifecycle.ApplyFeedback("nonexistent", 1.0f));
+        Assert.Null(_lifecycle.ApplyFeedback("nonexistent", 1.0f, ns: null, tenantId: ""));
     }
 
     [Fact]
@@ -66,10 +66,10 @@ public class FeedbackTests : IDisposable
         var entry = CreateEntry("e1");
         _index.Upsert(entry);
 
-        var result = _lifecycle.ApplyFeedback("e1", 100f); // Should clamp to 10
+        var result = _lifecycle.ApplyFeedback("e1", 100f, ns: null, tenantId: ""); // Should clamp to 10
         Assert.Equal(10f, result!.NewActivationEnergy);
 
-        result = _lifecycle.ApplyFeedback("e1", -200f); // Should clamp to -10
+        result = _lifecycle.ApplyFeedback("e1", -200f, ns: null, tenantId: ""); // Should clamp to -10
         Assert.Equal(0f, result!.NewActivationEnergy); // 10 + (-10) = 0
     }
 
@@ -80,7 +80,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
         int initialAccess = entry.AccessCount;
 
-        _lifecycle.ApplyFeedback("e1", 1.0f);
+        _lifecycle.ApplyFeedback("e1", 1.0f, ns: null, tenantId: "");
 
         var updated = _index.Get("e1");
         Assert.True(updated!.AccessCount > initialAccess);
@@ -93,7 +93,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
         int initialAccess = entry.AccessCount;
 
-        _lifecycle.ApplyFeedback("e1", -1.0f);
+        _lifecycle.ApplyFeedback("e1", -1.0f, ns: null, tenantId: "");
 
         var updated = _index.Get("e1");
         Assert.Equal(initialAccess, updated!.AccessCount);
@@ -106,7 +106,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
 
         // Negative feedback below stmThreshold (default 2.0) should transition to LTM
-        var result = _lifecycle.ApplyFeedback("e1", -1.0f);
+        var result = _lifecycle.ApplyFeedback("e1", -1.0f, ns: null, tenantId: "");
 
         Assert.True(result!.StateChanged);
         Assert.Equal("stm", result.PreviousState);
@@ -120,7 +120,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
 
         // Push well below archiveThreshold (default -5.0)
-        var result = _lifecycle.ApplyFeedback("e1", -6.0f);
+        var result = _lifecycle.ApplyFeedback("e1", -6.0f, ns: null, tenantId: "");
 
         Assert.True(result!.StateChanged);
         Assert.Equal("ltm", result.PreviousState);
@@ -134,7 +134,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
 
         // Strong positive feedback should resurrect from archived
-        var result = _lifecycle.ApplyFeedback("e1", 5.0f);
+        var result = _lifecycle.ApplyFeedback("e1", 5.0f, ns: null, tenantId: "");
 
         Assert.True(result!.StateChanged);
         Assert.Equal("archived", result.PreviousState);
@@ -148,7 +148,7 @@ public class FeedbackTests : IDisposable
         _index.Upsert(entry);
 
         // Mild positive: energy 1.0 < stmThreshold 2.0 → LTM
-        var result = _lifecycle.ApplyFeedback("e1", 1.0f);
+        var result = _lifecycle.ApplyFeedback("e1", 1.0f, ns: null, tenantId: "");
 
         Assert.True(result!.StateChanged);
         Assert.Equal("archived", result.PreviousState);
@@ -161,9 +161,9 @@ public class FeedbackTests : IDisposable
         var entry = CreateEntry("e1");
         _index.Upsert(entry);
 
-        _lifecycle.ApplyFeedback("e1", 3.0f);
-        _lifecycle.ApplyFeedback("e1", 2.0f);
-        var result = _lifecycle.ApplyFeedback("e1", 1.0f);
+        _lifecycle.ApplyFeedback("e1", 3.0f, ns: null, tenantId: "");
+        _lifecycle.ApplyFeedback("e1", 2.0f, ns: null, tenantId: "");
+        var result = _lifecycle.ApplyFeedback("e1", 1.0f, ns: null, tenantId: "");
 
         Assert.Equal(6f, result!.NewActivationEnergy);
     }

@@ -29,7 +29,7 @@ public class ExpertDispatcherTests : IDisposable
         Assert.Equal("security_engineer", result.ExpertId);
         Assert.Equal("expert_security_engineer", result.TargetNamespace);
 
-        var entry = _index.Get("security_engineer", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("security_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("ltm", entry!.LifecycleState);
         Assert.True(entry.IsSummaryNode);
@@ -155,12 +155,12 @@ public class ExpertDispatcherTests : IDisposable
     {
         _dispatcher.CreateExpert("ml_engineer", "Machine learning and deep learning specialist.");
 
-        var before = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace);
+        var before = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         int initialCount = before!.AccessCount;
 
         _dispatcher.RecordDispatch("ml_engineer");
 
-        var after = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace);
+        var after = _index.Get("ml_engineer", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.Equal(initialCount + 1, after!.AccessCount);
     }
 
@@ -176,7 +176,7 @@ public class ExpertDispatcherTests : IDisposable
     {
         _dispatcher.CreateExpert("data_scientist", "A data scientist specializing in statistical modeling.");
 
-        var entry = _index.Get("data_scientist", ExpertDispatcher.SystemNamespace);
+        var entry = _index.Get("data_scientist", ExpertDispatcher.SystemNamespace, tenantId: "");
         Assert.NotNull(entry);
         Assert.Equal("expert_data_scientist", entry!.Metadata["targetNamespace"]);
     }
@@ -206,7 +206,13 @@ file sealed class InMemoryStorageProvider : IStorageProvider
     public List<SemanticCluster> LoadClusters() => new();
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider) { }
     public List<CollapseRecord> LoadCollapseHistory() => new();
-    public void ScheduleSaveCollapseHistory(Func<List<CollapseRecord>> dataProvider) { }
+    public bool UpsertCollapseRecordSync(CollapseRecord record) => true;
+    public bool DeleteCollapseRecordSync(string collapseId) => true;
+    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration) => CollapseRecordCas.Applied;
+    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration) => CollapseRecordCas.AlreadyAbsent;
+    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record) { record = null; return true; }
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records) { records = new(); return true; }
+    public bool TryFlush() => true;
     public Dictionary<string, DecayConfig> LoadDecayConfigs() => new();
     public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider) { }
     public bool SupportsIncrementalWrites => false;

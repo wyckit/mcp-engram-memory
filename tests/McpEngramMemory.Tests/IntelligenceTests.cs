@@ -41,7 +41,7 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void FindDuplicates_EmptyNamespace_ReturnsEmpty()
     {
-        var dups = _index.FindDuplicates("empty", 0.95f);
+        var dups = _index.FindDuplicates("empty", tenantId: "", threshold: 0.95f);
         Assert.Empty(dups);
     }
 
@@ -51,7 +51,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f, 0f }, "test", "hello"));
         _index.Upsert(new CognitiveEntry("b", new[] { 1f, 0f, 0f }, "test", "hello again"));
 
-        var dups = _index.FindDuplicates("test", 0.95f);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f);
         Assert.Single(dups);
         var ids = new HashSet<string> { dups[0].IdA, dups[0].IdB };
         Assert.Contains("a", ids);
@@ -65,7 +65,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f, 0f }, "test", "hello"));
         _index.Upsert(new CognitiveEntry("b", new[] { 0f, 1f, 0f }, "test", "world"));
 
-        var dups = _index.FindDuplicates("test", 0.95f);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f);
         Assert.Empty(dups);
     }
 
@@ -76,7 +76,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("b", new[] { 0.99f, 0.01f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("c", new[] { 0f, 1f, 0f }, "test")); // different
 
-        var dups = _index.FindDuplicates("test", 0.99f);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.99f);
         Assert.Single(dups);
         // Order of IdA/IdB depends on internal sorting; check either direction
         Assert.Contains(dups, d =>
@@ -89,10 +89,10 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f, 0f }, "test", category: "cat1"));
         _index.Upsert(new CognitiveEntry("b", new[] { 1f, 0f, 0f }, "test", category: "cat2")); // same vector, different category
 
-        var dups = _index.FindDuplicates("test", 0.95f, category: "cat1");
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f, category: "cat1");
         Assert.Empty(dups); // Only 1 entry matches cat1, so no pairs
 
-        var dupsAll = _index.FindDuplicates("test", 0.95f);
+        var dupsAll = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f);
         Assert.Single(dupsAll); // Without category filter, they're duplicates
     }
 
@@ -102,10 +102,10 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f, 0f }, "test", lifecycleState: "stm"));
         _index.Upsert(new CognitiveEntry("b", new[] { 1f, 0f, 0f }, "test", lifecycleState: "archived"));
 
-        var dups = _index.FindDuplicates("test", 0.95f); // default stm,ltm
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f); // default stm,ltm
         Assert.Empty(dups); // 'b' is archived, excluded
 
-        var dupsAll = _index.FindDuplicates("test", 0.95f, includeStates: new HashSet<string> { "stm", "ltm", "archived" });
+        var dupsAll = _index.FindDuplicates("test", tenantId: "", threshold: 0.95f, includeStates: new HashSet<string> { "stm", "ltm", "archived" });
         Assert.Single(dupsAll);
     }
 
@@ -116,7 +116,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("b", new[] { 0.99f, 0.01f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("c", new[] { 1f, 0f, 0f }, "test")); // identical to a
 
-        var dups = _index.FindDuplicates("test", 0.9f);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.9f);
         Assert.Equal(3, dups.Count); // a-b, a-c, b-c
         // First pair should be the highest similarity (1.0 for identical vectors)
         Assert.True(dups[0].Similarity >= dups[1].Similarity);
@@ -126,8 +126,8 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void FindDuplicates_InvalidThreshold_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => _index.FindDuplicates("test", 1.5f));
-        Assert.Throws<ArgumentOutOfRangeException>(() => _index.FindDuplicates("test", -0.1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _index.FindDuplicates("test", tenantId: "", threshold: 1.5f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _index.FindDuplicates("test", tenantId: "", threshold: -0.1f));
     }
 
     [Fact]
@@ -136,8 +136,8 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f, 0f }, "ns1"));
         _index.Upsert(new CognitiveEntry("b", new[] { 1f, 0f, 0f }, "ns2")); // same vector, different namespace
 
-        Assert.Empty(_index.FindDuplicates("ns1", 0.95f));
-        Assert.Empty(_index.FindDuplicates("ns2", 0.95f));
+        Assert.Empty(_index.FindDuplicates("ns1", tenantId: "", threshold: 0.95f));
+        Assert.Empty(_index.FindDuplicates("ns2", tenantId: "", threshold: 0.95f));
     }
 
     // ── Contradiction Surfacing: KnowledgeGraph.GetContradictions ──
@@ -146,7 +146,7 @@ public class IntelligenceTests : IDisposable
     public void GetContradictions_NoEdges_ReturnsEmpty()
     {
         _index.Upsert(new CognitiveEntry("a", new[] { 1f, 0f }, "test", "statement A"));
-        var contradictions = _graph.GetContradictions("test");
+        var contradictions = _graph.GetContradictions("test", tenantId: "");
         Assert.Empty(contradictions);
     }
 
@@ -158,7 +158,7 @@ public class IntelligenceTests : IDisposable
 
         _graph.AddEdge(new GraphEdge("a", "b", "contradicts", 0.9f));
 
-        var contradictions = _graph.GetContradictions("test");
+        var contradictions = _graph.GetContradictions("test", tenantId: "");
         Assert.Single(contradictions);
         Assert.Equal("a", contradictions[0].Edge.SourceId);
         Assert.Equal("b", contradictions[0].Edge.TargetId);
@@ -172,7 +172,7 @@ public class IntelligenceTests : IDisposable
 
         _graph.AddEdge(new GraphEdge("a", "b", "similar_to", 0.9f));
 
-        var contradictions = _graph.GetContradictions("test");
+        var contradictions = _graph.GetContradictions("test", tenantId: "");
         Assert.Empty(contradictions);
     }
 
@@ -184,12 +184,12 @@ public class IntelligenceTests : IDisposable
 
         _graph.AddEdge(new GraphEdge("a", "b", "contradicts"));
 
-        var ns1 = _graph.GetContradictions("ns1");
-        var ns2 = _graph.GetContradictions("ns2");
+        var ns1 = _graph.GetContradictions("ns1", tenantId: "");
+        var ns2 = _graph.GetContradictions("ns2", tenantId: "");
         Assert.Single(ns1); // source is in ns1
         Assert.Single(ns2); // target is in ns2
 
-        var ns3 = _graph.GetContradictions("ns3");
+        var ns3 = _graph.GetContradictions("ns3", tenantId: "");
         Assert.Empty(ns3);
     }
 
@@ -198,7 +198,7 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void UndoCollapse_NoRecord_ReturnsError()
     {
-        var result = _scanner.UndoCollapse("nonexistent", _lifecycle, _clusters);
+        var result = _scanner.UndoCollapse("nonexistent", _lifecycle, _clusters, tenantId: "");
         Assert.StartsWith("Error:", result);
     }
 
@@ -212,18 +212,18 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "memory four", lifecycleState: "ltm"));
 
         // Trigger scan to create pending collapse
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         Assert.True(scan.NewCollapses.Count > 0);
 
         var collapseId = scan.NewCollapses[0].CollapseId;
 
         // Execute the collapse
         var summaryVector = new[] { 0.99f, 0.01f, 0f };
-        var result = _scanner.ExecuteCollapse(collapseId, "Combined summary", summaryVector, _clusters, _lifecycle);
+        var result = _scanner.ExecuteCollapse(collapseId, "Combined summary", summaryVector, _clusters, tenantId: "");
         Assert.DoesNotContain("Error:", result);
 
         // Verify history was recorded
-        var history = _scanner.GetCollapseHistory("test");
+        var history = _scanner.GetCollapseHistory("test", tenantId: "");
         Assert.Single(history);
         Assert.Equal(collapseId, history[0].CollapseId);
         Assert.Contains("m1", history[0].MemberIds);
@@ -243,9 +243,9 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m3", new[] { 0.98f, 0.02f, 0f }, "test", "memory three", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "memory four", lifecycleState: "ltm"));
 
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Combined summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(collapseId, "Combined summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Verify members are archived after collapse
         Assert.Equal("archived", _index.Get("m1")!.LifecycleState);
@@ -254,7 +254,7 @@ public class IntelligenceTests : IDisposable
         Assert.Equal("archived", _index.Get("m4")!.LifecycleState);
 
         // Now undo the collapse
-        var undoResult = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        var undoResult = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
         Assert.DoesNotContain("Error:", undoResult);
 
         // Verify members are restored to LTM
@@ -272,16 +272,16 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m3", new[] { 0.98f, 0.02f, 0f }, "test", "mem3", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "mem4", lifecycleState: "ltm"));
 
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary text", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(collapseId, "Summary text", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Get summary entry ID from history
-        var record = _scanner.GetCollapseHistory("test")[0];
+        var record = _scanner.GetCollapseHistory("test", tenantId: "")[0];
         Assert.NotNull(_index.Get(record.SummaryEntryId));
 
         // Undo
-        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
 
         // Summary entry should be gone
         Assert.Null(_index.Get(record.SummaryEntryId));
@@ -295,15 +295,15 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m3", new[] { 0.98f, 0.02f, 0f }, "test", "mem3", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "mem4", lifecycleState: "ltm"));
 
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
-        Assert.Single(_scanner.GetCollapseHistory("test"));
+        Assert.Single(_scanner.GetCollapseHistory("test", tenantId: ""));
 
-        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
 
-        Assert.Empty(_scanner.GetCollapseHistory("test"));
+        Assert.Empty(_scanner.GetCollapseHistory("test", tenantId: ""));
     }
 
     [Fact]
@@ -314,21 +314,21 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m3", new[] { 0.98f, 0.02f, 0f }, "test", "mem3", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "mem4", lifecycleState: "ltm"));
 
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
-        var first = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        var first = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
         Assert.DoesNotContain("Error:", first);
 
-        var second = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        var second = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
         Assert.StartsWith("Error:", second);
     }
 
     [Fact]
     public void GetCollapseHistory_EmptyNamespace_ReturnsEmpty()
     {
-        var history = _scanner.GetCollapseHistory("nonexistent");
+        var history = _scanner.GetCollapseHistory("nonexistent", tenantId: "");
         Assert.Empty(history);
     }
 
@@ -341,12 +341,12 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("a3", new[] { 0.98f, 0.02f, 0f }, "ns1", "a3", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("a4", new[] { 0.97f, 0.03f, 0f }, "ns1", "a4", lifecycleState: "ltm"));
 
-        var scan = _scanner.ScanNamespace("ns1", epsilon: 0.15f, minPoints: 3);
+        var scan = _scanner.ScanNamespace("ns1", tenantId: "", epsilon: 0.15f, minPoints: 3);
         Assert.True(scan.NewCollapses.Count > 0);
-        _scanner.ExecuteCollapse(scan.NewCollapses[0].CollapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(scan.NewCollapses[0].CollapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
-        Assert.Single(_scanner.GetCollapseHistory("ns1"));
-        Assert.Empty(_scanner.GetCollapseHistory("ns2"));
+        Assert.Single(_scanner.GetCollapseHistory("ns1", tenantId: ""));
+        Assert.Empty(_scanner.GetCollapseHistory("ns2", tenantId: ""));
     }
 
     // ── Collapse records previous states correctly for mixed states ──
@@ -361,20 +361,20 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("m4", new[] { 0.97f, 0.03f, 0f }, "test", "mem4", lifecycleState: "ltm"));
 
         // Manually promote one to STM after scan detects it
-        var scan = _scanner.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
-        _lifecycle.PromoteMemory("m1", "stm"); // Change m1 back to STM
+        var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
+        _lifecycle.PromoteMemory("m1", "stm", ns: "", tenantId: ""); // Change m1 back to STM (legacy bare-id path, pinned explicitly)
 
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
-        var record = _scanner.GetCollapseHistory("test")[0];
+        var record = _scanner.GetCollapseHistory("test", tenantId: "")[0];
         Assert.Equal("stm", record.PreviousStates["m1"]);
         Assert.Equal("ltm", record.PreviousStates["m2"]);
         Assert.Equal("ltm", record.PreviousStates["m3"]);
         Assert.Equal("ltm", record.PreviousStates["m4"]);
 
         // Undo should restore mixed states
-        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters);
+        _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
         Assert.Equal("stm", _index.Get("m1")!.LifecycleState);
         Assert.Equal("ltm", _index.Get("m2")!.LifecycleState);
         Assert.Equal("ltm", _index.Get("m3")!.LifecycleState);
@@ -386,13 +386,14 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void SetDecayConfig_StoresAndRetrieves()
     {
-        var config = _lifecycle.SetDecayConfig("test", decayRate: 0.5f, stmThreshold: 5.0f);
+        var config = _lifecycle.SetDecayConfig("test", decayRate: 0.5f, reinforcementWeight: null,
+            stmThreshold: 5.0f, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
         Assert.Equal(0.5f, config.DecayRate);
         Assert.Equal(5.0f, config.StmThreshold);
         Assert.Equal(1.0f, config.ReinforcementWeight); // default
         Assert.Equal(-5.0f, config.ArchiveThreshold); // default
 
-        var retrieved = _lifecycle.GetDecayConfig("test");
+        var retrieved = _lifecycle.GetDecayConfig("test", tenantId: "");
         Assert.NotNull(retrieved);
         Assert.Equal(0.5f, retrieved!.DecayRate);
     }
@@ -400,10 +401,12 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void SetDecayConfig_PartialUpdate_PreservesOtherFields()
     {
-        _lifecycle.SetDecayConfig("test", decayRate: 0.5f, reinforcementWeight: 2.0f);
-        _lifecycle.SetDecayConfig("test", stmThreshold: 10.0f); // Only update threshold
+        _lifecycle.SetDecayConfig("test", decayRate: 0.5f, reinforcementWeight: 2.0f,
+            stmThreshold: null, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
+        _lifecycle.SetDecayConfig("test", decayRate: null, reinforcementWeight: null,
+            stmThreshold: 10.0f, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: ""); // Only update threshold
 
-        var config = _lifecycle.GetDecayConfig("test");
+        var config = _lifecycle.GetDecayConfig("test", tenantId: "");
         Assert.NotNull(config);
         Assert.Equal(0.5f, config!.DecayRate); // preserved
         Assert.Equal(2.0f, config.ReinforcementWeight); // preserved
@@ -413,14 +416,16 @@ public class IntelligenceTests : IDisposable
     [Fact]
     public void GetDecayConfig_Unconfigured_ReturnsNull()
     {
-        Assert.Null(_lifecycle.GetDecayConfig("nonexistent"));
+        Assert.Null(_lifecycle.GetDecayConfig("nonexistent", tenantId: ""));
     }
 
     [Fact]
     public void GetAllDecayConfigs_ReturnsAll()
     {
-        _lifecycle.SetDecayConfig("ns1", decayRate: 0.1f);
-        _lifecycle.SetDecayConfig("ns2", decayRate: 0.2f);
+        _lifecycle.SetDecayConfig("ns1", decayRate: 0.1f, reinforcementWeight: null,
+            stmThreshold: null, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
+        _lifecycle.SetDecayConfig("ns2", decayRate: 0.2f, reinforcementWeight: null,
+            stmThreshold: null, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
 
         var all = _lifecycle.GetAllDecayConfigs();
         Assert.Equal(2, all.Count);
@@ -430,12 +435,13 @@ public class IntelligenceTests : IDisposable
     public void RunDecayCycle_UseStoredConfig_AppliesStoredParameters()
     {
         // Configure a very aggressive decay that will archive immediately
-        _lifecycle.SetDecayConfig("test", decayRate: 1000f, archiveThreshold: 10000f, stmThreshold: 10000f);
+        _lifecycle.SetDecayConfig("test", decayRate: 1000f, reinforcementWeight: null,
+            stmThreshold: 10000f, archiveThreshold: 10000f, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
 
         _index.Upsert(new CognitiveEntry("x", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
 
         // Run with useStoredConfig — should use the aggressive decay
-        var result = _lifecycle.RunDecayCycle("test", useStoredConfig: true);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", useStoredConfig: true);
         Assert.Equal(1, result.StmToLtm); // STM should demote (activation energy way below 10000 threshold)
     }
 
@@ -446,7 +452,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("x", new[] { 1f, 0f }, "test", lifecycleState: "stm"));
 
         // Very permissive threshold — should NOT demote
-        var result = _lifecycle.RunDecayCycle("test", stmThreshold: -9999f, useStoredConfig: true);
+        var result = _lifecycle.RunDecayCycle("test", tenantId: "", stmThreshold: -9999f, useStoredConfig: true);
         Assert.Equal(0, result.StmToLtm);
     }
 
@@ -463,16 +469,16 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("p3", new[] { 0.98f, 0.02f, 0f }, "test", "p3", lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("p4", new[] { 0.97f, 0.03f, 0f }, "test", "p4", lifecycleState: "ltm"));
 
-        var scan = scannerWithPersistence.ScanNamespace("test", epsilon: 0.15f, minPoints: 3);
+        var scan = scannerWithPersistence.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        scannerWithPersistence.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle);
+        scannerWithPersistence.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Flush to disk
         _persistence.Flush();
 
         // Load in a new scanner instance
         var scanner2 = new AccretionScanner(_index, _persistence);
-        var history = scanner2.GetCollapseHistory("test");
+        var history = scanner2.GetCollapseHistory("test", tenantId: "");
         Assert.Single(history);
         Assert.Equal(collapseId, history[0].CollapseId);
     }
@@ -486,7 +492,7 @@ public class IntelligenceTests : IDisposable
         for (int i = 0; i < 5; i++)
             _index.Upsert(new CognitiveEntry($"dup{i}", new[] { 1f, 0f, 0f }, "test"));
 
-        var dups = _index.FindDuplicates("test", 0.9f, maxResults: 3);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.9f, maxResults: 3);
         Assert.Equal(3, dups.Count);
     }
 
@@ -548,7 +554,7 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(new CognitiveEntry("x2", new[] { 0.99f, 0.01f, 0f }, "test"));
         _index.Upsert(new CognitiveEntry("x3", new[] { 1f, 0f, 0f }, "test")); // identical to x1
 
-        var dups = _index.FindDuplicates("test", 0.9f);
+        var dups = _index.FindDuplicates("test", tenantId: "", threshold: 0.9f);
         Assert.True(dups.Count >= 2);
         for (int i = 1; i < dups.Count; i++)
             Assert.True(dups[i - 1].Similarity >= dups[i].Similarity);
@@ -560,12 +566,13 @@ public class IntelligenceTests : IDisposable
     public void DecayConfig_PersistsToDisk()
     {
         var engine1 = new LifecycleEngine(_index, _persistence);
-        engine1.SetDecayConfig("test", decayRate: 0.42f, stmThreshold: 7.0f);
+        engine1.SetDecayConfig("test", decayRate: 0.42f, reinforcementWeight: null,
+            stmThreshold: 7.0f, archiveThreshold: null, useSpectralDecay: null, subdiffusiveExponent: null, tenantId: "");
         _persistence.Flush();
 
         // New engine should load from disk
         var engine2 = new LifecycleEngine(_index, _persistence);
-        var config = engine2.GetDecayConfig("test");
+        var config = engine2.GetDecayConfig("test", tenantId: "");
         Assert.NotNull(config);
         Assert.Equal(0.42f, config!.DecayRate);
         Assert.Equal(7.0f, config.StmThreshold);
@@ -586,29 +593,29 @@ public class IntelligenceTests : IDisposable
         _graph.AddEdge(new GraphEdge("other", "dup", "depends_on"));
 
         // Create cluster with dup as member
-        _clusters.CreateCluster("c1", "test", new[] { "dup", "other" });
+        _clusters.CreateCluster("c1", "test", new[] { "dup", "other" }, label: null, tenantId: "");
 
         // Transfer edges
-        int edgesTransferred = _graph.TransferEdges("dup", "keep");
+        int edgesTransferred = _graph.TransferEdges("dup", "keep", tenantId: "");
         Assert.Equal(2, edgesTransferred);
 
         // Transfer cluster membership
-        int clustersTransferred = _clusters.TransferMembership("dup", "keep");
+        int clustersTransferred = _clusters.TransferMembership("dup", "keep", tenantId: "");
         Assert.Equal(1, clustersTransferred);
 
         // Archive dup
         _index.SetLifecycleState("dup", "archived");
 
         // Verify: keep now has the edges
-        var keepEdges = _graph.GetEdgesForEntry("keep");
+        var keepEdges = _graph.GetEdgesForEntry("keep", tenantId: "");
         Assert.True(keepEdges.Count >= 2);
 
         // Verify: keep is now in the cluster
-        var clusters = _clusters.GetClustersForEntry("keep");
+        var clusters = _clusters.GetClustersForEntry("keep", tenantId: "");
         Assert.Contains("c1", clusters);
 
         // Verify: dup is archived
-        var dupEntry = _index.Get("dup", "test");
+        var dupEntry = _index.Get("dup", "test", tenantId: "");
         Assert.Equal("archived", dupEntry!.LifecycleState);
     }
 
@@ -624,8 +631,8 @@ public class IntelligenceTests : IDisposable
         _index.Upsert(dupEntry);
 
         // Simulate merge: get entries, combine access counts, upsert updated
-        var keep = _index.Get("keep", "test")!;
-        var dup = _index.Get("dup", "test")!;
+        var keep = _index.Get("keep", "test", tenantId: "")!;
+        var dup = _index.Get("dup", "test", tenantId: "")!;
         var merged = new CognitiveEntry(
             keep.Id, keep.Vector, keep.Ns, keep.Text,
             keep.Category, keep.Metadata, keep.LifecycleState,
@@ -634,7 +641,7 @@ public class IntelligenceTests : IDisposable
             keep.ActivationEnergy, keep.IsSummaryNode, keep.SourceClusterId);
         _index.Upsert(merged);
 
-        var result = _index.Get("keep", "test");
+        var result = _index.Get("keep", "test", tenantId: "");
         Assert.Equal(8, result!.AccessCount);
     }
 }

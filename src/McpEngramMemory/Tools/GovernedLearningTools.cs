@@ -174,7 +174,7 @@ public sealed class GovernedLearningTools
         var versions = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var source in sources)
         {
-            var current = _index.Get(source.Entry.Id, source.Entry.Ns, _principal.TenantId);
+            var current = _index.Get(source.Entry.Id, source.Entry.Ns, tenantId: _principal.TenantId);
             versions[KnowledgeProposal.EvidenceKey(SourceOperation(source))] =
                 current is null ? "missing" : EntryHash(current);
         }
@@ -186,7 +186,7 @@ public sealed class GovernedLearningTools
         var result = new List<SourceSnapshot>();
         foreach (var id in ids.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal))
         {
-            var entry = _index.Get(id, ns, _principal.TenantId);
+            var entry = _index.Get(id, ns, tenantId: _principal.TenantId);
             if (entry is null || !_access.CanRead(entry.Ns))
                 return null;
             var hash = EntryHash(entry);
@@ -255,7 +255,7 @@ public sealed class GovernedLearningTools
             cancellationToken.ThrowIfCancellationRequested();
             bool stable = _sources.Count > 0 && _sources.All(source =>
             {
-                var current = _index.Get(source.Entry.Id, _namespace, _tenant);
+                var current = _index.Get(source.Entry.Id, _namespace, tenantId: _tenant);
                 return current is not null && EntryHash(current) == source.ContentHash;
             });
             IReadOnlyList<VerificationFinding> findings = stable

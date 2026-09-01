@@ -48,7 +48,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
             ("iso_3", 0.7f),
             ("c_2", 0.5f),
         };
-        var output = _reranker.Rerank(ns, input, SpectralRetrievalMode.None, topK: 3);
+        var output = _reranker.Rerank(ns, input, SpectralRetrievalMode.None, tenantId: "", topK: 3);
 
         Assert.Equal(3, output.Count);
         Assert.Equal("c_5", output[0].Id);
@@ -81,8 +81,8 @@ public class SpectralRetrievalRerankerTests : IDisposable
             ("c_0", 0.90f),
         };
 
-        var noneResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.None, topK: 5);
-        var broadResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, topK: 5);
+        var noneResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.None, tenantId: "", topK: 5);
+        var broadResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, tenantId: "", topK: 5);
 
         // Without spectral: isolated wins on raw score.
         Assert.Equal("iso_0", noneResult[0].Id);
@@ -124,7 +124,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
             ("iso_0", 0.85f),
         };
 
-        var specificResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, topK: 5);
+        var specificResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 5);
 
         // Specific mode subtracts the cluster mean, so c_0's score after
         // re-ranking reflects how much it stands out from its cluster (which
@@ -151,7 +151,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
             ("t_1", 0.9f),
             ("t_7", 0.7f),
         };
-        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, topK: 3);
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, tenantId: "", topK: 3);
 
         // Sorted descending by score; no spectral effect.
         Assert.Equal("t_1", result[0].Id);
@@ -166,7 +166,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
     public void EmptyInputReturnsEmpty()
     {
         var output = _reranker.Rerank("anywhere",
-            Array.Empty<(string, float)>(), SpectralRetrievalMode.Broad, topK: 5);
+            Array.Empty<(string, float)>(), SpectralRetrievalMode.Broad, tenantId: "", topK: 5);
         Assert.Empty(output);
     }
 
@@ -184,7 +184,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
         {
             ("c_0", 0.9f),
         };
-        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, topK: 3);
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, tenantId: "", topK: 3);
         Assert.True(result.Count <= 3);
     }
 

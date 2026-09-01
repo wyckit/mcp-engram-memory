@@ -61,10 +61,10 @@ public sealed class CoreMemoryTools
     // (cross_search), so share_namespace/unshare_namespace protected nothing.
 
     private bool CanRead(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
 
     private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", _principal.TenantId);
+        _registry.HasAccess(_principal.AgentId, ns, "write", tenantId: _principal.TenantId);
 
     /// <summary>
     /// Denial message for a read. Deliberately shaped like "not found" rather than "denied":
@@ -73,18 +73,9 @@ public sealed class CoreMemoryTools
     /// </summary>
     private static string ReadDenied(string ns) => $"No accessible memories in namespace '{ns}'.";
 
-    /// <summary>
-    /// Access check for an entry reached by id rather than by namespace. The graph and cluster
-    /// DTOs (<c>CognitiveEntryInfo</c>, <c>CognitiveSearchResult</c>) carry no namespace field,
-    /// which is very likely why expansion silently crossed namespaces for so long - the
-    /// namespace simply is not visible at the call site. Costs one index lookup per expanded
-    /// candidate, which is bounded by the result count.
-    /// </summary>
-    private bool CanReadEntryById(string entryId)
-    {
-        var entry = _index.GetForTenant(entryId, _principal.TenantId);
-        return entry is not null && CanRead(entry.Ns);
-    }
+    /// <summary>Resolution + authorization for an entry reached by bare id — see <see cref="EntryAccessResolver"/> for the semantics.</summary>
+    private bool CanReadEntryById(string entryId) =>
+        EntryAccessResolver.Resolve(_index, entryId, _principal.TenantId, CanRead) is not null;
 
     private static string WriteDenied(string ns) =>
         $"Error: namespace '{ns}' is owned by another agent. Ask its owner to share it with write access.";
@@ -266,13 +257,13 @@ public sealed class CoreMemoryTools
         }
         else if (hybrid && text is not null)
         {
-            results = _index.HybridSearch(resolved, text, ns, k, minScore, category, states, rerank,
-                tenantId: _principal.TenantId);
+            results = _index.HybridSearch(resolved, text, ns, tenantId: _principal.TenantId,
+                k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
         }
         else
         {
-            results = _index.Search(resolved, ns, k, minScore, category, states, summaryFirst,
-                tenantId: _principal.TenantId);
+            results = _index.Search(resolved, ns, tenantId: _principal.TenantId,
+                k: k, minScore: minScore, category: category, includeStates: states, summaryFirst: summaryFirst);
             if (rerank && text is not null && results.Count > 1)
                 results = _index.Rerank(text, results);
         }
@@ -287,13 +278,13 @@ public sealed class CoreMemoryTools
                 IReadOnlyList<CognitiveSearchResult> expandedResults;
                 if (hybrid)
                 {
-                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, k, minScore, category, states, rerank,
-                        tenantId: _principal.TenantId);
+                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, tenantId: _principal.TenantId,
+                        k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
                 }
                 else
                 {
-                    expandedResults = _index.Search(expandedVector, ns, k, minScore, category, states, summaryFirst,
-                        tenantId: _principal.TenantId);
+                    expandedResults = _index.Search(expandedVector, ns, tenantId: _principal.TenantId,
+                        k: k, minScore: minScore, category: category, includeStates: states, summaryFirst: summaryFirst);
                     if (rerank)
                         expandedResults = _index.Rerank(expandedText, expandedResults);
                 }
@@ -312,17 +303,42 @@ public sealed class CoreMemoryTools
 
         searchSw.Stop();
 
+        // Every hop below leaves the namespace this call was authorized for and re-enters the store
+        // by BARE id. Graph adjacency and cluster membership are keyed (tenant, id) with no
+        // namespace, so an id the tenant holds in two namespaces names ONE node shared by both
+        // entries: the seed is a result the caller may read, but the topology hanging off it
+        // belongs just as much to a twin they cannot see. Suppress expansion per SEED rather than
+        // per reply, so one ambiguous hit costs its own neighbors and nothing else.
+        //
+        // Built only when expansion was actually asked for: constructing the guard lists the
+        // tenant's namespaces, and a plain search must not pay for a guard it never consults.
+        // One sweep for the whole call — a per-id test re-lists (and so reloads) per seed.
+        //
+        // A failed provider listing degrades to "no expansion" rather than erroring the call:
+        // the base results above are already computed, and expansion skipped is exactly what
+        // expandGraph: false returns. Fail-closed for the expansion, not for the whole reply.
+        TopologyGuard.Sweep? topology = null;
+        if (expandGraph)
+        {
+            try { topology = BareIdTopology.ForSweep(_index, tenantId: _principal.TenantId); }
+            catch (NamespaceEnumerationException) { /* expansion skipped; base hits still returned */ }
+        }
+
         // Side effect: record access and trigger spreading activation for returned entries
         foreach (var result in results)
         {
+            // RecordAccess is namespace-qualified and lands on the entry that was actually
+            // returned, so it needs no topology guard.
             _index.RecordAccess(result.Id, ns, _principal.TenantId);
-            // Asynchronous spreading activation: propagate energy to graph neighbors and cluster peers
-            if (expandGraph)
+            // Asynchronous spreading activation: propagate energy to graph neighbors and cluster
+            // peers. It walks the same shared node, and it WRITES — an ambiguous seed would push
+            // activation energy into an invisible twin's neighbors.
+            if (topology is not null && topology.IsTopologySafe(result.Id))
                 _spreading.PropagateAccess(result.Id, ns, baseEnergy: 0.5f, tenantId: _principal.TenantId);
         }
 
         // Graph expansion: pull in neighbors of top results with edge-type-weighted scoring
-        if (expandGraph && results.Count > 0)
+        if (topology is not null && results.Count > 0)
         {
             var existingIds = results.Select(r => r.Id).ToHashSet();
             var graphExpanded = new List<CognitiveSearchResult>(results);
@@ -330,8 +346,12 @@ public sealed class CoreMemoryTools
 
             foreach (var result in results)
             {
+                // Fail closed on the seed: no attributable node, no expansion from it.
+                if (!topology.IsTopologySafe(result.Id)) continue;
+
                 // Graph neighbor expansion with edge-type-weighted scoring
-                var neighbors = _graph.GetNeighbors(result.Id, tenantId: _principal.TenantId);
+                var neighbors = _graph.GetNeighbors(result.Id, relation: null, direction: "both",
+                    tenantId: _principal.TenantId);
                 foreach (var neighbor in neighbors.Neighbors)
                 {
                     if (existingIds.Contains(neighbor.Entry.Id)) continue;
@@ -356,10 +376,10 @@ public sealed class CoreMemoryTools
                 }
 
                 // Cluster expansion: include cluster peers of top results
-                var clusterIds = _clusters.GetClustersForEntry(result.Id, _principal.TenantId);
+                var clusterIds = _clusters.GetClustersForEntry(result.Id, tenantId: _principal.TenantId);
                 foreach (var clusterId in clusterIds)
                 {
-                    var clusterInfo = _clusters.GetCluster(clusterId, _principal.TenantId);
+                    var clusterInfo = _clusters.GetCluster(clusterId, tenantId: _principal.TenantId);
                     if (clusterInfo is null) continue;
 
                     // Include cluster summary node at high priority
@@ -482,13 +502,44 @@ public sealed class CoreMemoryTools
         // re-decides whether to guard, which is exactly how the guard goes missing. Routing
         // through the shared helper makes the guarded form the only reachable one, so a later
         // edit here cannot quietly drop it.
+        // The witness is frozen as a NUMBER at resolution time: `existing` is the live map
+        // occupant, and reading its Revision property later would read whatever is current —
+        // exactly the retargeting the conditional delete exists to prevent.
+        long stagedRevision = existing.Revision;
+
+        // The occupancy baseline can only vouch for replacements AFTER its capture, and the
+        // resolution above happened before it — so the staging judgment is re-made on the
+        // baseline's side of the line: if the occupation already changed, nothing has been
+        // touched yet and the caller simply retries.
+        long occupancyBaseline = _index.OccupancyRevisionFor(existing.Ns, _principal.TenantId);
+        var restaged = _index.Get(id, existing.Ns, _principal.TenantId);
+        if (restaged is null || restaged.Revision != stagedRevision)
+            return $"Error: entry '{id}' changed while it was being deleted — nothing was deleted. Retry.";
+
+        // watchNs: the resolution above IS a staging judgment — the cascade must not apply it
+        // if the entry's partition changes underneath (a same-slot replacement moves no
+        // attribution revision, so only the occupancy watch can see it).
         var cascade = TopologyCascade.CascadeAll(
-            _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true);
+            _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true,
+            watchNs: existing.Ns, watchOccupancyBaseline: occupancyBaseline);
         int edgesRemoved = cascade.EdgesRemoved;
 
-        // Check the return value to avoid TOCTOU against a concurrent delete.
-        if (!_index.DeleteForTenant(id, _principal.TenantId))
-            return $"Entry '{id}' not found.";
+        // An unsettled cascade is not a safe skip: the cleanup was attempted and cannot be
+        // proven complete (graph removal may have landed while cluster removal silently
+        // refused). Deleting the entry now would strand whatever remains, attributed to an
+        // entry that no longer exists — so nothing is deleted and the caller retries. The
+        // retry re-runs the cascade, which is idempotent over what already came off.
+        if (cascade.IdsUnsettled > 0)
+            return $"Error: entry '{id}' was not deleted — its topology cleanup could not be verified because the tenant's attribution kept moving. Retry.";
+
+        // Delete exactly the OCCUPATION the CanWrite check above authorized — atomically, via
+        // the revision-conditional delete. The namespace qualification stops a concurrent move
+        // from landing the delete in a partition the ACL never covered; the revision pin stops
+        // a same-slot replacement (which CreatedAt could not witness) from being taken down in
+        // the staged entry's place. A refusal means the slot changed under this call, and
+        // nothing was deleted.
+        if (!_index.Delete(id, existing.Ns, _principal.TenantId, onlyIfRevision: stagedRevision))
+            return $"Error: entry '{id}' changed while it was being deleted — nothing was deleted. Retry.";
 
         return $"Deleted entry '{id}'. Removed {edgesRemoved} edge(s) and cleaned cluster memberships.";
     }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Lifecycle;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -51,7 +52,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             string? errorMessage = null;
             long totalEntriesProcessed = 0;
             var swTotal = Stopwatch.StartNew();
-            try { totalEntriesProcessed = ScanAllNamespaces(); }
+            try { totalEntriesProcessed = ScanAllNamespaces(stoppingToken, out errorMessage); }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 swTotal.Stop();
@@ -66,21 +67,62 @@ public sealed class AutoLinkBackgroundService : BackgroundService
         }
     }
 
-    private long ScanAllNamespaces()
+    // The token reaches the scanner rather than only gating the loop between namespaces: one
+    // namespace at the entry cap is a multi-second pairwise walk, and a shutdown that has to wait
+    // for it holds the whole host up. A cancelled scan writes what it had already ranked and leaves
+    // its resume cursor where it was, so nothing is skipped when the process comes back.
+    private long ScanAllNamespaces(CancellationToken cancellationToken, out string? partialFailure)
     {
         int totalCreated = 0;
         int scannedCount = 0;
         int skippedCount = 0;
+        int tenantsSkippedOnEnumeration = 0;
+        int namespacesFailedToScan = 0;
         long totalEntriesProcessed = 0;
 
         // Scan every tenant's namespaces (the legacy tenant "" is included when present).
         foreach (var tenant in _index.GetAllTenants())
-        foreach (var ns in _index.GetNamespaces(tenant))
         {
+            // The inner loop's break only escapes the inner loop; without this, a shutdown
+            // mid-sweep still walks every remaining tenant's enumeration before returning.
+            if (cancellationToken.IsCancellationRequested) break;
+
+            // Namespace enumeration fails closed, so one tenant's failing listing must be
+            // contained here — unguarded, a single NamespaceEnumerationException unwinds the
+            // whole sweep and starves auto-link for every tenant, every cycle. Accretion and
+            // diffusion warmup wrap this same call per tenant for the same reason.
+            IReadOnlyList<string> tenantNamespaces;
+            try { tenantNamespaces = _index.GetNamespaces(tenant); }
+            catch (Exception ex) when (ex is NamespaceEnumerationException or ArgumentException)
+            {
+                // ArgumentException: GetAllTenants() can surface a stored pre-validation
+                // tenant that the validating normalize inside GetNamespaces rejects — see
+                // LifecycleEngine.RunDecayCycle's guard; contained per tenant, same as there.
+                tenantsSkippedOnEnumeration++;
+                _logger?.LogWarning(ex, "Auto-link sweep could not enumerate namespaces for a tenant; skipping it this pass.");
+                continue;
+            }
+
+            foreach (var ns in tenantNamespaces)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+
             // Skip system namespaces (sharing registry, etc.).
             if (ns.StartsWith('_')) { skippedCount++; continue; }
 
-            var config = _lifecycle.GetDecayConfig(ns, tenant);
+            // Contained per NAMESPACE, like the scan itself below: a stored pre-validation
+            // namespace can carry a control character the config lookup's validating
+            // PartitionKey rejects, and an escaped ArgumentException here sits outside the
+            // per-namespace try — it would unwind the whole sweep and starve auto-link for
+            // every tenant and namespace ordered after the poisoned one, every cycle.
+            DecayConfig? config;
+            try { config = _lifecycle.GetDecayConfig(ns, tenantId: tenant); }
+            catch (ArgumentException ex)
+            {
+                namespacesFailedToScan++;
+                _logger?.LogWarning(ex, "Auto-link sweep skipped a namespace whose stored name fails partition validation.");
+                continue;
+            }
             // No stored config means defaults — auto-link is on by default.
             if (config is not null && !config.EnableAutoLink)
             {
@@ -94,7 +136,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = _scanner.Scan(ns, threshold, cap, tenantId: tenant);
+                var result = _scanner.Scan(ns, threshold, cap, tenantId: tenant, cancellationToken: cancellationToken);
                 sw.Stop();
                 scannedCount++;
                 totalCreated += result.EdgesCreated;
@@ -106,13 +148,32 @@ public sealed class AutoLinkBackgroundService : BackgroundService
             catch (Exception ex)
             {
                 sw.Stop();
+                namespacesFailedToScan++;
                 _logger?.LogWarning(ex, "Auto-link scan failed for ns={Namespace}; continuing.", ns);
             }
+        }
         }
 
         _logger?.LogInformation(
             "Auto-link sweep: {Total} new similar_to edges across {Scanned} namespaces ({Skipped} skipped).",
             totalCreated, scannedCount, skippedCount);
+
+        // A skipped tenant or a failed namespace scan is a PARTIAL pass, and the cycle record
+        // must say so: with a null error, engram_status shows a healthy completed sweep that
+        // silently covered nothing for the affected partitions, every cycle, for as long as the
+        // failure persists.
+        var failures = new List<string>(3);
+        if (tenantsSkippedOnEnumeration > 0)
+            failures.Add($"namespace enumeration failed for {tenantsSkippedOnEnumeration} tenant(s)");
+        if (namespacesFailedToScan > 0)
+            failures.Add($"the scan failed for {namespacesFailedToScan} namespace(s)");
+        // A cancelled sweep exited its loops early; recording it with a null error would show a
+        // healthy completed cycle that silently skipped every remaining partition.
+        if (cancellationToken.IsCancellationRequested)
+            failures.Add("the sweep was cancelled before completion");
+        partialFailure = failures.Count > 0
+            ? $"Partial pass: {string.Join(" and ", failures)}; the affected partitions were skipped."
+            : null;
 
         return totalEntriesProcessed;
     }

@@ -89,7 +89,7 @@ public class CognitiveIndexTests : IDisposable
     public void Search_ExactMatch_ReturnsScoreOfOne()
     {
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f, 0f }));
-        var results = _index.Search(new float[] { 1f, 0f, 0f }, "test", k: 1);
+        var results = _index.Search(new float[] { 1f, 0f, 0f }, "test", tenantId: "", k: 1);
         Assert.Single(results);
         Assert.Equal("a", results[0].Id);
         Assert.Equal(1f, results[0].Score, precision: 5);
@@ -102,7 +102,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("medium", new[] { 0.5f, 0.5f }));
         _index.Upsert(MakeEntry("far", new[] { 0f, 1f }));
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test", k: 2);
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", k: 2);
         Assert.Equal(2, results.Count);
         Assert.Equal("close", results[0].Id);
     }
@@ -113,7 +113,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }));
         _index.Upsert(MakeEntry("b", new[] { 0f, 1f }));
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test", k: 10, minScore: 0.99f);
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", k: 10, minScore: 0.99f);
         Assert.Single(results);
         Assert.Equal("a", results[0].Id);
     }
@@ -121,7 +121,7 @@ public class CognitiveIndexTests : IDisposable
     [Fact]
     public void Search_EmptyIndex_ReturnsEmpty()
     {
-        var results = _index.Search(new float[] { 1f, 0f }, "test");
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "");
         Assert.Empty(results);
     }
 
@@ -129,19 +129,19 @@ public class CognitiveIndexTests : IDisposable
     public void Search_ZeroQueryVector_Throws()
     {
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }));
-        Assert.Throws<ArgumentException>(() => _index.Search(new float[] { 0f, 0f }, "test"));
+        Assert.Throws<ArgumentException>(() => _index.Search(new float[] { 0f, 0f }, "test", tenantId: ""));
     }
 
     [Fact]
     public void Search_NegativeK_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => _index.Search(new float[] { 1f, 0f }, "test", k: -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", k: -1));
     }
 
     [Fact]
     public void Search_ZeroK_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => _index.Search(new float[] { 1f, 0f }, "test", k: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", k: 0));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f, 0f })); // 3-dim
         _index.Upsert(MakeEntry("b", new[] { 1f, 0f }));     // 2-dim
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test");
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "");
         Assert.Single(results);
         Assert.Equal("b", results[0].Id);
     }
@@ -162,7 +162,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("mid", new[] { 0.7071f, 0.7071f }));
         _index.Upsert(MakeEntry("high", new[] { 1f, 0f }));
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test", k: 3);
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", k: 3);
         Assert.Equal("high", results[0].Id);
         Assert.Equal("mid", results[1].Id);
         Assert.Equal("low", results[2].Id);
@@ -176,7 +176,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }, ns: "work"));
         _index.Upsert(MakeEntry("b", new[] { 1f, 0f }, ns: "personal"));
 
-        var workResults = _index.Search(new float[] { 1f, 0f }, "work");
+        var workResults = _index.Search(new float[] { 1f, 0f }, "work", tenantId: "");
         Assert.Single(workResults);
         Assert.Equal("a", workResults[0].Id);
     }
@@ -200,7 +200,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }, lifecycleState: "stm"));
         _index.Upsert(MakeEntry("b", new[] { 1f, 0f }, lifecycleState: "archived"));
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test");
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "");
         Assert.Single(results);
         Assert.Equal("a", results[0].Id);
     }
@@ -211,7 +211,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }, lifecycleState: "stm"));
         _index.Upsert(MakeEntry("b", new[] { 1f, 0.01f }, lifecycleState: "archived"));
 
-        var results = _index.SearchAllStates(new float[] { 1f, 0f }, "test", minScore: 0f);
+        var results = _index.SearchAllStates(new float[] { 1f, 0f }, "test", tenantId: "", minScore: 0f);
         Assert.Equal(2, results.Count);
     }
 
@@ -223,7 +223,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }, category: "meeting-notes"));
         _index.Upsert(MakeEntry("b", new[] { 1f, 0f }, category: "tasks"));
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test", category: "meeting-notes");
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", category: "meeting-notes");
         Assert.Single(results);
         Assert.Equal("a", results[0].Id);
     }
@@ -241,7 +241,7 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(regular);
         _index.Upsert(summary);
 
-        var results = _index.Search(new float[] { 1f, 0f }, "test", summaryFirst: true);
+        var results = _index.Search(new float[] { 1f, 0f }, "test", tenantId: "", summaryFirst: true);
         Assert.Equal("summary", results[0].Id);
     }
 
@@ -323,7 +323,7 @@ public class CognitiveIndexTests : IDisposable
         for (int i = 0; i < 100; i++)
         {
             tasks.Add(Task.Run(() =>
-                _index.Search(new float[] { 1f, 2f }, "test", k: 5)));
+                _index.Search(new float[] { 1f, 2f }, "test", tenantId: "", k: 5)));
         }
         await Task.WhenAll(tasks);
         Assert.Equal(100, _index.Count);
@@ -420,8 +420,8 @@ public class CognitiveIndexTests : IDisposable
         _index.Upsert(MakeEntry("a", new[] { 1f, 0f }, ns: "work", text: "work entry"));
         _index.Upsert(MakeEntry("a", new[] { 0f, 1f }, ns: "personal", text: "personal entry"));
 
-        var workEntry = _index.Get("a", "work");
-        var personalEntry = _index.Get("a", "personal");
+        var workEntry = _index.Get("a", "work", tenantId: "");
+        var personalEntry = _index.Get("a", "personal", tenantId: "");
 
         Assert.NotNull(workEntry);
         Assert.Equal("work entry", workEntry.Text);

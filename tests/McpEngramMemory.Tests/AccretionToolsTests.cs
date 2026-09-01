@@ -99,7 +99,7 @@ public class AccretionToolsTests : IDisposable
 
         // Summary entry should be searchable
         var searchResults = _index.Search(
-            new[] { 0.99f, 0.01f, 0f }, "test", k: 5,
+            new[] { 0.99f, 0.01f, 0f }, "test", tenantId: "", k: 5,
             includeStates: new HashSet<string> { "ltm" });
         Assert.Contains(searchResults, r => r.IsSummaryNode);
 

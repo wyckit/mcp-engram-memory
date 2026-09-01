@@ -29,18 +29,37 @@ public sealed class GraphTools
         _access = access;
     }
 
+    /// <summary>Reply for every refusal on this path. One string - and it is Core's string, so the
+    /// three refusal reasons (no such entry, not writable, id shared with an invisible twin) cannot
+    /// drift apart into an existence oracle even across the layer boundary.</summary>
+    private static string NotFound(string id) => TopologyGuard.Unattributable(id);
+
     /// <summary>
-    /// Access check for an edge endpoint reached by id. Graph edges carry no namespace of
-    /// their own, so the only way to know whether a caller may touch one is to resolve the
-    /// entry (within the caller's tenant) and check its namespace. Same reply shape as a genuine
-    /// miss - a distinct denial would confirm the id exists in a namespace the caller cannot see.
+    /// Access check for an edge endpoint reached by id. Two conditions, and they authorize
+    /// different objects, so both are required.
+    ///
+    /// Resolution authorizes the ENTRY: graph edges carry no namespace of their own, so the only
+    /// way to know whether a caller may touch one is to resolve the entry (within the caller's
+    /// tenant) and check its namespace. Core cannot do this one - it has no principal.
+    ///
+    /// The ambiguity test authorizes the NODE, which is not the same object. Adjacency is keyed
+    /// (tenant, id) with no namespace, so a caller who resolves to a twin they may write is still
+    /// about to mutate the node their twin shares with every other same-id entry in the tenant -
+    /// including ones in namespaces they cannot see. Resolution is ACL-filtered and cannot see
+    /// that twin, which is exactly why the second test has to be ACL-blind.
+    ///
+    /// <see cref="KnowledgeGraph"/> now enforces that second test itself, so it is kept here only
+    /// to SHAPE THE REPLY: without it the tool would hand back Core's refusal, and a caller
+    /// deserves the same not-found answer for all three reasons rather than a message that
+    /// happens to match today. Both tests refuse with that one reply - a distinct denial would
+    /// confirm the id exists in a namespace the caller cannot see.
     /// </summary>
-    private string? DenyIfCannotWrite(string id)
+    private string? DenyIfCannotWrite(string id, TopologyGuard.Sweep topology)
     {
-        var entry = _access.TenantId.Length == 0 ? _index.Get(id) : _index.GetForTenant(id, _access.TenantId);
-        if (entry is null || !_access.CanWrite(entry.Ns))
-            return $"Error: Entry '{id}' not found.";
-        return null;
+        if (!topology.IsTopologySafe(id))
+            return NotFound(id);
+
+        return _access.ResolveWritableEntry(_index, id) is null ? NotFound(id) : null;
     }
 
     [McpServerTool(Name = "link_memories", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -54,8 +73,13 @@ public sealed class GraphTools
     {
         try
         {
-            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata, _access.TenantId);
-            return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId) ?? _graph.AddEdge(edge);
+            var edge = new GraphEdge(sourceId, targetId, relation, weight, metadata, tenantId: _access.TenantId);
+            // One sweep for both endpoints: the per-id overload re-lists the tenant's namespaces
+            // and that listing reloads the store.
+            var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+            return DenyIfCannotWrite(sourceId, topology)
+                ?? DenyIfCannotWrite(targetId, topology)
+                ?? _graph.AddEdge(edge);
         }
         catch (ArgumentException ex)
         {
@@ -70,8 +94,9 @@ public sealed class GraphTools
         [Description("Edge destination entry ID.")] string targetId,
         [Description("Specific relation to remove (null = all).")] string? relation = null)
     {
-        return DenyIfCannotWrite(sourceId) ?? DenyIfCannotWrite(targetId)
-            ?? _graph.RemoveEdges(sourceId, targetId, relation, _access.TenantId);
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+        return DenyIfCannotWrite(sourceId, topology) ?? DenyIfCannotWrite(targetId, topology)
+            ?? _graph.RemoveEdges(sourceId, targetId, relation, tenantId: _access.TenantId);
     }
 
     [McpServerTool(Name = "get_neighbors", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -81,12 +106,32 @@ public sealed class GraphTools
         [Description("Filter by relation type.")] string? relation = null,
         [Description("Direction: 'outgoing', 'incoming', or 'both' (default).")] string direction = "both")
     {
-        var result = _graph.GetNeighbors(id, relation, direction, _access.TenantId);
+        // One sweep for the seed and every neighbor it returns.
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+
+        // The seed names a node, not an entry. When the tenant holds this id in two namespaces the
+        // node is shared with a twin the caller may not see, so its adjacency is not attributable
+        // to the entry the caller means - answer as a node with no neighbors, which is what a
+        // caller with no readable neighbors already sees.
+        if (!topology.IsTopologySafe(id))
+            return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
+
+        var result = _graph.GetNeighbors(id, relation, direction, tenantId: _access.TenantId);
 
         // Edges are tenant-scoped but span namespaces, so a neighbor can live in a namespace this
         // caller may not read. Filter, don't deny: the id the caller passed in is already known to
         // them, so only the resolved neighbors need to be hidden.
-        var visible = result.Neighbors.Where(n => _access.CanRead(n.Entry.Namespace)).ToList();
+        //
+        // The second test is the one a safe seed does not buy. A neighbor id the tenant holds
+        // twice resolves through the legacy id locator to whichever twin was written last - so a
+        // caller who creates a twin of an id that appears in someone else's edge gets that edge
+        // handed back attached to their own readable entry, relation, weight and metadata
+        // included. Filtering the neighbor rather than denying the seed keeps a caller's own
+        // adjacency intact while withholding the edge that is not attributable.
+        var visible = result.Neighbors
+            .Where(n => _access.CanRead(n.Entry.Namespace))
+            .Where(n => topology.IsTopologySafe(n.Entry.Id))
+            .ToList();
         return new GetNeighborsResult(result.Id, visible);
     }
 
@@ -99,13 +144,23 @@ public sealed class GraphTools
         [Description("Minimum edge weight (default: 0.0).")] float minWeight = 0f,
         [Description("Result limit (default: 20).")] int maxResults = 20)
     {
-        var result = _graph.Traverse(startId, maxDepth, relation, minWeight, maxResults, _access.TenantId);
+        // No topology guard here, and that is the fix rather than an omission. This tool used to
+        // guard the seed and then strip unsafe edges from the finished result, which is too late:
+        // by then the BFS had already crossed the shared node and discovered its descendants, so
+        // the twin and everything downstream of it stayed in Entries with only the edges removed.
+        // The predicate now runs INSIDE KnowledgeGraph.Traverse, before a target is resolved or
+        // enqueued, so a walk that reaches an unattributable node simply stops there and an
+        // ambiguous root returns this same empty result. Re-testing here would be a second copy of
+        // a predicate that could only ever agree or be wrong.
+        var result = _graph.Traverse(startId, tenantId: _access.TenantId, maxDepth: maxDepth, relation: relation, minWeight: minWeight, maxResults: maxResults);
 
-        // The start entry itself is included in Entries, so it must be filtered too -
-        // otherwise a caller could learn the text of an unreadable entry just by naming it
-        // as the traversal root. Drop any edge whose endpoint fell out of the visible set.
+        // What remains is the ACL filter, which Core cannot do because it has no principal. The
+        // start entry itself is included in Entries, so it must be filtered too - otherwise a
+        // caller could learn the text of an unreadable entry just by naming it as the traversal
+        // root. Drop any edge whose endpoint fell out of the visible set.
         var visibleEntries = result.Entries.Where(e => _access.CanRead(e.Namespace)).ToList();
         var visibleIds = visibleEntries.Select(e => e.Id).ToHashSet();
+
         var visibleEdges = result.Edges
             .Where(e => visibleIds.Contains(e.SourceId) && visibleIds.Contains(e.TargetId))
             .ToList();

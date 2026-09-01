@@ -31,9 +31,9 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void DefaultAgent_HasUnrestrictedAccess()
     {
-        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "any-namespace"));
-        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "private-ns", "write"));
-        Assert.False(_registry.HasAccess(AgentIdentity.DefaultAgentId, "private-ns", "read", "tenant-a"));
+        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "any-namespace", requiredLevel: "read", tenantId: ""));
+        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "private-ns", "write", tenantId: ""));
+        Assert.False(_registry.HasAccess(AgentIdentity.DefaultAgentId, "private-ns", "read", tenantId: "tenant-a"));
     }
 
     [Fact]
@@ -47,19 +47,19 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void NamespaceRegistry_QualifiesOwnershipAndSharingByTenant()
     {
-        _registry.EnsureOwnership("work", "owner-a", "tenant-a");
-        _registry.EnsureOwnership("work", "owner-b", "tenant-b");
-        _registry.Share("work", "owner-a", "reader", "read", "tenant-a");
+        _registry.EnsureOwnership("work", "owner-a", tenantId: "tenant-a");
+        _registry.EnsureOwnership("work", "owner-b", tenantId: "tenant-b");
+        _registry.Share("work", "owner-a", "reader", "read", tenantId: "tenant-a");
 
-        Assert.True(_registry.HasAccess("owner-a", "work", "write", "tenant-a"));
-        Assert.False(_registry.HasAccess("owner-b", "work", "write", "tenant-a"));
-        Assert.True(_registry.HasAccess("owner-b", "work", "write", "tenant-b"));
-        Assert.False(_registry.HasAccess("owner-a", "work", "write", "tenant-b"));
-        Assert.True(_registry.HasAccess("reader", "work", "read", "tenant-a"));
-        Assert.False(_registry.HasAccess("reader", "work", "read", "tenant-b"));
+        Assert.True(_registry.HasAccess("owner-a", "work", "write", tenantId: "tenant-a"));
+        Assert.False(_registry.HasAccess("owner-b", "work", "write", tenantId: "tenant-a"));
+        Assert.True(_registry.HasAccess("owner-b", "work", "write", tenantId: "tenant-b"));
+        Assert.False(_registry.HasAccess("owner-a", "work", "write", tenantId: "tenant-b"));
+        Assert.True(_registry.HasAccess("reader", "work", "read", tenantId: "tenant-a"));
+        Assert.False(_registry.HasAccess("reader", "work", "read", tenantId: "tenant-b"));
 
-        var tenantA = _registry.GetAccessibleNamespaces("reader", "tenant-a");
-        var tenantB = _registry.GetAccessibleNamespaces("reader", "tenant-b");
+        var tenantA = _registry.GetAccessibleNamespaces("reader", tenantId: "tenant-a");
+        var tenantB = _registry.GetAccessibleNamespaces("reader", tenantId: "tenant-b");
         Assert.Single(tenantA.SharedNamespaces);
         Assert.Empty(tenantB.SharedNamespaces);
     }
@@ -67,41 +67,41 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void IdentifiedPrincipal_CanClaimOnlyEmptyUnregisteredNamespaceForWrite()
     {
-        Assert.False(_registry.HasAccess("agent-x", "unregistered-ns"));
-        Assert.True(_registry.HasAccess("agent-x", "unregistered-ns", "write"));
-        Assert.True(_registry.HasAccess("agent-x", "unregistered-ns", "read"));
-        Assert.False(_registry.HasAccess("agent-y", "unregistered-ns", "write"));
+        Assert.False(_registry.HasAccess("agent-x", "unregistered-ns", requiredLevel: "read", tenantId: ""));
+        Assert.True(_registry.HasAccess("agent-x", "unregistered-ns", "write", tenantId: ""));
+        Assert.True(_registry.HasAccess("agent-x", "unregistered-ns", "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("agent-y", "unregistered-ns", "write", tenantId: ""));
     }
 
     [Fact]
     public void SystemNamespaces_ArePrivateToInternalServices()
     {
-        Assert.False(_registry.HasAccess("any-agent", "_system_sharing"));
-        Assert.False(_registry.HasAccess("restricted-agent", "_system_internal"));
-        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "_system_sharing"));
+        Assert.False(_registry.HasAccess("any-agent", "_system_sharing", requiredLevel: "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("restricted-agent", "_system_internal", requiredLevel: "read", tenantId: ""));
+        Assert.True(_registry.HasAccess(AgentIdentity.DefaultAgentId, "_system_sharing", requiredLevel: "read", tenantId: ""));
     }
 
     [Fact]
     public void Share_GrantsReadAccess()
     {
-        _registry.EnsureOwnership("work", "agent-a");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
 
-        var result = _registry.Share("work", "agent-a", "agent-b", "read");
+        var result = _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
         Assert.Equal("shared", result.Status);
-        Assert.True(_registry.HasAccess("agent-b", "work", "read"));
-        Assert.False(_registry.HasAccess("agent-b", "work", "write"));
+        Assert.True(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("agent-b", "work", "write", tenantId: ""));
     }
 
     [Fact]
     public void Share_GrantsWriteAccess()
     {
-        _registry.EnsureOwnership("work", "agent-a");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
 
-        _registry.Share("work", "agent-a", "agent-b", "write");
+        _registry.Share("work", "agent-a", "agent-b", "write", tenantId: "");
 
-        Assert.True(_registry.HasAccess("agent-b", "work", "read"));
-        Assert.True(_registry.HasAccess("agent-b", "work", "write"));
+        Assert.True(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
+        Assert.True(_registry.HasAccess("agent-b", "work", "write", tenantId: ""));
     }
 
     [Fact]
@@ -110,26 +110,26 @@ public class MultiAgentTests : IDisposable
         // The default agent never claims ownership on write, so Share is the only place its
         // permission record can come into being. Without that, share_namespace is unusable on
         // every server started without AGENT_ID.
-        var result = _registry.Share("work", AgentIdentity.DefaultAgentId, "agent-b", "read");
+        var result = _registry.Share("work", AgentIdentity.DefaultAgentId, "agent-b", "read", tenantId: "");
 
         Assert.Equal("shared", result.Status);
-        Assert.True(_registry.HasAccess("agent-b", "work", "read"));
-        Assert.False(_registry.HasAccess("agent-b", "work", "write"));
+        Assert.True(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("agent-b", "work", "write", tenantId: ""));
 
-        var revoked = _registry.Unshare("work", AgentIdentity.DefaultAgentId, "agent-b");
+        var revoked = _registry.Unshare("work", AgentIdentity.DefaultAgentId, "agent-b", tenantId: "");
 
         Assert.Equal("unshared", revoked.Status);
-        Assert.False(_registry.HasAccess("agent-b", "work", "read"));
+        Assert.False(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
     }
 
     [Fact]
     public void Share_IdentifiedAgent_CannotTakeOverUnregisteredNamespace()
     {
-        var result = _registry.Share("work", "agent-a", "agent-b", "read");
+        var result = _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
         Assert.Equal("error_not_found", result.Status);
-        Assert.False(_registry.HasAccess("agent-b", "work", "read"));
-        Assert.False(_registry.HasAccess("agent-a", "work", "read"));
+        Assert.False(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
+        Assert.False(_registry.HasAccess("agent-a", "work", "read", tenantId: ""));
     }
 
     [Fact]
@@ -137,16 +137,16 @@ public class MultiAgentTests : IDisposable
     {
         // HasAccess refuses '_' namespaces ahead of any permission lookup, so a grant on one
         // would be inert. Fail loudly instead of reporting a share that grants nothing.
-        var result = _registry.Share("_system_sharing", AgentIdentity.DefaultAgentId, "agent-b", "read");
+        var result = _registry.Share("_system_sharing", AgentIdentity.DefaultAgentId, "agent-b", "read", tenantId: "");
 
         Assert.Equal("error_not_found", result.Status);
-        Assert.False(_registry.HasAccess("agent-b", "_system_sharing"));
+        Assert.False(_registry.HasAccess("agent-b", "_system_sharing", requiredLevel: "read", tenantId: ""));
     }
 
     [Fact]
     public void Share_RejectsInvalidAccessLevel()
     {
-        var result = _registry.Share("work", "agent-a", "agent-b", "admin");
+        var result = _registry.Share("work", "agent-a", "agent-b", "admin", tenantId: "");
 
         Assert.Equal("error", result.Status);
     }
@@ -155,10 +155,10 @@ public class MultiAgentTests : IDisposable
     public void Share_NonOwnerCannotShare()
     {
         // Explicitly register agent-a as owner first
-        _registry.EnsureOwnership("work", "agent-a");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
 
         // agent-b tries to share a namespace they don't own
-        var result = _registry.Share("work", "agent-b", "agent-c", "read");
+        var result = _registry.Share("work", "agent-b", "agent-c", "read", tenantId: "");
 
         Assert.Equal("error_not_owner", result.Status);
     }
@@ -166,22 +166,22 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void Unshare_RevokesAccess()
     {
-        _registry.EnsureOwnership("work", "agent-a");
-        _registry.Share("work", "agent-a", "agent-b", "read");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
+        _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
-        var result = _registry.Unshare("work", "agent-a", "agent-b");
+        var result = _registry.Unshare("work", "agent-a", "agent-b", tenantId: "");
 
         Assert.Equal("unshared", result.Status);
-        Assert.False(_registry.HasAccess("agent-b", "work"));
+        Assert.False(_registry.HasAccess("agent-b", "work", requiredLevel: "read", tenantId: ""));
     }
 
     [Fact]
     public void Unshare_NonOwnerCannotRevoke()
     {
-        _registry.EnsureOwnership("work", "agent-a");
-        _registry.Share("work", "agent-a", "agent-b", "read");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
+        _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
-        var result = _registry.Unshare("work", "agent-b", "agent-b");
+        var result = _registry.Unshare("work", "agent-b", "agent-b", tenantId: "");
 
         Assert.Equal("error_not_owner", result.Status);
     }
@@ -189,7 +189,7 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void Unshare_UnknownNamespace_ReturnsNotFound()
     {
-        var result = _registry.Unshare("nonexistent", "agent-a", "agent-b");
+        var result = _registry.Unshare("nonexistent", "agent-a", "agent-b", tenantId: "");
 
         Assert.Equal("error_not_found", result.Status);
     }
@@ -197,56 +197,56 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void Owner_AlwaysHasFullAccess()
     {
-        _registry.EnsureOwnership("private-ns", "agent-a");
+        _registry.EnsureOwnership("private-ns", "agent-a", tenantId: "");
 
-        Assert.True(_registry.HasAccess("agent-a", "private-ns", "read"));
-        Assert.True(_registry.HasAccess("agent-a", "private-ns", "write"));
+        Assert.True(_registry.HasAccess("agent-a", "private-ns", "read", tenantId: ""));
+        Assert.True(_registry.HasAccess("agent-a", "private-ns", "write", tenantId: ""));
     }
 
     [Fact]
     public void NonOwnerNonShared_HasNoAccess()
     {
-        _registry.EnsureOwnership("private-ns", "agent-a");
+        _registry.EnsureOwnership("private-ns", "agent-a", tenantId: "");
 
-        Assert.False(_registry.HasAccess("agent-c", "private-ns"));
+        Assert.False(_registry.HasAccess("agent-c", "private-ns", requiredLevel: "read", tenantId: ""));
     }
 
     [Fact]
     public void EnsureOwnership_DoesNotOverwriteExisting()
     {
-        _registry.EnsureOwnership("work", "agent-a");
-        _registry.Share("work", "agent-a", "agent-b", "read");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
+        _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
         // Second call should not overwrite
-        _registry.EnsureOwnership("work", "agent-x");
+        _registry.EnsureOwnership("work", "agent-x", tenantId: "");
 
         // agent-a is still owner, agent-b still has access
-        Assert.True(_registry.HasAccess("agent-a", "work", "write"));
-        Assert.True(_registry.HasAccess("agent-b", "work", "read"));
+        Assert.True(_registry.HasAccess("agent-a", "work", "write", tenantId: ""));
+        Assert.True(_registry.HasAccess("agent-b", "work", "read", tenantId: ""));
     }
 
     [Fact]
     public void Share_UpgradesAccessLevel()
     {
-        _registry.EnsureOwnership("work", "agent-a");
-        _registry.Share("work", "agent-a", "agent-b", "read");
+        _registry.EnsureOwnership("work", "agent-a", tenantId: "");
+        _registry.Share("work", "agent-a", "agent-b", "read", tenantId: "");
 
-        Assert.False(_registry.HasAccess("agent-b", "work", "write"));
+        Assert.False(_registry.HasAccess("agent-b", "work", "write", tenantId: ""));
 
-        _registry.Share("work", "agent-a", "agent-b", "write");
+        _registry.Share("work", "agent-a", "agent-b", "write", tenantId: "");
 
-        Assert.True(_registry.HasAccess("agent-b", "work", "write"));
+        Assert.True(_registry.HasAccess("agent-b", "work", "write", tenantId: ""));
     }
 
     [Fact]
     public void GetAccessibleNamespaces_ReturnsOwnedAndShared()
     {
-        _registry.EnsureOwnership("ns1", "agent-a");
-        _registry.EnsureOwnership("ns2", "agent-a");
-        _registry.EnsureOwnership("ns3", "agent-b");
-        _registry.Share("ns3", "agent-b", "agent-a", "read");
+        _registry.EnsureOwnership("ns1", "agent-a", tenantId: "");
+        _registry.EnsureOwnership("ns2", "agent-a", tenantId: "");
+        _registry.EnsureOwnership("ns3", "agent-b", tenantId: "");
+        _registry.Share("ns3", "agent-b", "agent-a", "read", tenantId: "");
 
-        var result = _registry.GetAccessibleNamespaces("agent-a");
+        var result = _registry.GetAccessibleNamespaces("agent-a", tenantId: "");
 
         Assert.Equal("agent-a", result.AgentId);
         Assert.Contains("ns1", result.OwnedNamespaces);
@@ -266,7 +266,7 @@ public class MultiAgentTests : IDisposable
         _index.Upsert(new CognitiveEntry("e1", vec, "ns1", text, lifecycleState: "ltm"));
         _index.Upsert(new CognitiveEntry("e2", vec, "ns2", text, lifecycleState: "ltm"));
 
-        var results = _index.SearchMultiple(vec, new[] { "ns1", "ns2" }, k: 10,
+        var results = _index.SearchMultiple(vec, new[] { "ns1", "ns2" }, queryText: null, tenantId: "", k: 10,
             includeStates: new HashSet<string> { "ltm" });
 
         Assert.Equal(2, results.Count);
@@ -284,7 +284,7 @@ public class MultiAgentTests : IDisposable
         _index.Upsert(new CognitiveEntry("e1", vec, "ns1", text, lifecycleState: "ltm"));
 
         var query = _embedding.Embed(text);
-        var results = _index.SearchMultiple(query, new[] { "ns2" }, k: 10,
+        var results = _index.SearchMultiple(query, new[] { "ns2" }, queryText: null, tenantId: "", k: 10,
             includeStates: new HashSet<string> { "ltm" });
 
         // Should not find anything since we only search ns2
@@ -296,7 +296,7 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void CrossSearch_FiltersInaccessibleNamespaces()
     {
-        _registry.EnsureOwnership("private", "agent-a");
+        _registry.EnsureOwnership("private", "agent-a", tenantId: "");
         var agent = new AgentIdentity("agent-b"); // agent-b has no access
 
         var text = "test entry";
@@ -312,8 +312,8 @@ public class MultiAgentTests : IDisposable
     [Fact]
     public void CrossSearch_AllowsAccessibleNamespaces()
     {
-        _registry.EnsureOwnership("shared", "agent-a");
-        _registry.Share("shared", "agent-a", "agent-b", "read");
+        _registry.EnsureOwnership("shared", "agent-a", tenantId: "");
+        _registry.Share("shared", "agent-a", "agent-b", "read", tenantId: "");
         var agent = new AgentIdentity("agent-b");
 
         var text = "shared knowledge about SIMD operations";
@@ -392,7 +392,7 @@ public class MultiAgentTests : IDisposable
     {
         var agent = new AgentIdentity("agent-a");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
-        _registry.EnsureOwnership("myns", "agent-a");
+        _registry.EnsureOwnership("myns", "agent-a", tenantId: "");
 
         var result = tools.ShareNamespace("myns", "agent-b", "write") as ShareResult;
 
@@ -408,7 +408,7 @@ public class MultiAgentTests : IDisposable
     {
         var agent = new AgentIdentity("agent-a");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
-        _registry.EnsureOwnership("myns", "agent-a");
+        _registry.EnsureOwnership("myns", "agent-a", tenantId: "");
 
         tools.ShareNamespace("myns", "agent-b", "read");
         var result = tools.UnshareNamespace("myns", "agent-b") as ShareResult;
@@ -421,11 +421,11 @@ public class MultiAgentTests : IDisposable
     public void ListShared_ReturnsOnlySharedByOthers()
     {
         // agent-b owns ns-shared and shares it with agent-a
-        _registry.EnsureOwnership("ns-shared", "agent-b");
-        _registry.Share("ns-shared", "agent-b", "agent-a", "read");
+        _registry.EnsureOwnership("ns-shared", "agent-b", tenantId: "");
+        _registry.Share("ns-shared", "agent-b", "agent-a", "read", tenantId: "");
 
         // agent-a also owns its own namespace (should NOT appear in list_shared)
-        _registry.EnsureOwnership("ns-own", "agent-a");
+        _registry.EnsureOwnership("ns-own", "agent-a", tenantId: "");
 
         var agent = new AgentIdentity("agent-a");
         var tools = new MultiAgentTools(_index, _embedding, _metrics, _registry, agent);
