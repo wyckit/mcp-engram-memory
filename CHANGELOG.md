@@ -2,7 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] (2.0.0)
+## [2.0.0] - 2026-09-01
+
+_Major release. Tenant scope stops being a defaulted argument and becomes a required one: 55 Core
+retrieval and scoping APIs now take `tenantId` with no default, placed so that pre-2.0 positional
+calls fail to compile rather than silently rebinding. Also lands revision-consistent topology reads,
+exact auto-link accounting, and fully retractable diffusion-kernel state._
+
+_Major rather than minor because `McpEngramMemory.Core` is a published assembly and this is a
+deliberate source- and binary-breaking change to it. **The MCP tool surface is unchanged** — tool
+names, arguments, and results are identical, there is no storage migration, and legacy empty-tenant
+deployments behave byte-for-byte as before. Full detail in
+[docs/release-notes-2.0.0.md](docs/release-notes-2.0.0.md)._
 
 ### Changed — BREAKING
 
@@ -87,6 +98,13 @@ All notable changes to this project will be documented in this file.
 - **The 2.0.0 package set is checked before merge.** CI packs and verifies Core, optional ONNX
   synthesis, and the global tool on pull requests; main-branch artifact upload remains gated to
   successful builds and tests.
+- **The global tool stopped shipping mobile native runtimes.** `TrimNonDesktopNativeRuntimes`
+  anchored `ios` and `android` directly against the path separator, but ONNX Runtime emits those as
+  `ios-arm64`, `iossimulator-x64`, `android-arm` and similar — never as bare directories — so only
+  the `maccatalyst-` and `browser-` alternatives, written with their suffix pattern, ever matched.
+  The target reported "excluded 6 native file(s)" and read as working while every mobile native
+  shipped. Each alternative now carries `[^/\\]*`; the count is 14 and the tool package drops from
+  89.3 MB to 79.7 MB. Desktop and server RIDs, including `linux-musl-*`, are unchanged.
 
 ## [1.6.0] - 2026-08-27
 

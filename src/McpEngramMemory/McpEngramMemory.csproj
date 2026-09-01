@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
+    <!-- Debugging Symbols — matched to the two library packages, so a stack trace out of
+         the shipped tool resolves to source the same way one out of Core does. -->
+    <DebugType>embedded</DebugType>
+    <EmbedAllSources>true</EmbedAllSources>
+
     <!-- dotnet global tool packaging -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>engram-memory</ToolCommandName>
@@ -24,7 +29,7 @@
     <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>2.0.0 is a breaking release for hosts embedding McpEngramMemory.Core: tenantId is now a required argument on 55 Core retrieval and scoping APIs. The MCP tool surface and on-disk data are unchanged. Release notes: https://github.com/wyckit/mcp-engram-memory/blob/main/docs/release-notes-2.0.0.md</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -45,11 +50,18 @@
     containers) and the minor architectures, which cost ~2 MB each.
 
     If ONNX Runtime ever gains a platform that belongs here, this list is the thing to update.
+
+    The trailing [^/\\]* on each alternative is load-bearing: these appear as RIDs with an
+    architecture suffix - ios-arm64, iossimulator-x64, android-arm, maccatalyst-x64,
+    browser-wasm - never as a bare "ios" or "android" directory. An earlier form of this
+    pattern anchored `ios` and `android` directly against the path separator, so it matched
+    neither and silently shipped every mobile native. The Message below reports the count;
+    if it drops back to single digits, this pattern has stopped matching again.
   -->
   <Target Name="TrimNonDesktopNativeRuntimes" AfterTargets="ComputeResolvedFilesToPublishList">
     <ItemGroup>
       <_NonDesktopRuntimeFiles Include="@(ResolvedFileToPublish)"
-                               Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\](ios|android|maccatalyst-[^/\\]+|browser[^/\\]*)[/\\]'))" />
+                               Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\](ios|android|maccatalyst|browser)[^/\\]*[/\\]'))" />
       <ResolvedFileToPublish Remove="@(_NonDesktopRuntimeFiles)" />
     </ItemGroup>
     <Message Importance="high"
