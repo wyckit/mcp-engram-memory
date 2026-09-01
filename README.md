@@ -69,7 +69,7 @@ The loop, end to end:
 Retrieval itself is a nine-stage pipeline — candidate generation, keyword rescue, fusion, diversity, and spectral re-ranking:
 
 <p align="center">
-  <img src="images/retrieval-pipeline.svg?v=1.2.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
+  <img src="images/retrieval-pipeline.svg?v=2.0.0" alt="9-stage retrieval pipeline including v0.9.0 spectral re-ranking" width="900"/>
 </p>
 
 ## See It in Action
