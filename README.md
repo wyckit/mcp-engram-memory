@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/banner.svg?v=1.5.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=2.0.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
@@ -7,18 +7,49 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
   <img src="https://img.shields.io/badge/tests-multi--target-brightgreen" alt="Tests: .NET 8, 9, and 10"/>
+  <img src="https://img.shields.io/badge/release-2.0-blueviolet" alt="Release: 2.0"/>
 </p>
 
-# The local-first cognitive memory kernel for AI agents
+# The governed, local-first cognitive memory kernel for AI agents
 
 **Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction detection, all running locally with zero external API.
 
+**2.0 makes the boundaries structural.** Isolation is no longer something you remember to pass: every Core retrieval and scoping API *requires* a tenant, the cognitive graph is partitioned end to end, and the governed Constitution filters every tool call. What used to be a convention you could silently forget is now a compile error.
+
+- **Isolated by Construction** — tenant partitioning runs through storage, graph, clusters, lifecycle, diffusion, synthesis, and visualization. Edges never cross tenants; cross-namespace association *within* a tenant is preserved.
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
 - **Contradiction Detection** — `find_contradictions` surfaces conflicting goals or architecture decisions on demand, so you can review and retire logic you've already reversed instead of letting the agent keep acting on it.
 - **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
 - **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
 
-→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md)
+→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md) · [What's new in 2.0](#whats-new-in-20)
+
+## What's New in 2.0
+
+2.0 is a **breaking release for hosts embedding `McpEngramMemory.Core`**. MCP clients and stdio
+deployments are unaffected — tool names, arguments, and on-disk data are unchanged, and legacy
+empty-tenant deployments still behave byte-for-byte as before.
+
+| Change | What it means |
+|--------|---------------|
+| **`tenantId` is required** on 55 Core retrieval/scoping APIs | The old `tenantId = ""` default wasn't a sentinel — `""` is the legacy partition, a real readable dataset, so a forgotten argument compiled clean and silently degraded to cross-tenant scope. It did, twice. The compiler now finds every omission. |
+| **Parameter placement is anti-rebinding** | `tenantId` only moved into slots previously held by an `int`/`float`/`bool`, so pre-2.0 positional calls fail to compile rather than binding a relation or query string into the tenant slot. |
+| **Topology reads are revision-consistent** | Graph and cluster projections publish only if the tenant's attribution revision held through the whole projection; continuous churn fails closed. |
+| **Auto-link accounting is exact** | Pair walks report completed comparison slots once per anchor, so cancellation no longer over- or under-states progress. |
+| **`AutoLinkResult` reshaped** | Four new trailing members; `PairsExamined` is now `long` and reports completed comparison slots. Use `PairSlotsPlanned` for the window budget, `PairsAboveThreshold` for the find count. |
+
+2.0 supersedes 1.6.0, which is where the underlying features landed: **full multi-tenant graph,
+clusters, lifecycle, diffusion, intelligence, synthesis and snapshots** (with no storage migration —
+tenant travels inside the existing JSON blobs), and the **governed cognitive constitution**
+(deterministic Root Constitution, audited pre/post MCP filter, versioned Knowledge, append-only
+Provenance, `promote_knowledge` on the full profile). 2.0 is what makes that boundary mandatory
+instead of optional.
+
+**Upgrading:** recompile, and at each error pass the tenant the call site already holds —
+`tenantId: myTenant`, or `tenantId: ""` where legacy scope is the deliberate meaning. Treat every
+`tenantId: ""` you add as a claim, not a fix. Full detail in the
+[2.0.0 release notes](docs/release-notes-2.0.0.md) and
+[Tenant Isolation Design](docs/tenant-isolation-design.md).
 
 ## How It Works
 
@@ -133,7 +164,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 1.5.0
+dotnet add package McpEngramMemory.Core --version 2.0.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -144,7 +175,9 @@ See [`examples/`](examples/) for ready-to-use config files.
 
 | Metric | Value |
 |--------|-------|
+| Version | 2.0.0 (breaking for Core library hosts; MCP surface unchanged) |
 | MCP tools | 63 (profiles: 17 / 39 / 63) |
+| Isolation | Tenant-partitioned across storage, graph, clusters, lifecycle, diffusion, synthesis, and snapshots |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
 | Embedding | bge-micro-v2 (384-dim, ONNX, MIT license, runs locally, concurrent inference) |
 | Best recall | **0.792** realworld dataset, **0.771** scale dataset (hybrid mode) |
@@ -198,7 +231,7 @@ SDK package version and negotiated MCP protocol revision are not the same thing.
 |-------|-----------|------------|
 | **Core** | Stable | Storage, Embeddings, Retrieval, Lifecycle, Graph |
 | **Advanced** | Stable | Clustering, Multi-Agent Sharing, Intelligence |
-| **Governed Core** | New | Constitution, Knowledge, Provenance, Learning, Planning, Semantic Assets |
+| **Governed Core** | Maturing | Constitution, Knowledge, Provenance, Learning, Planning, Semantic Assets |
 | **Orchestration** | Maturing | Expert Routing (HMoE), Debate, Benchmarks |
 
 ### Governed Core vs. MCP tools
@@ -218,11 +251,13 @@ Identity is also host-owned. `IPrincipalContext` carries tenant and principal cl
 server bootstraps it from `MEMORY_TENANT_ID` and `AGENT_ID`, which are process configuration rather
 than authentication. Empty tenant + default agent is explicit legacy-unisolated mode.
 
-Multi-tenancy is full. Memory CRUD and search — and now the cognitive graph, clusters, lifecycle,
-collapse history, diffusion/spectral retrieval, intelligence, maintenance, synthesis, and
-visualization — are all tenant-partitioned: a tenant sees and mutates only its own data, and graph
-edges never cross tenants (cross-namespace association within a tenant is preserved). Legacy
-empty-tenant deployments are byte-for-byte unchanged. See
+Multi-tenancy is complete and, as of 2.0, mandatory at the API boundary. Memory CRUD and search,
+the cognitive graph, clusters, lifecycle, collapse history, diffusion/spectral retrieval,
+intelligence, maintenance, synthesis, and visualization are all tenant-partitioned: a tenant sees
+and mutates only its own data, and graph edges never cross tenants (cross-namespace association
+within a tenant is preserved). Core APIs take `tenantId` as a required argument, so scope is a
+decision the compiler makes you state rather than a default you can forget. Legacy empty-tenant
+deployments are byte-for-byte unchanged. See
 [Cognitive Constitution and Governed Core](docs/cognitive-constitution.md) and [Security](SECURITY.md).
 
 ## AI Assistant Setup
@@ -274,7 +309,7 @@ own .NET applications.
 **Server (global tool)**
 
 ```bash
-dotnet tool install --global McpEngramMemory --version 1.5.0
+dotnet tool install --global McpEngramMemory --version 2.0.0
 engram-memory
 ```
 
@@ -282,10 +317,10 @@ engram-memory
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 1.5.0
+dotnet add package McpEngramMemory.Core --version 2.0.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 1.5.0 \
+dotnet add package McpEngramMemory.Core --version 2.0.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -296,7 +331,7 @@ dotnet add package McpEngramMemory.Core --version 1.5.0 \
 daemon, add the optional ONNX backend when embedding the library:
 
 ```bash
-dotnet add package McpEngramMemory.Synthesis.Onnx --version 1.5.0
+dotnet add package McpEngramMemory.Synthesis.Onnx --version 2.0.0
 ```
 
 ```csharp
@@ -321,13 +356,17 @@ var persistence = new PersistenceManager();
 var embedding = new OnnxEmbeddingService();
 var index = new CognitiveIndex(persistence);
 
+// "" is the legacy (single-tenant) partition. Pass a real tenant id to isolate.
+const string tenant = "";
+
 // Store
 var vector = embedding.Embed("The capital of France is Paris");
-var entry = new CognitiveEntry("fact-1", vector, "default", "The capital of France is Paris", "facts");
+var entry = new CognitiveEntry(
+    "fact-1", vector, "default", "The capital of France is Paris", "facts", tenantId: tenant);
 index.Upsert(entry);
 
-// Search
-var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
+// Search — tenantId is required as of 2.0
+var results = index.Search(embedding.Embed("French capital"), "default", tenant, k: 5);
 ```
 
 ## Documentation
@@ -347,6 +386,9 @@ var results = index.Search(embedding.Embed("French capital"), "default", k: 5);
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
 | [MRCR v2 Benchmark](docs/benchmarks-mrcr.md) | Long-context A/B (full context vs. hybrid retrieval) via Claude CLI subscription |
 | [Testing](docs/testing.md) | Test coverage breakdown and current CI coverage |
+| [2.0.0 Release Notes](docs/release-notes-2.0.0.md) | What changed in 2.0, why it is major, and how to migrate an embedding host |
+| [Tenant Isolation Design](docs/tenant-isolation-design.md) | Partitioning model, guarantees, and the 2.0 required-`tenantId` boundary |
+| [Changelog](CHANGELOG.md) | Full release history |
 
 ## Build & Test
 

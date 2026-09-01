@@ -23,7 +23,7 @@
     <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>2.0.0 is a breaking release for hosts embedding McpEngramMemory.Core: tenantId is now a required argument on 55 Core retrieval and scoping APIs. The MCP tool surface and on-disk data are unchanged. Release notes: https://github.com/wyckit/mcp-engram-memory/blob/main/docs/release-notes-2.0.0.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
@@ -48,11 +48,17 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="FastBertTokenizer" Version="1.0.28" />
-    <!-- Kept current with the optional ONNX Runtime GenAI backend so embedding and
-         synthesis use one compatible native runtime. -->
+    <!-- Embedding inference (bge-micro-v2). 1.29.0 is the current stable ONNX Runtime.
+
+         NOTE: this deliberately runs AHEAD of the optional synthesis backend.
+         Microsoft.ML.OnnxRuntimeGenAI 0.15.2 declares a dependency on ONNX Runtime 1.28.0,
+         so in a project that installs both, NuGet unifies the native runtime UP to the
+         1.29.0 pinned here. Core is installed on its own far more often than it is paired
+         with the GenAI backend, and holding Core back to 1.28.0 would deny every one of
+         those consumers ONNX Runtime's servicing fixes to keep an optional package's
+         declared minimum exact. McpEngramMemory.Synthesis.Onnx restates this pin explicitly
+         so the unified version is a stated decision rather than a silent resolution. -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
-    <!-- In-process SLM generation for SynthesisEngine (Qwen2.5-0.5B). CPU package; bring in
-         Microsoft.ML.OnnxRuntimeGenAI.Cuda / .DirectML at the app layer for GPU acceleration. -->
     <PackageReference Include="System.Numerics.Tensors" Version="10.0.11" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <!-- Keep the native SQLite bundle explicit so its security servicing cadence is not

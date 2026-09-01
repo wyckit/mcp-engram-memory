@@ -23,7 +23,7 @@
     <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>See https://github.com/wyckit/mcp-engram-memory/blob/main/CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>2.0.0 is a breaking release for hosts embedding McpEngramMemory.Core: tenantId is now a required argument on 55 Core retrieval and scoping APIs. The MCP tool surface and on-disk data are unchanged. Release notes: https://github.com/wyckit/mcp-engram-memory/blob/main/docs/release-notes-2.0.0.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
@@ -41,8 +41,19 @@
     <!-- The reason this package exists. ONNX Runtime GenAI ships native binaries for every
          RID (linux-x64/arm64, osx-x64/arm64, win-x64/arm64, iOS xcframeworks, Android aars),
          roughly 500 MB in total. Keeping it here rather than in Core means neither the
-         McpEngramMemory tool package nor a plain Core install pays that cost. -->
+         McpEngramMemory tool package nor a plain Core install pays that cost.
+
+         In-process SLM generation for SynthesisEngine (Qwen2.5-0.5B). This is the CPU
+         package; bring in Microsoft.ML.OnnxRuntimeGenAI.Cuda / .DirectML at the app layer
+         for GPU acceleration. -->
     <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.15.2" />
+
+    <!-- 0.15.2 declares ONNX Runtime >= 1.28.0; Core pins 1.29.0, so NuGet unifies the
+         native runtime up to 1.29.0 whether or not this line exists. It exists so the
+         version this package actually loads is visible here rather than inferred from a
+         transitive graph — if a future GenAI release needs an exact ORT, this is the line
+         that has to change, and it should change together with Core's pin. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
   </ItemGroup>
 
 </Project>
