@@ -139,7 +139,15 @@ public sealed class CompositeTools
         // that listing reloads the store, so guarding a result set id-by-id would cost one full
         // reload per candidate. Both endpoints are tested — an edge lands on two bare nodes, and
         // either of them may be shared with a twin this caller cannot see.
-        var topology = BareIdTopology.ForSweep(_index, _access.TenantId);
+        //
+        // The entry above is already durably stored, so a failed provider listing here must
+        // degrade to "no auto-linking" rather than erroring a write that happened — an error
+        // reply for a committed upsert makes the caller retry and duplicate the entry.
+        TopologyGuard.Sweep? topology = null;
+        try { topology = BareIdTopology.ForSweep(_index, _access.TenantId); }
+        catch (NamespaceEnumerationException) { actions.Add("auto-linking skipped (namespace listing unavailable)"); }
+        if (topology is not null)
+        {
         bool selfLinkable = topology.IsTopologySafe(id);
         foreach (var result in related)
         {
@@ -151,6 +159,7 @@ public sealed class CompositeTools
             var relation = result.Score >= 0.85f ? "similar_to" : "cross_reference";
             _graph.AddEdge(new GraphEdge(id, result.Id, relation, tenantId: _access.TenantId));
             links.Add($"{result.Id} ({relation}, {result.Score:F3})");
+        }
         }
 
         if (links.Count > 0)
@@ -353,6 +362,12 @@ public sealed class CompositeTools
         _access.ClaimOnWrite(ns);
         actions.Add("stored as ltm lesson");
 
+        // Steps 4 and 5 resolve bare ids and build a topology sweep, either of which can throw
+        // NamespaceEnumerationException when the provider's namespace listing fails. The
+        // reflection above is already durably stored, so linking must degrade rather than error
+        // the write that happened — an error reply here makes the caller retry and duplicate it.
+        try
+        {
         // 4. Auto-link to explicitly referenced memories. These ids come from the caller, not
         // from a search inside an already-authorized namespace, so each one is resolved and
         // authorized before an edge is drawn to it (see ResolveLinkTarget).
@@ -408,6 +423,11 @@ public sealed class CompositeTools
         }
         if (autoLinked > 0)
             actions.Add($"auto-linked to {autoLinked} related memor{(autoLinked == 1 ? "y" : "ies")}");
+        }
+        catch (NamespaceEnumerationException)
+        {
+            actions.Add("auto-linking skipped (namespace listing unavailable)");
+        }
 
         // 6. Search for past reflections to surface patterns
         var pastReflections = _index.Search(vector, ns, k: 3, minScore: 0.6f,

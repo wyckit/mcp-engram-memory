@@ -506,7 +506,13 @@ public sealed class HotPathAndSnapshotTests : IDisposable
         public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> p) => _inner.ScheduleSaveGlobalEdges(p);
         public List<SemanticCluster> LoadClusters() => _inner.LoadClusters();
         public List<CollapseRecord> LoadCollapseHistory() => _inner.LoadCollapseHistory();
-        public void ScheduleSaveCollapseHistory(Func<List<CollapseRecord>> p) => _inner.ScheduleSaveCollapseHistory(p);
+        public bool UpsertCollapseRecordSync(CollapseRecord record) => _inner.UpsertCollapseRecordSync(record);
+        public bool DeleteCollapseRecordSync(string collapseId) => _inner.DeleteCollapseRecordSync(collapseId);
+        public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration) => _inner.UpsertCollapseRecordSync(record, onlyIfGeneration);
+        public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration) => _inner.DeleteCollapseRecordSync(collapseId, onlyIfGeneration);
+        public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record) => _inner.TryReadCollapseRecord(collapseId, out record);
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records) => _inner.TryReadCollapseHistory(out records);
+        public bool TryFlush() => _inner.TryFlush();
         public Dictionary<string, DecayConfig> LoadDecayConfigs() => _inner.LoadDecayConfigs();
         public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> p) => _inner.ScheduleSaveDecayConfigs(p);
         public HnswSnapshot? LoadHnswSnapshot(string ns) => _inner.LoadHnswSnapshot(ns);

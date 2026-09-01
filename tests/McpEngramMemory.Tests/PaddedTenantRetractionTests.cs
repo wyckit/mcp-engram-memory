@@ -281,7 +281,13 @@ file sealed class DecayConfigCapturingStore : IStorageProvider
     public void ScheduleDeleteEntry(string ns, string entryId) => _inner.ScheduleDeleteEntry(ns, entryId);
     public void ScheduleDeleteEntry(string ns, string entryId, string tenantId) => _inner.ScheduleDeleteEntry(ns, entryId, tenantId);
     public List<CollapseRecord> LoadCollapseHistory() => _inner.LoadCollapseHistory();
-    public void ScheduleSaveCollapseHistory(Func<List<CollapseRecord>> dataProvider) => _inner.ScheduleSaveCollapseHistory(dataProvider);
+    public bool UpsertCollapseRecordSync(CollapseRecord record) => _inner.UpsertCollapseRecordSync(record);
+    public bool DeleteCollapseRecordSync(string collapseId) => _inner.DeleteCollapseRecordSync(collapseId);
+    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration) => _inner.UpsertCollapseRecordSync(record, onlyIfGeneration);
+    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration) => _inner.DeleteCollapseRecordSync(collapseId, onlyIfGeneration);
+    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record) => _inner.TryReadCollapseRecord(collapseId, out record);
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records) => _inner.TryReadCollapseHistory(out records);
+    public bool TryFlush() => _inner.TryFlush();
     public HnswSnapshot? LoadHnswSnapshot(string ns) => _inner.LoadHnswSnapshot(ns);
     public void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot) => _inner.SaveHnswSnapshotSync(ns, snapshot);
     public void DeleteHnswSnapshot(string ns) => _inner.DeleteHnswSnapshot(ns);

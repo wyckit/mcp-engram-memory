@@ -344,6 +344,75 @@ public class NamespaceCleanupTests : IDisposable
     }
 
     [Fact]
+    public void Delete_OnlyIfRevision_SkipsReplacedOccupation()
+    {
+        _index.Upsert(new CognitiveEntry("v", new[] { 1f, 0f }, "vers-ns", "first occupation"));
+        long staged = _index.Get("v", "vers-ns", tenantId: "")!.Revision;
+
+        // Same id, same namespace, new occupation — the exact replacement a staged snapshot
+        // must not be allowed to delete, even when CreatedAt would collide on a coarse clock.
+        _index.Upsert(new CognitiveEntry("v", new[] { 0f, 1f }, "vers-ns", "replacement"));
+
+        Assert.False(_index.Delete("v", "vers-ns", "", onlyIfRevision: staged));
+        Assert.Equal("replacement", _index.Get("v", "vers-ns", tenantId: "")!.Text);
+
+        long current = _index.Get("v", "vers-ns", tenantId: "")!.Revision;
+        Assert.NotEqual(staged, current);
+        Assert.True(_index.Delete("v", "vers-ns", "", onlyIfRevision: current));
+        Assert.Null(_index.Get("v", "vers-ns", tenantId: ""));
+    }
+
+    [Fact]
+    public void DeleteAllInNamespaceIfEmpty_RefusesWhenEntriesPresent()
+    {
+        _index.Upsert(new CognitiveEntry("keep", new[] { 1f, 0f }, "cond-ns", "still here"));
+
+        Assert.False(_index.DeleteAllInNamespaceIfEmpty("cond-ns", ""));
+        Assert.NotNull(_index.Get("keep", "cond-ns", tenantId: ""));
+
+        Assert.True(_index.Delete("keep", "cond-ns", ""));
+        Assert.True(_index.DeleteAllInNamespaceIfEmpty("cond-ns", ""));
+    }
+
+    [Fact]
+    public async Task PurgeDebates_DryRun_MatchesRealPurge_AcrossStaleTwinNamespaces()
+    {
+        const string debateNsOne = "active-debate-twin-one";
+        const string debateNsTwo = "active-debate-twin-two";
+        var registry = new NamespaceRegistry(_index, new CleanupStubEmbedding());
+        var stale = DateTimeOffset.UtcNow.AddHours(-48);
+
+        // The SAME id held by two stale namespaces of one pass, with an edge written while it
+        // was still unique. Interleaving deletion with cascading would un-ambiguate the id after
+        // the first namespace's entries go, so the second cascade of the REAL purge would remove
+        // the edge the dry run reported as skipped — every cascade must therefore judge the
+        // store as the pass found it, before any deletion.
+        SeedTenantEntry("twin", debateNsOne, "first copy", stale);
+        SeedTenantEntry("twin-anchor", LiveNs, "anchor");
+        _graph.AddEdge(new GraphEdge("twin", "twin-anchor", "similar_to", tenantId: PurgeTenant));
+        SeedTenantEntry("twin", debateNsTwo, "second copy", stale);
+
+        var dry = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNsOne, debateNsTwo).PurgeDebates(maxAgeHours: 24, dryRun: true));
+        var real = Assert.IsType<PurgeDebatesResult>(
+            await PurgeAdmin(registry, debateNsOne, debateNsTwo).PurgeDebates(maxAgeHours: 24, dryRun: false));
+
+        Assert.Equal(dry.TotalEdgesRemoved, real.TotalEdgesRemoved);
+        Assert.Equal(dry.TotalIdsSkippedAmbiguous, real.TotalIdsSkippedAmbiguous);
+        Assert.Equal(dry.TotalEntriesRemoved, real.TotalEntriesRemoved);
+        // Pin the shared figures: the id is ambiguous in BOTH cascades, so nothing is removed
+        // and each namespace reports its own skip. 1/1 here is what the interleaved order
+        // produced — the second cascade running after the first deletion saw a unique id.
+        Assert.Equal(0, real.TotalEdgesRemoved);
+        Assert.Equal(2, real.TotalIdsSkippedAmbiguous);
+
+        // The entries themselves still go (deletion is namespace-scoped); the edge dangles,
+        // which is the documented, tolerated residual for ambiguous ids.
+        Assert.Equal(0, _index.CountInNamespace(debateNsOne, PurgeTenant));
+        Assert.Equal(0, _index.CountInNamespace(debateNsTwo, PurgeTenant));
+    }
+
+    [Fact]
     public async Task PurgeDebates_UnambiguousId_StillCascades()
     {
         const string debateNs = "active-debate-unambiguous";

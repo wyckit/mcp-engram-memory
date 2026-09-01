@@ -391,4 +391,51 @@ public sealed class TopologyAccountingTests : IDisposable
         Assert.Single(_graph.GetStoredEdgesForEntry("twin", Tenant));
         AssertHalvesAgree();
     }
+
+    /// <summary>
+    /// A same-slot replacement DURING the sweep moves no attribution revision (no ambiguity
+    /// boundary is crossed), so only the occupancy watch can see it — and seeing it must ABORT
+    /// the id as unsettled rather than retry: a retry would re-run the primitives against the
+    /// replacement, sweeping topology this pass never staged or judged. The seam fires
+    /// immediately before the graph primitive pins the watched partition — the LAST instant a
+    /// replacement can land at all: once the pin holds the partition's read lock, a
+    /// replacement blocks until the sweep is over, so the check and the mutation are one atom.
+    /// The decisive assertion is the last one: the replacement's inherited topology SURVIVES,
+    /// where a compare-then-mutate design had already removed the edge by the time the
+    /// post-cascade bracket said "unsettled".
+    /// </summary>
+    [Fact]
+    public void CascadeAll_ReplacementDuringSweep_ReportsUnsettledAndDoesNotRetry()
+    {
+        Seed("swept", MainNs);
+        Seed("anchor", MainNs);
+        Link("swept", "anchor");
+
+        int seamFired = 0;
+        _graph.OnBeforeOccupancyPin = () =>
+        {
+            if (Interlocked.Increment(ref seamFired) == 1)
+            {
+                _graph.OnBeforeOccupancyPin = null;
+                _index.Upsert(new CognitiveEntry("swept", [0.5f, 0.5f], MainNs,
+                    "replacement occupation", tenantId: Tenant));
+            }
+        };
+
+        var outcome = TopologyCascade.CascadeAll(
+            _index, _graph, _clusters, new[] { "swept" }, Tenant, apply: true,
+            watchNs: MainNs);
+
+        Assert.True(seamFired >= 1, "the pre-pin seam never fired; the sweep removed nothing");
+        Assert.Equal(1, outcome.IdsUnsettled);
+        Assert.Equal(0, outcome.IdsSkippedAmbiguous);
+        Assert.Equal(0, outcome.EdgesRemoved);
+        // The replacement itself survives the aborted sweep...
+        Assert.Equal("replacement occupation",
+            _index.Get("swept", MainNs, tenantId: Tenant)!.Text);
+        // ...and so does the topology it inherited under the same id: the pin refused BEFORE
+        // anything came off, rather than reporting a loss that had already happened.
+        Assert.Single(_graph.GetStoredEdgesForEntry("swept", Tenant));
+        AssertHalvesAgree();
+    }
 }

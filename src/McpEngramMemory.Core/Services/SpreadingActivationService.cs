@@ -43,6 +43,10 @@ public sealed class SpreadingActivationService
     private readonly KnowledgeGraph _graph;
     private readonly ClusterManager _clusters;
 
+    // Fires between the attribution-revision baseline capture and the root admission check —
+    // see the comment at the call site for why that interval is the one worth pinning.
+    internal Action? OnBeforeRootGate;
+
     public SpreadingActivationService(CognitiveIndex index, KnowledgeGraph graph, ClusterManager clusters)
     {
         _index = index;
@@ -80,6 +84,34 @@ public sealed class SpreadingActivationService
         //
         // Reaching nothing is exactly what an entry with no topology already reports, so failing
         // closed is not a signal about what else exists.
+        // The gate below is a point check, and this walk WRITES: a twin planted after the check
+        // makes GetClustersForEntry answer for the shared bucket, so the boosts would land on a
+        // stranger's cluster peers. Holding the attribution fence across the walk is off the
+        // table — Phase 3 writes through CognitiveIndex, which nothing inside the fence may
+        // touch — so the walk is optimistic like the graph reads: bracket it with the tenant's
+        // attribution revision and discard the whole accumulation if any id crossed the
+        // ambiguity boundary. The baseline is captured BEFORE the admission decision, never
+        // after it: a twin landing between the gate and a later capture has already made the
+        // shared bucket look valid, and a baseline taken after that crossing would compare
+        // equal at the discard. Captured first, the crossing lands inside the bracket and the
+        // walk is thrown away. A discarded pre-warm costs nothing but warmth.
+        // Cold-load barrier, and its result is deliberately unused: probing the id can lazily
+        // materialize store partitions, and every crossing DISCOVERED during that load bumps the
+        // attribution revision exactly like a live one. Probed once before the baseline, the
+        // load-time bumps land before the bracket opens; captured first instead, a cold process
+        // would falsely discard its first walks for "churn" that was only its own loading. The
+        // real admission check below re-probes warm.
+        _ = TopologyGuard.IsSafe(_index, id, tenantId);
+
+        long attributionRevision = _index.AttributionRevisionFor(tenantId);
+
+        // Test seam, invoked between the baseline capture and the admission check. It exists to
+        // make the ORDERING above testable: a crossing planted here must be caught by the final
+        // discard, which is true only while the baseline is captured first. A regression that
+        // moves the capture below the gate makes the planted crossing part of the baseline, the
+        // discard compares equal, and the pinning test fails.
+        OnBeforeRootGate?.Invoke();
+
         if (!TopologyGuard.IsSafe(_index, id, tenantId))
             return new SpreadingResult(id, 0, 0, 0f);
 
@@ -88,6 +120,10 @@ public sealed class SpreadingActivationService
 
         // Phase 2: Cluster-based pre-warming
         PropagateCluster(id, baseEnergy, boosted, tenantId);
+
+        // The discard: everything above was accumulation, nothing was written yet.
+        if (_index.AttributionRevisionFor(tenantId) != attributionRevision)
+            return new SpreadingResult(id, boosted.Count, 0, 0f);
 
         // Phase 3: Apply all accumulated boosts, each in its own namespace
         var source = (Ns: ns, Id: id);

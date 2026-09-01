@@ -219,7 +219,7 @@ public class IntelligenceTests : IDisposable
 
         // Execute the collapse
         var summaryVector = new[] { 0.99f, 0.01f, 0f };
-        var result = _scanner.ExecuteCollapse(collapseId, "Combined summary", summaryVector, _clusters, _lifecycle, tenantId: "");
+        var result = _scanner.ExecuteCollapse(collapseId, "Combined summary", summaryVector, _clusters, tenantId: "");
         Assert.DoesNotContain("Error:", result);
 
         // Verify history was recorded
@@ -245,7 +245,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Combined summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(collapseId, "Combined summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Verify members are archived after collapse
         Assert.Equal("archived", _index.Get("m1")!.LifecycleState);
@@ -274,7 +274,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary text", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(collapseId, "Summary text", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Get summary entry ID from history
         var record = _scanner.GetCollapseHistory("test", tenantId: "")[0];
@@ -297,7 +297,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         Assert.Single(_scanner.GetCollapseHistory("test", tenantId: ""));
 
@@ -316,7 +316,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = _scanner.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         var first = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: "");
         Assert.DoesNotContain("Error:", first);
@@ -343,7 +343,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = _scanner.ScanNamespace("ns1", tenantId: "", epsilon: 0.15f, minPoints: 3);
         Assert.True(scan.NewCollapses.Count > 0);
-        _scanner.ExecuteCollapse(scan.NewCollapses[0].CollapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(scan.NewCollapses[0].CollapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         Assert.Single(_scanner.GetCollapseHistory("ns1", tenantId: ""));
         Assert.Empty(_scanner.GetCollapseHistory("ns2", tenantId: ""));
@@ -365,7 +365,7 @@ public class IntelligenceTests : IDisposable
         _lifecycle.PromoteMemory("m1", "stm", ns: "", tenantId: ""); // Change m1 back to STM (legacy bare-id path, pinned explicitly)
 
         var collapseId = scan.NewCollapses[0].CollapseId;
-        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        _scanner.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         var record = _scanner.GetCollapseHistory("test", tenantId: "")[0];
         Assert.Equal("stm", record.PreviousStates["m1"]);
@@ -471,7 +471,7 @@ public class IntelligenceTests : IDisposable
 
         var scan = scannerWithPersistence.ScanNamespace("test", tenantId: "", epsilon: 0.15f, minPoints: 3);
         var collapseId = scan.NewCollapses[0].CollapseId;
-        scannerWithPersistence.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, _lifecycle, tenantId: "");
+        scannerWithPersistence.ExecuteCollapse(collapseId, "Summary", new[] { 0.99f, 0.01f, 0f }, _clusters, tenantId: "");
 
         // Flush to disk
         _persistence.Flush();

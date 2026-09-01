@@ -15,6 +15,21 @@ public sealed class PendingCollapse
     public DateTimeOffset DetectedAt { get; }
     public bool Dismissed { get; set; }
 
+    /// <summary>
+    /// The cluster id the LATEST execution attempt minted (or reused) for this proposal — set
+    /// under the scanner's lock the moment the attempt fixes its identity, before any side
+    /// effect. In-memory only, like the proposal itself: after a crash the durable collapse
+    /// record carries the same id, and dismissal is refused while such a record exists. It
+    /// exists so a zero-admission attempt's empty cluster shell can be found by DISMISSAL
+    /// without deriving the id — cluster ids carry a per-incarnation nonce precisely so they
+    /// cannot be derived. Null until an execution attempt first runs.
+    /// </summary>
+    public string? ClusterId { get; set; }
+
+    /// <summary>The incarnation stamp minted with <see cref="ClusterId"/> — see
+    /// <see cref="CollapseRecord.ClusterStamp"/>. In-memory only, like the id.</summary>
+    public string? ClusterStamp { get; set; }
+
     public PendingCollapse(string collapseId, string ns, List<string> memberIds, float[] centroid, string? tenantId = null)
     {
         CollapseId = collapseId;

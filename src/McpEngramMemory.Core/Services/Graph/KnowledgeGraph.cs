@@ -1,7 +1,9 @@
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using McpEngramMemory.Core.Models;
+using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace McpEngramMemory.Core.Services.Graph;
 
@@ -74,7 +76,7 @@ public static class TopologyGuard
     /// single entry.
     ///
     /// For a site guarding ONE id. A site guarding many ids in one operation must use
-    /// <see cref="ForSweep"/> instead: this overload re-lists the tenant's namespaces per call and
+    /// <see cref="ForSweep(CognitiveIndex, string)"/> instead: this overload re-lists the tenant's namespaces per call and
     /// that listing reloads the store, which turns an expansion over a result set into one full
     /// store reload per seed.
     ///
@@ -105,7 +107,25 @@ public static class TopologyGuard
     /// </summary>
     public static Sweep ForSweep(CognitiveIndex index, string tenantId) => new(index, tenantId);
 
-    /// <summary>Per-operation topology guard — see <see cref="ForSweep"/>.</summary>
+    /// <summary>
+    /// As <see cref="ForSweep(CognitiveIndex, string)"/>, additionally watching one partition's
+    /// OCCUPANCY revision. A destructive sweep whose ids were staged from a snapshot passes the
+    /// partition they were staged FROM: a same-slot replacement there crosses no ambiguity
+    /// boundary — the attribution revision cannot see it — but it invalidates the staging. The
+    /// destructive mutators PIN the watched partition at the staged baseline for the whole
+    /// mutation (<see cref="Sweep.TryPinWatchedOccupancy"/>), so a replacement either refuses
+    /// the sweep before anything is removed or waits until it is over; the lock-free
+    /// <see cref="Sweep.WatchedOccupancyMoved"/> compare is the caller's post-mutation bracket.
+    ///
+    /// <paramref name="stagedOccupancy"/> is the occupancy revision the CALLER captured when it
+    /// staged its judgment — before listing the entries it judged, not when this sweep happens
+    /// to be built. A baseline taken at sweep construction would be blind to every replacement
+    /// between the staging and this call, which is most of the window.
+    /// </summary>
+    public static Sweep ForSweep(CognitiveIndex index, string tenantId, string watchNs, long stagedOccupancy)
+        => new(index, tenantId, watchNs, stagedOccupancy);
+
+    /// <summary>Per-operation topology guard — see <see cref="ForSweep(CognitiveIndex, string)"/>.</summary>
     public sealed class Sweep
     {
         private readonly CognitiveIndex _index;
@@ -146,11 +166,51 @@ public static class TopologyGuard
         /// </summary>
         public string TenantId => _tenantId;
 
-        internal Sweep(CognitiveIndex index, string tenantId)
+        private readonly string? _watchNs;
+        private readonly long? _stagedOccupancy;
+        private readonly long _watchedOccupancy;
+
+        /// <summary>
+        /// True when the watched partition's occupancy revision moved since the CALLER'S STAGED
+        /// BASELINE (falling back to this sweep's construction when none was passed) — some
+        /// entry there was written or removed, so a staging decision made from a snapshot of
+        /// that partition no longer describes its occupations. Lock-free, like
+        /// <see cref="AttributionRevision"/>'s compare. This is the POST-MUTATION bracket's
+        /// read; the pre-mutation validation is <see cref="TryPinWatchedOccupancy"/>, which
+        /// does not merely compare but excludes. Always false for a sweep built without a
+        /// watch.
+        /// </summary>
+        public bool WatchedOccupancyMoved()
+            => _watchNs is not null
+               && _index.OccupancyRevisionFor(_watchNs, _tenantId) != (_stagedOccupancy ?? _watchedOccupancy);
+
+        /// <summary>
+        /// Pin the watched partition at the staged baseline, or refuse. A non-null return
+        /// holds the watched partition's read lock: no entry there can be written or removed
+        /// until the pin is disposed, so a destructive mutation performed under it acts on
+        /// exactly the occupations the staging examined — the compare and the mutation are one
+        /// atom, where a bare <see cref="WatchedOccupancyMoved"/> compare left a window for a
+        /// replacement to land between the check and the removal, and the post-mutation
+        /// bracket could then only report the loss it failed to prevent. Null means the
+        /// partition already moved and the caller must refuse without mutating. A sweep with
+        /// no watch pins nothing and always succeeds.
+        ///
+        /// Acquire BEFORE the attribution fence and the graph/cluster write lock (the
+        /// partition-before-fence order every crossing upsert already uses), and call nothing
+        /// on <see cref="CognitiveIndex"/> for the watched partition while holding it.
+        /// </summary>
+        internal OccupancyPin? TryPinWatchedOccupancy()
+            => _watchNs is null
+                ? OccupancyPin.None
+                : _index.TryPinOccupancy(_watchNs, _tenantId, _stagedOccupancy ?? _watchedOccupancy);
+
+        internal Sweep(CognitiveIndex index, string tenantId, string? watchNs = null, long? stagedOccupancy = null)
         {
             ArgumentNullException.ThrowIfNull(index);
             _index = index;
             _tenantId = Tenancy.Normalize(tenantId);
+            _watchNs = watchNs;
+            _stagedOccupancy = stagedOccupancy;
 
             // THE ORDER OF THESE THREE LINES IS THE CONTRACT, in both directions.
             //
@@ -168,6 +228,9 @@ public static class TopologyGuard
             // this sweep could be wrong about is one the counter has already recorded.
             index.EnsureAllNamespacesLoaded();
             AttributionRevision = index.AttributionRevisionFor(_tenantId);
+            // Captured with the attribution revision, after the warm, for the same two-way
+            // ordering argument stated above.
+            _watchedOccupancy = watchNs is null ? 0 : index.OccupancyRevisionFor(watchNs, _tenantId);
             _namespaces = index.GetNamespaces(_tenantId);
         }
 
@@ -259,6 +322,27 @@ public enum EdgeAddMode
 }
 
 /// <summary>
+/// Non-mutating topology plan for an entry merge. The partition baseline binds every namespace
+/// resolution in the plan; the guard binds every bare-id attribution decision.
+/// </summary>
+internal sealed record PreparedMergeTopology(
+    string FromId,
+    string ToId,
+    string TenantId,
+    string Namespace,
+    long PartitionOccupancy,
+    TopologyGuard.Sweep Guard,
+    bool TransferEdges,
+    PreparedMergeMembership Membership);
+
+/// <summary>Counts and deferred cluster work produced by one coherent merge commit.</summary>
+internal sealed record CommittedMergeTopology(
+    int EdgesTransferred,
+    int ClustersTransferred,
+    bool GraphMutated,
+    CommittedMergeMembership Membership);
+
+/// <summary>
 /// In-memory knowledge graph using adjacency lists for directed edges between cognitive entries.
 ///
 /// Tenant isolation: adjacency is keyed by <c>(tenant, entryId)</c>, and every <see cref="GraphEdge"/>
@@ -329,7 +413,7 @@ public enum EdgeAddMode
 ///   lock takes the fence and consults the helper — all five of them
 ///   (<see cref="TryAddEdge"/>, <see cref="AddEdges"/>, <see cref="RemoveEdges"/>,
 ///   <see cref="RemoveAllEdgesForEntry(string, string, TopologyGuard.Sweep)"/>,
-///   <see cref="TransferEdges"/>) — and each fails closed with its own existing no-op reply. Naming
+///   <see cref="TransferEdges(string, string, string)"/>) — and each fails closed with its own existing no-op reply. Naming
 ///   the complete set here is deliberate: an earlier round wired the check into the two ADD paths
 ///   and left the three remove/transfer paths, which have strictly WIDER admission-to-mutation
 ///   windows, consulting nothing. A new mutator that takes a sweep before the lock and does not
@@ -481,6 +565,25 @@ public sealed class KnowledgeGraph
     internal Action? OnValidatedUnderFence;
 
     /// <summary>
+    /// TEST SEAM: invoked by the occupancy-watched destructive mutator immediately BEFORE it
+    /// tries to pin the watched partition. This is the last instant an ordinary entry write
+    /// (a same-slot replacement in particular) can land: once the pin is held the partition
+    /// is read-locked and no occupancy can move until the mutation is over. A test that
+    /// injects a replacement here proves the pin refuses rather than mutates — injecting it
+    /// any later is impossible by construction, which is the property under test. Distinct
+    /// from <see cref="OnValidatedUnderFence"/> because a hook that wrote entries UNDER the
+    /// pin would be re-entering the pinned partition's lock from its own thread.
+    /// </summary>
+    internal Action? OnBeforeOccupancyPin;
+
+    /// <summary>
+    /// Test seam for the former post-entry topology window. Invoked after both entry changes are
+    /// installed but before the prepared edge and membership replacements publish, while the
+    /// partition write lock, attribution fence, graph lock, and cluster lock are all still held.
+    /// </summary>
+    internal Action? OnMergeEntriesCommitted;
+
+    /// <summary>
     /// Materialize the persisted edge set BEFORE the attribution fence is taken.
     ///
     /// <see cref="EnsureLoadedUnderWrite"/> calls <c>IStorageProvider.LoadGlobalEdges</c>, which is
@@ -510,11 +613,27 @@ public sealed class KnowledgeGraph
         finally { _lock.ExitUpgradeableReadLock(); }
     }
 
-    public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index)
+    public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index,
+        ILogger<KnowledgeGraph>? logger = null)
     {
         _persistence = persistence;
         _index = index;
+        _logger = logger;
     }
+
+    private readonly ILogger<KnowledgeGraph>? _logger;
+
+    /// <summary>
+    /// A fail-closed attributable read is silent to its caller BY DESIGN — the empty result is
+    /// deliberately indistinguishable from an empty graph — so this log line is the only place
+    /// where churn-induced blanking is observable at all. Without it, sustained ambiguity churn
+    /// (a bulk import repeatedly crossing the boundary) blanks recall expansion, contradiction
+    /// listing and the diffusion basis for its duration while looking exactly like missing data.
+    /// </summary>
+    private void LogReadFailedClosed(string operation, string tenantId)
+        => _logger?.LogWarning(
+            "{Operation} discarded {Attempts} projection(s) because tenant '{TenantId}' attribution kept moving; returning empty. Sustained ambiguity churn blanks attributable graph reads for its duration.",
+            operation, AttributionReadAttempts, tenantId);
 
     /// <summary>Total number of edges in the graph, across all tenants.</summary>
     public int EdgeCount
@@ -718,6 +837,13 @@ public sealed class KnowledgeGraph
         // are the invariant, and a path that reached neither would be a rule with a hole in it even
         // though it writes nothing.
         int chunks = Math.Max(1, (admitted.Count + AddEdgesFenceChunk - 1) / AddEdgesFenceChunk);
+        // The save is in a finally: each committed chunk is already observable to concurrent
+        // readers behind a bumped revision the moment its locks are released, so a throw while
+        // starting a LATER chunk (a fence acquisition hitting index teardown, say) must not skip
+        // scheduling persistence for the chunks that landed — that leaves the in-memory graph
+        // ahead of the store, and a restart silently loses those edges.
+        try
+        {
         for (int chunk = 0; chunk < chunks; chunk++)
         {
             int start = chunk * AddEdgesFenceChunk;
@@ -833,9 +959,12 @@ public sealed class KnowledgeGraph
             // Outside the fence, so the stop costs nothing that is still holding one.
             if (moved) break;
         }
-
-        // After every release — see ScheduleSaveEdges.
-        if (count > 0) ScheduleSaveEdges();
+        }
+        finally
+        {
+            // After every release — see ScheduleSaveEdges.
+            if (count > 0) ScheduleSaveEdges();
+        }
         return count;
     }
 
@@ -904,7 +1033,7 @@ public sealed class KnowledgeGraph
     /// Testing the two arguments IS the edge test here, and that is worth stating because it is
     /// what fails elsewhere: every edge this touches runs between exactly
     /// <paramref name="sourceId"/> and <paramref name="targetId"/>, so there is no third endpoint
-    /// for the argument test to miss. Contrast <see cref="TransferEdges"/>, where there is one on
+    /// for the argument test to miss. Contrast <see cref="TransferEdges(string, string, string)"/>, where there is one on
     /// every edge.
     /// </summary>
     public string RemoveEdges(string sourceId, string targetId, string? relation, string tenantId)
@@ -1002,9 +1131,14 @@ public sealed class KnowledgeGraph
     /// <see cref="GetEdgesForEntry"/>, which applies this same edge test, so a preview and the
     /// purge it previews can no longer report different figures.
     ///
-    /// Pass the <c>guard</c> overload a sweep shared with the OTHER cascade primitive for the same
-    /// id — <see cref="Intelligence.ClusterManager.RemoveEntryFromAllClusters(string, string,
-    /// TopologyGuard.Sweep)"/> — so one namespace listing covers both halves of that id's purge.
+    /// The <c>guard</c> overload takes ITS OWN sweep, built for this one call — deliberately NOT
+    /// shared with the other cascade primitive for the same id
+    /// (<see cref="Intelligence.ClusterManager.RemoveEntryFromAllClusters(string, string,
+    /// TopologyGuard.Sweep)"/>): <see cref="TopologyCascade"/> constructs a fresh sweep per
+    /// primitive so each one's attribution view is captured immediately before its own fenced
+    /// section, at the cost of one namespace listing each. What the two calls DO share is the
+    /// caller's staged occupancy baseline, threaded into both sweeps, so either primitive
+    /// refuses when the watched partition moved since the caller staged its judgment.
     ///
     /// SHARING A SWEEP ACROSS MANY IDS IS A DIFFERENT PROPOSITION AND IS NOT WHAT THIS IS FOR. A
     /// sweep carries ONE <see cref="TopologyGuard.Sweep.AttributionRevision"/>, captured when it was
@@ -1070,61 +1204,91 @@ public sealed class KnowledgeGraph
         // the revision follow the structure, so they follow this flag.
         bool mutated = false;
 
-        var fence = _index.EnterAttributionFence(tenantId);
+        OnBeforeOccupancyPin?.Invoke();
+
+        // PIN, not compare: the watched partition's read lock is held from here to the end of
+        // the mutation, so a same-slot replacement there cannot land mid-removal — it blocks on
+        // the partition's write lock until this sweep is over, and a replacement that landed
+        // BEFORE the pin makes the pin refuse with nothing yet removed. A bare compare at this
+        // point left exactly that interleaving open: check clean, replacement lands, topology
+        // the replacement inherited is removed, and only the caller's post-mutation bracket
+        // notices — after the loss. Acquired before the fence, matching the partition-before-
+        // fence order every crossing upsert uses — and released with the fence, BEFORE
+        // ScheduleSaveEdges, like the cluster twin: a synchronous provider writes the whole
+        // edge set at that call site, and holding a partition read lock across arbitrary
+        // provider I/O would stall every writer of the watched partition for the duration.
+        var occupancyPin = guard.TryPinWatchedOccupancy();
+        if (occupancyPin is null)
+            return 0;
+
         try
         {
-            _lock.EnterWriteLock();
+            var fence = _index.EnterAttributionFence(tenantId);
             try
             {
-                EnsureLoadedUnderWrite();
-
-                // The WIDEST of the admission-to-mutation windows in this class:
-                // removableOut/removableIn were judged against CognitiveIndex after the read lock
-                // was released and before this write lock was taken, so every endpoint they name —
-                // including the far ones no argument mentions — was judged in a window linear in
-                // this node's degree. The fence makes the window's WIDTH stop mattering: nothing can
-                // cross while it is held, and this compare covers everything before it. See
-                // AttributionMovedSince. Fails closed the way the method already fails: 0, nothing
-                // deleted, which is what a node with no attributable incident edges already reports.
-                if (AttributionMovedSince(guard, tenantId))
-                    return 0;
-
-                OnValidatedUnderFence?.Invoke();
-
-                // Matched on (endpoint, relation) rather than by dropping the whole list: the list
-                // now has survivors in it. AddEdgeInternal keeps (source, target, relation) unique,
-                // so each match is the one edge meant.
-                foreach (var edge in removableOut)
+                _lock.EnterWriteLock();
+                try
                 {
-                    int fromNode = RemoveMatching(_outgoing, (tenantId, id),
-                        e => e.TargetId == edge.TargetId && e.Relation == edge.Relation);
-                    int fromMirror = RemoveMatching(_incoming, (tenantId, edge.TargetId),
-                        e => e.SourceId == id && e.Relation == edge.Relation);
-                    removed += fromNode;
-                    mutated |= fromNode > 0 || fromMirror > 0;
-                }
+                    EnsureLoadedUnderWrite();
 
-                foreach (var edge in removableIn)
-                {
-                    int fromNode = RemoveMatching(_incoming, (tenantId, id),
-                        e => e.SourceId == edge.SourceId && e.Relation == edge.Relation);
-                    int fromMirror = RemoveMatching(_outgoing, (tenantId, edge.SourceId),
-                        e => e.TargetId == id && e.Relation == edge.Relation);
-                    removed += fromNode;
-                    mutated |= fromNode > 0 || fromMirror > 0;
-                }
+                    // The WIDEST of the admission-to-mutation windows in this class:
+                    // removableOut/removableIn were judged against CognitiveIndex after the read lock
+                    // was released and before this write lock was taken, so every endpoint they name —
+                    // including the far ones no argument mentions — was judged in a window linear in
+                    // this node's degree. The fence makes the window's WIDTH stop mattering: nothing can
+                    // cross while it is held, and this compare covers everything before it. See
+                    // AttributionMovedSince. Fails closed the way the method already fails: 0, nothing
+                    // deleted, which is what a node with no attributable incident edges already reports.
+                    //
+                    // Occupancy needs no compare here: the pin above holds the watched partition
+                    // read-locked, so a replacement cannot have landed since it was taken.
+                    if (AttributionMovedSince(guard, tenantId))
+                        return 0;
 
-                if (mutated)
-                {
-                    Interlocked.Increment(ref _revision);
-                    BumpTenant(tenantId);
+                    OnValidatedUnderFence?.Invoke();
+
+                    // Matched by REFERENCE, not by (endpoint, relation): the staged lists hold the
+                    // exact GraphEdge instances the sweep judged, and AddEdgeInternal publishes one
+                    // instance into both adjacency halves — so removing by identity removes exactly
+                    // what was staged and nothing else. A FRESH edge written between staging and
+                    // this mutation (a replaced entry re-linking itself, say) is a different object
+                    // and survives, where a shape-match on the same endpoints and relation would
+                    // have deleted work this sweep never examined. What identity removal cannot do
+                    // is finish a job whose staging went stale — the occupancy pin above refuses
+                    // that before anything comes off, and the caller re-stages.
+                    foreach (var edge in removableOut)
+                    {
+                        int fromNode = RemoveMatching(_outgoing, (tenantId, id),
+                            e => ReferenceEquals(e, edge));
+                        int fromMirror = RemoveMatching(_incoming, (tenantId, edge.TargetId),
+                            e => ReferenceEquals(e, edge));
+                        removed += fromNode;
+                        mutated |= fromNode > 0 || fromMirror > 0;
+                    }
+
+                    foreach (var edge in removableIn)
+                    {
+                        int fromNode = RemoveMatching(_incoming, (tenantId, id),
+                            e => ReferenceEquals(e, edge));
+                        int fromMirror = RemoveMatching(_outgoing, (tenantId, edge.SourceId),
+                            e => ReferenceEquals(e, edge));
+                        removed += fromNode;
+                        mutated |= fromNode > 0 || fromMirror > 0;
+                    }
+
+                    if (mutated)
+                    {
+                        Interlocked.Increment(ref _revision);
+                        BumpTenant(tenantId);
+                    }
                 }
+                finally { _lock.ExitWriteLock(); }
             }
-            finally { _lock.ExitWriteLock(); }
+            finally { CognitiveIndex.ExitAttributionFence(fence); }
         }
-        finally { CognitiveIndex.ExitAttributionFence(fence); }
+        finally { occupancyPin.Dispose(); }
 
-        // After both releases — see ScheduleSaveEdges.
+        // After all three releases — pin included — see ScheduleSaveEdges.
         if (mutated) ScheduleSaveEdges();
         return removed;
     }
@@ -1217,6 +1381,7 @@ public sealed class KnowledgeGraph
                 return new GetNeighborsResult(id, neighbors);
         }
 
+        LogReadFailedClosed(nameof(GetNeighbors), tenantId);
         return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
     }
 
@@ -1318,6 +1483,7 @@ public sealed class KnowledgeGraph
                 return new TraversalResult(startId, resultEntries, resultEdges);
         }
 
+        LogReadFailedClosed(nameof(Traverse), tenantId);
         return new TraversalResult(startId, Array.Empty<CognitiveEntryInfo>(), Array.Empty<GraphEdge>());
     }
 
@@ -1427,6 +1593,7 @@ public sealed class KnowledgeGraph
                 return results;
         }
 
+        LogReadFailedClosed(nameof(GetContradictions), tenantId);
         return Array.Empty<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
     }
 
@@ -1514,7 +1681,133 @@ public sealed class KnowledgeGraph
                 return attributable;
         }
 
+        LogReadFailedClosed(nameof(FilterAttributableEdges), tenantId);
         return Array.Empty<GraphEdge>();
+    }
+
+    /// <summary>
+    /// Prepare both topology halves of a merge without changing either. Namespace occupancy is
+    /// sampled before any endpoint resolution, so the index commit can reject a plan whose
+    /// qualified identities moved while it was being assembled.
+    /// </summary>
+    internal PreparedMergeTopology? PrepareMergeTopology(
+        string fromId, string toId, string tenantId, string onlyIfWithinNs,
+        ClusterManager clusters)
+    {
+        tenantId = Tenancy.Normalize(tenantId);
+        if (string.Equals(fromId, toId, StringComparison.Ordinal))
+            return null;
+
+        var guard = TopologyGuard.ForSweep(_index, tenantId);
+        bool namedTopologySafe = guard.IsTopologySafe(fromId) && guard.IsTopologySafe(toId);
+        bool transferEdges = namedTopologySafe;
+
+        List<GraphEdge> incident;
+        _lock.EnterUpgradeableReadLock();
+        try
+        {
+            EnsureLoaded();
+            incident = new List<GraphEdge>();
+            if (namedTopologySafe && _outgoing.TryGetValue((tenantId, fromId), out var outgoing))
+                incident.AddRange(outgoing);
+            if (namedTopologySafe && _incoming.TryGetValue((tenantId, fromId), out var incoming))
+                incident.AddRange(incoming);
+        }
+        finally { _lock.ExitUpgradeableReadLock(); }
+
+        foreach (var edge in incident)
+            if (!guard.IsEdgeUsable(edge))
+                transferEdges = false;
+
+        long occupancy = _index.OccupancyRevisionFor(onlyIfWithinNs, tenantId);
+        if (_index.Get(fromId, onlyIfWithinNs, tenantId) is null
+            || _index.Get(toId, onlyIfWithinNs, tenantId) is null)
+            return null;
+        foreach (var edge in incident)
+        {
+            string far = string.Equals(edge.SourceId, fromId, StringComparison.Ordinal)
+                ? edge.TargetId
+                : edge.SourceId;
+            if (!string.Equals(far, fromId, StringComparison.Ordinal)
+                && !string.Equals(far, toId, StringComparison.Ordinal)
+                && _index.Get(far, onlyIfWithinNs, tenantId) is null)
+                transferEdges = false;
+        }
+
+        return new PreparedMergeTopology(
+            fromId, toId, tenantId, onlyIfWithinNs, occupancy, guard, transferEdges,
+            namedTopologySafe
+                ? clusters.PrepareMergeMembership(fromId, toId, tenantId, onlyIfWithinNs)
+                : clusters.PrepareNoopMergeMembership(fromId, toId, tenantId, onlyIfWithinNs));
+    }
+
+    /// <summary>
+    /// Commit a prepared topology plan while the caller holds the plan's partition write lock.
+    /// Lock order is partition -&gt; attribution fence -&gt; graph -&gt; cluster. Every validation that
+    /// can refuse runs before <paramref name="commitEntries"/>; after the callback installs the
+    /// exact keep/archive occupations, both topology maps publish under the same holds.
+    /// </summary>
+    internal bool TryCommitPreparedMerge(
+        PreparedMergeTopology plan,
+        ClusterManager clusters,
+        Func<bool> commitEntries,
+        out CommittedMergeTopology? committed)
+    {
+        committed = null;
+        int transferred = 0;
+        bool graphMutated = false;
+        CommittedMergeMembership? membership = null;
+
+        var fence = _index.EnterAttributionFence(plan.TenantId);
+        try
+        {
+            _lock.EnterWriteLock();
+            try
+            {
+                EnsureLoadedUnderWrite();
+                if (AttributionMovedSince(plan.Guard, plan.TenantId))
+                    return false;
+
+                if (plan.TransferEdges
+                    && _outgoing.TryGetValue((plan.TenantId, plan.FromId), out var currentOut))
+                    foreach (var edge in currentOut)
+                        if (!plan.Guard.IsEdgeKnownUsable(edge))
+                            return false;
+                if (plan.TransferEdges
+                    && _incoming.TryGetValue((plan.TenantId, plan.FromId), out var currentIn))
+                    foreach (var edge in currentIn)
+                        if (!plan.Guard.IsEdgeKnownUsable(edge))
+                            return false;
+
+                OnValidatedUnderFence?.Invoke();
+                bool clusterCommitted = clusters.TryCommitPreparedMergeMembership(
+                    plan.Membership, plan.Guard,
+                    () =>
+                    {
+                        if (!commitEntries())
+                            return false;
+
+                        OnMergeEntriesCommitted?.Invoke();
+                        if (plan.TransferEdges)
+                        {
+                            transferred = ApplyEdgeTransferUnderWrite(
+                                plan.FromId, plan.ToId, plan.TenantId, out graphMutated);
+                        }
+                        return true;
+                    },
+                    out membership);
+                if (!clusterCommitted || membership is null)
+                    return false;
+            }
+            finally { _lock.ExitWriteLock(); }
+        }
+        finally { CognitiveIndex.ExitAttributionFence(fence); }
+
+        if (graphMutated)
+            ScheduleSaveEdges();
+        committed = new CommittedMergeTopology(
+            transferred, membership.Affected.Count, graphMutated, membership);
+        return true;
     }
 
     /// <summary>
@@ -1547,6 +1840,17 @@ public sealed class KnowledgeGraph
     /// the guard below.
     /// </summary>
     public int TransferEdges(string fromId, string toId, string tenantId)
+        => TransferEdges(fromId, toId, tenantId, onlyIfWithinNs: null);
+
+    /// <summary>
+    /// As above, additionally NAMESPACE-BOUND: with <paramref name="onlyIfWithinNs"/> given,
+    /// the transfer proceeds only when BOTH named nodes and every incident edge's far
+    /// endpoint resolve in that namespace — a caller whose authorization covers one
+    /// namespace must not rewire adjacency whose endpoints live in another. Refusal is the
+    /// same non-disclosing 0 as every other screen here (the all-or-nothing contract above
+    /// forbids moving just the in-namespace subset).
+    /// </summary>
+    public int TransferEdges(string fromId, string toId, string tenantId, string? onlyIfWithinNs)
     {
         // See RemoveEdges: every dictionary probe below is keyed by this string, and every key that
         // exists was written from a normalized GraphEdge.TenantId.
@@ -1598,6 +1902,33 @@ public sealed class KnowledgeGraph
             if (!guard.IsEdgeUsable(edge))
                 return 0;
 
+        // The NAMESPACE BINDING, judged over the same snapshot as the usability screen and
+        // with the same all-or-nothing outcome: both named nodes and every far endpoint must
+        // resolve in the authorized namespace, or nothing moves. Resolution runs outside the
+        // graph lock, like the guard's.
+        long nsOccupancyBaseline = 0;
+        if (onlyIfWithinNs is not null)
+        {
+            // The baseline is captured BEFORE the endpoint resolutions and re-compared under
+            // the write lock below: a non-crossing move of an endpoint (delete here, store
+            // in another namespace — 1→0 then 0→1) deliberately bypasses the attribution
+            // revision AND the fence, so only the OCCUPANCY revision (bumped on every write
+            // or removal in the partition) can witness it. Without the recompare this screen
+            // was check-then-act, and the one screen in the method that failed OPEN.
+            nsOccupancyBaseline = _index.OccupancyRevisionFor(onlyIfWithinNs, tenantId);
+            if (_index.Get(fromId, onlyIfWithinNs, tenantId: tenantId) is null
+                || _index.Get(toId, onlyIfWithinNs, tenantId: tenantId) is null)
+                return 0;
+            foreach (var edge in incident)
+            {
+                var far = string.Equals(edge.SourceId, fromId, StringComparison.Ordinal) ? edge.TargetId : edge.SourceId;
+                if (!string.Equals(far, fromId, StringComparison.Ordinal)
+                    && !string.Equals(far, toId, StringComparison.Ordinal)
+                    && _index.Get(far, onlyIfWithinNs, tenantId: tenantId) is null)
+                    return 0;
+            }
+        }
+
         // No EnsureLoadedOutsideFence here: the snapshot phase above already ran EnsureLoaded under
         // the upgradeable read lock, outside the fence, and _loaded never returns to false.
 
@@ -1611,6 +1942,27 @@ public sealed class KnowledgeGraph
         // returned figure still means "edges rewired onto toId", which is what merge reports; this
         // flag means "topology changed", which is what persistence and the revision must follow.
         bool mutated = false;
+
+        // PIN the watched partition rather than comparing it. The compare this replaces sat
+        // under the write lock below and was still CHECK-THEN-ACT: occupancy is bumped under
+        // the INDEX's partition write lock, which the graph write lock does not serialize, so
+        // a non-crossing endpoint move (delete here, store in another namespace) could land
+        // after the compare and before the rewire, and the transfer would then act on
+        // occupations it never examined — the one screen in this method that could still fail
+        // open. The pin holds the partition's read lock for the whole mutation, so the
+        // endpoints resolved above are exactly the ones the rewire acts on, and the compare
+        // and the mutation become one atom.
+        //
+        // Acquired BEFORE the attribution fence and the graph write lock: the
+        // partition-before-fence order every crossing upsert uses. Holding it obliges the
+        // locked region below to call nothing on CognitiveIndex for this partition — the
+        // partition lock is non-recursive and a nested read would throw rather than block —
+        // and it does not.
+        using var occupancyPin = onlyIfWithinNs is null
+            ? OccupancyPin.None
+            : _index.TryPinOccupancy(onlyIfWithinNs, tenantId, nsOccupancyBaseline);
+        if (occupancyPin is null)
+            return 0;
 
         var fence = _index.EnterAttributionFence(tenantId);
         try
@@ -1633,6 +1985,12 @@ public sealed class KnowledgeGraph
                 // See AttributionMovedSince.
                 if (AttributionMovedSince(guard, tenantId))
                     return 0;
+
+                // The namespace binding's third staleness case — the non-crossing endpoint
+                // moves the attribution compare above deliberately ignores — is handled before
+                // this lock is taken, by the occupancy pin. No compare is needed here: while
+                // the pin is held nothing in that partition can be written or removed, so the
+                // revision cannot have moved since the endpoints were resolved.
 
                 // The IsEdgeKnownUsable walk catches the other case: an edge that ARRIVED between
                 // the snapshot and this lock, naming an endpoint the sweep has never judged at all.
@@ -1764,6 +2122,54 @@ public sealed class KnowledgeGraph
         // the self-only transfer moves nothing and still has to reach the store, or a restart
         // resurrects the edge it deleted. See ScheduleSaveEdges.
         if (mutated) ScheduleSaveEdges();
+        return transferred;
+    }
+
+    /// <summary>Apply a fully validated edge transfer. Caller holds the graph write lock.</summary>
+    private int ApplyEdgeTransferUnderWrite(
+        string fromId, string toId, string tenantId, out bool mutated)
+    {
+        int transferred = 0;
+        mutated = false;
+        var fromKey = (tenantId, fromId);
+
+        if (_outgoing.TryGetValue(fromKey, out var outEdges))
+        {
+            if (outEdges.Count > 0) mutated = true;
+            foreach (var edge in outEdges.ToList())
+            {
+                RemoveMatching(_incoming, (tenantId, edge.TargetId),
+                    e => e.SourceId == fromId && e.Relation == edge.Relation);
+                if (edge.TargetId == toId || edge.TargetId == fromId) continue;
+
+                AddEdgeInternal(new GraphEdge(
+                    toId, edge.TargetId, edge.Relation, edge.Weight, edge.Metadata, tenantId));
+                transferred++;
+            }
+            _outgoing.Remove(fromKey);
+        }
+
+        if (_incoming.TryGetValue(fromKey, out var inEdges))
+        {
+            if (inEdges.Count > 0) mutated = true;
+            foreach (var edge in inEdges.ToList())
+            {
+                RemoveMatching(_outgoing, (tenantId, edge.SourceId),
+                    e => e.TargetId == fromId && e.Relation == edge.Relation);
+                if (edge.SourceId == toId) continue;
+
+                AddEdgeInternal(new GraphEdge(
+                    edge.SourceId, toId, edge.Relation, edge.Weight, edge.Metadata, tenantId));
+                transferred++;
+            }
+            _incoming.Remove(fromKey);
+        }
+
+        if (mutated)
+        {
+            Interlocked.Increment(ref _revision);
+            BumpTenant(tenantId);
+        }
         return transferred;
     }
 
@@ -1961,8 +2367,15 @@ public sealed class KnowledgeGraph
         {
             if (_loaded) return; // Double-check
             var globalEdges = _persistence.LoadGlobalEdges();
+            // NULL-SHAPED rows are quarantined, not indexed: a hand-poisoned or truncated
+            // store can deserialize a null list element or an edge whose endpoints bound
+            // JSON null, and either would throw out of the keying below — bricking every
+            // graph operation off one bad row.
             foreach (var edge in globalEdges)
+            {
+                if (edge is null || string.IsNullOrWhiteSpace(edge.SourceId) || string.IsNullOrWhiteSpace(edge.TargetId) || string.IsNullOrWhiteSpace(edge.Relation)) continue;
                 AddEdgeInternal(edge);
+            }
             _loaded = true;
         }
         finally { _lock.ExitWriteLock(); }
@@ -1973,8 +2386,12 @@ public sealed class KnowledgeGraph
     {
         if (_loaded) return;
         var globalEdges = _persistence.LoadGlobalEdges();
+        // See EnsureLoaded: null-shaped rows are quarantined, not indexed.
         foreach (var edge in globalEdges)
+        {
+            if (edge is null || string.IsNullOrWhiteSpace(edge.SourceId) || string.IsNullOrWhiteSpace(edge.TargetId) || string.IsNullOrWhiteSpace(edge.Relation)) continue;
             AddEdgeInternal(edge);
+        }
         _loaded = true;
     }
 

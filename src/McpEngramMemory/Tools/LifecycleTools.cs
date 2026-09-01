@@ -37,18 +37,23 @@ public sealed class LifecycleTools
     /// Resolve a bare id to a writable entry within the caller's tenant — see
     /// <see cref="EntryAccessResolver"/> for the semantics. Both consumers (PromoteMemory and
     /// MemoryFeedback) are writes, so the write predicate is the right verb here.
+    /// <paramref name="preferredNs"/> is the caller's disambiguation: an id the tenant legally
+    /// holds in two writable namespaces resolves to nothing bare, and without a namespace
+    /// parameter neither twin could ever be promoted or given feedback again.
     /// </summary>
-    private CognitiveEntry? Resolve(string id) => _access.ResolveWritableEntry(_index, id);
+    private CognitiveEntry? Resolve(string id, string? preferredNs = null)
+        => _access.ResolveWritableEntry(_index, id, preferredNs);
 
     [McpServerTool(Name = "promote_memory", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description("Change an entry's lifecycle state. Use to archive, consolidate to LTM, or resurrect to STM.")]
     public string PromoteMemory(
         [Description("Entry ID.")] string id,
-        [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState)
+        [Description("Target state: 'stm', 'ltm', or 'archived'.")] string targetState,
+        [Description("Namespace holding the entry. Optional; supply it to disambiguate when the same ID exists in more than one namespace of your tenant.")] string? ns = null)
     {
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
-        var existing = Resolve(id);
+        var existing = Resolve(id, ns);
         if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
@@ -99,20 +104,25 @@ public sealed class LifecycleTools
     public object MemoryFeedback(
         [Description("Entry ID to provide feedback on.")] string id,
         [Description("Feedback delta: positive reinforces (e.g. 1.0-3.0 for helpful), negative suppresses (e.g. -1.0 to -3.0 for unhelpful). Clamped to [-10, 10].")] float delta,
-        [Description("Ignored. Accepted only so existing callers keep working: the entry that receives the feedback, and the decay thresholds applied to it, both come from the namespace the ID resolves to inside your tenant.")] string? ns = null)
+        [Description("Namespace holding the entry. Optional; supply it to disambiguate when the same ID exists in more than one namespace of your tenant. The entry that receives the feedback, and the decay thresholds applied to it, both come from the namespace the ID resolves to.")] string? ns = null)
     {
         // Resolve first: same reply shape as a genuine miss for both "doesn't exist" and
         // "exists but you can't touch it" - a distinct denial would confirm the id exists.
-        var existing = Resolve(id);
+        // `ns` participates only as EntryAccessResolver's preferred namespace: it is checked
+        // with the same write predicate as any other candidate, and the mutation below still
+        // targets exactly the (tenant, ns, id) the resolution authorized — so a caller-chosen
+        // namespace can never authorize one entry and mutate a different one.
+        var existing = Resolve(id, ns);
         if (existing is null)
             return $"Error: Entry '{id}' not found.";
 
         // existing.Ns is the ONLY legal target, because it is the only namespace this call
         // authorized. Ids are unique per (tenant, namespace), so forwarding any other namespace
         // authorizes one entry and mutates a different one - and `ns` is caller-controlled, which
-        // makes the victim caller-chosen. It is therefore not passed on at all, not even as the
-        // config hint its name suggests: ApplyFeedback derives thresholds from the same namespace
-        // it mutates, so a hint that disagreed with the target could only be wrong.
+        // makes the victim caller-chosen. The caller's `ns` therefore reaches Core only as
+        // existing.Ns — the resolution above already folded it in as the preferred namespace and
+        // re-checked it with the write predicate, so target and authorization cannot diverge.
+        // ApplyFeedback derives thresholds from the same namespace it mutates.
         //
         // In particular this must not be relaxed for an empty tenant. "" is the legacy PARTITION,
         // which identified ACL principals share; the unisolated principal is the default agent,

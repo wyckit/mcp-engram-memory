@@ -313,7 +313,16 @@ public sealed class CoreMemoryTools
         // Built only when expansion was actually asked for: constructing the guard lists the
         // tenant's namespaces, and a plain search must not pay for a guard it never consults.
         // One sweep for the whole call — a per-id test re-lists (and so reloads) per seed.
-        var topology = expandGraph ? BareIdTopology.ForSweep(_index, tenantId: _principal.TenantId) : null;
+        //
+        // A failed provider listing degrades to "no expansion" rather than erroring the call:
+        // the base results above are already computed, and expansion skipped is exactly what
+        // expandGraph: false returns. Fail-closed for the expansion, not for the whole reply.
+        TopologyGuard.Sweep? topology = null;
+        if (expandGraph)
+        {
+            try { topology = BareIdTopology.ForSweep(_index, tenantId: _principal.TenantId); }
+            catch (NamespaceEnumerationException) { /* expansion skipped; base hits still returned */ }
+        }
 
         // Side effect: record access and trigger spreading activation for returned entries
         foreach (var result in results)
@@ -493,13 +502,44 @@ public sealed class CoreMemoryTools
         // re-decides whether to guard, which is exactly how the guard goes missing. Routing
         // through the shared helper makes the guarded form the only reachable one, so a later
         // edit here cannot quietly drop it.
+        // The witness is frozen as a NUMBER at resolution time: `existing` is the live map
+        // occupant, and reading its Revision property later would read whatever is current —
+        // exactly the retargeting the conditional delete exists to prevent.
+        long stagedRevision = existing.Revision;
+
+        // The occupancy baseline can only vouch for replacements AFTER its capture, and the
+        // resolution above happened before it — so the staging judgment is re-made on the
+        // baseline's side of the line: if the occupation already changed, nothing has been
+        // touched yet and the caller simply retries.
+        long occupancyBaseline = _index.OccupancyRevisionFor(existing.Ns, _principal.TenantId);
+        var restaged = _index.Get(id, existing.Ns, _principal.TenantId);
+        if (restaged is null || restaged.Revision != stagedRevision)
+            return $"Error: entry '{id}' changed while it was being deleted — nothing was deleted. Retry.";
+
+        // watchNs: the resolution above IS a staging judgment — the cascade must not apply it
+        // if the entry's partition changes underneath (a same-slot replacement moves no
+        // attribution revision, so only the occupancy watch can see it).
         var cascade = TopologyCascade.CascadeAll(
-            _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true);
+            _index, _graph, _clusters, new[] { id }, _principal.TenantId, apply: true,
+            watchNs: existing.Ns, watchOccupancyBaseline: occupancyBaseline);
         int edgesRemoved = cascade.EdgesRemoved;
 
-        // Check the return value to avoid TOCTOU against a concurrent delete.
-        if (!_index.DeleteForTenant(id, _principal.TenantId))
-            return $"Entry '{id}' not found.";
+        // An unsettled cascade is not a safe skip: the cleanup was attempted and cannot be
+        // proven complete (graph removal may have landed while cluster removal silently
+        // refused). Deleting the entry now would strand whatever remains, attributed to an
+        // entry that no longer exists — so nothing is deleted and the caller retries. The
+        // retry re-runs the cascade, which is idempotent over what already came off.
+        if (cascade.IdsUnsettled > 0)
+            return $"Error: entry '{id}' was not deleted — its topology cleanup could not be verified because the tenant's attribution kept moving. Retry.";
+
+        // Delete exactly the OCCUPATION the CanWrite check above authorized — atomically, via
+        // the revision-conditional delete. The namespace qualification stops a concurrent move
+        // from landing the delete in a partition the ACL never covered; the revision pin stops
+        // a same-slot replacement (which CreatedAt could not witness) from being taken down in
+        // the staged entry's place. A refusal means the slot changed under this call, and
+        // nothing was deleted.
+        if (!_index.Delete(id, existing.Ns, _principal.TenantId, onlyIfRevision: stagedRevision))
+            return $"Error: entry '{id}' changed while it was being deleted — nothing was deleted. Retry.";
 
         return $"Deleted entry '{id}'. Removed {edgesRemoved} edge(s) and cleaned cluster memberships.";
     }

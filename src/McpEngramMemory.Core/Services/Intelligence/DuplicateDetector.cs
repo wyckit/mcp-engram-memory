@@ -67,8 +67,11 @@ internal readonly record struct PairScanProgress(int Anchor, long PairSlotsCompl
 /// </summary>
 /// <param name="ProjectionDots">Pairs this window actually compared in projection space — the
 /// cheap side of the bargain.</param>
-/// <param name="ConfirmationDots">The subset that cleared the widened gate and paid for a
-/// full-dimension FP32 cosine — the expensive side the gate exists to suppress.</param>
+/// <param name="ConfirmationDots">Every full-dimension FP32 cosine the window paid — the
+/// expensive side the gate exists to suppress. That is the gate's survivors PLUS the pairs
+/// resolved without a projection at all: unprojected-cohort rows and zero-projection
+/// resolutions. Including the latter is deliberate — a mixed-dimension namespace whose fallback
+/// went quadratic must move this counter, not hide behind it.</param>
 internal readonly record struct ProjectionScanProbe(long ProjectionDots, long ConfirmationDots);
 
 /// <summary>
@@ -323,84 +326,125 @@ public sealed class DuplicateDetector
         Action<PairScanProgress>? onAnchorCompleted,
         Action<ProjectionScanProbe>? onProjectionProbe)
     {
-        // Skip embeddings of inconsistent dimension or zero norm — fall back to
-        // direct on whatever's left if too many drop out.
-        var keep = new List<int>(candidates.Count);
-        int firstLen = -1;
+        // Skip embeddings of zero norm, and bucket the rest into COHORTS BY VECTOR LENGTH. Only
+        // same-length vectors are comparable, so the pair space factors exactly along cohort
+        // lines: every real comparison is within a cohort and every cross-cohort slot is a miss
+        // by definition. Each cohort large enough to pay for a subspace gets ITS OWN projection —
+        // a single "chosen" cohort is not enough, because after a model migration BOTH cohorts
+        // can be large (5,000 old + 5,000 new is ~12.5M full-dimension dots for whichever side
+        // is left unprojected). A cohort below the pivot keeps direct full-dimension rows, whose
+        // cost is bounded by the pivot exactly as the all-direct path's is.
+        var cohortIndexByLength = new Dictionary<int, int>();
+        var memberLists = new List<List<int>>();
         for (int idx = 0; idx < candidates.Count; idx++)
         {
             var (e, n, _) = candidates[idx];
             if (n == 0f || e.Vector.Length == 0) continue;
-            if (firstLen < 0) firstLen = e.Vector.Length;
-            else if (e.Vector.Length != firstLen) continue;
-            keep.Add(idx);
+            if (!cohortIndexByLength.TryGetValue(e.Vector.Length, out int c))
+            {
+                c = memberLists.Count;
+                cohortIndexByLength[e.Vector.Length] = c;
+                memberLists.Add(new List<int>());
+            }
+            memberLists[c].Add(idx);
         }
-        if (keep.Count < LowRankPivot)
-            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
 
-        // Build subspace from the kept embeddings, in their original order.
-        var embeddings = new float[keep.Count][];
-        for (int i = 0; i < keep.Count; i++) embeddings[i] = candidates[keep[i]].Entry.Vector;
-        var subspace = EmbeddingSubspace.Build(embeddings, EmbeddingSubspace.DefaultTopK);
-        if (subspace is null)
-            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
+        // Anchors are candidate indices on every path (see PairScanWindow), so an excluded
+        // candidate keeps its place and a cursor stepping through anchors means the same thing
+        // whichever path produced it.
+        var cohortOf = new int[candidates.Count];
+        Array.Fill(cohortOf, -1);
+        var posInCohort = new int[candidates.Count];
+        var cohortMembers = new List<int[]>(memberLists.Count);
+        var cohortProjections = new List<float[][]?>(memberLists.Count);
+        var cohortProjNorms = new List<float[]?>(memberLists.Count);
+        bool anyProjected = false;
 
-        // THE CONCRETE ROWS, RESOLVED ONCE PER SCAN AND NEVER PER PAIR.
-        //
-        // SubspaceProjection.Projections is declared IReadOnlyList<float[]> over the float[][] that
-        // EmbeddingSubspace builds, and an interface indexer is a dispatch the JIT cannot fold into
-        // an array load. The loop below this one reads a row per PAIR — ~18M reads in one default
-        // background window over a 10k-entry namespace — so paying the dispatch there is paying it
-        // 18M times for a value whose concrete type never changes within a scan.
-        //
-        // The cast succeeds on every value this type can hold today, since the only constructor
-        // takes float[][]. The fallback is not dead defensiveness: it keeps a future
-        // SubspaceProjection that returned some other IReadOnlyList from making this path WRONG
-        // rather than merely slower, and it is linear set-up cost charged to the scan, not per-pair
-        // cost charged to the window.
-        float[][] projections = subspace.Projections as float[][] ?? subspace.Projections.ToArray();
-
-        // Projection-space norms are *not* the original norms (truncation drops magnitude
-        // orthogonal to col(V)), so they are computed here rather than reused. Same kernel as the
-        // pair loop below, so the norm and the dot that divides by it are associated identically.
-        var projNorms = new float[keep.Count];
-        for (int i = 0; i < keep.Count; i++)
+        for (int c = 0; c < memberLists.Count; c++)
         {
-            var p = projections[i];
-            projNorms[i] = MathF.Sqrt(ProjectionDot(p, p));
+            var members = memberLists[c];
+            cohortMembers.Add(members.ToArray());
+            for (int p = 0; p < members.Count; p++)
+            {
+                cohortOf[members[p]] = c;
+                posInCohort[members[p]] = p;
+            }
+
+            float[][]? rows = null;
+            float[]? norms = null;
+            // A cohort below the pivot keeps direct rows — bounded by the pivot — and a cohort
+            // whose subspace cannot be built stays comparable, just unprojected.
+            if (members.Count >= LowRankPivot)
+            {
+                // Build this cohort's subspace from its embeddings, in their original order.
+                var embeddings = new float[members.Count][];
+                for (int i = 0; i < members.Count; i++) embeddings[i] = candidates[members[i]].Entry.Vector;
+                var subspace = EmbeddingSubspace.Build(embeddings, EmbeddingSubspace.DefaultTopK);
+                if (subspace is not null)
+                {
+                    // THE CONCRETE ROWS, RESOLVED ONCE PER SCAN AND NEVER PER PAIR.
+                    //
+                    // SubspaceProjection.Projections is declared IReadOnlyList<float[]> over the
+                    // float[][] that EmbeddingSubspace builds, and an interface indexer is a
+                    // dispatch the JIT cannot fold into an array load. The loop below this one
+                    // reads a row per PAIR — ~18M reads in one default background window over a
+                    // 10k-entry namespace — so paying the dispatch there is paying it 18M times
+                    // for a value whose concrete type never changes within a scan. The cast
+                    // succeeds on every value this type can hold today (the only constructor
+                    // takes float[][]); the fallback keeps a future SubspaceProjection from
+                    // making this path WRONG rather than merely slower.
+                    rows = subspace.Projections as float[][] ?? subspace.Projections.ToArray();
+
+                    // Projection-space norms are *not* the original norms (truncation drops
+                    // magnitude orthogonal to col(V)), so they are computed here rather than
+                    // reused. Same kernel as the pair loop below, so the norm and the dot
+                    // dividing by it associate identically.
+                    norms = new float[members.Count];
+                    for (int i = 0; i < members.Count; i++)
+                        norms[i] = MathF.Sqrt(ProjectionDot(rows[i], rows[i]));
+
+                    anyProjected = true;
+                }
+            }
+
+            cohortProjections.Add(rows);
+            cohortProjNorms.Add(norms);
         }
 
-        // Anchors are candidate indices on every path (see PairScanWindow), so a dropped candidate
-        // keeps its place and a cursor stepping through anchors means the same thing whichever path
-        // produced it. A dropped anchor resolves its logical row during this setup and costs no
-        // projection dots in the quadratic walk.
-        var keepPos = new int[candidates.Count];
-        Array.Fill(keepPos, -1);
-        for (int p = 0; p < keep.Count; p++) keepPos[keep[p]] = p;
+        if (!anyProjected)
+            return StreamDirectPairwise(candidates, threshold, window, cancellationToken, onAnchorCompleted);
 
-        return StreamProjectionSurvivors(candidates, keep, keepPos, projections, projNorms, threshold,
+        return StreamCohortSurvivors(candidates, cohortOf, posInCohort, cohortMembers,
+            cohortProjections, cohortProjNorms, threshold,
             window, cancellationToken, onAnchorCompleted, onProjectionProbe);
     }
 
     /// <summary>
-    /// The widened projection-space filter and the full-FP32 confirmation, interleaved.
+    /// The widened projection-space filter and the full-FP32 confirmation, interleaved, walked
+    /// PER LENGTH COHORT. Only same-length vectors are comparable, so every anchor's real row is
+    /// exactly the later members of its own cohort; cross-cohort slots are misses by definition
+    /// and cost nothing. A projected cohort's row runs through its own subspace prefilter; a
+    /// cohort too small for a subspace (or whose anchor's projection collapsed to zero norm)
+    /// runs the row with direct full-dimension cosines, whose cost the pivot bounds. Each
+    /// unordered pair is still yielded at most once — from the smaller candidate index's row.
     ///
-    /// They were two passes with a list of survivor indices between them, and that list was the one
-    /// unbounded allocation on this path: it is sized by how many pairs clear the LOOSE threshold,
-    /// which no output bound reaches. Confirming each survivor as it is found yields the same pairs
-    /// in the same order and holds nothing between the passes.
+    /// The two passes were once a list of survivor indices between them, and that list was the
+    /// one unbounded allocation on this path: sized by how many pairs clear the LOOSE threshold,
+    /// which no output bound reaches. Confirming each survivor as it is found yields the same
+    /// pairs in the same order and holds nothing between the passes.
     ///
     /// THIS IS THE INNERMOST LOOP OF THE SUBSYSTEM — on the order of 18 million iterations in one
     /// default background window over a 10k-entry namespace. Everything loop-invariant is hoisted
     /// out of it in the source rather than left to the JIT, because the one hoist that mattered is
-    /// one the JIT could NOT do: the projection rows arrive as <c>float[][]</c> (resolved once at
-    /// the call site) instead of through an <c>IReadOnlyList</c> indexer, which is a dispatch no
-    /// amount of loop analysis folds into an array load.
+    /// one the JIT could NOT do: the projection rows arrive as <c>float[][]</c> (resolved once per
+    /// anchor) instead of through an <c>IReadOnlyList</c> indexer, which is a dispatch no amount
+    /// of loop analysis folds into an array load.
     /// </summary>
-    private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamProjectionSurvivors(
+    private static IEnumerable<(string IdA, string IdB, float Similarity)> StreamCohortSurvivors(
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
-        List<int> keep, int[] keepPos, float[][] projections, float[] projNorms, float threshold,
-        PairScanWindow window, CancellationToken cancellationToken,
+        int[] cohortOf, int[] posInCohort, IReadOnlyList<int[]> cohortMembers,
+        IReadOnlyList<float[][]?> cohortProjections, IReadOnlyList<float[]?> cohortProjNorms,
+        float threshold, PairScanWindow window, CancellationToken cancellationToken,
         Action<PairScanProgress>? onAnchorCompleted,
         Action<ProjectionScanProbe>? onProjectionProbe)
     {
@@ -409,36 +453,77 @@ public sealed class DuplicateDetector
         try
         {
             float looseThreshold = threshold - ProjectionThresholdSlack;
-            int keepCount = keep.Count;
             foreach (int i in WindowAnchors(candidates.Count, window))
             {
                 if (cancellationToken.IsCancellationRequested) yield break;
 
-                int pi = keepPos[i];
-                if (pi >= 0 && projNorms[pi] != 0f)
+                int c = cohortOf[i];
+                if (c >= 0)
                 {
-                    var vi = projections[pi];
+                    var members = cohortMembers[c];
+                    var rows = cohortProjections[c];
+                    var norms = cohortProjNorms[c];
+                    int pi = posInCohort[i];
 
-                    // Hoisted above the inner loop because it does not depend on pj. It used to be
-                    // read per SURVIVOR, through the IReadOnlyList indexer, inside the loop body.
+                    // Hoisted above the inner loops because it does not depend on pj.
                     var a = candidates[i];
-                    float normI = projNorms[pi];
 
-                    // keep is ascending, so a later keep position is a later candidate index:
-                    // walking forward from pi covers the same triangular half the direct path.
-                    for (int pj = pi + 1; pj < keepCount; pj++)
+                    if (rows is not null && norms![pi] != 0f)
                     {
-                        float normJ = projNorms[pj];
-                        if (normJ == 0f) continue;
+                        var vi = rows[pi];
+                        float normI = norms[pi];
 
-                        projectionDots++;
-                        if (ProjectionDot(vi, projections[pj]) / (normI * normJ) < looseThreshold) continue;
+                        // Cohort members are ascending candidate indices, so walking forward
+                        // from pi covers this anchor's half of the cohort's triangle exactly
+                        // once — the same coverage the direct path's row gives it, minus the
+                        // cross-length slots that were never comparisons at all.
+                        for (int pj = pi + 1; pj < members.Length; pj++)
+                        {
+                            float normJ = norms[pj];
+                            if (normJ == 0f)
+                            {
+                                // A zero-projection SURVIVOR still owns real full-dimension
+                                // pairs, and its own direct row below covers only LATER
+                                // candidates — the pair with this earlier anchor exists nowhere
+                                // else, while this row's attestation claims it. Resolve it here
+                                // with the confirming kernel rather than marking a
+                                // never-compared pair completed. Counted as a confirmation:
+                                // it is a full-dimension dot actually paid.
+                                confirmationDots++;
+                                var bz = candidates[members[pj]];
+                                float simz = VectorMath.Dot(a.Entry.Vector, bz.Entry.Vector) / (a.Norm * bz.Norm);
+                                if (simz >= threshold)
+                                    yield return (a.Entry.Id, bz.Entry.Id, simz);
+                                continue;
+                            }
 
-                        confirmationDots++;
-                        var b = candidates[keep[pj]];
-                        float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
-                        if (sim >= threshold)
-                            yield return (a.Entry.Id, b.Entry.Id, sim);
+                            projectionDots++;
+                            if (ProjectionDot(vi, rows[pj]) / (normI * normJ) < looseThreshold) continue;
+
+                            confirmationDots++;
+                            var b = candidates[members[pj]];
+                            float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
+                            if (sim >= threshold)
+                                yield return (a.Entry.Id, b.Entry.Id, sim);
+                        }
+                    }
+                    else
+                    {
+                        // Direct row: the cohort is too small to pay for a subspace, its build
+                        // failed, or this anchor's projection collapsed to zero norm. The row is
+                        // still owned and attested, so it must be resolved — with full-dimension
+                        // cosines over the LATER members of the same cohort, the only real
+                        // comparisons in it. Every dot is charged to the probe: a fallback that
+                        // went quadratic must be visible in the cost counters, not hidden by
+                        // them.
+                        for (int pj = pi + 1; pj < members.Length; pj++)
+                        {
+                            confirmationDots++;
+                            var b = candidates[members[pj]];
+                            float sim = VectorMath.Dot(a.Entry.Vector, b.Entry.Vector) / (a.Norm * b.Norm);
+                            if (sim >= threshold)
+                                yield return (a.Entry.Id, b.Entry.Id, sim);
+                        }
                     }
                 }
 

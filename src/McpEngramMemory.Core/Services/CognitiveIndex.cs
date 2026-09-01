@@ -1,11 +1,68 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Evaluation;
+using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Intelligence;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Storage;
 
+// The MCP host orchestrates the package-internal coherent merge primitive without widening that
+// concurrency protocol into Core's public NuGet surface.
+[assembly: InternalsVisibleTo("McpEngramMemory")]
+
 namespace McpEngramMemory.Core.Services;
+
+/// <summary>
+/// An opaque token for a lifecycle revision that
+/// <see cref="CognitiveIndex.ReserveLifecycleRevision"/> reserved but whose transition has not
+/// happened yet. INTERNAL end to end — the type, the minting method and the installing CAS —
+/// so no code outside this assembly can mint, forge, default-construct or replay one; and the
+/// CAS additionally rejects a defaulted token (value 0, which no reservation ever carries), so
+/// even in-assembly a <c>default(LifecycleReservation)</c> installs nothing. Uniqueness of
+/// installed witnesses is enforced by the minting counter, not by every caller independently
+/// promising to pass fresh numbers.
+/// </summary>
+internal readonly struct LifecycleReservation
+{
+    internal long Value { get; }
+    internal LifecycleReservation(long value) => Value = value;
+}
+
+/// <summary>
+/// A held partition read lock proving one (tenant, ns) partition's occupancy has not moved
+/// since a staged baseline — see <see cref="CognitiveIndex.TryPinOccupancy"/>. Dispose exactly
+/// once, after the mutation the pin covers.
+/// </summary>
+internal sealed class OccupancyPin : IDisposable
+{
+    /// <summary>A pin over nothing, for operations with no watched partition. Never disposed of a lock.</summary>
+    internal static readonly OccupancyPin None = new(null);
+
+    private ReaderWriterLockSlim? _held;
+    internal OccupancyPin(ReaderWriterLockSlim? held) => _held = held;
+
+    public void Dispose()
+    {
+        var held = _held;
+        _held = null;
+        held?.ExitReadLock();
+    }
+}
+
+/// <summary>
+/// One entry as observed for a merge, plus the fields that can change in place without moving
+/// <see cref="CognitiveEntry.Revision"/>. The entry is a detached copy; the witness is compared
+/// against the resident object under the partition write lock before either merge side changes.
+/// </summary>
+internal sealed record MergeEntrySnapshot(
+    CognitiveEntry Entry,
+    long Revision,
+    long LifecycleRevision,
+    string LifecycleState,
+    DateTimeOffset LastAccessedAt,
+    int AccessCount,
+    float ActivationEnergy);
 
 /// <summary>
 /// Thread-safe namespace-partitioned vector index with lifecycle awareness.
@@ -323,6 +380,10 @@ public sealed class CognitiveIndex : IDisposable
             ? fence.WaitingWriteCount
             : 0;
 
+    /// <summary>Test diagnostic for a writer queued behind one partition lock.</summary>
+    internal int PartitionWaitingWriters(string ns, string tenantId)
+        => NsLock(NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns)).WaitingWriteCount;
+
     /// <summary>
     /// TEST SEAM: how many tenant fences are still published. Pairs with
     /// <see cref="DisposalContendedFenceCount"/> to state that a fence held across
@@ -343,9 +404,258 @@ public sealed class CognitiveIndex : IDisposable
     // ── CRUD ──
 
     /// <summary>Add or replace a cognitive entry. LTM/archived entries are auto-quantized for fast search.</summary>
+    // Seeded RANDOMLY, not from the clock: witnesses are compared for EQUALITY only, never
+    // ordered, so a seed needs uniqueness and nothing else — and a tick seed does not deliver
+    // it. Ticks made post-restart collisions unlikely but let two LIVE processes over one
+    // store mint overlapping ranges (start δ ticks apart, overlap after δ increments), and an
+    // overlapping value forges CAS ownership: a claim one process reserved but never installed
+    // can come to match a witness the other process DID install. A random 62-bit seed makes a
+    // cross-process range collision negligible instead of merely unlikely.
+    // Incremented per upsert so same-process occupations cannot collide with each other. See
+    // CognitiveEntry.Revision.
+    private long _entryRevisionCounter = RandomRevisionSeed();
+
+    // Same seeding rationale; moved only on actual lifecycle TRANSITIONS — see
+    // CognitiveEntry.LifecycleRevision.
+    private long _lifecycleRevisionCounter = RandomRevisionSeed();
+
+    // Positive and clear of the top bits so billions of increments cannot overflow, and never
+    // zero-adjacent: 0 is the "no transition" sentinel, and the first minted value is seed+1.
+    private static long RandomRevisionSeed()
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        return (long)(BitConverter.ToUInt64(bytes) >> 2) + 1;
+    }
+
+    // Called inside the partition write lock, after LifecycleState was assigned. A set to the
+    // state already held is not a transition and moves nothing.
+    private void StampLifecycleTransition(CognitiveEntry entry, string previousState)
+    {
+        if (!string.Equals(previousState, entry.LifecycleState, StringComparison.Ordinal))
+            entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+    }
+
+    /// <summary>
+    /// Reserve a lifecycle revision for a transition that has not happened yet. This is what
+    /// makes a claims-ahead receipt safe to persist BEFORE its side effect: the claim names a
+    /// revision only <see cref="TryTransitionLifecycle"/> can install, so a claim whose
+    /// transition never ran (crash, CAS loss) matches no entry and is inert — over-claiming is
+    /// structurally impossible rather than carefully avoided. The reservation comes back as an
+    /// opaque token rather than a raw number so an arbitrary value can never be installed as a
+    /// witness: the only way to mint one is this counter, which never repeats.
+    /// </summary>
+    internal LifecycleReservation ReserveLifecycleRevision()
+        => new(Interlocked.Increment(ref _lifecycleRevisionCounter));
+
+    /// <summary>
+    /// Compare-and-swap lifecycle transition, atomic under the partition write lock: the entry
+    /// transitions from EXACTLY <paramref name="fromState"/> to <paramref name="toState"/>,
+    /// installing <paramref name="installRevision"/> (a token from
+    /// <see cref="ReserveLifecycleRevision"/>) as its lifecycle witness — and only when the
+    /// current state is <paramref name="fromState"/> and, when
+    /// <paramref name="expectedRevision"/> is given, the current witness equals it. Returns
+    /// false, changing nothing, otherwise. This is the primitive reversible maintenance needs
+    /// at both ends: an archive that only fires from the state AND witness its durable receipt
+    /// recorded (so neither an intervening transition nor a same-state replacement — an ABA
+    /// through <c>ltm → stm → ltm</c>, or a fresh upsert that landed on the same state — can be
+    /// absorbed by a stale plan), and a restore that only fires while the archived state is
+    /// still the very transition the receipt claims (closing the validate-then-restore gap a
+    /// separate check would leave). Callers performing a PLANNED transition should always pass
+    /// <paramref name="expectedRevision"/>; omitting it is for transitions that genuinely only
+    /// care about the state.
+    /// </summary>
+    internal bool TryTransitionLifecycle(
+        string id, string ns, string tenantId,
+        string fromState, string toState, LifecycleReservation installRevision,
+        long? expectedRevision = null)
+    {
+        // A defaulted token is not a reservation — no minted value is ever 0 (the seed is
+        // strictly positive and only ever incremented), so 0 can only mean
+        // default(LifecycleReservation), which must install nothing.
+        if (installRevision.Value == 0)
+            throw new ArgumentException(
+                "A default LifecycleReservation cannot be installed; mint one with ReserveLifecycleRevision().",
+                nameof(installRevision));
+
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null || !nsEntries.TryGetValue(id, out var tuple))
+                return false;
+
+            if (!string.Equals(tuple.Entry.LifecycleState, fromState, StringComparison.Ordinal))
+                return false;
+            if (expectedRevision is long expected && tuple.Entry.LifecycleRevision != expected)
+                return false;
+            if (string.Equals(fromState, toState, StringComparison.Ordinal))
+                return false;
+
+            tuple.Entry.LifecycleState = toState;
+            tuple.Entry.LifecycleRevision = installRevision.Value;
+            UpdateQuantization(nsEntries, id, tuple, fromState, toState);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            return true;
+        }
+        finally { nsLock.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// DISARM a planned-but-unfired lifecycle claim: move the entry's lifecycle witness off
+    /// <paramref name="expectedRevision"/> — state untouched — only while it still stands
+    /// exactly there, atomic under the partition write lock. An undoer retiring a record whose
+    /// claims are ARMED (persisted, member still at the planned state and witness, archive CAS
+    /// not yet fired) must neutralize them first: the record's deletion does not stop the
+    /// executor's pending CAS, but moving the witness makes that CAS refuse — so a crash on
+    /// the executor's side after the record is gone can no longer strand members archived
+    /// under a receipt nobody holds. A refusal means the claim was not armed (already fired,
+    /// already inert, or the member moved) — a skip for the caller, never an error.
+    /// </summary>
+    internal bool TryBumpLifecycleWitness(
+        string id, string ns, string tenantId, long expectedRevision, LifecycleReservation install)
+    {
+        if (install.Value == 0)
+            throw new ArgumentException(
+                "A default LifecycleReservation cannot be installed; mint one with ReserveLifecycleRevision().",
+                nameof(install));
+
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null || !nsEntries.TryGetValue(id, out var tuple))
+                return false;
+            if (tuple.Entry.LifecycleRevision != expectedRevision)
+                return false;
+
+            tuple.Entry.LifecycleRevision = install.Value;
+            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            return true;
+        }
+        finally { nsLock.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// Pin one partition's OCCUPANCY at <paramref name="baseline"/>: take the partition's READ
+    /// lock, verify the occupancy revision still equals the baseline UNDER that lock, and hand
+    /// the hold back as a disposable — or return null, holding nothing, when the partition
+    /// already moved. While the pin is held no entry in the partition can be written or removed
+    /// (every occupancy bump happens under the partition WRITE lock), which is what turns a
+    /// staged occupancy check from check-then-act into check-and-hold: the destructive mutation
+    /// performed under the pin acts on exactly the occupations the staging examined.
+    ///
+    /// LOCK ORDER: the pin must be acquired BEFORE the attribution fence and before the graph
+    /// or cluster write lock — the same partition-before-fence order an ambiguity-crossing
+    /// upsert uses (partition write lock, then the fence's exclusive side) — and nothing may
+    /// call back into this index for the pinned partition while holding it: the partition lock
+    /// is non-recursive, so a nested read or write from the same thread throws rather than
+    /// deadlocks.
+    /// </summary>
+    internal OccupancyPin? TryPinOccupancy(string ns, string tenantId, long baseline)
+    {
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterReadLock();
+        if (OccupancyRevisionFor(ns, tenantId) != baseline)
+        {
+            nsLock.ExitReadLock();
+            return null;
+        }
+        return new OccupancyPin(nsLock);
+    }
+
+    /// <summary>
+    /// Delete <paramref name="summaryId"/> in the exact partition ONLY IF the resident entry is
+    /// a summary node of <paramref name="clusterId"/> — and, when <paramref name="onlyIfStamp"/>
+    /// is given, of exactly that cluster INCARNATION
+    /// (<see cref="CognitiveEntry.SourceClusterStamp"/>) — identity by CONTENT, atomic under
+    /// the partition write lock. This is what lets a write-ahead record authorize the deletion
+    /// before the summary is ever stored: the record cannot know a revision that does not exist
+    /// yet, but it minted the incarnation stamp itself and knows exactly which cluster's
+    /// summary it owns. A replacement summary stored by a RECREATED same-id cluster carries a
+    /// different stamp and is left standing, as is an unrelated entry a caller manually placed
+    /// under the summary's id.
+    /// </summary>
+    internal bool DeleteIfSummaryOf(string summaryId, string ns, string tenantId, string clusterId,
+        string? onlyIfStamp = null, string? onlyIfInstance = null)
+    {
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        string pk = NamespaceStore.PartitionKey(key);
+
+        string? deletedFromNs = null;
+        var nsLock = NsLock(pk);
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is not null
+                && nsEntries.TryGetValue(summaryId, out var tuple)
+                && tuple.Entry.IsSummaryNode
+                && string.Equals(tuple.Entry.SourceClusterId, clusterId, StringComparison.Ordinal)
+                && (onlyIfStamp is null
+                    || string.Equals(tuple.Entry.SourceClusterStamp, onlyIfStamp, StringComparison.Ordinal))
+                // The PHYSICAL-instance condition, for record-driven cleanup: the stamp names
+                // a lineage every retry shares, so a stale branch's stamped delete could take
+                // down the live summary a concurrent retry published — the retry's record
+                // advanced with a fresh instance first, and comparing it here spares that
+                // summary. Null = legacy record, stamp-only compare as before.
+                && (onlyIfInstance is null
+                    || string.Equals(tuple.Entry.SourceClusterInstance, onlyIfInstance, StringComparison.Ordinal))
+                && nsEntries.TryRemove(summaryId, out _))
+            {
+                // Same cleanup as Delete — see its comments.
+                _store.UntrackEntry(summaryId, ns, key.Tenant);
+                _store.RemoveBM25(summaryId, pk);
+                _store.RemoveFromHnsw(pk, summaryId);
+                _store.ScheduleEntryDelete(ns, summaryId, key.Tenant);
+                BumpOccupancy(key.Tenant, ns);
+                deletedFromNs = ns;
+            }
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        if (deletedFromNs is not null)
+        {
+            EntryDeleted?.Invoke(this, (deletedFromNs, summaryId));
+            return true;
+        }
+        return false;
+    }
+
+    // Per-partition OCCUPANCY revision: moves whenever an entry is written or removed in that
+    // (tenant, ns) partition — including a same-slot replacement, which the ATTRIBUTION revision
+    // deliberately ignores (no ambiguity boundary is crossed) and which CreatedAt cannot witness
+    // on a coarse clock. Destructive maintenance brackets compare it so a staged judgment whose
+    // partition changed underneath it is refused rather than applied to occupations it never
+    // examined. Bumped inside the partition write lock; read lock-free.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Tenant, string Ns), long> _occupancyRevisions = new();
+
+    private void BumpOccupancy(string tenant, string ns)
+        => _occupancyRevisions.AddOrUpdate((tenant, ns), 1L, static (_, v) => v + 1);
+
+    /// <summary>
+    /// The partition's occupancy revision — see the field remarks. Compared, never interpreted:
+    /// any difference from a recorded value means some entry in the partition was written or
+    /// removed, and a maintenance decision staged before that must be re-staged, not applied.
+    /// </summary>
+    public long OccupancyRevisionFor(string ns, string tenantId)
+        => _occupancyRevisions.TryGetValue((Tenancy.Normalize(tenantId), ns), out var v) ? v : 0;
+
     public void Upsert(CognitiveEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        // Every occupation of a slot gets a fresh revision — see CognitiveEntry.Revision.
+        entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+        entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
 
         // Auto-enrich keywords for BM25 vocabulary bridging
         if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
@@ -383,11 +693,374 @@ public sealed class CognitiveIndex : IDisposable
             _store.IndexBM25(entry);
             _store.AddToHnsw(nskey, entry.Id, entry.Vector);
             _store.ScheduleEntryUpsert(entry.Ns, entry);
+            BumpOccupancy(nskey.Tenant, entry.Ns);
         }
         finally { nsLock.ExitWriteLock(); }
 
         // Fire event after lock release so handlers can call back into the index safely.
         EntryUpserted?.Invoke(this, entry);
+    }
+
+    /// <summary>
+    /// Upsert a SUMMARY entry only while its slot is compatible — empty, or occupied by an
+    /// entry of the SAME incarnation (equal <see cref="CognitiveEntry.SourceClusterStamp"/>,
+    /// null matching null for the legacy stampless world). The compare and the write are one
+    /// atom under the partition write lock: a DELAYED summary writer from a replaced
+    /// incarnation can therefore never overwrite its successor's summary (and then reap the
+    /// wreckage into a dangling pointer) — it refuses here, having written nothing. A
+    /// resident that is NOT a summary of the writer's own cluster — an ordinary entry a
+    /// caller manually placed under the summary's id in particular — is never overwritten,
+    /// whatever the stamps say (the legacy stampless world's null stamp would otherwise
+    /// EQUAL an ordinary entry's null stamp). False = refused, slot untouched.
+    ///
+    /// With <paramref name="replaceStale"/>, the caller — who has verified it speaks for the
+    /// cluster's CURRENT incarnation — may additionally replace EXACTLY the stale predecessor
+    /// summary it observed, pinned by <paramref name="staleRevision"/>: the PHYSICAL WRITE
+    /// identity of the resident the caller saw, not its incarnation stamp. The stamp is a
+    /// LINEAGE nonce a collapse retry re-mints onto a recreated cluster, so a stamp-pinned
+    /// takeover could destroy the live summary a retry published after the caller's observation
+    /// — the revision moves on every write and cannot alias. The replacement is the SAME atom
+    /// as the compare — overwrite-in-place on the existing key, so the new-entry quota checks
+    /// stay skipped and no instant exists with the slot empty. (A delete-then-retry shape
+    /// destroyed the only summary whenever a crash or a quota throw landed between the two
+    /// calls.) Anything else in the slot — a successor's summary, a manually stored entry, any
+    /// write other than the one observed — still refuses.
+    /// </summary>
+    internal bool UpsertSummaryIfIncarnation(CognitiveEntry entry, bool replaceStale = false, long? staleRevision = null)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+        entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+        if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
+            entry.Keywords = _documentEnricher.Enrich(entry.Text);
+        float norm = VectorMath.Norm(entry.Vector);
+        var quantized = entry.LifecycleState is "ltm" or "archived"
+            ? VectorQuantizer.Quantize(entry.Vector)
+            : null;
+
+        var nskey = new NsKey(entry.TenantId, entry.Ns);
+        string pk = NamespaceStore.PartitionKey(nskey);
+        var nsLock = NsLock(pk);
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(entry.Ns);
+            var nsEntries = _store.GetOrCreateNamespace(nskey);
+
+            if (nsEntries.TryGetValue(entry.Id, out var resident))
+            {
+                // A summary writer may only ever replace A SUMMARY OF ITS OWN CLUSTER. An
+                // ordinary entry a user stored under the summary's id is never overwritten —
+                // including by the legacy stampless world, whose null stamp would otherwise
+                // EQUAL an ordinary entry's null stamp and hand the user's memory to the
+                // summary machinery. With the resident's summary-hood and cluster verified,
+                // the stamp decides WHICH writers proceed: the same incarnation (refresh),
+                // or a takeover replacing exactly the stale stamp the caller observed.
+                bool ownSlot = resident.Entry.IsSummaryNode
+                    && string.Equals(resident.Entry.SourceClusterId, entry.SourceClusterId, StringComparison.Ordinal);
+                // Same incarnation means same PHYSICAL cluster object, not merely same
+                // lineage: the stamp is reused by a collapse retry's re-created cluster, so
+                // stamp equality alone would let a delayed writer admitted by a DEAD object
+                // of the lineage overwrite the live object's summary. The instance is never
+                // reused (null matching null covers both legacy worlds).
+                bool sameIncarnation =
+                    string.Equals(resident.Entry.SourceClusterStamp, entry.SourceClusterStamp, StringComparison.Ordinal)
+                    && string.Equals(resident.Entry.SourceClusterInstance, entry.SourceClusterInstance, StringComparison.Ordinal);
+                bool takeover = replaceStale
+                    && staleRevision is not null
+                    && resident.Entry.Revision == staleRevision.Value;
+                if (!ownSlot || !(sameIncarnation || takeover)) return false;
+            }
+
+            if (!nsEntries.ContainsKey(entry.Id))
+            {
+                if (nsEntries.Count >= _limits.MaxNamespaceSize)
+                    throw new InvalidOperationException(
+                        $"Namespace '{entry.Ns}' has reached the maximum size of {_limits.MaxNamespaceSize} entries.");
+                if (_store.TotalCount >= _limits.MaxTotalCount)
+                    throw new InvalidOperationException(
+                        $"Total memory count has reached the maximum of {_limits.MaxTotalCount} entries.");
+            }
+
+            nsEntries[entry.Id] = (entry, norm, quantized);
+            _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
+            _store.IndexBM25(entry);
+            _store.AddToHnsw(nskey, entry.Id, entry.Vector);
+            _store.ScheduleEntryUpsert(entry.Ns, entry);
+            BumpOccupancy(nskey.Tenant, entry.Ns);
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        EntryUpserted?.Invoke(this, entry);
+        return true;
+    }
+
+    /// <summary>
+    /// Capture both sides of a merge under one partition read lock. The copies are detached from
+    /// the resident objects, while the accompanying witnesses name both the slot occupation and
+    /// every field ordinary index operations can mutate in place.
+    /// </summary>
+    internal bool TryCaptureMergeEntries(
+        string keepId, string archiveId, string ns, string tenantId,
+        out MergeEntrySnapshot? keep, out MergeEntrySnapshot? archive)
+    {
+        keep = null;
+        archive = null;
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterReadLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var entries = _store.GetNamespace(key);
+            if (entries is null
+                || !entries.TryGetValue(keepId, out var keepTuple)
+                || !entries.TryGetValue(archiveId, out var archiveTuple))
+                return false;
+
+            keep = CaptureMergeSnapshot(keepTuple.Entry);
+            archive = CaptureMergeSnapshot(archiveTuple.Entry);
+            return true;
+        }
+        finally { nsLock.ExitReadLock(); }
+    }
+
+    private static MergeEntrySnapshot CaptureMergeSnapshot(CognitiveEntry source)
+    {
+        var copy = new CognitiveEntry(
+            source.Id, (float[])source.Vector.Clone(), source.Ns, source.Text,
+            source.Category, new Dictionary<string, string>(source.Metadata),
+            source.LifecycleState, source.CreatedAt, source.LastAccessedAt,
+            source.AccessCount, source.ActivationEnergy, source.IsSummaryNode,
+            source.SourceClusterId, source.Keywords, source.TenantId)
+        {
+            Revision = source.Revision,
+            LifecycleRevision = source.LifecycleRevision,
+            SourceClusterStamp = source.SourceClusterStamp,
+            SourceClusterInstance = source.SourceClusterInstance
+        };
+        return new MergeEntrySnapshot(
+            copy, source.Revision, source.LifecycleRevision, source.LifecycleState,
+            source.LastAccessedAt, source.AccessCount, source.ActivationEnergy);
+    }
+
+    private static bool MatchesMergeSnapshot(CognitiveEntry resident, MergeEntrySnapshot snapshot)
+        => resident.Revision == snapshot.Revision
+           && resident.LifecycleRevision == snapshot.LifecycleRevision
+           && string.Equals(resident.LifecycleState, snapshot.LifecycleState, StringComparison.Ordinal)
+           && resident.LastAccessedAt == snapshot.LastAccessedAt
+           && resident.AccessCount == snapshot.AccessCount
+           && resident.ActivationEnergy.Equals(snapshot.ActivationEnergy)
+           && string.Equals(resident.Text, snapshot.Entry.Text, StringComparison.Ordinal)
+           && string.Equals(resident.Category, snapshot.Entry.Category, StringComparison.Ordinal)
+           && string.Equals(resident.Keywords, snapshot.Entry.Keywords, StringComparison.Ordinal)
+           && resident.CreatedAt == snapshot.Entry.CreatedAt
+           && resident.IsSummaryNode == snapshot.Entry.IsSummaryNode
+           && string.Equals(resident.SourceClusterId, snapshot.Entry.SourceClusterId, StringComparison.Ordinal)
+           && string.Equals(resident.SourceClusterStamp, snapshot.Entry.SourceClusterStamp, StringComparison.Ordinal)
+           && string.Equals(resident.SourceClusterInstance, snapshot.Entry.SourceClusterInstance, StringComparison.Ordinal)
+           && resident.Vector.AsSpan().SequenceEqual(snapshot.Entry.Vector)
+           && MetadataEquals(resident.Metadata, snapshot.Entry.Metadata);
+
+    private static bool MetadataEquals(
+        IReadOnlyDictionary<string, string> current,
+        IReadOnlyDictionary<string, string> expected)
+    {
+        if (current.Count != expected.Count)
+            return false;
+        foreach (var (key, value) in expected)
+            if (!current.TryGetValue(key, out var actual)
+                || !string.Equals(actual, value, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Test seam immediately before the coherent merge takes its partition write lock.
+    /// </summary>
+    internal Action? OnBeforeMergeCommit;
+
+    /// <summary>
+    /// Atomically validate and update both entry sides and publish their prepared graph/cluster
+    /// transfer. Lock order is partition -&gt; attribution fence -&gt; graph -&gt; cluster. The partition
+    /// remains write-locked from witness comparison through both topology publications, so neither
+    /// produced occupation can be replaced or changed in place in the former post-entry window.
+    /// </summary>
+    internal bool TryCommitMerge(
+        MergeEntrySnapshot keep,
+        MergeEntrySnapshot archive,
+        CognitiveEntry updatedKeep,
+        PreparedMergeTopology topology,
+        KnowledgeGraph graph,
+        ClusterManager clusters,
+        out CommittedMergeTopology? committed)
+    {
+        committed = null;
+        if (!string.Equals(keep.Entry.Ns, archive.Entry.Ns, StringComparison.Ordinal)
+            || !string.Equals(keep.Entry.Ns, topology.Namespace, StringComparison.Ordinal)
+            || !string.Equals(keep.Entry.TenantId, archive.Entry.TenantId, StringComparison.Ordinal)
+            || !string.Equals(keep.Entry.TenantId, topology.TenantId, StringComparison.Ordinal)
+            || !string.Equals(archive.Entry.Id, topology.FromId, StringComparison.Ordinal)
+            || !string.Equals(keep.Entry.Id, topology.ToId, StringComparison.Ordinal))
+            return false;
+
+        var keywords = updatedKeep.Keywords
+            ?? (string.IsNullOrWhiteSpace(updatedKeep.Text)
+                ? null
+                : _documentEnricher.Enrich(updatedKeep.Text));
+        float norm = VectorMath.Norm(updatedKeep.Vector);
+        var quantized = updatedKeep.LifecycleState is "ltm" or "archived"
+            ? VectorQuantizer.Quantize(updatedKeep.Vector)
+            : null;
+
+        OnBeforeMergeCommit?.Invoke();
+
+        var key = new NsKey(keep.Entry.TenantId, keep.Entry.Ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        bool installed = false;
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(key.Ns);
+            var entries = _store.GetNamespace(key);
+            if (entries is null
+                || OccupancyRevisionFor(key.Ns, key.Tenant) != topology.PartitionOccupancy
+                || !entries.TryGetValue(keep.Entry.Id, out var residentKeep)
+                || !entries.TryGetValue(archive.Entry.Id, out var residentArchive)
+                || !MatchesMergeSnapshot(residentKeep.Entry, keep)
+                || !MatchesMergeSnapshot(residentArchive.Entry, archive)
+                || residentKeep.Entry.IsSummaryNode
+                || residentArchive.Entry.IsSummaryNode
+                || residentKeep.Entry.LifecycleState == "archived"
+                || residentArchive.Entry.LifecycleState == "archived")
+                return false;
+
+            bool topologyCommitted = graph.TryCommitPreparedMerge(
+                topology, clusters,
+                () =>
+                {
+                    updatedKeep.Keywords = keywords;
+                    updatedKeep.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+                    updatedKeep.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+                    entries[updatedKeep.Id] = (updatedKeep, norm, quantized);
+                    _store.TrackEntry(updatedKeep.Id, updatedKeep.Ns, updatedKeep.TenantId);
+                    _store.IndexBM25(updatedKeep);
+                    _store.AddToHnsw(key, updatedKeep.Id, updatedKeep.Vector);
+                    _store.ScheduleEntryUpsert(key.Ns, updatedKeep);
+                    BumpOccupancy(key.Tenant, key.Ns);
+
+                    string priorArchiveState = residentArchive.Entry.LifecycleState;
+                    residentArchive.Entry.LifecycleState = "archived";
+                    residentArchive.Entry.LifecycleRevision =
+                        Interlocked.Increment(ref _lifecycleRevisionCounter);
+                    UpdateQuantization(
+                        entries, archive.Entry.Id, residentArchive,
+                        priorArchiveState, residentArchive.Entry.LifecycleState);
+                    _store.ScheduleEntryUpsert(key.Ns, residentArchive.Entry);
+                    installed = true;
+                    return true;
+                },
+                out committed);
+            if (!topologyCommitted)
+                return false;
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        if (!installed || committed is null)
+            return false;
+
+        clusters.CompletePreparedMergeMembership(committed.Membership);
+        EntryUpserted?.Invoke(this, updatedKeep);
+        return true;
+    }
+
+    /// <summary>
+    /// Test seam: invoked immediately before <see cref="UpsertIfRevision"/> takes the
+    /// partition write lock, which is the exact window between a caller's read and its
+    /// compare-and-swap. A test installs a competing occupation from here to prove the
+    /// compare refuses; null in production, like every other seam in this assembly.
+    /// </summary>
+    internal Action? OnBeforeConditionedUpsert;
+
+    /// <summary>
+    /// Upsert ONLY over the occupation whose <see cref="CognitiveEntry.Revision"/> matches
+    /// <paramref name="onlyIfRevision"/> — the write half of the conditioned pair whose
+    /// delete half is <see cref="Delete(string, string, string, long)"/>.
+    ///
+    /// A caller that reads an entry, judges it, and builds a replacement out of its fields is
+    /// holding a SNAPSHOT. Writing that back unconditionally publishes stale content over
+    /// whatever occupies the slot now: the newer occupation is discarded without trace, and
+    /// every screen the caller ran — summary-hood, lifecycle state, ownership — was applied to
+    /// an entry that is no longer there. Comparing HERE, under the same write lock that
+    /// installs, makes the judgement and the write one atom; an entry replaced since (same id,
+    /// different revision) refuses instead. Revision is the witness for the same reason the
+    /// conditioned delete uses it: a same-tick replacement repeats CreatedAt, while every
+    /// upsert moves Revision.
+    ///
+    /// An ABSENT slot refuses too. The caller judged an entry that existed, and a vanished
+    /// occupation has moved just as surely as a replaced one — installing here would
+    /// resurrect a deleted id under the guise of an update. No quota check is needed for the
+    /// same reason: this never creates a slot.
+    ///
+    /// Returns false without installing when the id is absent or the resident does not match.
+    /// </summary>
+    public bool UpsertIfRevision(CognitiveEntry entry, long onlyIfRevision)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        // A REFUSAL MUST LEAVE NOTHING BEHIND, and that starts with not writing to `entry`.
+        // Get hands out the LIVE resident object, so a caller may legitimately pass the very
+        // entry that occupies the slot. Minting the revisions up front mutated that resident
+        // IN PLACE and then refused: the witness every other holder compares against had
+        // moved, so a collapse receipt's restore CAS — which fires only from the exact
+        // LifecycleRevision it installed — would refuse forever against an entry nobody had
+        // actually changed. Derived values are computed into locals here; the entry itself is
+        // touched only once the compare has committed us to installing it.
+        var keywords = entry.Keywords
+            ?? (string.IsNullOrWhiteSpace(entry.Text) ? null : _documentEnricher.Enrich(entry.Text));
+        float norm = VectorMath.Norm(entry.Vector);
+        var quantized = entry.LifecycleState is "ltm" or "archived"
+            ? VectorQuantizer.Quantize(entry.Vector)
+            : null;
+
+        var nskey = new NsKey(entry.TenantId, entry.Ns);
+        string pk = NamespaceStore.PartitionKey(nskey);
+
+        OnBeforeConditionedUpsert?.Invoke();
+
+        var nsLock = NsLock(pk);
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(entry.Ns);
+            // NON-CREATING, like the conditioned delete: a refused CAS must not bring a
+            // namespace into existence as a side effect of declining to write to it.
+            var nsEntries = _store.GetNamespace(nskey);
+
+            if (nsEntries is null
+                || !nsEntries.TryGetValue(entry.Id, out var resident)
+                || resident.Entry.Revision != onlyIfRevision)
+                return false;
+
+            // Committed. Only now does the caller's entry become the new occupation, so a
+            // refusal above has left both it and the resident exactly as they were.
+            entry.Keywords = keywords;
+            entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+            entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+
+            // Identical install to the unconditional overload — see its comments.
+            nsEntries[entry.Id] = (entry, norm, quantized);
+            _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
+            _store.IndexBM25(entry);
+            _store.AddToHnsw(nskey, entry.Id, entry.Vector);
+            _store.ScheduleEntryUpsert(entry.Ns, entry);
+            BumpOccupancy(nskey.Tenant, entry.Ns);
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        EntryUpserted?.Invoke(this, entry);
+        return true;
     }
 
     /// <summary>Batch upsert entries with a single write-lock acquisition.</summary>
@@ -399,6 +1072,9 @@ public sealed class CognitiveIndex : IDisposable
         var prepared = new List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>(entries.Count);
         foreach (var entry in entries)
         {
+            // Every occupation of a slot gets a fresh revision — see CognitiveEntry.Revision.
+            entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+        entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
             if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
                 entry.Keywords = _documentEnricher.Enrich(entry.Text);
             float norm = VectorMath.Norm(entry.Vector);
@@ -446,6 +1122,7 @@ public sealed class CognitiveIndex : IDisposable
                     _store.IndexBM25(entry);
                     _store.AddToHnsw(nskey, entry.Id, entry.Vector);
                     _store.ScheduleEntryUpsert(entry.Ns, entry);
+                    BumpOccupancy(nskey.Tenant, entry.Ns);
                     accepted.Add(entry);
                 }
             }
@@ -611,6 +1288,7 @@ public sealed class CognitiveIndex : IDisposable
                 _store.RemoveBM25(id, ns);
                 _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id, string.Empty);
+                BumpOccupancy(string.Empty, ns);
                 deletedFromNs = ns;
             }
         }
@@ -651,6 +1329,53 @@ public sealed class CognitiveIndex : IDisposable
                 _store.RemoveBM25(id, pk);
                 _store.RemoveFromHnsw(pk, id);
                 _store.ScheduleEntryDelete(ns, id, key.Tenant);
+                BumpOccupancy(key.Tenant, ns);
+                deletedFromNs = ns;
+            }
+        }
+        finally { nsLock.ExitWriteLock(); }
+
+        if (deletedFromNs is not null)
+        {
+            EntryDeleted?.Invoke(this, (deletedFromNs, id));
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Delete an entry scoped to a specific (tenant, ns) partition, but ONLY the occupation
+    /// whose <see cref="CognitiveEntry.Revision"/> matches <paramref name="onlyIfRevision"/>.
+    /// The check and the removal run under the same partition write lock, so a caller holding a
+    /// staged snapshot can delete exactly the version it judged: an entry replaced since — same
+    /// id, different revision — is left standing, where a bare check-then-delete would race the
+    /// replacement and take the fresh entry down anyway. Revision, not CreatedAt, is the
+    /// witness: a same-tick replacement repeats CreatedAt, while every upsert moves Revision.
+    /// Returns false when the id is absent or the resident occupation does not match.
+    /// </summary>
+    public bool Delete(string id, string ns, string tenantId, long onlyIfRevision)
+    {
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        string pk = NamespaceStore.PartitionKey(key);
+
+        string? deletedFromNs = null;
+        var nsLock = NsLock(pk);
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is not null
+                && nsEntries.TryGetValue(id, out var tuple)
+                && tuple.Entry.Revision == onlyIfRevision
+                && nsEntries.TryRemove(id, out _))
+            {
+                // Same cleanup as the unconditional overload — see its comments.
+                _store.UntrackEntry(id, ns, key.Tenant);
+                _store.RemoveBM25(id, pk);
+                _store.RemoveFromHnsw(pk, id);
+                _store.ScheduleEntryDelete(ns, id, key.Tenant);
+                BumpOccupancy(key.Tenant, ns);
                 deletedFromNs = ns;
             }
         }
@@ -1115,6 +1840,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 var previousState = tuple.Entry.LifecycleState;
                 tuple.Entry.LifecycleState = state;
+                StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, state);
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
                 return true;
@@ -1126,7 +1852,21 @@ public sealed class CognitiveIndex : IDisposable
 
     /// <summary>Update lifecycle state within an exact tenant + namespace partition.</summary>
     public bool SetLifecycleState(string id, string state, string ns, string tenantId)
+        => SetLifecycleState(id, state, ns, tenantId, out _);
+
+    /// <summary>
+    /// As <see cref="SetLifecycleState(string, string, string, string)"/>, additionally reporting
+    /// the <see cref="CognitiveEntry.LifecycleRevision"/> that THIS CALL'S transition produced —
+    /// and 0 when the call performed no transition at all (the state was already held), decided
+    /// under the same partition write lock. The zero matters as much as the value: a caller
+    /// building a reversal receipt claims ownership of a transition, and a set that changed
+    /// nothing — including one racing another actor who archived the entry first — performed no
+    /// transition to own. Reporting the current revision there would hand the caller somebody
+    /// else's witness.
+    /// </summary>
+    public bool SetLifecycleState(string id, string state, string ns, string tenantId, out long lifecycleRevision)
     {
+        lifecycleRevision = 0;
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         var nsLock = NsLock(NamespaceStore.PartitionKey(key));
         nsLock.EnterWriteLock();
@@ -1139,8 +1879,11 @@ public sealed class CognitiveIndex : IDisposable
 
             var previousState = tuple.Entry.LifecycleState;
             tuple.Entry.LifecycleState = state;
+            StampLifecycleTransition(tuple.Entry, previousState);
             UpdateQuantization(nsEntries, id, tuple, previousState, state);
             _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            if (!string.Equals(previousState, state, StringComparison.Ordinal))
+                lifecycleRevision = tuple.Entry.LifecycleRevision;
             return true;
         }
         finally { nsLock.ExitWriteLock(); }
@@ -1180,6 +1923,7 @@ public sealed class CognitiveIndex : IDisposable
                     {
                         var previousState = tuple.Entry.LifecycleState;
                         tuple.Entry.LifecycleState = state;
+                        StampLifecycleTransition(tuple.Entry, previousState);
                         UpdateQuantization(nsEntries, id, tuple, previousState, state);
                         _store.ScheduleEntryUpsert(ns, tuple.Entry);
                         updated++;
@@ -1214,6 +1958,7 @@ public sealed class CognitiveIndex : IDisposable
 
                 var previousState = tuple.Entry.LifecycleState;
                 tuple.Entry.LifecycleState = state;
+                StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, state);
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
                 updated++;
@@ -1241,6 +1986,7 @@ public sealed class CognitiveIndex : IDisposable
                 if (newState is not null)
                 {
                     tuple.Entry.LifecycleState = newState;
+                    StampLifecycleTransition(tuple.Entry, previousState);
                     UpdateQuantization(nsEntries, id, tuple, previousState, newState);
                 }
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
@@ -1273,6 +2019,7 @@ public sealed class CognitiveIndex : IDisposable
             if (newState is not null)
             {
                 tuple.Entry.LifecycleState = newState;
+                StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, newState);
             }
             _store.ScheduleEntryUpsert(ns, tuple.Entry);
@@ -1305,6 +2052,39 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>Delete all entries in a namespace and remove it from in-memory state. Does NOT cascade to graph edges or clusters — callers must handle that.</summary>
+    /// <summary>
+    /// Remove a namespace partition ONLY IF it holds no entries — the emptiness check and the
+    /// removal run under the same partition write lock, so a concurrent upsert cannot land
+    /// between a caller's "it is empty" observation and a wholesale delete that would take the
+    /// fresh entry down with it. Returns false, touching nothing, when entries are present.
+    /// </summary>
+    public bool DeleteAllInNamespaceIfEmpty(string ns, string tenantId)
+    {
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        bool namespaceRemoved = false;
+        nsLock.EnterWriteLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is not null && nsEntries.Count > 0)
+                return false;
+            _store.RemoveNamespace(key);
+            namespaceRemoved = true;
+        }
+        finally
+        {
+            nsLock.ExitWriteLock();
+
+            // Outside the partition lock, for the same lock-ordering reason DeleteAllInNamespace
+            // states on its own event dispatch.
+            if (namespaceRemoved)
+                NamespaceRemoved?.Invoke(key);
+        }
+        return true;
+    }
+
     public int DeleteAllInNamespace(string ns)
         => DeleteAllInNamespace(ns, string.Empty);
 
@@ -1339,6 +2119,7 @@ public sealed class CognitiveIndex : IDisposable
                 foreach (var id in ids)
                     _store.ScheduleEntryDelete(ns, id, key.Tenant);
                 removed = ids.Count;
+                BumpOccupancy(key.Tenant, ns);
             }
         }
         finally
@@ -1469,7 +2250,23 @@ public sealed class CognitiveIndex : IDisposable
                     oldEntry.Category, oldEntry.Metadata, oldEntry.LifecycleState,
                     oldEntry.CreatedAt, oldEntry.LastAccessedAt, oldEntry.AccessCount,
                     oldEntry.ActivationEnergy, oldEntry.IsSummaryNode, oldEntry.SourceClusterId,
-                    oldEntry.Keywords, oldEntry.TenantId);
+                    oldEntry.Keywords, oldEntry.TenantId)
+                {
+                    // Summary OWNERSHIP survives the rebuild: a re-embedded summary that lost
+                    // its stamp/instance would fail every ownership screen (served as no
+                    // summary) and stop matching its record's conditioned cleanup — the
+                    // rebuild changes the vector, never whose summary this is.
+                    SourceClusterStamp = oldEntry.SourceClusterStamp,
+                    SourceClusterInstance = oldEntry.SourceClusterInstance
+                };
+
+                // A rebuild is a re-OCCUPATION of the slot, and the witnesses must say so
+                // rather than reset to zero: a fresh Revision (so a delete staged against the
+                // pre-rebuild occupation refuses), the PRESERVED LifecycleRevision (no
+                // lifecycle transition happened, so reversal receipts pointing at the current
+                // state must keep matching), and an occupancy bump below.
+                newEntry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
+                newEntry.LifecycleRevision = oldEntry.LifecycleRevision;
 
                 var quantized = newEntry.LifecycleState is "ltm" or "archived"
                     ? VectorQuantizer.Quantize(newVector)
@@ -1481,6 +2278,7 @@ public sealed class CognitiveIndex : IDisposable
 
             if (updated > 0)
             {
+                BumpOccupancy(key.Tenant, ns);
                 _store.ScheduleSave(ns);
                 // Invalidate the stale HNSW index so it is rebuilt lazily on the next search.
                 // The old topology references pre-re-embedding vectors and would return wrong candidates.

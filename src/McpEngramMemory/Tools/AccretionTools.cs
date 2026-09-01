@@ -55,7 +55,7 @@ public sealed class AccretionTools
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        var result = _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, _lifecycle, tenantId: _access.TenantId);
+        var result = _scanner.ExecuteCollapse(collapseId, summaryText, resolved, _clusters, tenantId: _access.TenantId);
         if (!result.StartsWith("Error:"))
             _access.ClaimOnWrite(ns);
         return result;
@@ -70,7 +70,7 @@ public sealed class AccretionTools
         if (ns is null || !_access.CanWrite(ns))
             return $"Error: Collapse '{collapseId}' not found.";
 
-        return _scanner.DismissCollapse(collapseId, tenantId: _access.TenantId);
+        return _scanner.DismissCollapse(collapseId, tenantId: _access.TenantId, clusters: _clusters);
     }
 
     public AccretionScanResult TriggerAccretionScan(

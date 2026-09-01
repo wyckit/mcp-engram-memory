@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Storage;
@@ -248,19 +251,115 @@ public class SqliteStorageProviderTests : IDisposable
         Assert.Equal("c1", loaded[0].ClusterId);
     }
 
+    /// <summary>
+    /// The record-level RMW is one backend transaction, so it is serialized by SQLITE ITSELF —
+    /// across connections, provider instances, connection-string spellings and OS processes. A
+    /// side transaction takes the database's write lock and commits a record while the
+    /// provider's upsert is forced to wait; because the provider reads only AFTER acquiring
+    /// that same lock, the side record survives the join. The old shape — read on one
+    /// connection, write on another, serialized only by a process-local gate keyed by the raw
+    /// connection string — read the pre-commit set and erased the side record under a
+    /// "successful" upsert.
+    /// </summary>
+    [Fact]
+    public async Task UpsertCollapseRecordSync_ConcurrentWriterCommitsFirst_JoinsInsteadOfErasing()
+    {
+        var camel = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var sideRecord = new CollapseRecord(
+            "collapse:side", "cluster-s", "summary-s", "test",
+            new List<string> { "m1" }, new Dictionary<string, string>(), tenantId: "");
+        var sideJson = JsonSerializer.Serialize(new List<CollapseRecord> { sideRecord }, camel);
+        var sideChecksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sideJson)));
+
+        using var side = new SqliteConnection($"Data Source={_testDbPath}");
+        side.Open();
+        using (var begin = side.CreateCommand())
+        {
+            begin.CommandText = "BEGIN IMMEDIATE;";
+            begin.ExecuteNonQuery();
+        }
+        using (var write = side.CreateCommand())
+        {
+            write.CommandText =
+                "INSERT OR REPLACE INTO global_data (key, json_data, checksum) VALUES ('collapse_history', @json, @sum)";
+            write.Parameters.AddWithValue("@json", sideJson);
+            write.Parameters.AddWithValue("@sum", sideChecksum);
+            write.ExecuteNonQuery();
+        }
+
+        var providerRecord = new CollapseRecord(
+            "collapse:provider", "cluster-p", "summary-p", "test",
+            new List<string> { "m2" }, new Dictionary<string, string>(), tenantId: "");
+        var upsert = Task.Run(() => _provider.UpsertCollapseRecordSync(providerRecord));
+
+        // Blocked behind the side transaction's write lock — not interleaving with it.
+        Assert.NotSame(upsert, await Task.WhenAny(upsert, Task.Delay(300)));
+
+        using (var commit = side.CreateCommand())
+        {
+            commit.CommandText = "COMMIT;";
+            commit.ExecuteNonQuery();
+        }
+
+        Assert.True(await upsert);
+        var loaded = _provider.LoadCollapseHistory();
+        Assert.Equal(2, loaded.Count);
+        Assert.Contains(loaded, r => r.CollapseId == "collapse:side");
+        Assert.Contains(loaded, r => r.CollapseId == "collapse:provider");
+    }
+
+    /// <summary>
+    /// Two instances whose paths are different spellings of the same file agree on
+    /// <see cref="IStorageProvider.StoreIdentity"/> — the key the accretion scanner's
+    /// store-scoped in-flight gate coordinates on.
+    /// </summary>
+    [Fact]
+    public void StoreIdentity_EquivalentPathSpellings_AgreeAcrossInstances()
+    {
+        var alias = Path.Combine(Path.GetDirectoryName(_testDbPath)!, ".", "memory.db");
+        using var second = new SqliteStorageProvider(alias, debounceMs: 10);
+        Assert.Equal(((IStorageProvider)_provider).StoreIdentity, ((IStorageProvider)second).StoreIdentity);
+    }
+
+    /// <summary>
+    /// Valid-JSON tampering under a stale checksum is refused by every strict path — the
+    /// single-record read reports UNKNOWN (never absent), and the RMW refuses rather than
+    /// deserializing the tampering and normalizing it into a freshly-checksummed commit.
+    /// </summary>
+    [Fact]
+    public void CollapseHistory_TamperedJsonWithStaleChecksum_IsRefusedByStrictPaths()
+    {
+        var record = new CollapseRecord(
+            "collapse:sum", "cluster-s", "summary-s", "test",
+            new List<string> { "m" }, new Dictionary<string, string>(), tenantId: "");
+        Assert.True(_provider.UpsertCollapseRecordSync(record));
+
+        using (var conn = new SqliteConnection($"Data Source={_testDbPath}"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                "UPDATE global_data SET json_data = REPLACE(json_data, 'cluster-s', 'cluster-TAMPERED') WHERE key = 'collapse_history'";
+            Assert.Equal(1, cmd.ExecuteNonQuery());
+        }
+
+        Assert.False(_provider.TryReadCollapseRecord("collapse:sum", out _));
+        var another = new CollapseRecord(
+            "collapse:other", "cluster-o", "summary-o", "test",
+            new List<string> { "m2" }, new Dictionary<string, string>(), tenantId: "");
+        Assert.False(_provider.UpsertCollapseRecordSync(another));
+    }
+
     [Fact]
     public void CollapseHistory_SaveAndLoad()
     {
-        var records = new List<CollapseRecord>
-        {
-            new("collapse-1", "c1", "summary-1", "test",
-                new List<string> { "orig-1", "orig-2" },
-                new Dictionary<string, string> { ["orig-1"] = "ltm", ["orig-2"] = "ltm" },
-                DateTimeOffset.UtcNow)
-        };
+        var record = new CollapseRecord(
+            "collapse-1", "c1", "summary-1", "test",
+            new List<string> { "orig-1", "orig-2" },
+            new Dictionary<string, string> { ["orig-1"] = "ltm", ["orig-2"] = "ltm" },
+            DateTimeOffset.UtcNow);
 
-        _provider.ScheduleSaveCollapseHistory(() => records);
-        _provider.Flush();
+        Assert.True(_provider.UpsertCollapseRecordSync(record));
 
         var loaded = _provider.LoadCollapseHistory();
         Assert.Single(loaded);

@@ -56,14 +56,21 @@ public sealed class ClusterTools
     {
         // Cluster ownership isn't known until the cluster itself is resolved (within this tenant).
         // Same reply shape as a genuine miss - a distinct denial would confirm the cluster exists in
-        // a namespace this caller cannot see.
-        var clusterNs = _clusters.GetCluster(clusterId, tenantId: _access.TenantId)?.Namespace;
+        // a namespace this caller cannot see. GetClusterNamespace, not the full GetCluster
+        // projection: the gate needs only the namespace, and the optimistic projection can
+        // return null under tenant-wide attribution churn — refusing a write the fenced
+        // mutation itself would have admitted.
+        var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
         var addIds = addMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         var removeIds = removeMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        return _clusters.UpdateCluster(clusterId, addIds, removeIds, label, tenantId: _access.TenantId);
+        // The authorized namespace rides INTO the mutation and is re-compared under the same
+        // lock that publishes the edit — a cluster recreated in another namespace between the
+        // gate above and this write refuses instead of being mutated under stale authority.
+        return _clusters.UpdateClusterInNs(clusterId, addIds, removeIds, label, tenantId: _access.TenantId,
+            onlyIfNs: clusterNs);
     }
 
     [McpServerTool(Name = "store_cluster_summary", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -73,7 +80,8 @@ public sealed class ClusterTools
         [Description("Generated summary text.")] string summaryText,
         [Description("Embedding of the summary.")] float[]? summaryVector = null)
     {
-        var clusterNs = _clusters.GetCluster(clusterId, tenantId: _access.TenantId)?.Namespace;
+        // GetClusterNamespace for the gate, like update_cluster — see the comment there.
+        var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
         if (clusterNs is null || !_access.CanWrite(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
@@ -81,7 +89,9 @@ public sealed class ClusterTools
             ? summaryVector
             : _embedding.Embed(summaryText);
 
-        var result = _clusters.StoreSummary(clusterId, summaryText, resolved, tenantId: _access.TenantId);
+        // onlyIfNs: authorization bound to the mutation — see update_cluster.
+        var result = _clusters.StoreSummaryInNs(clusterId, summaryText, resolved, tenantId: _access.TenantId,
+            onlyIfNs: clusterNs);
         if (result.StartsWith("Error:")) return result;
 
         _access.ClaimOnWrite(clusterNs);

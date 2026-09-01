@@ -23,6 +23,64 @@ public class PersistenceManagerTests : IDisposable
     }
 
     [Fact]
+    public void UpsertCollapseRecordSync_FailureCommitsNothingAndDoesNotPoisonTheStore()
+    {
+        using var persistence = new PersistenceManager(_testDataPath);
+
+        // Break the write path before anything commits: the history slot's file name occupied
+        // by a directory makes both the strict read-back and the atomic replace fail
+        // deterministically.
+        var historyPath = Path.Combine(_testDataPath, "_collapse_history.json");
+        Directory.CreateDirectory(historyPath);
+
+        var failedRecord = new CollapseRecord(
+            "collapse:failed", "cluster-f", "summary-f", "ns",
+            new List<string> { "m1" }, new Dictionary<string, string>(), tenantId: "");
+        Assert.False(persistence.UpsertCollapseRecordSync(failedRecord));
+
+        // False must mean NOTHING was committed: once the path is writable again the store is
+        // simply empty — no half-written file, no phantom record.
+        Directory.Delete(historyPath);
+        Assert.Empty(persistence.LoadCollapseHistory());
+
+        // The failure has not poisoned anything: later record-level upserts land — and, being
+        // read-modify-writes, the second JOINS the record already on disk instead of erasing
+        // it with a snapshot of one caller's world.
+        var first = new CollapseRecord(
+            "collapse:first", "cluster-a", "summary-a", "ns",
+            new List<string> { "m2" }, new Dictionary<string, string>(), tenantId: "");
+        Assert.True(persistence.UpsertCollapseRecordSync(first));
+
+        var second = new CollapseRecord(
+            "collapse:second", "cluster-b", "summary-b", "ns",
+            new List<string> { "m3" }, new Dictionary<string, string>(), tenantId: "");
+        Assert.True(persistence.UpsertCollapseRecordSync(second));
+
+        var final = persistence.LoadCollapseHistory();
+        Assert.Equal(2, final.Count);
+        Assert.Contains(final, r => r.CollapseId == "collapse:first");
+        Assert.Contains(final, r => r.CollapseId == "collapse:second");
+
+        // And the removal twin honors the same read-modify-write discipline.
+        Assert.True(persistence.DeleteCollapseRecordSync("collapse:first"));
+        Assert.Equal("collapse:second", Assert.Single(persistence.LoadCollapseHistory()).CollapseId);
+
+        // Deleting an absent record commits nothing and reports agreement — the documented
+        // no-op semantics, not a rewrite that can spuriously fail.
+        Assert.True(persistence.DeleteCollapseRecordSync("collapse:never-existed"));
+        Assert.Single(persistence.LoadCollapseHistory());
+
+        // The history file is a self-checksummed envelope committed in ONE atomic replace —
+        // no companion file survives a sync commit (a stale one would spuriously refuse good
+        // data after a crash between two writes, which is why the checksum moved inside).
+        var historyFile = Path.Combine(_testDataPath, "_collapse_history.json");
+        Assert.False(File.Exists(historyFile + ".sha256"));
+        Assert.Contains("\"checksum\":", File.ReadAllText(historyFile));
+        Assert.True(persistence.TryReadCollapseRecord("collapse:second", out var reread));
+        Assert.NotNull(reread);
+    }
+
+    [Fact]
     public void LoadNamespace_EmptyFile_ReturnsEmpty()
     {
         var persistence = new PersistenceManager(_testDataPath);

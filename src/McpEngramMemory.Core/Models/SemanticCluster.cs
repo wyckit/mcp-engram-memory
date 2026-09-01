@@ -29,6 +29,30 @@ public sealed class SemanticCluster
     [JsonPropertyName("summaryEntryId")]
     public string? SummaryEntryId { get; set; }
 
+    /// <summary>
+    /// Incarnation witness minted when THIS cluster object's lineage was created — every
+    /// creation gets a fresh one (<c>ClusterManager.CreateCluster</c>), so
+    /// a cluster recreated under a previously-used id is distinguishable from the incarnation
+    /// that id named before. Reversible maintenance (the accretion collapse record) persists
+    /// the stamp write-ahead and its cleanup compares it atomically, sparing any same-id
+    /// resident it never minted. Null on clusters persisted before the field existed.
+    /// </summary>
+    [JsonPropertyName("creationStamp")]
+    public string? CreationStamp { get; set; }
+
+    /// <summary>
+    /// PHYSICAL-INSTANCE witness, distinct from <see cref="CreationStamp"/> on purpose: the
+    /// stamp names a LINEAGE and is deliberately REUSED when a collapse retry re-creates its
+    /// recorded cluster, while this id is minted fresh on EVERY creation and never reused —
+    /// two cluster objects of the same lineage carry the same stamp but different instances.
+    /// Writers that must fence "the exact cluster object that admitted me" (the summary
+    /// store's CAS and publish) compare the instance; record-driven cleanup that owns a
+    /// lineage keeps comparing the stamp it minted. Carried through every edit
+    /// (<c>ClusterManager.Replace</c>); null on clusters persisted before the field existed.
+    /// </summary>
+    [JsonPropertyName("instanceId")]
+    public string? InstanceId { get; set; }
+
     public SemanticCluster(
         string clusterId,
         string ns,
@@ -64,6 +88,10 @@ public sealed class SemanticCluster
         MemberIds = memberIds ?? new();
         Centroid = centroid;
         SummaryEntryId = summaryEntryId;
-        TenantId = Tenancy.Normalize(tenantId);
+        // Read path: normalize only, never validate (see CognitiveEntry's read constructor).
+        // Tenancy.Normalize throws on over-long/control-character tenants, and System.Text.Json
+        // does not wrap constructor exceptions — a validating read ctor makes one poisoned row
+        // render the whole store unloadable. Validation belongs on the way in only.
+        TenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
     }
 }

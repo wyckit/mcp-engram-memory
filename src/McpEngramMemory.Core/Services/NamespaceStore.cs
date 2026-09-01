@@ -235,11 +235,19 @@ internal sealed class NamespaceStore
     // (they are unreachable via the global id/count paths).
     private long _totalCountApprox;
 
-    public NamespaceStore(IStorageProvider persistence, BM25Index bm25)
+    public NamespaceStore(IStorageProvider persistence, BM25Index bm25, ILogger? logger = null)
     {
         _persistence = persistence;
         _bm25 = bm25;
+        _logger = logger;
     }
+
+    private readonly ILogger? _logger;
+
+    /// <summary>True when the value carries a character the partition-key composition reserves —
+    /// the screen the load paths apply before registering search indexes for a stored partition.</summary>
+    private static bool ContainsPartitionControlChar(string value)
+        => value.Any(char.IsControl);
 
     /// <summary>Compose the partition-key string for BM25/HNSW sub-indexes. Legacy tenant → the namespace itself.</summary>
     /// <exception cref="ArgumentException">
@@ -291,10 +299,29 @@ internal sealed class NamespaceStore
         if (configs is null)
             return map;
 
+        // NULL rows first: a hand-poisoned or truncated file can deserialize a null list
+        // element (JSON "[null, ...]"), or a row whose ns bound explicit JSON null — the
+        // read constructor guarantees a non-null TenantId but takes ns as-is. Either shape
+        // would throw out of the OrderBy or the key composition below and turn one bad row
+        // into a boot that cannot load ANY decay config — the exact brick this method
+        // exists to prevent. Dropped with a warning; nothing can address such a row anyway.
+        var wellFormed = new List<DecayConfig>(configs.Count);
+        foreach (var config in configs)
+        {
+            if (config is null || config.Ns is null || config.TenantId is null)
+            {
+                logger?.LogWarning(
+                    "Dropping a stored decay-config row with a null shape (null row, null ns, or null tenant); " +
+                    "this store holds hand-poisoned or truncated data and should be repaired.");
+                continue;
+            }
+            wellFormed.Add(config);
+        }
+
         // OrderBy is a stable sort, so within each group the stored order decides. That makes the
         // survivor arbitrary but reproducible across boots, which is what keeps decay behaviour
         // from flipping between restarts.
-        foreach (var config in configs.OrderBy(c => c.TenantId.Length == 0 ? 1 : 0))
+        foreach (var config in wellFormed.OrderBy(c => c.TenantId.Length == 0 ? 1 : 0))
         {
             // ComposeKeyUnchecked, not PartitionKey: the rows being keyed here are exactly the ones
             // that may already carry a separator, so the assert would abort the boot this method
@@ -481,6 +508,26 @@ internal sealed class NamespaceStore
             // GetNamespace(ns) returned a (possibly empty) dictionary after EnsureLoaded.
             _namespaces.GetOrAdd(new NsKey(string.Empty, ns), _ => new ConcurrentDictionary<string, (CognitiveEntry, float, QuantizedVector?)>());
 
+            // SANITIZE the deserialized SHAPES before anything consumes them: the lenient
+            // loaders accept any well-formed JSON, so a hand-poisoned or truncated file can
+            // hold a null list element ("[null, ...]"), or an entry whose id or vector bound
+            // explicit JSON null — each would throw out of the grouping, the tracking, or the
+            // norm/index math below and turn one bad row into a namespace that cannot load at
+            // all. Dropped with a warning: a row with no identity or no vector is not an
+            // entry, and nothing can address it.
+            // The COLLECTION itself can bind JSON null ("entries": null) — quarantined like
+            // its rows, or the sanitize below is itself the throw that bricks the load.
+            data.Entries ??= new List<CognitiveEntry>();
+            int dropped = data.Entries.RemoveAll(e =>
+                e is null || string.IsNullOrEmpty(e.Id) || e.Vector is null || string.IsNullOrEmpty(e.Ns));
+            if (dropped > 0)
+            {
+                _logger?.LogWarning(
+                    "Namespace '{Namespace}' held {Dropped} stored row(s) with a null shape (null row, null id, " +
+                    "null vector, or null ns); they were dropped on load. This store holds hand-poisoned or truncated " +
+                    "data and should be repaired.", EscapeControlChars(ns), dropped);
+            }
+
             LoadEntries(ns, data.Entries);
 
             // Build BM25 + restore HNSW per (tenant, ns) partition so a search never mixes tenants
@@ -488,7 +535,29 @@ internal sealed class NamespaceStore
             // path (partition key == ns, one group).
             foreach (var group in data.Entries.GroupBy(e => e.TenantId))
             {
-                string pk = PartitionKey(group.Key, ns);
+                // ComposeKeyUnchecked, not PartitionKey: these tenants come FROM the store
+                // (read constructors trim without validating), and the validating composer
+                // would turn one pre-validation row into a load that throws — bricking the
+                // whole namespace.
+                //
+                // A POISONED component (a partition control character in the stored tenant
+                // or ns) gets NO search indexes at all, because its unchecked key is not
+                // merely unreachable — it can be BYTE-IDENTICAL to a key a valid caller
+                // legitimately composes (legacy ns "acme<US>notes" collides with tenant
+                // "acme" + ns "notes"). Registering BM25/HNSW under that alias would hand
+                // the valid tenant's searches a foreign corpus and skip indexing its own
+                // entries when it loads second. The rows themselves stay loaded in the
+                // partition map for the recovery paths; only the search indexes are
+                // withheld, and no valid search can address the partition anyway.
+                if (ContainsPartitionControlChar(group.Key) || ContainsPartitionControlChar(ns))
+                {
+                    _logger?.LogWarning(
+                        "Namespace '{Namespace}' holds a partition whose stored tenant or name fails partition " +
+                        "validation; its rows are loaded but not search-indexed. This store was written before " +
+                        "partition-component validation and should be repaired.", EscapeControlChars(ns));
+                    continue;
+                }
+                string pk = ComposeKeyUnchecked(group.Key, ns);
                 var groupList = group as IList<CognitiveEntry> ?? group.ToList();
 
                 if (!_bm25.HasNamespace(pk))
@@ -585,6 +654,21 @@ internal sealed class NamespaceStore
     /// </summary>
     public void ScheduleSave(string ns)
     {
+        // The provider MATERIALIZES AT INVOKE TIME, never at schedule time. A full save is a
+        // delete-all-rows-and-re-insert of the namespace, so a snapshot frozen at schedule
+        // time that commits after any NEWER write — a retained retry, a timer firing late, a
+        // flush draining queues — durably resurrects deleted entries and erases new ones.
+        // Materializing when the provider is actually invoked (under the provider's flush
+        // gate) makes every full save at least as fresh as every write that committed before
+        // it, which is the invariant the providers' commit ordering relies on.
+        _persistence.ScheduleSave(ns, () => BuildNamespaceSnapshot(ns));
+
+        // Persist HNSW snapshots alongside namespace data (one per tenant partition)
+        ScheduleHnswSave(ns);
+    }
+
+    private NamespaceData BuildNamespaceSnapshot(string ns)
+    {
         var data = new NamespaceData();
         var list = new List<CognitiveEntry>();
         foreach (var kv in _namespaces)
@@ -593,11 +677,7 @@ internal sealed class NamespaceStore
             list.AddRange(kv.Value.Values.Select(t => t.Entry));
         }
         data.Entries = list;
-
-        _persistence.ScheduleSave(ns, () => data);
-
-        // Persist HNSW snapshots alongside namespace data (one per tenant partition)
-        ScheduleHnswSave(ns);
+        return data;
     }
 
     /// <summary>Schedule an incremental upsert (SQLite/SQL Server) or full snapshot (JSON) for a single entry.</summary>
@@ -1141,7 +1221,16 @@ internal sealed class NamespaceStore
         foreach (var key in _namespaces.Keys)
         {
             if (key.Ns != ns) continue;
-            string pk = PartitionKey(key);
+            // ComposeKeyUnchecked: these keys come from the LOADED map, which can hold a
+            // pre-validation tenant the read path deliberately tolerates — the validating
+            // composer would abort this sweep for every partition ordered after it. A
+            // POISONED key is skipped outright: no index was ever registered for it (see
+            // EnsureLoaded's quarantine), and its unchecked composition can alias a
+            // valid partition's key — saving under the alias would write that partition's
+            // snapshot a second time at best.
+            if (ContainsPartitionControlChar(key.Tenant) || ContainsPartitionControlChar(key.Ns))
+                continue;
+            string pk = ComposeKeyUnchecked(key.Tenant, key.Ns);
             if (_hnswIndices.TryGetValue(pk, out var idx))
             {
                 var snapshot = idx.CreateSnapshot();
