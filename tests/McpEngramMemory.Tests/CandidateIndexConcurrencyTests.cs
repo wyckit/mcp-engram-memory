@@ -90,7 +90,8 @@ public class CandidateIndexConcurrencyTests : IDisposable
         const int rounds = 6000;
         const int adders = 3;
 
-        RunRetirementStorm(adders, rounds);
+        int completed = RunRetirementStorm(adders, rounds);
+        AssertStormWasMeaningful(completed, rounds);
 
         // The oracle: everything actually resident, read back through the same public API a caller
         // would use, with no knowledge of how the index is maintained.
@@ -108,8 +109,9 @@ public class CandidateIndexConcurrencyTests : IDisposable
 
         // Guard the guard. If the storm had silently done nothing, an index that is permanently
         // empty would agree with an empty scan and this test would pass having proved nothing.
-        // The adders never delete and every id is unique to its round, so the count is exact.
-        Assert.Equal(rounds * adders, live);
+        // The adders never delete and every id is unique to its round, so the count is exact —
+        // against the rounds that actually ran, since the cutoff is taken at a round boundary.
+        Assert.Equal(completed * adders, live);
 
         Assert.True(missing.Count == 0,
             $"{missing.Count} live placement(s) are unreachable by bare id — a retirement " +
@@ -129,10 +131,11 @@ public class CandidateIndexConcurrencyTests : IDisposable
         const int rounds = 4000;
         const int adders = 2;
 
-        RunRetirementStorm(adders, rounds);
+        int completed = RunRetirementStorm(adders, rounds);
+        AssertStormWasMeaningful(completed, rounds);
 
         var underCounted = new List<string>();
-        for (int round = 0; round < rounds; round++)
+        for (int round = 0; round < completed; round++)
         {
             var id = StormId(round);
             // Exactly two: both adders hold the id and neither ever deleted it, the remover's
@@ -155,13 +158,32 @@ public class CandidateIndexConcurrencyTests : IDisposable
     /// round, and a thread-pool that has to grow to cover the blocked workers injects threads on a
     /// hill-climbing delay, which would stretch the test out and desynchronize the rounds it depends
     /// on.
+    ///
+    /// Returns the number of rounds that actually ran to completion, which is what the callers'
+    /// oracles must be stated against. The storm is bounded by BOTH a round count and a wall clock,
+    /// and on a contended shared runner the clock wins: this used to be a hard failure
+    /// ("the storm ran out of time before completing its rounds"), which made the test a coin flip
+    /// on CI — it failed on net10 in one run and on net8 and net9 in the next, migrating between
+    /// frameworks the way contention does and a defect does not. A storm that completes fewer rounds
+    /// has less chance of hitting the window, but the rounds it did run still prove the property
+    /// over themselves. Callers assert a floor instead, so a genuinely stalled machine still fails
+    /// loudly rather than passing on a storm that did nothing.
+    ///
+    /// The cutoff is taken at a round boundary and published before the barrier, so every worker
+    /// makes the same decision for the same round. Deciding per worker would tear a round in half —
+    /// the remover seeding while the adders skip — and leave the returned count describing rounds
+    /// that only partly happened.
     /// </summary>
-    private void RunRetirementStorm(int adders, int rounds)
+    private int RunRetirementStorm(int adders, int rounds)
     {
         int workerCount = adders + 1;
         using var start = new ManualResetEventSlim(false);
         using var round = new Barrier(workerCount);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource(StormBudget);
+
+        // -1 while the storm is running; otherwise the first round that did NOT run. Written only by
+        // worker 0 and only before the barrier, so the read after the barrier is consistent for all.
+        int stopFromRound = -1;
 
         Exception? failure = null;
         var failureGate = new object();
@@ -188,8 +210,18 @@ public class CandidateIndexConcurrencyTests : IDisposable
                             // Seeded before the round opens so the bucket holds exactly one
                             // namespace when the barrier releases — the delete below is then
                             // guaranteed to empty it and attempt a retirement.
-                            if (worker == 0 && !deadline.IsCancellationRequested)
-                                _index.Upsert(Entry(id, RemoverNs, Tenant));
+                            //
+                            // Worker 0 also owns the stop decision, taken here so it is published
+                            // before the barrier and therefore visible identically to every worker
+                            // after it. Once set it is never cleared: later rounds stay skipped.
+                            if (worker == 0)
+                            {
+                                if (Volatile.Read(ref stopFromRound) < 0 && deadline.IsCancellationRequested)
+                                    Volatile.Write(ref stopFromRound, r);
+
+                                if (Volatile.Read(ref stopFromRound) < 0)
+                                    _index.Upsert(Entry(id, RemoverNs, Tenant));
+                            }
                         }
                         catch (Exception ex) { Record(ex); }
 
@@ -197,9 +229,10 @@ public class CandidateIndexConcurrencyTests : IDisposable
 
                         try
                         {
-                            // A cancelled deadline skips the work but still signals, so the barrier
-                            // stays balanced and no worker is left parked forever.
-                            if (deadline.IsCancellationRequested)
+                            // Out of budget: skip the work but keep signalling, so the barrier stays
+                            // balanced and no worker is left parked forever. Every worker reads the
+                            // same value here because it was written before the barrier.
+                            if (Volatile.Read(ref stopFromRound) >= 0)
                                 continue;
 
                             if (worker == 0)
@@ -237,12 +270,34 @@ public class CandidateIndexConcurrencyTests : IDisposable
 
         start.Set();
 
-        Assert.True(Task.WaitAll(workers, TimeSpan.FromSeconds(120)),
+        // Comfortably longer than StormBudget: this timeout is the deadlock detector, and it can
+        // only mean "deadlocked" if the budget has already had its chance to stop the storm cleanly.
+        Assert.True(Task.WaitAll(workers, StormBudget + TimeSpan.FromSeconds(60)),
             "the storm workers did not finish; the index is likely deadlocked");
         Assert.Null(failure);
-        Assert.False(deadline.IsCancellationRequested,
-            "the storm ran out of time before completing its rounds, so it proved nothing");
+
+        int stopped = Volatile.Read(ref stopFromRound);
+        return stopped < 0 ? rounds : stopped;
     }
+
+    /// <summary>
+    /// Wall-clock budget for a storm. Generous rather than tight: the round counts below are sized
+    /// so a developer machine finishes them well inside it, and the budget exists to bound a
+    /// pathologically slow or oversubscribed runner, not to pace a healthy one.
+    /// </summary>
+    private static readonly TimeSpan StormBudget = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// The fraction of requested rounds a storm must complete for its result to mean anything.
+    /// Below this the machine is not merely slow, and a pass would be close to vacuous.
+    /// </summary>
+    private static int MinMeaningfulRounds(int rounds) => rounds / 4;
+
+    private static void AssertStormWasMeaningful(int completed, int rounds)
+        => Assert.True(completed >= MinMeaningfulRounds(rounds),
+            $"the storm completed only {completed} of {rounds} rounds, below the " +
+            $"{MinMeaningfulRounds(rounds)} needed for the result to mean anything — the machine is " +
+            $"not merely slow, so this is a real signal rather than a scheduling artefact.");
 
     // ── Normal, single-threaded maintenance of the same structure ──
 
