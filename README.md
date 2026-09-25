@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="images/banner.svg?v=2.0.0" alt="MCP Engram Memory" width="900"/>
 </p>
@@ -185,7 +187,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 | Storage | JSON (default) or SQLite (WAL mode) |
 | Frameworks | net8.0, net9.0, net10.0 |
 | Tests | Multi-target xUnit suite across net8.0, net9.0, and net10.0 |
-| CI/CD | GitHub Actions: build + test on push, nightly MSA benchmarks |
+| CI/CD | GitHub Actions: build + test on push, daily MSA benchmarks |
 
 ## Tool Profiles
 
