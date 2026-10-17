@@ -30,6 +30,31 @@ dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
   -f net8.0 --artifacts-path artifacts/governance-tests
 ```
 
+## Tool profile count regression check
+
+For a quick check of the published tool counts:
+
+```bash
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
+  -f net8.0 --filter FullyQualifiedName~ToolSurfaceCountTests
+```
+
+`ToolSurfaceCountTests` counts the MCP SDK registrations from `ToolProfileRegistration`,
+the same registration path used by `Program.cs`. It checks both installer summaries,
+README tables and prose, service configuration docs, assistant setup guides, the cheat sheet,
+the tools reference (including every tool name), the banner, and other current total-count claims. It requires
+no model initialization, tool calls, network access, or execution of the installers.
+The normal push/PR CI test step runs these checks on all supported frameworks; the nightly
+MSA-only benchmark filter does not.
+
+When adding or removing tools, update the counts and reference entries in the same change.
+Historical release notes and planning documents retain their original counts. The GitHub
+repository description is external metadata, so check it separately when releasing:
+
+```bash
+gh repo view wyckit/mcp-engram-memory --json description --jq .description
+```
+
 ## Governed substrate coverage
 
 | Test File | Invariant exercised |

@@ -193,43 +193,12 @@ builder.Services.AddHostedService<AutoLinkBackgroundService>();
 //   "full"     → adds benchmarks, debate, expert routing, synthesis, visualization, maintenance
 var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "minimal";
 
-var mcpBuilder = builder.Services
+builder.Services
     .AddMcpServer()
     .WithStdioServerTransport()
     .WithRequestFilters(filters =>
-        filters.AddCallToolFilter(ConstitutionMcpFilter.Create));
-
-// Minimal: core memory operations + admin + composite tier-1 tools
-mcpBuilder
-    .WithTools<CoreMemoryTools>()
-    .WithTools<AdminTools>()
-    .WithTools<CompositeTools>()
-    .WithTools<MultiAgentTools>();
-
-if (toolProfile is "standard" or "full")
-{
-    mcpBuilder
-        .WithTools<GraphTools>()
-        .WithTools<ClusterTools>()
-        .WithTools<LifecycleTools>()
-        .WithTools<IntelligenceTools>()
-        .WithTools<MemoryDiffusionTools>()
-        .WithTools<SpectralRetrievalTools>();
-}
-
-if (toolProfile is "full")
-{
-    mcpBuilder
-        .WithTools<AccretionTools>()
-        .WithTools<BenchmarkTools>()
-        .WithTools<MrcrBenchmarkTools>()
-        .WithTools<DebateTools>()
-        .WithTools<MaintenanceTools>()
-        .WithTools<ExpertTools>()
-        .WithTools<GovernedLearningTools>()
-        .WithTools<SynthesisTools>()
-        .WithTools<VisualizationTools>();
-}
+        filters.AddCallToolFilter(ConstitutionMcpFilter.Create))
+    .WithMemoryToolProfile(toolProfile);
 
 await builder.Build().RunAsync();
 return 0;
