@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
@@ -43,6 +44,156 @@ public class CompositeToolsTests : IDisposable
         // every existing assertion keeps its current meaning.
         var access = new NamespaceAccess(new NamespaceRegistry(_index, _embedding), AgentIdentity.Default);
         _tools = new CompositeTools(_index, _embedding, _graph, _lifecycle, _dispatcher, _metrics, _spectral, access);
+    }
+
+    // ── context block tests ──
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("category")]
+    [InlineData("metadata-value")]
+    [InlineData("metadata-key")]
+    [InlineData("metadata-removed")]
+    public void GetContextBlock_ChangedContentInvalidatesVersionAtSameCounts(string change)
+    {
+        const string ns = "context";
+        var metadata = new Dictionary<string, string> { ["source"] = "old" };
+        SeedStableContextEntry("decision", ns, "Use old endpoint", "decision", metadata);
+        var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+        if (change == "metadata-value") metadata["source"] = "new";
+        if (change == "metadata-key") metadata = new() { ["origin"] = "old" };
+        if (change == "metadata-removed") metadata.Clear();
+        SeedStableContextEntry("decision", ns,
+            change == "text" ? "Use replacement endpoint" : "Use old endpoint",
+            change == "category" ? "reference" : "decision", metadata);
+        var after = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+        Assert.Equal(before.Header, after.Header);
+        Assert.NotEqual(before.Version, after.Version);
+    }
+
+    [Fact]
+    public void GetContextBlock_DifferentSelectedEntryInvalidatesVersionAtSameCounts()
+    {
+        const string ns = "context";
+        var first = SeedStableContextEntry("a", ns);
+        SeedStableContextEntry("b", ns);
+        var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns, maxEntries: 1));
+
+        // Keep both LTM entries but make the first ineligible for the stable prefix.
+        first.AccessCount = 1;
+        var after = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns, maxEntries: 1));
+
+        Assert.Equal(before.Header, after.Header);
+        Assert.Equal("a", Assert.Single(before.StableMemories).Id);
+        Assert.Equal("b", Assert.Single(after.StableMemories).Id);
+        Assert.NotEqual(before.Version, after.Version);
+    }
+
+    [Fact]
+    public void GetContextBlock_UnchangedContentKeepsVersionAcrossReadsAndUpserts()
+    {
+        const string ns = "context";
+        var entry = SeedStableContextEntry("decision", ns);
+        var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+        Assert.Equal(before.Version, Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns)).Version);
+
+        entry.AccessCount++;
+        entry.ActivationEnergy = 0.9f;
+        entry.LastAccessedAt = entry.LastAccessedAt.AddHours(1);
+        Assert.Equal(before.Version, Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns)).Version);
+
+        // Replacement gets a new revision and timestamps, but the emitted facts are identical.
+        SeedStableContextEntry("decision", ns);
+        Assert.Equal(before.Version, Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns)).Version);
+    }
+
+    [Fact]
+    public void GetContextBlock_CanonicalOrderingIgnoresCultureAndMetadataInsertionOrder()
+    {
+        const string ns = "context";
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            SeedStableContextEntry("ä", ns);
+            SeedStableContextEntry("z", ns, metadata: new() { ["ä"] = "2", ["z"] = "1" });
+            var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("sv-SE");
+            SeedStableContextEntry("z", ns, metadata: new() { ["z"] = "1", ["ä"] = "2" });
+            var after = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+            Assert.Equal(new[] { "z", "ä" }, before.StableMemories.Select(e => e.Id));
+            Assert.Equal(new[] { "z", "ä" }, before.StableMemories[0].Metadata!.Keys);
+            Assert.Equal(before.Version, after.Version);
+            Assert.Equal(JsonSerializer.Serialize(before), JsonSerializer.Serialize(after));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public void GetContextBlock_MetadataIsASnapshot()
+    {
+        const string ns = "context";
+        var entry = SeedStableContextEntry("decision", ns, metadata: new() { ["source"] = "old" });
+        var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+        entry.Metadata["source"] = "new";
+        var after = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+
+        Assert.Equal("old", Assert.Single(before.StableMemories).Metadata!["source"]);
+        Assert.Equal("new", Assert.Single(after.StableMemories).Metadata!["source"]);
+        Assert.NotEqual(before.Version, after.Version);
+    }
+
+    [Theory]
+    [InlineData("stm")]
+    [InlineData("ltm")]
+    [InlineData("archived")]
+    public void GetContextBlock_HeaderCountsInvalidateOnlyWhenIncluded(string state)
+    {
+        const string ns = "context";
+        SeedStableContextEntry("decision", ns);
+        var before = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+        var beforeWithoutHeader = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns, includeHeader: false));
+
+        // This entry changes statistics but never qualifies for the stable block.
+        _index.Upsert(new CognitiveEntry("other", _embedding.Embed("other"), ns, "other", lifecycleState: state));
+        var after = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns));
+        var afterWithoutHeader = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock(ns, includeHeader: false));
+
+        Assert.Equal(before.StableMemories, after.StableMemories);
+        Assert.NotEqual(before.Header, after.Header);
+        Assert.NotEqual(before.Version, after.Version);
+        Assert.Null(afterWithoutHeader.Header);
+        Assert.Equal(beforeWithoutHeader.Version, afterWithoutHeader.Version);
+        Assert.NotEqual(after.Version, afterWithoutHeader.Version);
+    }
+
+    [Fact]
+    public void GetContextBlock_EmptyBlockHasStableNamespaceSpecificVersion()
+    {
+        var first = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock("empty"));
+        var repeat = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock("empty"));
+        var other = Assert.IsType<ContextBlockResult>(_tools.GetContextBlock("other-empty"));
+
+        Assert.Empty(first.StableMemories);
+        Assert.Equal(first.Version, repeat.Version);
+        Assert.NotEqual(first.Version, other.Version);
+    }
+
+    private CognitiveEntry SeedStableContextEntry(string id, string ns, string text = "Stable fact",
+        string? category = null, Dictionary<string, string>? metadata = null)
+    {
+        var entry = new CognitiveEntry(id, _embedding.Embed(text), ns, text, category, metadata,
+            lifecycleState: "ltm") { AccessCount = 3 };
+        _index.Upsert(entry);
+        return entry;
     }
 
     // ── remember tests ──
