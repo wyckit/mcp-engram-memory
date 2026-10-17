@@ -19,16 +19,15 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 ///   cluster summaries, and central concept memories. Best for broad/conceptual
 ///   queries ("what do we know about consolidation?").
 ///
-/// - <see cref="SpectralRetrievalMode.Specific"/>: high-pass filter <c>1 - exp(-lambda*t)</c>.
-///   Damps low-frequency (cluster-mean) modes; preserves high-frequency
-///   (per-entry deviation) modes. Boosts memories that score high *relative to
-///   their cluster* — surfaces outliers, edge cases, the specific entry that
-///   actually answers a precise question. Best for specific factual queries
-///   ("what's the exact value we set for foo?").
+/// - <see cref="SpectralRetrievalMode.Specific"/>: preserve upstream relevance and add
+///   a bounded bonus for positive residual <c>signal - exp(-tL) * signal</c>.
+///   The bonus is at most 25% of the incoming score, so graph specificity refines
+///   close matches without replacing relevance with a differently scaled signal.
+///   Isolated entries keep their incoming score; only original candidates are returned.
+///   Best for specific factual queries ("what's the exact value we set for foo?").
 ///
 /// - <see cref="SpectralRetrievalMode.None"/>: passthrough; results sorted by
-///   their incoming scores with no spectral redistribution. Use as the default
-///   while gathering empirical confidence in spectral re-ranking.
+///   their incoming scores with no spectral redistribution.
 ///
 /// Like all kernel consumers, this falls back gracefully when the namespace
 /// doesn't qualify for a diffusion basis (too small / too sparsely linked) —
@@ -36,13 +35,15 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 ///
 /// One subtlety: passing a sparse score vector into <see cref="MemoryDiffusionKernel.ApplySpectralFilter"/>
 /// produces a *dense* output covering every entry in the namespace. So the
-/// re-ranked top-K can include entries the upstream pipeline didn't surface,
+/// Broad-mode top-K can include entries the upstream pipeline didn't surface,
 /// if their cluster scored well (in Broad mode). This is the intended behavior:
 /// spectral retrieval can rescue thematically-relevant entries that BM25/ANN
 /// missed.
 /// </summary>
 public sealed class SpectralRetrievalReranker
 {
+    // Relevance remains the base: a graph bonus cannot bridge a score gap above 25%.
+    private const float SpecificBonusWeight = 0.25f;
     private readonly MemoryDiffusionKernel _kernel;
     private readonly ILogger<SpectralRetrievalReranker>? _logger;
 
@@ -75,8 +76,10 @@ public sealed class SpectralRetrievalReranker
         if (originalResults.Count == 0)
             return Array.Empty<(string, float)>();
 
-        // Passthrough fast paths: explicit None, or no qualifying basis.
-        if (mode == SpectralRetrievalMode.None || _kernel.GetBasis(ns, tenantId: tenantId) is null)
+        // Passthrough fast paths: explicit None, zero-time Specific, or no qualifying basis.
+        if (mode == SpectralRetrievalMode.None ||
+            (mode == SpectralRetrievalMode.Specific && diffusionTime == 0f) ||
+            _kernel.GetBasis(ns, tenantId: tenantId) is null)
         {
             return SortAndCap(originalResults, topK);
         }
@@ -90,10 +93,33 @@ public sealed class SpectralRetrievalReranker
         if (signal.Count == 0)
             return SortAndCap(originalResults, topK);
 
+        if (mode == SpectralRetrievalMode.Specific)
+        {
+            // Compute I-H against the ORIGINAL signal, not its truncated eigenprojection.
+            // Kernel passthrough gives isolated/out-of-basis entries a zero residual. Using
+            // raw high-pass scores instead would shrink linked scores but leave those entries
+            // untouched, unfairly ranking them on different scales. A nonnegative bounded
+            // bonus retains relevance and cannot promote zero/negative-score candidates.
+            var background = _kernel.ApplySpectralFilter(ns, signal,
+                lambda => MathF.Exp(-lambda * diffusionTime), tenantId: tenantId);
+            var specific = new List<(string Id, float Score)>(originalResults.Count);
+            var specificIds = new HashSet<string>();
+            foreach (var (id, originalScore) in originalResults)
+            {
+                if (!specificIds.Add(id)) continue;
+                // Preserve the signal map's last-positive-score rule for duplicate IDs.
+                float score = signal.TryGetValue(id, out var relevance) ? relevance : originalScore;
+                float bonus = 0f;
+                if (score > 0f && background.TryGetValue(id, out var smoothedScore))
+                    bonus = SpecificBonusWeight * Math.Clamp(score - smoothedScore, 0f, score);
+                specific.Add((id, score + bonus));
+            }
+            return SortAndCap(specific, topK);
+        }
+
         Func<float, float> filter = mode switch
         {
             SpectralRetrievalMode.Broad => lambda => MathF.Exp(-lambda * diffusionTime),
-            SpectralRetrievalMode.Specific => lambda => 1f - MathF.Exp(-lambda * diffusionTime),
             _ => _ => 1f,
         };
 
@@ -135,6 +161,6 @@ public enum SpectralRetrievalMode
     /// <summary>Low-pass filter: boost cluster-supported memories. Best for broad/thematic queries.</summary>
     Broad,
 
-    /// <summary>High-pass filter: boost outliers within cluster. Best for specific/factual queries.</summary>
+    /// <summary>Bounded positive high-pass residual bonus on relevance. Best for specific/factual queries.</summary>
     Specific,
 }

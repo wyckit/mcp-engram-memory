@@ -60,7 +60,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
     /// Broad mode (low-pass) should spread a scoring cluster member's signal
     /// through its cluster, surfacing cluster mates the upstream pipeline never
     /// returned. Isolated entries are their own connected component (Laplacian
-    /// eigenvalue 0), so every spectral filter is identity on them: their score
+    /// eigenvalue 0), so low-pass filtering is identity on them: their score
     /// passes through EXACTLY unchanged — a low-pass contraction can neither
     /// damp an isolated entry nor lift a cluster member above a higher-scoring
     /// isolated one. (The previous version of this test asserted the opposite
@@ -126,9 +126,8 @@ public class SpectralRetrievalRerankerTests : IDisposable
 
         var specificResult = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 5);
 
-        // Specific mode subtracts the cluster mean, so c_0's score after
-        // re-ranking reflects how much it stands out from its cluster (which
-        // mostly scored zero) — it should still rank highly.
+        // The positive residual adds a bounded bonus to c_0's relevance;
+        // isolated iso_0 retains its incoming relevance.
         Assert.NotEmpty(specificResult);
         Assert.Contains(specificResult, r => r.Id == "c_0");
         Assert.Contains(specificResult, r => r.Id == "iso_0");
@@ -138,8 +137,10 @@ public class SpectralRetrievalRerankerTests : IDisposable
     /// When the namespace doesn't qualify for a diffusion basis (too small),
     /// the reranker must fall back to passthrough sort regardless of mode.
     /// </summary>
-    [Fact]
-    public void NoQualifyingBasisFallsBackToPassthrough()
+    [Theory]
+    [InlineData(SpectralRetrievalMode.Broad)]
+    [InlineData(SpectralRetrievalMode.Specific)]
+    public void NoQualifyingBasisFallsBackToPassthrough(SpectralRetrievalMode mode)
     {
         const string ns = "tiny";
         for (int i = 0; i < 10; i++)
@@ -151,7 +152,7 @@ public class SpectralRetrievalRerankerTests : IDisposable
             ("t_1", 0.9f),
             ("t_7", 0.7f),
         };
-        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, tenantId: "", topK: 3);
+        var result = _reranker.Rerank(ns, input, mode, tenantId: "", topK: 3);
 
         // Sorted descending by score; no spectral effect.
         Assert.Equal("t_1", result[0].Id);
@@ -186,6 +187,103 @@ public class SpectralRetrievalRerankerTests : IDisposable
         };
         var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Broad, tenantId: "", topK: 3);
         Assert.True(result.Count <= 3);
+    }
+
+    [Theory]
+    [InlineData(32, 1f)]
+    [InlineData(128, 1f)]
+    [InlineData(32, 0.02f)]
+    public void SpecificModeKeepsRelevantLinkedHitsAheadOfWeakerIsolatedHits(int clusterSize, float scale)
+    {
+        const string ns = "mixed-topology";
+        SeedClusterPlusIsolated(ns, clusterSize, isolatedCount: 3);
+        Assert.NotNull(_kernel.GetBasis(ns, tenantId: ""));
+        var input = new[]
+        {
+            (Id: "c_0", Score: 0.715f * scale), (Id: "c_1", Score: 0.642f * scale),
+            (Id: "iso_0", Score: 0.483f * scale), (Id: "iso_1", Score: 0.482f * scale),
+            (Id: "iso_2", Score: 0.481f * scale),
+        };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 5);
+
+        Assert.Equal("c_0", result[0].Id);
+        Assert.Equal("c_1", result[1].Id);
+        Assert.Equal(input.Select(r => r.Id).Order(), result.Select(r => r.Id).Order());
+        foreach (var original in input)
+        {
+            var actual = Assert.Single(result, r => r.Id == original.Id);
+            Assert.InRange(actual.Score, original.Score, original.Score * 1.25f);
+            if (original.Id.StartsWith("iso_")) Assert.Equal(original.Score, actual.Score);
+        }
+    }
+
+    [Fact]
+    public void SpecificModeAddsBoundedOutlierBonusWithoutInventingCandidates()
+    {
+        const string ns = "specific-bonus";
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 1);
+        var input = new[] { (Id: "c_0", Score: 0.9f), (Id: "iso_0", Score: 0.95f) };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 50);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("c_0", result[0].Id);
+        Assert.InRange(result[0].Score, 0.95f, 0.9f * 1.25f);
+        Assert.Equal(0.95f, result[1].Score);
+    }
+
+    [Fact]
+    public void SpecificModeDoesNotBoostZeroOrNegativeRelevance()
+    {
+        const string ns = "nonpositive";
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 1);
+        var input = new[] { (Id: "c_0", Score: 0.9f), (Id: "c_1", Score: 0f), (Id: "c_2", Score: -0.1f) };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 50);
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal(0f, Assert.Single(result, r => r.Id == "c_1").Score);
+        Assert.Equal(-0.1f, Assert.Single(result, r => r.Id == "c_2").Score);
+    }
+
+    [Fact]
+    public void SpecificModeCannotOvertakeClearlyStrongerIsolatedEvidence()
+    {
+        const string ns = "strong-isolated";
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 1);
+        var input = new[] { (Id: "c_0", Score: 0.5f), (Id: "iso_0", Score: 0.9f) };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 1);
+
+        Assert.Equal(("iso_0", 0.9f), Assert.Single(result));
+    }
+
+    [Fact]
+    public void SpecificModeZeroTimePreservesScoresWithTruncatedBasis()
+    {
+        const string ns = "zero-time";
+        SeedClusterPlusIsolated(ns, clusterSize: 128, isolatedCount: 1);
+        var input = new[] { (Id: "c_0", Score: 0.9f), (Id: "iso_0", Score: 0.5f) };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific,
+            tenantId: "", topK: 5, diffusionTime: 0f);
+
+        Assert.Equal(input, result);
+    }
+
+    [Fact]
+    public void SpecificModeDeduplicatesCandidateIdsUsingTheirLastPositiveScore()
+    {
+        const string ns = "duplicate-candidates";
+        SeedClusterPlusIsolated(ns, clusterSize: 32, isolatedCount: 1);
+        var input = new[] { (Id: "c_0", Score: 0.5f), (Id: "c_0", Score: 0.9f), (Id: "iso_0", Score: 0.7f) };
+
+        var result = _reranker.Rerank(ns, input, SpectralRetrievalMode.Specific, tenantId: "", topK: 5);
+
+        Assert.Equal(2, result.Count);
+        Assert.InRange(Assert.Single(result, r => r.Id == "c_0").Score, 0.9f, 0.9f * 1.25f);
+        Assert.Equal(0.7f, Assert.Single(result, r => r.Id == "iso_0").Score);
     }
 
     private void SeedClusterPlusIsolated(string ns, int clusterSize, int isolatedCount)

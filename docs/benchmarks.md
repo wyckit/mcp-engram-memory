@@ -4,7 +4,46 @@
 
 Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
 
-## Spectral Retrieval Benchmark (v0.9.0)
+## Default Recall Ranking Regression Checks
+
+`DefaultRecallRankingTests` exercises the public `recall` defaults with controlled
+embeddings and real hybrid retrieval, token reranking, graph expansion, and archived
+fallback. A strong linked answer must stay ahead of weaker isolated summaries on both
+32-node and 128-node linked graphs (the latter exceeds the retained eigenbasis size).
+`SpectralRetrievalRerankerTests` also covers small score scales, bounded outlier bonuses,
+strong isolated evidence, candidate counts, zero/negative relevance, and zero diffusion time.
+
+Specific mode uses `score + 0.25 * clamp(score - smoothedScore, 0, score)`, where
+`smoothedScore` is the low-pass heat-kernel output. This preserves the original relevance
+scale and bounds the graph's influence; the 25% cap is a conservative policy, not a
+claim of an optimal weight. Isolated entries have zero residual. Broad-mode behavior
+is unchanged. The shared diffusion kernel's lifecycle behavior is also unchanged.
+
+The existing 40-entry, 10-query ONNX benchmark now asserts that default specific-query
+Recall, MRR, and nDCG do not fall below spectral-off retrieval, and that broad queries
+retain their cluster-recovery benefit. Fresh local runs on October 17, 2026 showed:
+
+| Default (`auto`) metric | Before | After |
+|---|---:|---:|
+| Overall Recall@K | 0.920 | 0.920 |
+| Overall MRR | 0.950 | 0.950 |
+| Overall nDCG@K | 0.907 | 0.909 |
+| Broad Recall@K | 0.840 | 0.840 |
+| Specific Recall@K / MRR | 1.000 / 1.000 | 1.000 / 1.000 |
+| Specific nDCG@K | 0.997 | 1.000 |
+
+The harness's precision divides by the number actually returned, not the requested K.
+Its specific-query precision changes from 0.667 to 0.533 because the old filtering could
+underfill the result set; relevant-result recall is unchanged. These are bounded synthetic
+corpus checks, not a claim of production-wide quality or a fresh live-agent benchmark.
+
+Run both the regression cases and the labeled benchmark with:
+
+```sh
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~DefaultRecallRankingTests|FullyQualifiedName~SpectralRetrievalRerankerTests|FullyQualifiedName~SpectralRetrievalBenchmark"
+```
+
+## Spectral Retrieval Benchmark (v0.9.0, historical)
 
 **Date:** 2026-04-27. **Artifact:** [`benchmarks/2026-04-27/spectral-retrieval-v1-results.json`](../benchmarks/2026-04-27/spectral-retrieval-v1-results.json). **Harness:** [`SpectralRetrievalBenchmark.cs`](../tests/McpEngramMemory.Tests/SpectralRetrievalBenchmark.cs).
 
@@ -42,7 +81,7 @@ Each query is run through `recall` with each `spectralMode` (`none`, `broad`, `s
 | `spec-heat-kernel` | 1.0 | 0.667 | 1.0 | |
 | `spec-wal` | 1.0 | 0.5 | 1.0 | |
 
-**Mechanisms:**
+**Mechanisms in this historical snapshot:**
 
 - **Broad mode**: cluster-dominance gate (≥3 of top-5 from same connected component) + max-neighbor boost (`score = max(original, max_neighbor × 0.95)`) + cluster expansion (BFS the full graph from a dominant-component candidate, surface members not in the original pool).
 - **Specific mode**: high-pass spectral filter `1 - exp(-λ·t)` via the memory-diffusion kernel — kills the constant (cluster mean) mode, preserves per-entry deviation. Restricted to original candidate set.

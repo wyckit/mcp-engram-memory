@@ -194,7 +194,7 @@ public sealed class CompositeTools
         [Description("Apply token-level reranking (default: true).")] bool rerank = true,
         [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
         [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true,
-        [Description("Spectral re-ranking mode applied to the candidate set after standard retrieval+graph expansion. 'auto' (default): infer from query — short conceptual queries get broad, longer specific queries get specific; runs entirely from a local word-count heuristic, no extra LLM/embedding calls. 'broad': low-pass filter, boosts cluster-supported memories. 'specific': high-pass filter, boosts entries that score high relative to their cluster. 'none': skip spectral re-ranking. Only applied when a namespace is provided; gracefully degrades to passthrough on namespaces without a qualifying diffusion basis.")] string spectralMode = "auto")
+        [Description("Graph-aware re-ranking after standard retrieval and graph expansion. 'auto' (default): short conceptual queries get broad, longer specific queries get specific; uses a local heuristic, no extra LLM/embedding calls. 'broad': boosts a dominant cluster. 'specific': preserves relevance and adds a bounded specificity bonus (at most 25%) to retrieved candidates. 'none': skip graph re-ranking. Only applied when a namespace is provided; specific mode passes through on namespaces without a qualifying diffusion basis.")] string spectralMode = "auto")
     {
         if (string.IsNullOrWhiteSpace(query)) return "Error: query must not be empty.";
         if (k <= 0) return "Error: k must be positive.";
@@ -560,8 +560,8 @@ public sealed class CompositeTools
         if (resolved == SpectralRetrievalMode.None) return candidates;
 
         // Different modes use different mechanisms:
-        // - Specific: spectral high-pass via the diffusion kernel — suppresses
-        //   cluster-mate noise from graph expansion when the query is precise.
+        // - Specific: a bounded specificity bonus on upstream relevance — favors
+        //   outliers without shrinking linked scores relative to isolated candidates.
         // - Broad: graph-adjacency-based cluster boost, gated by dominance —
         //   only fires when the candidate set is dominated by one cluster
         //   (i.e., the query is unambiguously about that topic). The spectral
@@ -571,7 +571,7 @@ public sealed class CompositeTools
         if (resolved == SpectralRetrievalMode.Broad)
             return ApplyBroadModeClusterBoost(ns, candidates, k);
 
-        // Specific mode: spectral high-pass via the kernel.
+        // Specific mode retains the original candidates and relevance score scale.
         var byId = new Dictionary<string, CognitiveSearchResult>(candidates.Count);
         foreach (var c in candidates) byId[c.Id] = c;
 

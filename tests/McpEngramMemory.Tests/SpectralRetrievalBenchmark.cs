@@ -100,6 +100,18 @@ public class SpectralRetrievalBenchmark : IDisposable
         }
 
         PrintResultsTable(allRuns, dataset);
+
+        // This benchmark exercises CompositeTools.Recall, unlike the lower-level IR
+        // harness. Make its labeled corpus a gate, not just a metrics printout.
+        var baseline = allRuns.Single(r => r.Mode == "none");
+        var automatic = allRuns.Single(r => r.Mode == "auto");
+        var broad = allRuns.Single(r => r.Mode == "broad");
+        Assert.True(automatic.Specific.Recall >= baseline.Specific.Recall - 1e-6f);
+        Assert.True(automatic.Specific.Mrr >= baseline.Specific.Mrr - 1e-6f);
+        Assert.True(automatic.Specific.Ndcg >= baseline.Specific.Ndcg - 1e-6f);
+        Assert.Equal(broad.Broad, automatic.Broad);
+        Assert.True(automatic.Broad.Recall > baseline.Broad.Recall,
+            "Default broad recall must retain its cluster-recovery benefit on this corpus.");
     }
 
     private void PrintResultsTable(IReadOnlyList<ModeRunSummary> runs, BenchmarkDataset dataset)
