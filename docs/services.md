@@ -97,6 +97,21 @@ they are not yet one transaction spanning knowledge, provenance, and audit files
 | `OnnxEmbeddingService` | `Services` | 384-dimensional vector embeddings via bge-micro-v2 ONNX model with FastBertTokenizer. Fully concurrent inference with per-call ArrayPool scratch buffers (no semaphore bottleneck) |
 | `HashEmbeddingService` | `Services` | Deterministic hash-based embeddings for testing/CI (no model dependency) |
 
+### Context Block Caching
+
+`get_context_block` returns stable LTM memories ordered by ID using ordinal comparison,
+with metadata keys also ordered ordinally. Its `version` is an opaque SHA-256 content
+fingerprint of `ns`, `stableMemories`, and the optional `header`. Compare versions for
+equality; do not parse them. Changes to text, category, metadata, or selected memories
+invalidate the version even when memory counts stay the same. Unchanged content keeps
+the same version across reads and identical upserts.
+
+The statistics header is included by default, so changes to its counts also invalidate
+the version. Use `includeHeader: false` for a stable prompt prefix that is unaffected by
+statistics changes. Access counts, timestamps, and activation energy are not part of the
+fingerprint; they only matter if they change which memories qualify for the block.
+Existing count-based versions are replaced on the first read after upgrading.
+
 ### Background Services
 
 | Service | Interval | Description |

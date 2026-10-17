@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using McpEngramMemory.Core.Models;
@@ -449,7 +450,7 @@ public sealed class CompositeTools
         [Description("Namespace to build context block from.")] string ns,
         [Description("Maximum number of LTM memories to include (default: 20).")] int maxEntries = 20,
         [Description("Minimum access count to qualify as 'stable' (default: 2).")] int minAccessCount = 2,
-        [Description("Include namespace statistics header (default: true).")] bool includeHeader = true)
+        [Description("Include namespace statistics header (default: true). Set false to keep statistics changes from invalidating the cache.")] bool includeHeader = true)
     {
         using var timer = _metrics.StartTimer("get_context_block");
 
@@ -460,7 +461,7 @@ public sealed class CompositeTools
         var allEntries = _index.GetAllInNamespace(ns, _access.TenantId);
         var stableEntries = allEntries
             .Where(e => e.LifecycleState == "ltm" && e.AccessCount >= minAccessCount && !e.IsSummaryNode)
-            .OrderBy(e => e.Id) // Deterministic ordering by ID — critical for cache stability
+            .OrderBy(e => e.Id, StringComparer.Ordinal) // Stable across host cultures
             .Take(maxEntries)
             .ToList();
 
@@ -468,20 +469,28 @@ public sealed class CompositeTools
         // that would change between calls and invalidate the cache
         var stableBlock = stableEntries.Select(e => new StableMemoryEntry(
             e.Id, e.Text, e.Category,
-            e.Metadata.Count > 0 ? e.Metadata : null)).ToList();
+            e.Metadata.Count > 0
+                ? e.Metadata.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
+                : null)).ToList();
 
-        // Build header with namespace metadata (also stable)
+        // Snapshot the returned data before hashing it. In particular, metadata must not
+        // alias the live entry, and its insertion order must not affect the cache token.
         var (stm, ltm, archived) = _index.GetStateCounts(ns, _access.TenantId);
+        var header = includeHeader ? new NamespaceHeader(stm, ltm, archived, stableEntries.Count) : null;
+        var content = JsonSerializer.SerializeToUtf8Bytes(new { ns, stableMemories = stableBlock, header });
+        var version = $"sha256:{Convert.ToHexString(SHA256.HashData(content))}";
 
         return new ContextBlockResult(
             ns,
-            $"{ns}:{ltm}:{stableEntries.Count}", // Changes only when LTM count changes
+            version,
             stableBlock,
-            includeHeader ? new NamespaceHeader(stm, ltm, archived, stableEntries.Count) : null,
+            header,
             "Place this block as a stable prefix in your system prompt. " +
                 "Append dynamic query results after this block. " +
-                "The version field changes when the stable block content changes — " +
-                "cache is valid while version is unchanged.");
+                "The version is an opaque content fingerprint of the namespace, stable memories, " +
+                "and included header; cache is valid while version is unchanged. " +
+                "Set includeHeader to false to avoid invalidation from namespace statistics changes.");
     }
 
     private IReadOnlyList<CognitiveSearchResult> ExpandWithGraph(
