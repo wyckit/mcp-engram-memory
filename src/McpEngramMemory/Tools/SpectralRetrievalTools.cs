@@ -32,7 +32,7 @@ public sealed class SpectralRetrievalTools
     }
 
     [McpServerTool(Name = "spectral_recall", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Graph-aware retrieval: runs the standard ANN/hybrid search to gather candidates, then re-ranks them through the memory-graph diffusion kernel. Mode 'broad' applies a low-pass filter that boosts cluster-supported memories (themes, summaries) — best for conceptual queries. Mode 'specific' applies a high-pass filter that boosts entries whose score exceeds their cluster mean — best for precise factual queries. Mode 'none' disables spectral re-ranking and returns standard search results. Spectral re-ranking can surface entries the upstream search didn't return if their cluster scored well; this is intentional.")]
+    [Description("Graph-aware retrieval: gathers vector-search candidates, then re-ranks them through the memory-graph diffusion kernel. Mode 'broad' applies a low-pass filter for conceptual queries and can surface additional cluster-supported memories. Mode 'specific' preserves candidate relevance and adds a bounded specificity bonus (at most 25%) for precise factual queries; isolated entries retain their scores. Mode 'none' disables spectral re-ranking and returns standard search results.")]
     public IReadOnlyList<CognitiveSearchResult> SpectralRecall(
         [Description("Query text. Embedded via the configured embedding model.")] string query,
         [Description("Namespace to search.")] string ns,
