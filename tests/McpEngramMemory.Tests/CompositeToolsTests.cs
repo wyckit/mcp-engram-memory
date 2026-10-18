@@ -266,7 +266,8 @@ public class CompositeToolsTests : IDisposable
     [Fact]
     public void Recall_DirectNamespace_FindsEntries()
     {
-        var v = _embedding.Embed("test SIMD vector operations");
+        // Hash embeddings do not preserve semantic similarity between different texts.
+        var v = _embedding.Embed("SIMD operations");
         _index.Upsert(new CognitiveEntry("e1", v, "myns", "SIMD vector operations for fast similarity", lifecycleState: "stm"));
 
         var result = _tools.Recall("SIMD operations", ns: "myns") as RecallResult;
@@ -452,7 +453,7 @@ public class CompositeToolsTests : IDisposable
     public void Recall_SpectralModeNone_PreservesBaselineOrdering()
     {
         const string ns = "spectral_none";
-        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16, query: "cluster member zero");
 
         var resultNone = _tools.Recall("cluster member zero", ns, k: 3, spectralMode: "none") as RecallResult;
         Assert.NotNull(resultNone);
@@ -463,7 +464,7 @@ public class CompositeToolsTests : IDisposable
     public void Recall_SpectralModeBroad_ReordersToFavorClusterMembers()
     {
         const string ns = "spectral_broad";
-        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16, query: "cluster");
 
         // A short conceptual query — Broad mode should surface cluster members
         // ahead of isolated filler that happens to score similarly.
@@ -477,7 +478,7 @@ public class CompositeToolsTests : IDisposable
     public void Recall_DefaultIsAuto_NoExplicitParam()
     {
         const string ns = "spectral_default";
-        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16);
+        SeedClusterPlusFiller(ns, clusterSize: 16, fillerCount: 16, query: "cluster member");
 
         // Without specifying spectralMode, the default ("auto") should kick in.
         // We just verify it returns a sane RecallResult — no exceptions, no empty.
@@ -539,13 +540,15 @@ public class CompositeToolsTests : IDisposable
         Assert.Equal(SpectralRetrievalMode.Broad, CompositeTools.InferSpectralMode("   "));
     }
 
-    private void SeedClusterPlusFiller(string ns, int clusterSize, int fillerCount)
+    private void SeedClusterPlusFiller(string ns, int clusterSize, int fillerCount, string query)
     {
         var rng = new Random(7);
         for (int i = 0; i < clusterSize; i++)
         {
             var text = $"cluster topic detail {i}";
-            _index.Upsert(new CognitiveEntry($"c_{i}", _embedding.Embed(text), ns, text));
+            // Guarantee an eligible semantic seed; hash vectors otherwise only model
+            // identity, and keyword rescue must now respect the minimum similarity.
+            _index.Upsert(new CognitiveEntry($"c_{i}", _embedding.Embed(i == 0 ? query : text), ns, text));
         }
         for (int i = 0; i < fillerCount; i++)
         {

@@ -64,7 +64,7 @@ Minimal profile. `spectral_recall` is a separate standard/full-profile tool — 
 | Tool | Description |
 |------|-------------|
 | `remember` | Intelligent store: saves a memory with auto-generated embedding, duplicate detection, and auto-linking to related existing memories. Use instead of store_memory + detect_duplicates + link_memories. |
-| `recall` | Intelligent search: searches with auto-routing to the best namespace via expert dispatch, with fallback to direct search. Combines search_memory + dispatch_task in one call. New `spectralMode` parameter (default `"auto"`) re-ranks results through the memory-diffusion kernel: short conceptual queries get a cluster-boost (Broad), longer/precise queries get cluster-mean subtraction (Specific). Pass `"none"` to disable. |
+| `recall` | Default search: an explicit namespace searches directly; otherwise expert routing falls back to broadcast over readable namespaces. Every route honors hybrid search, token reranking, summary preference, graph expansion, and spectral ranking. `spectralMode: "auto"` uses a dominant-cluster boost for broad queries and a bounded relevance-preserving specificity bonus for precise queries; `"none"` disables it. See [route semantics and evaluation](recall-evaluation.md). |
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
 | `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 

@@ -4,6 +4,10 @@
 
 Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
 
+The [realistic recall evaluation](recall-evaluation.md) adds 36 labeled operational
+questions, direct/expert/broadcast route comparisons, archive/restart cases, and a CI
+quality reference. Its reports also expose stale answers and summary/source competition.
+
 ## Default Recall Ranking Regression Checks
 
 `DefaultRecallRankingTests` exercises the public `recall` defaults with controlled

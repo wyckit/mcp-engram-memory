@@ -30,7 +30,6 @@ public sealed class CompositeTools
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
     private readonly KnowledgeGraph _graph;
-    private readonly LifecycleEngine _lifecycle;
     private readonly ExpertDispatcher _dispatcher;
     private readonly MetricsCollector _metrics;
     private readonly SpectralRetrievalReranker _spectral;
@@ -46,7 +45,8 @@ public sealed class CompositeTools
         _index = index;
         _embedding = embedding;
         _graph = graph;
-        _lifecycle = lifecycle;
+        // Keep the lifecycle constructor parameter for compatibility; recall defers
+        // lifecycle updates until after final selection instead of using DeepRecall.
         _dispatcher = dispatcher;
         _metrics = metrics;
         _spectral = spectral;
@@ -194,7 +194,7 @@ public sealed class CompositeTools
         [Description("Apply token-level reranking (default: true).")] bool rerank = true,
         [Description("Prioritize cluster summaries in results (default: false).")] bool summaryFirst = false,
         [Description("Include graph-connected neighbors in results (default: true).")] bool expandGraph = true,
-        [Description("Graph-aware re-ranking after standard retrieval and graph expansion. 'auto' (default): short conceptual queries get broad, longer specific queries get specific; uses a local heuristic, no extra LLM/embedding calls. 'broad': boosts a dominant cluster. 'specific': preserves relevance and adds a bounded specificity bonus (at most 25%) to retrieved candidates. 'none': skip graph re-ranking. Only applied when a namespace is provided; specific mode passes through on namespaces without a qualifying diffusion basis.")] string spectralMode = "auto")
+        [Description("Graph-aware re-ranking after standard retrieval and graph expansion. 'auto' (default): short conceptual queries get broad, longer specific queries get specific; uses a local heuristic, no extra LLM/embedding calls. 'broad': boosts a dominant cluster. 'specific': preserves relevance and adds a bounded specificity bonus (at most 25%) to retrieved candidates. 'none': skip graph re-ranking. Applied within each searched namespace on every route; specific mode passes through without a qualifying diffusion basis.")] string spectralMode = "auto")
     {
         if (string.IsNullOrWhiteSpace(query)) return "Error: query must not be empty.";
         if (k <= 0) return "Error: k must be positive.";
@@ -204,67 +204,17 @@ public sealed class CompositeTools
         try { vector = _embedding.Embed(query); }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
-        var strategy = "direct";
-
         try
         {
-
-        // Strategy 1: If namespace provided, search directly with optional hybrid + graph expansion
         if (ns is not null && !_access.CanRead(ns))
             return new RecallResult("direct", ns, new List<CognitiveSearchResult>(),
                 $"No accessible memories in namespace '{ns}'.");
 
+        var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode);
         if (ns is not null)
         {
-            var states = new HashSet<string> { "stm", "ltm" };
-            IReadOnlyList<CognitiveSearchResult> results = hybrid
-                ? _index.HybridSearch(vector, query, ns, tenantId: _access.TenantId,
-                    k: k, minScore: minScore, rerank: rerank)
-                : (rerank
-                    ? _index.Rerank(query, _index.Search(vector, ns, tenantId: _access.TenantId,
-                        k: k * 2, minScore: minScore, summaryFirst: summaryFirst)).Take(k).ToList()
-                    : _index.Search(vector, ns, tenantId: _access.TenantId,
-                        k: k, minScore: minScore, summaryFirst: summaryFirst));
-
-            // Expand with graph neighbors
-            var expanded = expandGraph
-                ? ExpandWithGraph(results, states)
-                : results;
-
-            // Fallback FIRST: if hybrid produced poor scores, swap in deep_recall
-            // before spectral re-ranking. Otherwise spectral runs on the low-score
-            // expansion and gets discarded when fallback overrides it.
-            if (results.Count == 0 || (results.Count > 0 && results[0].Score < 0.5f))
-            {
-                // DeepRecall resurrects high-scoring archived entries to STM as a side effect of
-                // reading them, so the fallback carries a write on a path the caller only ever
-                // asked to read on. CanRead legitimately authorizes seeing archived text, so the
-                // gate goes on the mutation and not on the call: a read-only grantee gets the
-                // same rows, scores and order, and only the reported LifecycleState changes —
-                // to the truth, since nothing was promoted.
-                var deepResults = _lifecycle.DeepRecall(vector, ns, tenantId: _access.TenantId,
-                    k: k, minScore: 0.3f, resurrectionThreshold: 0.7f, resurrect: _access.CanWrite(ns));
-                if (deepResults.Count > results.Count ||
-                    (deepResults.Count > 0 && (results.Count == 0 || deepResults[0].Score > results[0].Score)))
-                {
-                    strategy = "deep_recall";
-                    expanded = deepResults;
-                }
-            }
-
-            // Optional spectral re-ranking on whatever candidate set we ended up
-            // with (post-graph-expansion or post-deep_recall fallback). Restricted
-            // to entries already in the candidate pool for Specific mode; Broad
-            // mode applies a cluster-dominance-gated max-neighbor boost.
-            expanded = ApplySpectralRerankRestricted(ns, expanded, spectralMode, query, k);
-
-            // Record access for actually-returned entries (after spectral
-            // re-ranking, since that may have reshaped the top-K).
-            var finalResults = expanded.Take(k).ToList();
-            foreach (var r in finalResults)
-                _index.RecordAccess(r.Id, ns, _access.TenantId);
-
-            return new RecallResult(strategy, ns, finalResults);
+            var (candidates, deep) = RecallNamespace(query, vector, ns, options);
+            return new RecallResult(deep ? "deep_recall" : "direct", ns, CompleteRecall(candidates, options));
         }
 
         // Strategy 2: No namespace — auto-route via expert dispatcher
@@ -283,35 +233,25 @@ public sealed class CompositeTools
             {
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
-                IReadOnlyList<CognitiveSearchResult> expertResults = hybrid
-                    ? _index.HybridSearch(vector, query, bestExpert.TargetNamespace,
-                        tenantId: _access.TenantId, k: k, minScore: minScore, rerank: rerank)
-                    : _index.Search(vector, bestExpert.TargetNamespace, tenantId: _access.TenantId,
-                        k: k, minScore: minScore, summaryFirst: summaryFirst);
-
-                foreach (var r in expertResults)
-                    _index.RecordAccess(r.Id, bestExpert.TargetNamespace, _access.TenantId);
-
-                return new RecallResult("expert_routed", bestExpert.TargetNamespace, expertResults.ToList(),
+                var (candidates, _) = RecallNamespace(query, vector, bestExpert.TargetNamespace, options);
+                return new RecallResult("expert_routed", bestExpert.TargetNamespace, CompleteRecall(candidates, options),
                     $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})");
             }
         }
 
         // Strategy 3: No expert match — search all known namespaces
-        var allResults = new List<CognitiveSearchResult>();
-        // The broadcast path searches the entire store, so without a filter it is the widest
-        // possible read: one call returns hits from every namespace regardless of ownership.
-        var namespaces = _index.GetNamespaces(_access.TenantId).Where(_access.CanRead).ToList();
+        var allResults = new List<RecallCandidate>();
+        var namespaces = _index.GetNamespaces(_access.TenantId)
+            .Where(_access.CanRead)
+            .Where(n => !n.StartsWith("_system", StringComparison.Ordinal) &&
+                        !n.StartsWith("active-debate", StringComparison.Ordinal)).ToList();
         foreach (var searchNs in namespaces)
         {
-            if (searchNs.StartsWith("_system") || searchNs.StartsWith("active-debate")) continue;
-            var nsResults = _index.Search(vector, searchNs, k: 3, minScore: minScore,
-                tenantId: _access.TenantId);
-            allResults.AddRange(nsResults);
+            var (candidates, _) = RecallNamespace(query, vector, searchNs, options);
+            allResults.AddRange(candidates);
         }
 
-        var sorted = allResults.OrderByDescending(r => r.Score).Take(k).ToList();
-        return new RecallResult("broadcast", null, sorted,
+        return new RecallResult("broadcast", null, CompleteRecall(allResults, options),
             $"Searched {namespaces.Count} namespace(s), no expert match");
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
@@ -493,8 +433,88 @@ public sealed class CompositeTools
                 "Set includeHeader to false to avoid invalidation from namespace statistics changes.");
     }
 
+    private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
+        bool SummaryFirst, bool ExpandGraph, string SpectralMode);
+
+    // Namespace stays internal so the public MCP result shape remains unchanged. Graph
+    // neighbors may belong to another readable namespace; bare IDs are not storage keys.
+    private sealed record RecallCandidate(string Namespace, CognitiveSearchResult Result, bool Resurrect);
+
+    private (IReadOnlyList<RecallCandidate> Candidates, bool Deep) RecallNamespace(
+        string query, float[] vector, string ns, RecallOptions options)
+    {
+        var states = new HashSet<string> { "stm", "ltm" };
+        IReadOnlyList<CognitiveSearchResult> Search(HashSet<string> includeStates)
+        {
+            var found = _index.Search(new SearchRequest
+            {
+                Query = vector, QueryText = options.Hybrid ? query : null,
+                Namespace = ns, TenantId = _access.TenantId,
+                K = !options.Hybrid && options.Rerank ? options.K * 2 : options.K,
+                MinScore = options.MinScore, IncludeStates = includeStates,
+                Hybrid = options.Hybrid, Rerank = options.Rerank, SummaryFirst = options.SummaryFirst
+            });
+            if (!options.Hybrid && options.Rerank) found = _index.Rerank(query, found);
+            return OrderRecall(found, options.SummaryFirst).Take(options.K).ToList();
+        }
+
+        var results = Search(states);
+        bool deep = false;
+        // Fallback uses the same retrieval options instead of forcing vector-only search.
+        // Defer resurrection until the global top-K is known.
+        if (results.Count == 0 || results[0].Score < 0.5f)
+        {
+            var allStates = new HashSet<string> { "stm", "ltm", "archived" };
+            var recovered = Search(allStates);
+            if (recovered.Count > results.Count ||
+                (recovered.Count > 0 && (results.Count == 0 || recovered[0].Score > results[0].Score)))
+            {
+                results = recovered;
+                states = allStates;
+                deep = true;
+            }
+        }
+
+        var sources = results.ToDictionary(r => r.Id, _ => ns);
+        // Recovery eligibility uses semantic similarity, not RRF or graph-boosted scores.
+        var recoverable = results.Where(r => deep && r.LifecycleState == "archived")
+            .Where(r => _index.Get(r.Id, ns, _access.TenantId) is { } entry &&
+                VectorMath.Dot(vector, entry.Vector) /
+                    (VectorMath.Norm(vector) * VectorMath.Norm(entry.Vector) + 1e-9f) >= 0.7f)
+            .Select(r => r.Id).ToHashSet();
+        var expanded = options.ExpandGraph ? ExpandWithGraph(results, states, sources) : results;
+        expanded = ApplySpectralRerankRestricted(ns, expanded, options.SpectralMode, query, options.K,
+            options.ExpandGraph, states);
+        return (OrderRecall(expanded, options.SummaryFirst).Take(options.K)
+            .Select(r => new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id)))
+            .ToList(), deep);
+    }
+
+    private static IOrderedEnumerable<CognitiveSearchResult> OrderRecall(
+        IEnumerable<CognitiveSearchResult> results, bool summaryFirst) =>
+        results.OrderByDescending(r => summaryFirst && r.IsSummaryNode).ThenByDescending(r => r.Score);
+
+    private IReadOnlyList<CognitiveSearchResult> CompleteRecall(IEnumerable<RecallCandidate> candidates, RecallOptions options)
+    {
+        var selected = candidates.OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
+            .ThenByDescending(c => c.Result.Score)
+            .ThenBy(c => c.Namespace, StringComparer.Ordinal).ThenBy(c => c.Result.Id, StringComparer.Ordinal)
+            .DistinctBy(c => (c.Namespace, c.Result.Id)).Take(options.K);
+        var results = new List<CognitiveSearchResult>();
+        foreach (var candidate in selected)
+        {
+            var result = candidate.Result;
+            if (candidate.Resurrect && _access.CanWrite(candidate.Namespace) &&
+                _index.SetLifecycleState(result.Id, "stm", candidate.Namespace, _access.TenantId))
+                result = result with { LifecycleState = "stm" };
+            _index.RecordAccess(result.Id, candidate.Namespace, _access.TenantId);
+            results.Add(result);
+        }
+        return results;
+    }
+
     private IReadOnlyList<CognitiveSearchResult> ExpandWithGraph(
-        IReadOnlyList<CognitiveSearchResult> results, HashSet<string> states)
+        IReadOnlyList<CognitiveSearchResult> results, HashSet<string> states, Dictionary<string, string> sources)
     {
         if (results.Count == 0) return results;
 
@@ -521,11 +541,14 @@ public sealed class CompositeTools
                 if (!states.Contains(neighbor.Entry.LifecycleState)) continue;
                 if (!_access.CanRead(neighbor.Entry.Namespace)) continue;
 
-                existingIds.Add(neighbor.Entry.Id);
+                var entry = _index.Get(neighbor.Entry.Id, neighbor.Entry.Namespace, _access.TenantId);
+                if (entry is null) continue;
+                existingIds.Add(entry.Id);
+                sources[entry.Id] = neighbor.Entry.Namespace;
                 expanded.Add(new CognitiveSearchResult(
-                    neighbor.Entry.Id, neighbor.Entry.Text, lowestScore * 0.8f,
-                    neighbor.Entry.LifecycleState, 0f,
-                    neighbor.Entry.Category, null, false, null, 0));
+                    entry.Id, entry.Text, lowestScore * 0.8f, entry.LifecycleState, entry.ActivationEnergy,
+                    entry.Category, new Dictionary<string, string>(entry.Metadata), entry.IsSummaryNode,
+                    entry.SourceClusterId, entry.AccessCount));
             }
         }
 
@@ -544,7 +567,7 @@ public sealed class CompositeTools
         IReadOnlyList<CognitiveSearchResult> candidates,
         string spectralMode,
         string query,
-        int k)
+        int k, bool expandGraph, HashSet<string> states)
     {
         if (candidates.Count == 0) return candidates;
         if (string.IsNullOrWhiteSpace(spectralMode)) return candidates;
@@ -569,7 +592,7 @@ public sealed class CompositeTools
         //   mean, which is structurally below ExpandWithGraph's pre-assigned
         //   scores, so the lift never beats lexical false positives.
         if (resolved == SpectralRetrievalMode.Broad)
-            return ApplyBroadModeClusterBoost(ns, candidates, k);
+            return ApplyBroadModeClusterBoost(ns, candidates, k, expandGraph, states);
 
         // Specific mode retains the original candidates and relevance score scale.
         var byId = new Dictionary<string, CognitiveSearchResult>(candidates.Count);
@@ -578,12 +601,11 @@ public sealed class CompositeTools
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _spectral.Rerank(ns, scoreList, resolved, tenantId: _access.TenantId, topK: k * 3);
+        var reranked = _spectral.Rerank(ns, scoreList, resolved, tenantId: _access.TenantId, topK: candidates.Count);
 
         var output = new List<CognitiveSearchResult>(k);
         foreach (var (id, score) in reranked)
         {
-            if (output.Count >= k) break;
             if (byId.TryGetValue(id, out var orig))
                 output.Add(orig with { Score = score });
         }
@@ -605,7 +627,7 @@ public sealed class CompositeTools
     /// query's intent is clear).
     /// </summary>
     private IReadOnlyList<CognitiveSearchResult> ApplyBroadModeClusterBoost(
-        string ns, IReadOnlyList<CognitiveSearchResult> candidates, int k)
+        string ns, IReadOnlyList<CognitiveSearchResult> candidates, int k, bool expandGraph, HashSet<string> states)
     {
         if (candidates.Count == 0) return candidates;
 
@@ -685,7 +707,7 @@ public sealed class CompositeTools
         // boosted score so they can compete for the top-K.
         var clusterMember = candidates.FirstOrDefault(c =>
             componentOf.TryGetValue(c.Id, out var comp) && comp == dominantComponent);
-        if (clusterMember is not null)
+        if (expandGraph && clusterMember is not null)
         {
             // This BFS reads bare-id adjacency at every hop, so the guard belongs on each node
             // whose neighbors we are about to read, not only on the root: a walk that starts
@@ -708,7 +730,7 @@ public sealed class CompositeTools
 
                     if (seen.Contains(n.Entry.Id)) continue;
                     var entry = _index.Get(n.Entry.Id, ns, tenantId: _access.TenantId);
-                    if (entry is null) continue;
+                    if (entry is null || !states.Contains(entry.LifecycleState)) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
                         entry.ActivationEnergy, entry.Category,
@@ -720,7 +742,6 @@ public sealed class CompositeTools
         }
 
         output.Sort((a, b) => b.Score.CompareTo(a.Score));
-        if (output.Count > k) output = output.GetRange(0, k);
         return output;
     }
 

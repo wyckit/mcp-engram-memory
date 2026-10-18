@@ -10,6 +10,9 @@ The governed APIs are Core services, not additional MCP tools. The MCP server wr
 tools with `ConstitutionMcpFilter`; embedded hosts compose the same Core services directly. See
 [Cognitive Constitution and Governed Core](cognitive-constitution.md) for the execution contract.
 
+The composite `recall` tool uses one retrieval pipeline for direct, expert, and broadcast routes.
+See [recall route semantics and evaluation](recall-evaluation.md) for option behavior and quality checks.
+
 ### Governance, Knowledge, Planning, and Assets
 
 | Service | Namespace | Description |

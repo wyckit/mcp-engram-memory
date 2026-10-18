@@ -1448,8 +1448,17 @@ public sealed class CognitiveIndex : IDisposable
             // and it is already scoped to this (tenant, ns) partition so it can never surface another
             // tenant's entry. Reading nsEntries here instead of calling Get() also avoids re-entering
             // this non-recursive read lock.
+            float queryNorm = VectorMath.Norm(request.Query);
             Func<string, string, CognitiveEntry?> getEntry = (eid, _) =>
-                nsEntries.TryGetValue(eid, out var tuple) ? tuple.Entry : null;
+            {
+                if (!nsEntries.TryGetValue(eid, out var tuple)) return null;
+                if (tuple.Entry.Vector.Length != request.Query.Length) return null;
+                // Keyword rescue must not bypass the caller's similarity threshold,
+                // including when the vector pass found no eligible live entries.
+                float cosine = VectorMath.Dot(request.Query, tuple.Entry.Vector) /
+                    (queryNorm * tuple.Norm + 1e-9f);
+                return cosine >= request.MinScore ? tuple.Entry : null;
+            };
 
             // When diversity is active, fetch more candidates so MMR has a broader pool
             int diversityMultiplier = request.Diversity ? 3 : 1;
@@ -1465,8 +1474,8 @@ public sealed class CognitiveIndex : IDisposable
                     : Math.Max(request.K * 6, 30);
                 var vectorResults = _vectorSearch.Search(
                     request.Query, snapshot, candidateK, request.MinScore,
-                    request.Category, request.IncludeStates, false, hnswIndex);
-                int hybridK = request.K * diversityMultiplier;
+                    request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
+                int hybridK = request.SummaryFirst ? candidateK : request.K * diversityMultiplier;
                 var hybridResults = _hybridSearch.HybridSearch(
                     vectorResults, expandedQueryText, pk, hybridK,
                     request.IncludeStates, request.Category,
@@ -2409,17 +2418,22 @@ public sealed class CognitiveIndex : IDisposable
         SearchRequest request,
         IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot)
     {
-        if (!request.Diversity || results.Count <= 1)
-            return results.Count > request.K ? results.Take(request.K).ToList() : results;
+        if (request.Diversity && results.Count > 1)
+        {
+            // Keep MMR selection when both options are requested; summary preference
+            // orders the selected set without silently disabling diversity.
+            var vectorLookup = new Dictionary<string, float[]>(snapshot.Count);
+            foreach (var (entry, _, _) in snapshot)
+                vectorLookup[entry.Id] = entry.Vector;
+            results = DiversityReranker.Rerank(
+                results, request.Query, id => vectorLookup.GetValueOrDefault(id),
+                request.K, request.DiversityLambda);
+        }
 
-        // Build vector lookup from snapshot for MMR inter-result similarity
-        var vectorLookup = new Dictionary<string, float[]>(snapshot.Count);
-        foreach (var (entry, _, _) in snapshot)
-            vectorLookup[entry.Id] = entry.Vector;
-
-        return DiversityReranker.Rerank(
-            results, request.Query, id => vectorLookup.GetValueOrDefault(id),
-            request.K, request.DiversityLambda);
+        if (request.SummaryFirst)
+            return results.OrderByDescending(r => r.IsSummaryNode).ThenByDescending(r => r.Score)
+                .Take(request.K).ToList();
+        return results.Count > request.K ? results.Take(request.K).ToList() : results;
     }
 
     private static void UpdateQuantization(

@@ -1,0 +1,1067 @@
+{
+  "version": 1,
+  "description": "Fictional operational memories with 24 development and 12 held-out paraphrase questions. Labels are authored from source facts, not model judgments.",
+  "entries": [
+    {
+      "id": "atlas-timeout-old",
+      "ns": "expert_atlas",
+      "text": "Superseded Atlas payment timeout decision from April: use a 30 second gateway timeout. Replaced by the May incident review.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": true
+    },
+    {
+      "id": "atlas-timeout",
+      "ns": "expert_atlas",
+      "text": "Current Atlas payment gateway timeout is 45 seconds after the May incident review. This replaces the earlier 30 second setting.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-owner-old",
+      "ns": "expert_atlas",
+      "text": "Historical Atlas deployment owner was Maya. This ownership record is obsolete after the platform handover.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": true
+    },
+    {
+      "id": "atlas-owner",
+      "ns": "expert_atlas",
+      "text": "After the platform handover, Leon owns Atlas production deployments and approves rollback requests.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-region-old",
+      "ns": "expert_atlas",
+      "text": "Superseded Atlas primary database region was us-east-1. This was the location before the June migration.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": true
+    },
+    {
+      "id": "atlas-region",
+      "ns": "expert_atlas",
+      "text": "Atlas primary database moved to eu-west-1 in June; eu-central-1 is the disaster recovery region.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-endpoint",
+      "ns": "expert_atlas",
+      "text": "Atlas production health endpoint is /v2/health/ready on port 8443. The readiness probe must use HTTPS.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-rollback",
+      "ns": "expert_atlas",
+      "text": "Atlas rollback command: deployctl rollback atlas --release 42. Before executing, pause the payment consumer.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-error",
+      "ns": "expert_atlas",
+      "text": "Atlas error PAY-4097 means the payment idempotency key was reused with a different amount. Return HTTP 409.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-backup",
+      "ns": "expert_atlas",
+      "text": "Atlas PostgreSQL backups run at 02:15 UTC every day and are retained for 35 days.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-queue",
+      "ns": "expert_atlas",
+      "text": "Atlas payments use the atlas-payments-v2 queue. Dead letters go to atlas-payments-dlq after five attempts.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-secrets",
+      "ns": "expert_atlas",
+      "text": "Atlas deployment credentials live in the atlas-prod vault under deploy-token. Rotate them every 90 days.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-timeout",
+      "ns": "expert_boreal",
+      "text": "Boreal payment gateway timeout remains 30 seconds; it did not adopt the Atlas 45 second timeout.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-endpoint",
+      "ns": "expert_boreal",
+      "text": "Boreal production readiness endpoint is /healthz on port 8080. Internal probes use HTTP.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-backup",
+      "ns": "expert_boreal",
+      "text": "Boreal PostgreSQL backups run at 04:00 UTC daily and are retained for 14 days.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-owner",
+      "ns": "expert_boreal",
+      "text": "Maya owns Boreal production deployments. Escalate Boreal release approvals to Maya.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-queue",
+      "ns": "expert_boreal",
+      "text": "Boreal payments use boreal-payments-v1 with three retries before the dead-letter queue.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-region",
+      "ns": "expert_boreal",
+      "text": "Boreal primary database remains in us-east-1; its disaster recovery database is in us-west-2.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-cache",
+      "ns": "expert_engram",
+      "text": "Engram context block version is a SHA-256 content fingerprint covering namespace, ordered memory content, metadata and the optional header.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-cache-header",
+      "ns": "expert_engram",
+      "text": "Set includeHeader to false on get_context_block to prevent cache invalidation caused only by changing STM, LTM or archived counts.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-specific",
+      "ns": "expert_engram",
+      "text": "Engram specific spectral recall preserves relevance scores and adds a bounded specificity bonus of at most 25 percent to retrieved candidates.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-broad",
+      "ns": "expert_engram",
+      "text": "Engram broad recall boosts a dominant graph cluster when it has a strict majority of the top results; ambiguous clusters are left alone.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-identity",
+      "ns": "expert_engram",
+      "text": "Engram child agents currently share the default agent identity. Namespace ownership is not a security boundary until unique AGENT_ID values are verified.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-profiles",
+      "ns": "expert_engram",
+      "text": "Engram minimal profile exposes 17 MCP tools, standard 39 and full 63, verified against runtime registration.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-persistence",
+      "ns": "expert_engram",
+      "text": "Engram persistence flushes pending memory writes on shutdown. Restart must reload archived state and graph edges from disk.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-duplicates",
+      "ns": "expert_engram",
+      "text": "Engram graph adjacency uses bare IDs within a tenant. Duplicate memory IDs across namespaces must not be traversed as a shared graph node.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-routing",
+      "ns": "expert_engram",
+      "text": "Engram recall with a namespace searches directly. Without a namespace it tries an expert and otherwise broadcasts across readable namespaces.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-retry",
+      "ns": "expert_atlas",
+      "text": "Atlas clients retry transient HTTP 503 failures with exponential backoff, capped at five attempts.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-drill",
+      "ns": "expert_atlas",
+      "text": "Atlas disaster recovery drills happen on the first Tuesday of each quarter. The recovery time objective is 40 minutes.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-retry",
+      "ns": "expert_boreal",
+      "text": "Boreal clients retry transient HTTP 503 failures at most three times with jitter.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-drill",
+      "ns": "expert_boreal",
+      "text": "Boreal disaster recovery drill is monthly. Its recovery time objective is 90 minutes.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-summary",
+      "ns": "expert_atlas",
+      "text": "Atlas operations overview: payment gateway, deployment ownership, database regions, health endpoints, backups, rollback and credential rotation.",
+      "state": "ltm",
+      "summary": true,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-summary",
+      "ns": "expert_boreal",
+      "text": "Boreal operations overview: gateway configuration, production deployments, database backups, readiness probes and disaster recovery.",
+      "state": "ltm",
+      "summary": true,
+      "obsolete": false
+    },
+    {
+      "id": "engram-summary",
+      "ns": "expert_engram",
+      "text": "Engram memory architecture overview: context caching, retrieval ranking, graph expansion, namespace permissions, tool profiles and persistence.",
+      "state": "ltm",
+      "summary": true,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-incident",
+      "ns": "expert_atlas",
+      "text": "Archived incident INC-742: Atlas duplicate payments were caused by a missing idempotency key in the retry worker. The repair added the key before retrying.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-cert",
+      "ns": "expert_atlas",
+      "text": "Archived incident TLS-318: Atlas certificate renewal failed because the DNS challenge record was missing. Recreate _acme-challenge.atlas.example.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-incident",
+      "ns": "expert_boreal",
+      "text": "Archived incident INC-861: Boreal lost messages because queue acknowledgements happened before database commit. Acknowledge after commit.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-restore",
+      "ns": "expert_boreal",
+      "text": "Archived Boreal restore rehearsal REST-19 recovered the database from snapshot boreal-2026-06-14. The rehearsal took 22 minutes.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-incident",
+      "ns": "expert_engram",
+      "text": "Archived Engram incident MEM-212: stale context blocks resulted from a cache version that omitted metadata. Hash all returned content to invalidate correctly.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-restart",
+      "ns": "expert_engram",
+      "text": "Archived Engram restart incident MEM-309: pending writes were missing after abrupt process termination. Flush persisted data before a graceful restart.",
+      "state": "archived",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "cedar-port",
+      "ns": "expert_cedar",
+      "text": "Cedar readiness probes use /ready on port 9090. Its service is a reporting dashboard.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "cedar-backup",
+      "ns": "expert_cedar",
+      "text": "Cedar analytics backups run weekly on Sunday with 60 day retention.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "cedar-owner",
+      "ns": "expert_cedar",
+      "text": "Priya owns Cedar releases. Release 42 upgraded the reporting dashboard.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "cedar-timeout",
+      "ns": "expert_cedar",
+      "text": "Cedar report generation timeout is 120 seconds. Payment timeouts are unrelated.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "cedar-summary",
+      "ns": "expert_cedar",
+      "text": "Cedar analytics combines monthly revenue reporting, dashboards and export scheduling.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-ui",
+      "ns": "expert_atlas",
+      "text": "Atlas dashboard theme uses navy and amber. The settings page supports keyboard navigation.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "atlas-docs",
+      "ns": "expert_atlas",
+      "text": "Atlas onboarding documentation is reviewed every second Friday by the support team.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-ui",
+      "ns": "expert_boreal",
+      "text": "Boreal mobile app uses green status icons and has an offline mode for field teams.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "boreal-docs",
+      "ns": "expert_boreal",
+      "text": "Boreal onboarding guide covers local development, debugging and demo accounts.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-model",
+      "ns": "expert_engram",
+      "text": "Engram uses a local ONNX embedding model to convert memory text into semantic vectors.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-metrics",
+      "ns": "expert_engram",
+      "text": "Engram metrics collect tool latency, retrieval counts and background worker health.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    },
+    {
+      "id": "engram-summary-next",
+      "ns": "expert_engram",
+      "text": "Future work on Engram summary selection should compare summaries against original evidence and preserve useful source memories.",
+      "state": "ltm",
+      "summary": false,
+      "obsolete": false
+    }
+  ],
+  "edges": [
+    [
+      "atlas-timeout",
+      "atlas-timeout-old"
+    ],
+    [
+      "atlas-owner",
+      "atlas-owner-old"
+    ],
+    [
+      "atlas-region",
+      "atlas-region-old"
+    ],
+    [
+      "engram-cache",
+      "engram-cache-header"
+    ],
+    [
+      "engram-cache",
+      "engram-incident"
+    ],
+    [
+      "atlas-rollback",
+      "atlas-owner"
+    ],
+    [
+      "atlas-queue",
+      "atlas-retry"
+    ],
+    [
+      "boreal-drill",
+      "boreal-region"
+    ],
+    [
+      "atlas-summary",
+      "atlas-timeout-old"
+    ],
+    [
+      "atlas-summary",
+      "atlas-timeout"
+    ],
+    [
+      "atlas-summary",
+      "atlas-owner-old"
+    ],
+    [
+      "atlas-summary",
+      "atlas-owner"
+    ],
+    [
+      "atlas-summary",
+      "atlas-region-old"
+    ],
+    [
+      "atlas-summary",
+      "atlas-region"
+    ],
+    [
+      "atlas-summary",
+      "atlas-endpoint"
+    ],
+    [
+      "atlas-summary",
+      "atlas-rollback"
+    ],
+    [
+      "atlas-summary",
+      "atlas-error"
+    ],
+    [
+      "atlas-summary",
+      "atlas-backup"
+    ],
+    [
+      "atlas-summary",
+      "atlas-queue"
+    ],
+    [
+      "atlas-summary",
+      "atlas-secrets"
+    ],
+    [
+      "atlas-summary",
+      "atlas-retry"
+    ],
+    [
+      "atlas-summary",
+      "atlas-drill"
+    ],
+    [
+      "atlas-summary",
+      "atlas-ui"
+    ],
+    [
+      "atlas-summary",
+      "atlas-docs"
+    ],
+    [
+      "boreal-summary",
+      "boreal-timeout"
+    ],
+    [
+      "boreal-summary",
+      "boreal-endpoint"
+    ],
+    [
+      "boreal-summary",
+      "boreal-backup"
+    ],
+    [
+      "boreal-summary",
+      "boreal-owner"
+    ],
+    [
+      "boreal-summary",
+      "boreal-queue"
+    ],
+    [
+      "boreal-summary",
+      "boreal-region"
+    ],
+    [
+      "boreal-summary",
+      "boreal-retry"
+    ],
+    [
+      "boreal-summary",
+      "boreal-drill"
+    ],
+    [
+      "boreal-summary",
+      "boreal-ui"
+    ],
+    [
+      "boreal-summary",
+      "boreal-docs"
+    ],
+    [
+      "engram-summary",
+      "engram-cache"
+    ],
+    [
+      "engram-summary",
+      "engram-cache-header"
+    ],
+    [
+      "engram-summary",
+      "engram-specific"
+    ],
+    [
+      "engram-summary",
+      "engram-broad"
+    ],
+    [
+      "engram-summary",
+      "engram-identity"
+    ],
+    [
+      "engram-summary",
+      "engram-profiles"
+    ],
+    [
+      "engram-summary",
+      "engram-persistence"
+    ],
+    [
+      "engram-summary",
+      "engram-duplicates"
+    ],
+    [
+      "engram-summary",
+      "engram-routing"
+    ],
+    [
+      "engram-summary",
+      "engram-model"
+    ],
+    [
+      "engram-summary",
+      "engram-metrics"
+    ],
+    [
+      "engram-summary",
+      "engram-summary-next"
+    ]
+  ],
+  "queries": [
+    {
+      "id": "c01",
+      "scenario": "corrections",
+      "ns": "expert_atlas",
+      "query": "What is the current Atlas payment gateway timeout after the incident review?",
+      "relevant": [
+        "atlas-timeout"
+      ],
+      "obsolete": [
+        "atlas-timeout-old"
+      ],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "c02",
+      "scenario": "corrections",
+      "ns": "expert_atlas",
+      "query": "Who owns Atlas production deployments after the platform handover?",
+      "relevant": [
+        "atlas-owner"
+      ],
+      "obsolete": [
+        "atlas-owner-old"
+      ],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "c03",
+      "scenario": "corrections",
+      "ns": "expert_atlas",
+      "query": "Where is the Atlas primary database after the June migration?",
+      "relevant": [
+        "atlas-region"
+      ],
+      "obsolete": [
+        "atlas-region-old"
+      ],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "c04",
+      "scenario": "corrections",
+      "ns": "expert_boreal",
+      "query": "Did Boreal adopt the Atlas 45 second payment timeout?",
+      "relevant": [
+        "boreal-timeout"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "c05",
+      "scenario": "corrections",
+      "ns": "expert_atlas",
+      "query": "Which timeout replaced the old 30 second Atlas gateway setting?",
+      "relevant": [
+        "atlas-timeout"
+      ],
+      "obsolete": [
+        "atlas-timeout-old"
+      ],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "c06",
+      "scenario": "corrections",
+      "ns": "expert_atlas",
+      "query": "Who should approve an Atlas rollback now that ownership changed?",
+      "relevant": [
+        "atlas-owner"
+      ],
+      "obsolete": [
+        "atlas-owner-old"
+      ],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "i01",
+      "scenario": "identifiers",
+      "ns": "expert_atlas",
+      "query": "What does Atlas error PAY-4097 mean?",
+      "relevant": [
+        "atlas-error"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "i02",
+      "scenario": "identifiers",
+      "ns": "expert_atlas",
+      "query": "What command rolls Atlas back to release 42?",
+      "relevant": [
+        "atlas-rollback"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "i03",
+      "scenario": "identifiers",
+      "ns": "expert_atlas",
+      "query": "Which endpoint and port should the Atlas production readiness probe use?",
+      "relevant": [
+        "atlas-endpoint"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "i04",
+      "scenario": "identifiers",
+      "ns": "expert_atlas",
+      "query": "What queue holds Atlas payment dead letters?",
+      "relevant": [
+        "atlas-queue"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "i05",
+      "scenario": "identifiers",
+      "ns": "expert_engram",
+      "query": "How many tools does each Engram tool profile expose?",
+      "relevant": [
+        "engram-profiles"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "i06",
+      "scenario": "identifiers",
+      "ns": "expert_atlas",
+      "query": "Where is the Atlas production deploy-token stored and when is it rotated?",
+      "relevant": [
+        "atlas-secrets"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "p01",
+      "scenario": "similar-projects",
+      "ns": "expert_boreal",
+      "query": "When do Boreal database backups run and how long are they retained?",
+      "relevant": [
+        "boreal-backup"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "p02",
+      "scenario": "similar-projects",
+      "ns": "expert_atlas",
+      "query": "When do Atlas database backups run and how long are they retained?",
+      "relevant": [
+        "atlas-backup"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "p03",
+      "scenario": "similar-projects",
+      "ns": "expert_boreal",
+      "query": "Which region contains the Boreal primary database?",
+      "relevant": [
+        "boreal-region"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "p04",
+      "scenario": "similar-projects",
+      "ns": "expert_boreal",
+      "query": "Who approves Boreal production releases?",
+      "relevant": [
+        "boreal-owner"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "p05",
+      "scenario": "similar-projects",
+      "ns": "expert_boreal",
+      "query": "Which path and port does the Boreal readiness probe check?",
+      "relevant": [
+        "boreal-endpoint"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "p06",
+      "scenario": "similar-projects",
+      "ns": "expert_atlas",
+      "query": "How often are Atlas disaster recovery drills and what is the recovery time target?",
+      "relevant": [
+        "atlas-drill"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "s01",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_engram",
+      "query": "How does Engram context block cache invalidation work and how can counts be excluded?",
+      "relevant": [
+        "engram-cache",
+        "engram-cache-header"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "s02",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_engram",
+      "query": "How does Engram specific spectral ranking avoid losing relevant memories?",
+      "relevant": [
+        "engram-specific"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "s03",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_engram",
+      "query": "Why are Engram namespace permissions not an isolation boundary for default child agents?",
+      "relevant": [
+        "engram-identity"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "s04",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_atlas",
+      "query": "What must I pause before executing the Atlas rollback command?",
+      "relevant": [
+        "atlas-rollback"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "s05",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_engram",
+      "query": "What does Engram broad recall do when the top results contain several ambiguous graph clusters?",
+      "relevant": [
+        "engram-broad"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "s06",
+      "scenario": "summaries-and-sources",
+      "ns": "expert_engram",
+      "query": "Why must graph traversal reject duplicate memory IDs in different namespaces?",
+      "relevant": [
+        "engram-duplicates"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "a01",
+      "scenario": "archives-and-restart",
+      "ns": "expert_atlas",
+      "query": "What caused duplicate payments in archived Atlas incident INC-742?",
+      "relevant": [
+        "atlas-incident"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "a02",
+      "scenario": "archives-and-restart",
+      "ns": "expert_atlas",
+      "query": "How was the Atlas DNS certificate failure TLS-318 repaired?",
+      "relevant": [
+        "atlas-cert"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "a03",
+      "scenario": "archives-and-restart",
+      "ns": "expert_boreal",
+      "query": "Why did Boreal lose messages during incident INC-861?",
+      "relevant": [
+        "boreal-incident"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": true
+    },
+    {
+      "id": "a04",
+      "scenario": "archives-and-restart",
+      "ns": "expert_engram",
+      "query": "What fixed stale context blocks in Engram incident MEM-212?",
+      "relevant": [
+        "engram-incident"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": true
+    },
+    {
+      "id": "a05",
+      "scenario": "archives-and-restart",
+      "ns": "expert_boreal",
+      "query": "Which snapshot did Boreal restore rehearsal REST-19 use and how long did it take?",
+      "relevant": [
+        "boreal-restore"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": true
+    },
+    {
+      "id": "a06",
+      "scenario": "archives-and-restart",
+      "ns": "expert_engram",
+      "query": "What was learned about graceful shutdown in Engram restart incident MEM-309?",
+      "relevant": [
+        "engram-restart"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": true
+    },
+    {
+      "id": "b01",
+      "scenario": "ambiguous",
+      "ns": "expert_atlas",
+      "query": "Atlas operations",
+      "relevant": [
+        "atlas-summary",
+        "atlas-backup",
+        "atlas-endpoint",
+        "atlas-rollback"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "b02",
+      "scenario": "ambiguous",
+      "ns": "expert_boreal",
+      "query": "Boreal recovery",
+      "relevant": [
+        "boreal-drill",
+        "boreal-restore",
+        "boreal-region"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "b03",
+      "scenario": "ambiguous",
+      "ns": "expert_engram",
+      "query": "Engram caching",
+      "relevant": [
+        "engram-cache",
+        "engram-cache-header",
+        "engram-incident"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "b04",
+      "scenario": "ambiguous",
+      "ns": "expert_atlas",
+      "query": "Atlas retries",
+      "relevant": [
+        "atlas-retry",
+        "atlas-queue",
+        "atlas-incident"
+      ],
+      "obsolete": [],
+      "split": "development",
+      "restart": false
+    },
+    {
+      "id": "b05",
+      "scenario": "ambiguous",
+      "ns": "expert_engram",
+      "query": "Engram retrieval",
+      "relevant": [
+        "engram-routing",
+        "engram-specific",
+        "engram-broad"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    },
+    {
+      "id": "b06",
+      "scenario": "ambiguous",
+      "ns": "expert_boreal",
+      "query": "Boreal production",
+      "relevant": [
+        "boreal-summary",
+        "boreal-owner",
+        "boreal-endpoint",
+        "boreal-region"
+      ],
+      "obsolete": [],
+      "split": "heldout",
+      "restart": false
+    }
+  ]
+}
