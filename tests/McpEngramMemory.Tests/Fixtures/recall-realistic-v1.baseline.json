@@ -1,0 +1,66 @@
+{
+  "Version": 1,
+  "Description": "Initial recall-route consistency quality reference. Update deliberately with the per-query report and explain any regression; never regenerate automatically in CI. Latency and summary occupancy remain diagnostic.",
+  "Groups": [
+    {
+      "Split": "development",
+      "Route": "direct",
+      "HitAt5": 0.9583333333333334,
+      "RecallAt5": 0.90625,
+      "SourceRecallAt5": 0.9027777777777778,
+      "Mrr": 0.9375,
+      "NdcgAt5": 0.9001444589936001,
+      "StaleTop1": 0.041666666666666664
+    },
+    {
+      "Split": "development",
+      "Route": "expert",
+      "HitAt5": 0.9583333333333334,
+      "RecallAt5": 0.90625,
+      "SourceRecallAt5": 0.9027777777777778,
+      "Mrr": 0.9375,
+      "NdcgAt5": 0.9001444589936001,
+      "StaleTop1": 0.041666666666666664
+    },
+    {
+      "Split": "development",
+      "Route": "broadcast",
+      "HitAt5": 0.9166666666666666,
+      "RecallAt5": 0.8923611111111112,
+      "SourceRecallAt5": 0.888888888888889,
+      "Mrr": 0.8958333333333334,
+      "NdcgAt5": 0.8754751502150705,
+      "StaleTop1": 0.041666666666666664
+    },
+    {
+      "Split": "heldout",
+      "Route": "direct",
+      "HitAt5": 1,
+      "RecallAt5": 0.9236111111111112,
+      "SourceRecallAt5": 0.9166666666666666,
+      "Mrr": 0.8402777777777777,
+      "NdcgAt5": 0.8433949297527201,
+      "StaleTop1": 0.08333333333333333
+    },
+    {
+      "Split": "heldout",
+      "Route": "expert",
+      "HitAt5": 1,
+      "RecallAt5": 0.9236111111111112,
+      "SourceRecallAt5": 0.9166666666666666,
+      "Mrr": 0.8402777777777777,
+      "NdcgAt5": 0.8433949297527201,
+      "StaleTop1": 0.08333333333333333
+    },
+    {
+      "Split": "heldout",
+      "Route": "broadcast",
+      "HitAt5": 1,
+      "RecallAt5": 0.9236111111111112,
+      "SourceRecallAt5": 0.9166666666666666,
+      "Mrr": 0.8333333333333334,
+      "NdcgAt5": 0.8376179762588363,
+      "StaleTop1": 0.08333333333333333
+    }
+  ]
+}
