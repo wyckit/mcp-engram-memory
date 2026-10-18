@@ -440,6 +440,10 @@ public sealed class CompositeTools
     // neighbors may belong to another readable namespace; bare IDs are not storage keys.
     private sealed record RecallCandidate(string Namespace, CognitiveSearchResult Result, bool Resurrect);
 
+    // With the default five-result budget, leave room for an overview, two sources,
+    // and other independent hits. Smaller budgets retain the strongest hit first.
+    private const int SummarySourceLimit = 2;
+
     private (IReadOnlyList<RecallCandidate> Candidates, bool Deep) RecallNamespace(
         string query, float[] vector, string ns, RecallOptions options)
     {
@@ -482,26 +486,82 @@ public sealed class CompositeTools
                 VectorMath.Dot(vector, entry.Vector) /
                     (VectorMath.Norm(vector) * VectorMath.Norm(entry.Vector) + 1e-9f) >= 0.7f)
             .Select(r => r.Id).ToHashSet();
-        var expanded = options.ExpandGraph ? ExpandWithGraph(results, states, sources) : results;
+        var expanded = options.ExpandGraph
+            ? ExpandWithGraph(results, states, sources, vector, options.MinScore)
+            : results;
         expanded = ApplySpectralRerankRestricted(ns, expanded, options.SpectralMode, query, options.K,
             options.ExpandGraph, states);
-        return (OrderRecall(expanded, options.SummaryFirst).Take(options.K)
-            .Select(r => new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id)))
-            .ToList(), deep);
+        return (SelectRecallCandidates(expanded.Select(r =>
+            new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id))), options), deep);
     }
 
     private static IOrderedEnumerable<CognitiveSearchResult> OrderRecall(
         IEnumerable<CognitiveSearchResult> results, bool summaryFirst) =>
         results.OrderByDescending(r => summaryFirst && r.IsSummaryNode).ThenByDescending(r => r.Score);
 
-    private IReadOnlyList<CognitiveSearchResult> CompleteRecall(IEnumerable<RecallCandidate> candidates, RecallOptions options)
+    private IReadOnlyList<RecallCandidate> SelectRecallCandidates(
+        IEnumerable<RecallCandidate> candidates, RecallOptions options)
     {
-        var selected = candidates.OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
+        var ranked = candidates.OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
             .ThenByDescending(c => c.Result.Score)
             .ThenBy(c => c.Namespace, StringComparer.Ordinal).ThenBy(c => c.Result.Id, StringComparer.Ordinal)
-            .DistinctBy(c => (c.Namespace, c.Result.Id)).Take(options.K);
+            .DistinctBy(c => (c.Namespace, c.Result.Id)).ToList();
+        var selected = ranked.Take(options.K).ToList();
+        if (options.SummaryFirst || !options.ExpandGraph || selected.Count < 2 ||
+            !selected.Any(c => c.Result.IsSummaryNode)) return selected;
+
+        // Keep up to two query-ranked sources with each retained summary when possible.
+        // This is selection, not a score boost: keep the strongest hit and original
+        // scores, and place supporting context next to the overview it explains.
+        // Operate only on already authorized candidates, including during broadcast.
+        var protectedKeys = new HashSet<(string Namespace, string Id)>
+            { (selected[0].Namespace, selected[0].Result.Id) };
+        var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+        var pairs = new Dictionary<(string Namespace, string Id), List<RecallCandidate>>();
+        foreach (var summary in selected.Where(c => c.Result.IsSummaryNode).ToList())
+        {
+            if (!selected.Contains(summary) || !topology.IsTopologySafe(summary.Result.Id)) continue;
+            var linkedKeys = _graph.GetNeighbors(summary.Result.Id, relation: null, direction: "both",
+                    tenantId: _access.TenantId).Neighbors
+                .Where(n => n.Edge.Relation != "contradicts")
+                .Select(n => (n.Entry.Namespace, n.Entry.Id)).ToHashSet();
+            var sources = ranked.Where(c => !c.Result.IsSummaryNode &&
+                linkedKeys.Contains((c.Namespace, c.Result.Id))).Take(Math.Min(SummarySourceLimit, options.K - 1));
+            foreach (var source in sources)
+            {
+                if (!selected.Contains(source))
+                {
+                    var replace = selected.FindLastIndex(c => c != summary &&
+                        !protectedKeys.Contains((c.Namespace, c.Result.Id)));
+                    if (replace < 0) continue;
+                    selected[replace] = source;
+                }
+                var key = (summary.Namespace, summary.Result.Id);
+                if (!pairs.TryGetValue(key, out var linked)) pairs[key] = linked = new List<RecallCandidate>();
+                linked.Add(source);
+                protectedKeys.Add(key);
+                protectedKeys.Add((source.Namespace, source.Result.Id));
+            }
+        }
+        var keys = selected.Select(c => (c.Namespace, c.Result.Id)).ToHashSet();
+        var output = new List<RecallCandidate>();
+        var emitted = new HashSet<(string Namespace, string Id)>();
+        foreach (var candidate in ranked.Where(c => keys.Contains((c.Namespace, c.Result.Id))))
+        {
+            if (!emitted.Add((candidate.Namespace, candidate.Result.Id))) continue;
+            output.Add(candidate);
+            if (pairs.TryGetValue((candidate.Namespace, candidate.Result.Id), out var sources))
+                foreach (var source in sources)
+                    if (keys.Contains((source.Namespace, source.Result.Id)) && emitted.Add((source.Namespace, source.Result.Id)))
+                        output.Add(source);
+        }
+        return output;
+    }
+
+    private IReadOnlyList<CognitiveSearchResult> CompleteRecall(IEnumerable<RecallCandidate> candidates, RecallOptions options)
+    {
         var results = new List<CognitiveSearchResult>();
-        foreach (var candidate in selected)
+        foreach (var candidate in SelectRecallCandidates(candidates, options))
         {
             var result = candidate.Result;
             if (candidate.Resurrect && _access.CanWrite(candidate.Namespace) &&
@@ -514,13 +574,15 @@ public sealed class CompositeTools
     }
 
     private IReadOnlyList<CognitiveSearchResult> ExpandWithGraph(
-        IReadOnlyList<CognitiveSearchResult> results, HashSet<string> states, Dictionary<string, string> sources)
+        IReadOnlyList<CognitiveSearchResult> results, HashSet<string> states, Dictionary<string, string> sources,
+        float[] queryVector, float minScore)
     {
         if (results.Count == 0) return results;
 
         var existingIds = results.Select(r => r.Id).ToHashSet();
         var expanded = new List<CognitiveSearchResult>(results);
         float lowestScore = results.Min(r => r.Score);
+        float queryNorm = VectorMath.Norm(queryVector);
 
         // The seeds are entries the caller may read, but graph adjacency is keyed (tenant, id)
         // with no namespace: an id the tenant holds in two namespaces names ONE node, shared with
@@ -543,10 +605,23 @@ public sealed class CompositeTools
 
                 var entry = _index.Get(neighbor.Entry.Id, neighbor.Entry.Namespace, _access.TenantId);
                 if (entry is null) continue;
+                float score = lowestScore * 0.8f;
+                if (result.IsSummaryNode)
+                {
+                    // Drill into an overview using the query, not equal scores for every
+                    // linked source. Scale by the parent's retrieval score so cosine and
+                    // hybrid/RRF scores are never directly compared. A source cannot
+                    // inherit more confidence than the summary that led us to it.
+                    if (entry.Vector.Length != queryVector.Length) continue;
+                    float similarity = VectorMath.Dot(queryVector, entry.Vector) /
+                        (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
+                    if (similarity < minScore) continue;
+                    score = result.Score * Math.Clamp(similarity, 0f, 1f);
+                }
                 existingIds.Add(entry.Id);
                 sources[entry.Id] = neighbor.Entry.Namespace;
                 expanded.Add(new CognitiveSearchResult(
-                    entry.Id, entry.Text, lowestScore * 0.8f, entry.LifecycleState, entry.ActivationEnergy,
+                    entry.Id, entry.Text, score, entry.LifecycleState, entry.ActivationEnergy,
                     entry.Category, new Dictionary<string, string>(entry.Metadata), entry.IsSummaryNode,
                     entry.SourceClusterId, entry.AccessCount));
             }
@@ -635,7 +710,10 @@ public sealed class CompositeTools
         // candidate set itself — we only consider edges between candidates,
         // so an entry whose graph neighbors aren't in the pool is in a
         // singleton component.
-        var componentOf = AssignComponentsWithinCandidates(candidates);
+        // A summary is a navigation hub, not independent evidence that all of its
+        // sources describe one query-relevant topic. Keep summaries selectable at
+        // their retrieval scores, but infer dominance from source-to-source links.
+        var componentOf = AssignComponentsWithinCandidates(candidates.Where(c => !c.IsSummaryNode).ToList());
         if (componentOf.Count == 0) return candidates;
 
         // Find the dominant component among the top-K candidates by score.
@@ -726,11 +804,15 @@ public sealed class CompositeTools
                 {
                     if (fullClusterSeen.Contains(n.Entry.Id)) continue;
                     fullClusterSeen.Add(n.Entry.Id);
+                    if (!_access.CanRead(n.Entry.Namespace)) continue;
+                    var entry = _index.Get(n.Entry.Id, n.Entry.Namespace, tenantId: _access.TenantId);
+                    // This also covers summaries outside the original candidate pool:
+                    // a source cluster must not spread through an overview into another.
+                    if (entry is null || entry.IsSummaryNode) continue;
                     queue.Enqueue(n.Entry.Id);
 
                     if (seen.Contains(n.Entry.Id)) continue;
-                    var entry = _index.Get(n.Entry.Id, ns, tenantId: _access.TenantId);
-                    if (entry is null || !states.Contains(entry.LifecycleState)) continue;
+                    if (entry.Ns != ns || !states.Contains(entry.LifecycleState)) continue;
                     output.Add(new CognitiveSearchResult(
                         entry.Id, entry.Text, clusterBoostedScore, entry.LifecycleState,
                         entry.ActivationEnergy, entry.Category,
