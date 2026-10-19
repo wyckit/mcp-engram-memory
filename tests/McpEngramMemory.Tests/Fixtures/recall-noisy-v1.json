@@ -1,0 +1,740 @@
+{
+  "version": 1,
+  "description": "Frozen before the first run on main e8b2b6e. Synthetic authored recall evaluation, not production accuracy. Evaluation split is inspected after running and never used to tune production in this PR. Expected IDs are answer sources; broad/compound facets measure completeness. An underspecified environment credits either valid source and reports coverage without demanding abstention.",
+  "entries": [
+    {
+      "id": "juniper-owner",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production deployment owner is Mara Chen.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-endpoint",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production readiness endpoint is /ready/live.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-region",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production primary database region is eu-west-2.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-timeout",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production gateway timeout is 45 seconds after the August review.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-timeout-old",
+      "ns": "expert_juniper_ops",
+      "text": "[superseded] Juniper production gateway timeout was 90 seconds before the August review.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "archived",
+      "obsolete": true
+    },
+    {
+      "id": "juniper-retry",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production caps payment retries at three attempts. Repeated payment delivery caused duplicate settlements, so the cap prevents repeated charges.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-rollback",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production rollback command is deployctl undo juniper --stable.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-budget-note",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production monthly budget is documented in the finance workbook.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-encryption-note",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production encryption algorithm has not been decided yet.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-backup",
+      "ns": "expert_juniper_recovery",
+      "text": "Juniper production backups run daily at 02:15 UTC and retain snapshots for 21 days.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-restore",
+      "ns": "expert_juniper_recovery",
+      "text": "Juniper production completed its latest recovery rehearsal in 14 minutes. The snapshot was mounted first; transaction replay accounted for the final four minutes.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-rto",
+      "ns": "expert_juniper_recovery",
+      "text": "Juniper production recovery time objective is 20 minutes.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-storage",
+      "ns": "expert_juniper_recovery",
+      "text": "Juniper production backup storage region is eu-north-1.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-secret",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production rotated its API credential during the September exercise. The value itself is intentionally not recorded.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-stage-owner",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper staging deployment owner is Ivo Bell.",
+      "project": "Juniper",
+      "environment": "staging",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-stage-endpoint",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper staging readiness endpoint is /ready/stage.",
+      "project": "Juniper",
+      "environment": "staging",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-stage-budget",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper staging monthly budget is 900 USD.",
+      "project": "Juniper",
+      "environment": "staging",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-owner",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production deployment owner is Nia Cole.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-endpoint",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production readiness endpoint is /status/ready.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-timeout",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production gateway timeout is 12 seconds.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-budget",
+      "ns": "expert_juniper_ops",
+      "text": "Kestrel production monthly budget is 6500 USD.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-backup",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production backups run every six hours.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-multisentence",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production exports audit events to the archive worker. It batches them for eight minutes before writing to object storage.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-conflict-a",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production queue retention is 7 days.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "kestrel-conflict-b",
+      "ns": "expert_kestrel_ops",
+      "text": "Kestrel production queue retention is 14 days.",
+      "project": "Kestrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-archive",
+      "ns": "expert_juniper_recovery",
+      "text": "Juniper production disaster recovery exercise codename is Seabird.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "archived",
+      "obsolete": false
+    },
+    {
+      "id": "juniper-causal",
+      "ns": "expert_juniper_ops",
+      "text": "Juniper production rejected version 18. The health check passed, but the migration removed the invoices index. Restoring that index resolved the deployment failure.",
+      "project": "Juniper",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "sorrel-scope",
+      "ns": "expert_sorrel_ops",
+      "text": "Sorrel production readiness endpoint is /sorrel/ready.",
+      "project": "Sorrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "sorrel-implicit",
+      "ns": "expert_sorrel_ops",
+      "text": "Sorrel production finished moving its database in September. Frankfurt now holds the writable copy; Dublin keeps a read replica.",
+      "project": "Sorrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    },
+    {
+      "id": "sorrel-recovery",
+      "ns": "expert_sorrel_ops",
+      "text": "Sorrel production kept its previous snapshots after the move. Operators must validate the new writer before resuming scheduled backups.",
+      "project": "Sorrel",
+      "environment": "production",
+      "state": "ltm",
+      "obsolete": false
+    }
+  ],
+  "profiles": [
+    {
+      "id": "juniper_ops",
+      "description": "Juniper production operations specialist for deployment ownership, readiness probes, payment gateways, retries and release rollback."
+    },
+    {
+      "id": "juniper_recovery",
+      "description": "Juniper production disaster recovery specialist for backup schedules, snapshot retention, restore rehearsals and database recovery objectives."
+    },
+    {
+      "id": "kestrel_ops",
+      "description": "Kestrel production operations specialist for deployments, readiness probes, event processing, queue retention and backups."
+    },
+    {
+      "id": "sorrel_ops",
+      "description": "Sorrel production infrastructure specialist for database migrations, regions, primary writers, replicas and readiness endpoints."
+    }
+  ],
+  "queries": [
+    {
+      "id": "owner-canonical",
+      "query": "Who owns Juniper production deployment?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "fact",
+      "split": "development",
+      "expected": [
+        "juniper-owner"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "owner-paraphrase",
+      "query": "Who looks after Juniper production releases?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "paraphrase",
+      "split": "development",
+      "expected": [
+        "juniper-owner"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "endpoint-canonical",
+      "query": "What is Juniper production readiness endpoint?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "fact",
+      "split": "development",
+      "expected": [
+        "juniper-endpoint"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "endpoint-incident",
+      "query": "If Juniper production stops accepting traffic, which URL should I probe?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "paraphrase",
+      "split": "development",
+      "expected": [
+        "juniper-endpoint"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "region-canonical",
+      "query": "Where is Juniper production primary database?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "fact",
+      "split": "development",
+      "expected": [
+        "juniper-region"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "timeout-current",
+      "query": "What is Juniper production gateway timeout?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "fact",
+      "split": "development",
+      "expected": [
+        "juniper-timeout"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "timeout-history",
+      "query": "What was Juniper production gateway timeout before the August review?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "history",
+      "split": "development",
+      "expected": [
+        "juniper-timeout-old"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": true
+    },
+    {
+      "id": "missing-budget",
+      "query": "What is Juniper production monthly budget?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "negative",
+      "split": "development",
+      "expected": [],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "missing-encryption",
+      "query": "Which encryption algorithm does Juniper production use?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "negative",
+      "split": "development",
+      "expected": [],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "recovery-overview",
+      "query": "Juniper production recovery overview",
+      "ns": "expert_juniper_recovery",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "broad",
+      "split": "development",
+      "expected": [
+        "juniper-backup",
+        "juniper-restore",
+        "juniper-rto",
+        "juniper-storage"
+      ],
+      "facets": {
+        "backups": [
+          "juniper-backup"
+        ],
+        "rehearsal": [
+          "juniper-restore"
+        ],
+        "objective": [
+          "juniper-rto"
+        ],
+        "geography": [
+          "juniper-storage"
+        ]
+      },
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "production-overview",
+      "query": "Juniper production operational overview",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "broad",
+      "split": "development",
+      "expected": [
+        "juniper-owner",
+        "juniper-endpoint",
+        "juniper-region",
+        "juniper-timeout"
+      ],
+      "facets": {
+        "deployment": [
+          "juniper-owner"
+        ],
+        "availability": [
+          "juniper-endpoint"
+        ],
+        "data": [
+          "juniper-region"
+        ],
+        "payments": [
+          "juniper-timeout"
+        ]
+      },
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "split-expert-overview",
+      "query": "Juniper production deployment and recovery",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "cross-expert",
+      "split": "development",
+      "expected": [
+        "juniper-owner",
+        "juniper-rollback",
+        "juniper-backup",
+        "juniper-restore"
+      ],
+      "facets": {
+        "deployment": [
+          "juniper-owner",
+          "juniper-rollback"
+        ],
+        "backups": [
+          "juniper-backup"
+        ],
+        "rehearsal": [
+          "juniper-restore"
+        ]
+      },
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "retry-reason",
+      "query": "Why did Juniper production cap payment retries?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "causal",
+      "split": "evaluation",
+      "expected": [
+        "juniper-retry"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "recovery-duration",
+      "query": "How long did Juniper production recovery take in the latest rehearsal?",
+      "ns": "expert_juniper_recovery",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "multi-sentence",
+      "split": "evaluation",
+      "expected": [
+        "juniper-restore"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "backup-frequency",
+      "query": "When do Juniper production backups run?",
+      "ns": "expert_juniper_recovery",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "fact",
+      "split": "evaluation",
+      "expected": [
+        "juniper-backup"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "rollback-command",
+      "query": "Which command rolls back Juniper production?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "paraphrase",
+      "split": "evaluation",
+      "expected": [
+        "juniper-rollback"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "kestrel-owner",
+      "query": "Who owns Kestrel production deployment?",
+      "ns": "expert_kestrel_ops",
+      "project": "Kestrel",
+      "environment": "production",
+      "kind": "fact",
+      "split": "evaluation",
+      "expected": [
+        "kestrel-owner"
+      ],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "kestrel-endpoint",
+      "query": "Which endpoint should I probe for Kestrel production readiness?",
+      "ns": "expert_kestrel_ops",
+      "project": "Kestrel",
+      "environment": "production",
+      "kind": "paraphrase",
+      "split": "evaluation",
+      "expected": [
+        "kestrel-endpoint"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "kestrel-multisentence",
+      "query": "How long does Kestrel production batch audit events before storage?",
+      "ns": "expert_kestrel_ops",
+      "project": "Kestrel",
+      "environment": "production",
+      "kind": "multi-sentence",
+      "split": "evaluation",
+      "expected": [
+        "kestrel-multisentence"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "kestrel-contradiction",
+      "query": "What is Kestrel production queue retention?",
+      "ns": "expert_kestrel_ops",
+      "project": "Kestrel",
+      "environment": "production",
+      "kind": "conflict",
+      "split": "evaluation",
+      "expected": [
+        "kestrel-conflict-a",
+        "kestrel-conflict-b"
+      ],
+      "facets": {
+        "seven-days": [
+          "kestrel-conflict-a"
+        ],
+        "fourteen-days": [
+          "kestrel-conflict-b"
+        ]
+      },
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "missing-dev-budget",
+      "query": "What is Juniper development monthly budget?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "development",
+      "kind": "negative",
+      "split": "evaluation",
+      "expected": [],
+      "facets": {},
+      "critical": true,
+      "history": false
+    },
+    {
+      "id": "missing-secret",
+      "query": "What is Juniper production API credential value?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "negative",
+      "split": "evaluation",
+      "expected": [],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "archive-codename",
+      "query": "What is Juniper production disaster recovery exercise codename?",
+      "ns": "expert_juniper_recovery",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "archived",
+      "split": "evaluation",
+      "expected": [
+        "juniper-archive"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "implicit-location",
+      "query": "Where is Sorrel production writable database now?",
+      "ns": "expert_sorrel_ops",
+      "project": "Sorrel",
+      "environment": "production",
+      "kind": "implicit",
+      "split": "evaluation",
+      "expected": [
+        "sorrel-implicit"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "deployment-cause",
+      "query": "Why did Juniper production version 18 fail its deployment?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "production",
+      "kind": "causal",
+      "split": "evaluation",
+      "expected": [
+        "juniper-causal"
+      ],
+      "facets": {},
+      "critical": false,
+      "history": false
+    },
+    {
+      "id": "underspecified-environment",
+      "query": "Who owns Juniper deployment?",
+      "ns": "expert_juniper_ops",
+      "project": "Juniper",
+      "environment": "",
+      "kind": "ambiguous",
+      "split": "evaluation",
+      "expected": [
+        "juniper-owner",
+        "juniper-stage-owner"
+      ],
+      "facets": {
+        "production": [
+          "juniper-owner"
+        ],
+        "staging": [
+          "juniper-stage-owner"
+        ]
+      },
+      "critical": false,
+      "history": false
+    }
+  ]
+}

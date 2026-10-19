@@ -60,6 +60,17 @@ Do not hide a timeout by disabling concurrency or retrying until green. A timeou
 establish a production deadlock: inspect progress and cleanup evidence. Use `LogFilePrefix` so
 concurrent frameworks retain separate test-result files; CI uploads each one.
 
+## Noisy recall and scale evaluation
+
+The [noisy recall protocol](recall-noisy-evaluation.md) adds frozen questions, real
+ONNX distractors, 1,000/5,000-memory stores and 8/32-namespace layouts. Ordinary CI
+runs its small case on net8/net9/net10; a separate `RecallScale` job runs the large
+matrix on net8. Use `Category!=MSA&Category!=RecallScale` for the ordinary suite and
+`Category=RecallScale` for the scale lane. Both are required when validating recall.
+The report distinguishes hard tenant/ACL/durability checks from measured quality
+gaps; `scripts/check-noisy-recall.py <fresh-output-directory> --release` fails on
+predeclared release blockers even when the evaluation tests themselves pass.
+
 ## Tool profile count regression check
 
 For a quick check of the published tool counts:

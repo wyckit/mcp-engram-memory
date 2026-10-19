@@ -26,8 +26,8 @@ jobs:
       - name: Build
         run: dotnet build McpEngramMemory.slnx --no-restore -c Release
 
-      - name: Test (excluding MSA benchmarks)
-        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA"
+      - name: Test (excluding separate benchmark lanes)
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -37,6 +37,8 @@ jobs:
           path: |
             **/TestResults/*.trx
             **/TestResults/recall-realistic-*.json
+            **/TestResults/recall-noisy-*.json
+            **/TestResults/restart-*.json
 
       # Benchmark regression gate (T7): now STATISTICAL. The script delegates to
       # the C# gate (built Release above): absolute floors (Recall>=0.20,
@@ -48,6 +50,36 @@ jobs:
       # bash fallback path.
       - name: Benchmark regression gate (pinned baselines)
         run: bash scripts/check-benchmark-regression.sh benchmarks/baselines
+
+  recall-scale-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ENGRAM_RECALL_EVAL_OUTPUT: ${{ github.workspace }}/artifacts/recall-scale
+      ENGRAM_EVAL_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - name: Evaluate 1,000 and 5,000 memories
+        run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter "Category=RecallScale" --logger "trx;LogFileName=recall-scale.trx"
+      - name: Check complete reports and summarize release blockers
+        run: python scripts/check-noisy-recall.py artifacts/recall-scale
+      - name: Test report gate
+        run: python -m unittest discover -s scripts/tests -p test_noisy_recall_gate.py
+      - name: Upload scale evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-scale-results
+          path: |
+            artifacts/recall-scale/
+            **/TestResults/recall-scale.trx
 
   pack:
     needs: build-and-test
