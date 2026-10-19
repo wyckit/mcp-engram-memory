@@ -3,6 +3,8 @@ using McpEngramMemory.Core.Services;
 using McpEngramMemory.Core.Services.Evaluation;
 using McpEngramMemory.Core.Services.Experts;
 using McpEngramMemory.Core.Services.Graph;
+using McpEngramMemory.Core.Services.Governance;
+using McpEngramMemory.Core.Services.Governance.Persistence;
 using McpEngramMemory.Core.Services.Lifecycle;
 using McpEngramMemory.Core.Services.Retrieval;
 using McpEngramMemory.Core.Services.Sharing;
@@ -20,6 +22,7 @@ internal sealed class RecallTestStore : IDisposable
     public KnowledgeGraph Graph { get; private set; } = null!;
     public ExpertDispatcher Dispatcher { get; private set; } = null!;
     public NamespaceRegistry Registry { get; private set; } = null!;
+    public IGovernedKnowledgeStore Knowledge { get; private set; } = null!;
 
     public RecallTestStore(IEmbeddingService? embedding = null)
     {
@@ -34,12 +37,13 @@ internal sealed class RecallTestStore : IDisposable
         Graph = new KnowledgeGraph(_persistence, Index);
         Dispatcher = new ExpertDispatcher(Index, _embedding);
         Registry = new NamespaceRegistry(Index, _embedding);
+        Knowledge = new FileGovernedKnowledgeStore(Path.Combine(_path, "governance"));
     }
 
-    public CompositeTools Tools(string agent = "default", string tenant = "") => new(
+    public CompositeTools Tools(string agent = "default", string tenant = "", IGovernedKnowledgeStore? knowledge = null) => new(
         Index, _embedding, Graph, new LifecycleEngine(Index, _persistence), Dispatcher,
         new MetricsCollector(), new SpectralRetrievalReranker(new MemoryDiffusionKernel(Index, Graph)),
-        new NamespaceAccess(Registry, new PrincipalContext(tenant, agent)));
+        new NamespaceAccess(Registry, new PrincipalContext(tenant, agent)), knowledge ?? Knowledge);
 
     public CognitiveEntry Add(string id, string ns, string text, float cosine = 1f,
         string state = "ltm", bool summary = false, string tenant = "")

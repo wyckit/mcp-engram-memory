@@ -206,7 +206,9 @@ public sealed class GovernedLearningTools
         // audited declassification/capability grant supplies broader source permissions.
         => new([new CapabilityGrant(ArtifactCapability.Read, [principal])]);
 
-    private static string EntryHash(CognitiveEntry entry)
+    // Shared with recall's evidence revalidation. Keep this existing publication hash
+    // format stable so already committed source versions remain readable.
+    internal static string EntryHash(CognitiveEntry entry)
         => Hash(string.Join("\n", entry.TenantId, entry.Ns, entry.Id, entry.Text, entry.Category,
             string.Join("\n", entry.Metadata.OrderBy(item => item.Key, StringComparer.Ordinal)
                 .Select(item => $"{item.Key}={item.Value}"))));

@@ -62,6 +62,10 @@ public class McpSdkConformanceTests
         Assert.Equal(
             ["get_context_block", "recall", "reflect", "remember"],
             tools.Select(tool => tool.ProtocolTool.Name).Order().ToArray());
+        var recall = tools.Single(tool => tool.ProtocolTool.Name == "recall").ProtocolTool.InputSchema;
+        Assert.Equal(new[] { "expandGraph", "hybrid", "k", "minScore", "ns", "query", "rerank", "spectralMode", "summaryFirst" },
+            recall.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal("query", Assert.Single(recall.GetProperty("required").EnumerateArray()).GetString());
     }
 
     [Fact]
