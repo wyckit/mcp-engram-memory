@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "cases": [
+    { "id": "timeout", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 30 seconds.", "b": "Atlas gateway timeout is 45 seconds.", "conflict": true, "k": 5 },
+    { "id": "timeout-one", "query": "Atlas gateway timeout", "a": "Atlas gateway timeout is 30 seconds.", "b": "Atlas gateway timeout is 45 seconds.", "conflict": true, "k": 1 },
+    { "id": "region", "query": "Which region contains the Atlas primary database?", "a": "Atlas primary database region is us-east-1.", "b": "Atlas primary database region is eu-west-1.", "conflict": true, "k": 5 },
+    { "id": "owner", "query": "Who is the Atlas deployment owner?", "a": "Atlas deployment owner is Maya.", "b": "Atlas deployment owner is Leon.", "conflict": true, "k": 5, "restart": true },
+    { "id": "logging", "query": "Is Atlas audit logging enabled?", "a": "Atlas audit logging is enabled.", "b": "Atlas audit logging is disabled.", "conflict": true, "k": 5 },
+    { "id": "retry", "query": "What is the Atlas retry limit?", "a": "Atlas retry limit is 3.", "b": "Atlas retry limit is 5.", "conflict": true, "k": 5 },
+    { "id": "endpoint", "query": "What is the Atlas health endpoint?", "a": "Atlas health endpoint is /health.", "b": "Atlas health endpoint is /ready.", "conflict": true, "k": 5 },
+    { "id": "version", "query": "Which Atlas runtime version is configured?", "a": "Atlas runtime version is 8.0.1.", "b": "Atlas runtime version is 9.0.1.", "conflict": true, "k": 5, "restart": true },
+    { "id": "equivalent-units", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 1 minute.", "b": "Atlas gateway timeout is 60 seconds.", "conflict": false, "k": 5 },
+    { "id": "different-project", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 30 seconds.", "b": "Boreal gateway timeout is 45 seconds.", "conflict": false, "k": 5 },
+    { "id": "different-environment", "query": "What is the Atlas production gateway timeout?", "a": "Atlas production gateway timeout is 30 seconds.", "b": "Atlas staging gateway timeout is 45 seconds.", "conflict": false, "k": 5 },
+    { "id": "conditional", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 30 seconds.", "b": "Atlas gateway timeout is 45 seconds if the migration succeeds.", "conflict": false, "k": 5 },
+    { "id": "historical-fact", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 30 seconds.", "b": "Atlas gateway timeout was 45 seconds before the incident.", "conflict": false, "k": 5 },
+    { "id": "quoted-example", "query": "What is the Atlas gateway timeout?", "a": "Atlas gateway timeout is 30 seconds.", "b": "Example: 'Atlas gateway timeout is 45 seconds.'", "conflict": false, "k": 5 },
+    { "id": "equivalent-negation", "query": "Is Atlas audit logging enabled?", "a": "Atlas audit logging is disabled.", "b": "Atlas audit logging is not enabled.", "conflict": false, "k": 5 },
+    { "id": "history-query", "query": "Compare the previous and current Atlas gateway timeouts", "a": "Atlas gateway timeout is 30 seconds.", "b": "Atlas gateway timeout is 45 seconds.", "conflict": false, "k": 5 }
+  ]
+}

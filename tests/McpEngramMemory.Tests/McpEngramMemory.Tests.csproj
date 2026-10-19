@@ -39,6 +39,7 @@
   <ItemGroup>
     <None Update="Fixtures/recall-realistic-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-realistic-v1.baseline.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/recall-conflicts-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="xunit.runner.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

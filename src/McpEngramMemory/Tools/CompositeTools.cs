@@ -215,7 +215,7 @@ public sealed class CompositeTools
         if (ns is not null)
         {
             var (candidates, deep) = RecallNamespace(query, vector, ns, options);
-            return new RecallResult(deep ? "deep_recall" : "direct", ns, CompleteRecall(candidates, options));
+            return CompleteRecall(deep ? "deep_recall" : "direct", ns, candidates, options);
         }
 
         // Strategy 2: No namespace — auto-route via expert dispatcher
@@ -235,7 +235,7 @@ public sealed class CompositeTools
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
                 var (candidates, _) = RecallNamespace(query, vector, bestExpert.TargetNamespace, options);
-                return new RecallResult("expert_routed", bestExpert.TargetNamespace, CompleteRecall(candidates, options),
+                return CompleteRecall("expert_routed", bestExpert.TargetNamespace, candidates, options,
                     $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})");
             }
         }
@@ -252,7 +252,7 @@ public sealed class CompositeTools
             allResults.AddRange(candidates);
         }
 
-        return new RecallResult("broadcast", null, CompleteRecall(allResults, options),
+        return CompleteRecall("broadcast", null, allResults, options,
             $"Searched {namespaces.Count} namespace(s), no expert match");
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
@@ -437,9 +437,10 @@ public sealed class CompositeTools
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
         bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent);
 
-    // Namespace stays internal so the public MCP result shape remains unchanged. Graph
-    // neighbors may belong to another readable namespace; bare IDs are not storage keys.
-    private sealed record RecallCandidate(string Namespace, CognitiveSearchResult Result, bool Resurrect);
+    // Keep namespace provenance for selection and conflict evidence. Graph neighbors
+    // may belong to another readable namespace; bare IDs are not storage keys.
+    private sealed record RecallCandidate(string Namespace, CognitiveSearchResult Result, bool Resurrect,
+        IReadOnlyList<CognitiveSearchResult>? ConflictEvidence = null);
 
     // With the default five-result budget, leave room for an overview, two sources,
     // and other independent hits. Smaller budgets retain the strongest hit first.
@@ -449,7 +450,7 @@ public sealed class CompositeTools
         string query, float[] vector, string ns, RecallOptions options)
     {
         var states = new HashSet<string> { "stm", "ltm" };
-        IReadOnlyList<CognitiveSearchResult> Search(HashSet<string> includeStates)
+        (IReadOnlyList<CognitiveSearchResult> Hits, IReadOnlyList<CognitiveSearchResult> Evidence) Search(HashSet<string> includeStates)
         {
             IReadOnlyList<CognitiveSearchResult> Retrieve(int count)
             {
@@ -464,6 +465,8 @@ public sealed class CompositeTools
                 return !options.Hybrid && options.Rerank ? _index.Rerank(query, found) : found;
             }
             var results = Retrieve(options.K);
+            var evidence = results;
+            bool widened = false;
             // A superseded top hit must not hide its replacement just outside k.
             // Retry once only if status demotion would leave fewer than k unmarked
             // hits. Vector reranking may already have retrieved enough alternatives.
@@ -471,23 +474,34 @@ public sealed class CompositeTools
             {
                 int superseded = results.Count(r => RecallFreshness.IsSuperseded(r.Text));
                 if (superseded > 0 && results.Count - superseded < options.K)
-                    results = Retrieve(options.K * 2);
+                {
+                    results = evidence = Retrieve(options.K * 2);
+                    widened = true;
+                }
+                // A conflicting value can sit just outside k even without graph links.
+                // Probe only for supported factual claims, with at most 32 extra hits.
+                // Diagnostic evidence never changes the primary relevance selection.
+                int evidenceCount = options.K + Math.Min(options.K, Math.Min(32, int.MaxValue - options.K));
+                if (!widened && results.Count < evidenceCount &&
+                    results.Any(r => !r.IsSummaryNode && RecallConflictDetection.Parse(r.Text) is not null))
+                    evidence = Retrieve(evidenceCount);
             }
-            return OrderRecall(results, options).Take(options.K).ToList();
+            return (OrderRecall(results, options).Take(options.K).ToList(), evidence.Take(64).ToList());
         }
 
-        var results = Search(states);
+        var (results, evidence) = Search(states);
         bool deep = false;
         // Fallback uses the same retrieval options instead of forcing vector-only search.
         // Defer resurrection until the global top-K is known.
         if (results.Count == 0 || results[0].Score < 0.5f)
         {
             var allStates = new HashSet<string> { "stm", "ltm", "archived" };
-            var recovered = Search(allStates);
+            var (recovered, recoveredEvidence) = Search(allStates);
             if (recovered.Count > results.Count ||
                 (recovered.Count > 0 && (results.Count == 0 || recovered[0].Score > results[0].Score)))
             {
                 results = recovered;
+                evidence = recoveredEvidence;
                 states = allStates;
                 deep = true;
             }
@@ -506,7 +520,8 @@ public sealed class CompositeTools
         expanded = ApplySpectralRerankRestricted(ns, expanded, options.SpectralMode, query, options.K,
             options.ExpandGraph, states);
         return (SelectRecallCandidates(expanded.Select(r =>
-            new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id))), options), deep);
+            new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id),
+                sources.GetValueOrDefault(r.Id, ns) == ns ? evidence : null)), options), deep);
     }
 
     private static IOrderedEnumerable<CognitiveSearchResult> OrderRecall(
@@ -577,20 +592,59 @@ public sealed class CompositeTools
         return output;
     }
 
-    private IReadOnlyList<CognitiveSearchResult> CompleteRecall(IEnumerable<RecallCandidate> candidates, RecallOptions options)
+    private RecallResult CompleteRecall(string strategy, string? ns, IEnumerable<RecallCandidate> candidates,
+        RecallOptions options, string? routingInfo = null)
     {
+        var selected = SelectRecallCandidates(candidates, options);
+        var conflicts = FindRecallConflicts(selected, options);
+        var disputed = conflicts.SelectMany(c => c.Evidence).Select(e => (e.Namespace, e.Id)).ToHashSet();
         var results = new List<CognitiveSearchResult>();
-        foreach (var candidate in SelectRecallCandidates(candidates, options))
+        foreach (var candidate in selected)
         {
             var result = candidate.Result;
             // Historical usefulness does not make a superseded fact current again.
-            if (candidate.Resurrect && !RecallFreshness.IsSuperseded(result.Text) && _access.CanWrite(candidate.Namespace) &&
+            if (candidate.Resurrect && !RecallFreshness.IsSuperseded(result.Text) &&
+                !disputed.Contains((candidate.Namespace, result.Id)) && _access.CanWrite(candidate.Namespace) &&
                 _index.SetLifecycleState(result.Id, "stm", candidate.Namespace, _access.TenantId))
                 result = result with { LifecycleState = "stm" };
             _index.RecordAccess(result.Id, candidate.Namespace, _access.TenantId);
             results.Add(result);
         }
-        return results;
+        return new RecallResult(strategy, ns, results, routingInfo)
+        {
+            Conflicts = conflicts.Count > 0 ? conflicts : null
+        };
+    }
+
+    private static IReadOnlyList<RecallConflict> FindRecallConflicts(
+        IReadOnlyList<RecallCandidate> selected, RecallOptions options)
+    {
+        var conflicts = new List<RecallConflict>();
+        if (!options.PreferCurrent) return conflicts;
+        var seen = new HashSet<(string Namespace, string First, string Second)>();
+        // Evidence was retrieved within the same authorized namespace/tenant, with
+        // the original minScore and lifecycle scope. Never consult bare graph IDs,
+        // hidden namespaces, timestamps, or user-supplied metadata for authority.
+        foreach (var candidate in selected.Take(32))
+        {
+            if (candidate.Result.IsSummaryNode || candidate.ConflictEvidence is null ||
+                RecallConflictDetection.Parse(candidate.Result.Text) is not { } claim) continue;
+            foreach (var alternative in candidate.ConflictEvidence)
+            {
+                if (alternative.Id == candidate.Result.Id || alternative.IsSummaryNode ||
+                    RecallConflictDetection.Parse(alternative.Text) is not { } other ||
+                    !claim.ConflictsWith(other)) continue;
+                var first = candidate.Result.Id;
+                var second = alternative.Id;
+                if (StringComparer.Ordinal.Compare(first, second) > 0) (first, second) = (second, first);
+                if (!seen.Add((candidate.Namespace, first, second))) continue;
+                conflicts.Add(new RecallConflict("unresolved", "same_subject_different_value", claim.Subject,
+                    [new(candidate.Result.Id, candidate.Namespace, candidate.Result.Text!),
+                     new(alternative.Id, candidate.Namespace, alternative.Text!)]));
+                if (conflicts.Count == 8) return conflicts;
+            }
+        }
+        return conflicts;
     }
 
     private IReadOnlyList<CognitiveSearchResult> ExpandWithGraph(
@@ -963,7 +1017,25 @@ public sealed record RecallResult(
     [property: JsonPropertyName("strategy")] string Strategy,
     [property: JsonPropertyName("ns")] string? Namespace,
     [property: JsonPropertyName("results")] IReadOnlyList<CognitiveSearchResult> Results,
-    [property: JsonPropertyName("routingInfo")] string? RoutingInfo = null);
+    [property: JsonPropertyName("routingInfo")] string? RoutingInfo = null)
+{
+    // Additive diagnostic; preserve the existing constructor/deconstruction and omit
+    // it entirely for ordinary results. A missing diagnostic does not certify truth.
+    [JsonPropertyName("conflicts")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<RecallConflict>? Conflicts { get; init; }
+}
+
+public sealed record RecallConflict(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("basis")] string Basis,
+    [property: JsonPropertyName("subject")] string Subject,
+    [property: JsonPropertyName("evidence")] IReadOnlyList<RecallConflictEvidence> Evidence);
+
+public sealed record RecallConflictEvidence(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("ns")] string Namespace,
+    [property: JsonPropertyName("text")] string Text);
 
 public sealed record ReflectResult(
     [property: JsonPropertyName("status")] string Status,

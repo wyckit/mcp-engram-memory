@@ -84,6 +84,7 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
                 if (route == "direct") Assert.Contains(result.Strategy, new[] { "direct", "deep_recall" });
                 else Assert.Equal(route == "expert" ? "expert_routed" : "broadcast", result.Strategy);
                 Assert.InRange(result.Results.Count, 0, 5);
+                Assert.Null(result.Conflicts); // Marked history and complementary facts are not unresolved conflicts.
                 if (route == "direct") direct = result;
                 if (route == "expert" && (!direct!.Results.Select(r => r.Id).SequenceEqual(result.Results.Select(r => r.Id)) ||
                     !direct.Results.Select(r => r.Score).SequenceEqual(result.Results.Select(r => r.Score))))
