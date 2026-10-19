@@ -19,9 +19,10 @@ Direct, expert-routed, and broadcast recall now use the same namespace retrieval
 4. Select at most `k` results, keeping linked sources alongside retained summaries when
    possible; broadcast considers up to `k` from each readable namespace and applies the
    same selection policy to the combined candidates.
-5. Record access only for returned memories, using their actual source namespaces. Recover
+5. Diagnose supported unmarked disagreements against a bounded relevance window (see below).
+6. Record access only for primary returned memories, using their actual source namespaces. Recover
    returned archived search hits with cosine similarity at least 0.7 only when the caller
-   has write permission. Graph-only neighbors and explicitly superseded records do not
+   has write permission. Graph-only neighbors, explicitly superseded records, and reported disputed archives do not
    trigger resurrection.
 
 Keyword rescue respects the requested cosine threshold. Expansion from ordinary source
@@ -35,7 +36,8 @@ Explicit `summaryFirst: true` is honored after hybrid/token/spectral ranking and
 the final limit. When Core `SearchRequest.Diversity` is also requested, MMR still selects
 the result set and summary priority orders that selection.
 The default remains false; the summary/source policy below applies with graph expansion on.
-MCP names, argument defaults, result schemas, and route strategy labels are unchanged.
+MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
+Recall adds an optional top-level `conflicts` diagnostic for supported unmarked disagreements.
 
 ## Summary and source selection
 
@@ -220,12 +222,92 @@ stale facts remain unresolved, as do general date/authority inference and the ex
 broad-query coverage weakness. Both fixture splits remain inspected regression cases rather
 than blind validation.
 
+## Unmarked disagreements
+
+Two memories can give different values without either being labeled superseded. For
+example, `Atlas gateway timeout is 30 seconds.` and `Atlas gateway timeout is 45 seconds.`
+do not establish which value is authoritative. Default current-intent `recall` now returns
+an optional `conflicts` diagnostic with both original texts and namespace-qualified IDs:
+
+```json
+{
+  "conflicts": [{
+    "status": "unresolved",
+    "basis": "same_subject_different_value",
+    "subject": "atlas gateway timeout",
+    "evidence": [
+      { "id": "a", "ns": "atlas", "text": "Atlas gateway timeout is 30 seconds." },
+      { "id": "b", "ns": "atlas", "text": "Atlas gateway timeout is 45 seconds." }
+    ]
+  }]
+}
+```
+
+Consumers should verify a flagged claim against its source before treating either value
+as current. Primary `results` keep their existing order, scores, metadata, and `k` limit.
+Diagnostic evidence is additional context, so `k: 1` can still reveal both claims.
+Existing inputs, defaults, tool registrations, and the `RecallResult` constructor remain
+unchanged. The new output property is omitted when empty. `search_memory`, `cross_search`,
+and the separate `find_contradictions` tool are unchanged.
+
+The local grammar compares the same subject within the same namespace. It recognizes
+leading English `subject is value` sentences for duration settings (timeout, TTL,
+retention), integer settings (retry limit, replica count, batch size, port), owner, region,
+endpoint path, version, and enabled/disabled state. Whitespace/case, duration units, numeric
+formatting, and explicit boolean negation are normalized. Duration and enabled state are
+different claim types. Subjects must match after normalization; project/environment words
+are retained. Summary nodes, superseded records, quoted examples, and supported conditional,
+historical, or proposed wording are excluded. Arbitrary negation and paraphrases are not
+generalized into contradictions.
+
+When the initial retrieval includes a supported claim, recall inspects a bounded relevance
+window in that same authorized namespace: requested `k + min(k, 32)` candidates, reusing
+existing vector/status overfetch when sufficient. Vector reranking retains its existing
+internal 2x overfetch. At most 64 evidence candidates per namespace, 32 selected primary
+hits, and 8 distinct conflict pairs are examined/reported. The original `minScore`, tenant,
+and chosen lifecycle scope apply. Archives enter only through existing fallback; candidates
+named in a reported conflict remain archived. Evidence-only hits receive no access or
+lifecycle update, and no text, metadata, or graph links are written by diagnosis.
+
+Recognized historical/comparison queries and `rerank: false` bypass this current-intent
+diagnostic. Graph expansion and summary preference keep their existing behavior; a primary
+summary is not treated as a factual claimant. Cross-namespace graph neighbors are not probed
+as if they belonged to the original namespace. No timestamp, insertion order, ID, arbitrary
+metadata, graph direction, or vector similarity is treated as proof of truth.
+
+This is conservative conflict surfacing, not general contradiction detection or automatic
+resolution. It can miss different phrasings, unsupported languages/values, distant candidates,
+cross-namespace conflicts, or qualified claims. A missing diagnostic does not certify
+consistency. It also does not change ingest-time duplicate blocking or connect raw memories
+to the separate governed-knowledge authority model.
+
+### Evaluation
+
+`recall-conflicts-v1.json` adds 16 inspected regression cases. Each case seeds the unchanged
+52-memory corpus plus two unmarked assertions with opaque IDs and no graph links or authority
+metadata. Eight cases cover disagreements (timeout, `k: 1`, owner, region, logging, retry limit,
+endpoint, version); eight controls cover equivalent units/negation, different project/environment,
+conditional/history/example wording, and historical query intent. Two cases restart the store.
+The mandatory bundled ONNX model runs every case through direct, expert, and broadcast recall.
+
+All 24 positive query/route observations surface both claims; all 24 controls have no conflict
+diagnostic. Expert/direct IDs, scores, and diagnostics agree. On the original 36 questions,
+all 108 result lists and quality metrics match merged PR #34 (`844c658`), with zero labeled
+stale top answers and zero new conflict warnings. Original labels and baseline gates are
+unchanged. These results measure a small authored grammar-focused corpus, not open-domain
+contradiction accuracy or factual resolution.
+
+Controlled tests additionally cover thresholds, tenant/namespace isolation, duplicate IDs,
+summary/explicit-status exclusions, opt-out behavior, metadata, archive mutation, output bounds,
+and preservation of primary ranking. Conflict reports are named
+`recall-realistic-conflicts-net*.json`, so CI uploads them with the existing evaluation reports.
+
 ## Run and review
 
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory
