@@ -1,0 +1,288 @@
+{
+  "definition": "Frozen 32 questions and designated source labels from the post-PR #41 assessment, before implementation. The already-audited metadata incident is an explicit alternative answer; designated and accepted hits are reported separately. Eight negatives are paired with supplied answers. Authored regression cases, not blind accuracy estimates.",
+  "questions": [
+    {
+      "id": "owner",
+      "kind": "control",
+      "ns": "expert_atlas",
+      "query": "Who owns Atlas production deployments?",
+      "relevant": [
+        "atlas-owner"
+      ]
+    },
+    {
+      "id": "endpoint",
+      "kind": "control",
+      "ns": "expert_boreal",
+      "query": "What is Boreal production readiness endpoint?",
+      "relevant": [
+        "boreal-endpoint"
+      ]
+    },
+    {
+      "id": "timeout",
+      "kind": "control",
+      "ns": "expert_atlas",
+      "query": "What is Atlas payment gateway timeout?",
+      "relevant": [
+        "atlas-timeout"
+      ]
+    },
+    {
+      "id": "backup",
+      "kind": "control",
+      "ns": "expert_boreal",
+      "query": "When do Boreal database backups run?",
+      "relevant": [
+        "boreal-backup"
+      ]
+    },
+    {
+      "id": "retention",
+      "kind": "control",
+      "ns": "expert_atlas",
+      "query": "How long are Atlas PostgreSQL backups retained?",
+      "relevant": [
+        "atlas-backup"
+      ]
+    },
+    {
+      "id": "cache",
+      "kind": "control",
+      "ns": "expert_engram",
+      "query": "What does the Engram context version fingerprint cover?",
+      "relevant": [
+        "engram-cache"
+      ]
+    },
+    {
+      "id": "retry",
+      "kind": "control",
+      "ns": "expert_boreal",
+      "query": "How many times do Boreal clients retry HTTP 503 failures?",
+      "relevant": [
+        "boreal-retry"
+      ]
+    },
+    {
+      "id": "recovery",
+      "kind": "control",
+      "ns": "expert_atlas",
+      "query": "What is Atlas recovery time objective?",
+      "relevant": [
+        "atlas-drill"
+      ]
+    },
+    {
+      "id": "owner-reword",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "Who is responsible for Atlas production deployments?",
+      "relevant": [
+        "atlas-owner"
+      ]
+    },
+    {
+      "id": "owner-titlecase",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "Who Is Responsible For Atlas Production Deployments?",
+      "relevant": [
+        "atlas-owner"
+      ]
+    },
+    {
+      "id": "endpoint-url",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "What URL does Boreal use for production health probes?",
+      "relevant": [
+        "boreal-endpoint"
+      ]
+    },
+    {
+      "id": "endpoint-path",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "Which HTTP path should Boreal readiness probes call?",
+      "relevant": [
+        "boreal-endpoint"
+      ]
+    },
+    {
+      "id": "timeout-wait",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "How long does Atlas wait for its payment gateway before timing out?",
+      "relevant": [
+        "atlas-timeout"
+      ]
+    },
+    {
+      "id": "timeout-deadline",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "What is Atlas payment gateway deadline?",
+      "relevant": [
+        "atlas-timeout"
+      ]
+    },
+    {
+      "id": "backup-snapshots",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "When does Boreal take its nightly database snapshots?",
+      "relevant": [
+        "boreal-backup"
+      ]
+    },
+    {
+      "id": "backup-nightly",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "At what time does Boreal back up its database each night?",
+      "relevant": [
+        "boreal-backup"
+      ]
+    },
+    {
+      "id": "retention-days",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "How many days does Atlas keep PostgreSQL backups?",
+      "relevant": [
+        "atlas-backup"
+      ]
+    },
+    {
+      "id": "retention-period",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "What is the retention period for Atlas database backups?",
+      "relevant": [
+        "atlas-backup"
+      ]
+    },
+    {
+      "id": "cache-fields",
+      "kind": "paraphrase",
+      "ns": "expert_engram",
+      "query": "Which fields are included in Engram's context cache fingerprint?",
+      "relevant": [
+        "engram-cache"
+      ]
+    },
+    {
+      "id": "cache-metadata",
+      "kind": "paraphrase",
+      "ns": "expert_engram",
+      "query": "Why does changing Engram metadata invalidate the context cache?",
+      "relevant": [
+        "engram-cache"
+      ],
+      "acceptableAlternatives": [
+        "engram-incident"
+      ]
+    },
+    {
+      "id": "retry-often",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "How often may Boreal retry a transient HTTP 503 failure?",
+      "relevant": [
+        "boreal-retry"
+      ]
+    },
+    {
+      "id": "retry-limit",
+      "kind": "paraphrase",
+      "ns": "expert_boreal",
+      "query": "What is Boreal's retry limit for HTTP 503 errors?",
+      "relevant": [
+        "boreal-retry"
+      ]
+    },
+    {
+      "id": "recovery-quickly",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "How quickly must Atlas recover after an outage?",
+      "relevant": [
+        "atlas-drill"
+      ]
+    },
+    {
+      "id": "recovery-rto",
+      "kind": "paraphrase",
+      "ns": "expert_atlas",
+      "query": "What is the RTO for Atlas?",
+      "relevant": [
+        "atlas-drill"
+      ]
+    },
+    {
+      "id": "request-staging",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "Can you tell me the Atlas staging readiness endpoint?",
+      "relevant": [],
+      "answer": "Atlas staging readiness endpoint is /stage/ready."
+    },
+    {
+      "id": "request-orion",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "Please tell me who owns Orion production deployments.",
+      "relevant": [],
+      "answer": "Rina owns Orion production deployments."
+    },
+    {
+      "id": "qa-endpoint",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "What is Atlas QA readiness endpoint?",
+      "relevant": [],
+      "answer": "Atlas QA readiness endpoint is /qa/ready."
+    },
+    {
+      "id": "uat-region",
+      "kind": "negative",
+      "ns": "expert_boreal",
+      "query": "Where is Boreal UAT database hosted?",
+      "relevant": [],
+      "answer": "Boreal UAT database is hosted in eu-north-1."
+    },
+    {
+      "id": "missing-jitter",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "What is Atlas payment gateway timeout jitter?",
+      "relevant": [],
+      "answer": "Atlas payment gateway timeout jitter is two seconds."
+    },
+    {
+      "id": "missing-currency",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "What currency is the Atlas monthly budget in?",
+      "relevant": [],
+      "answer": "Atlas monthly budget is denominated in USD."
+    },
+    {
+      "id": "unknown-region",
+      "kind": "negative",
+      "ns": "expert_boreal",
+      "query": "Which region hosts Orion production database?",
+      "relevant": [],
+      "answer": "Orion production database is hosted in eu-north-1."
+    },
+    {
+      "id": "staging-control",
+      "kind": "negative",
+      "ns": "expert_atlas",
+      "query": "What is Atlas staging readiness endpoint?",
+      "relevant": [],
+      "answer": "Atlas staging readiness endpoint is /stage/ready."
+    }
+  ]
+}

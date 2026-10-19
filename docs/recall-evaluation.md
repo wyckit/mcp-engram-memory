@@ -51,12 +51,14 @@ graph expansion and again before final selection on all three routes. For exampl
 Atlas production endpoint cannot answer a question about Atlas staging, and a Boreal
 deployment owner cannot answer a question about an unknown Orion project. Shared words
 such as the project name or database alone cannot substitute for a requested password,
-budget, encryption, lifetime, retention, timeout or region attribute. Owner questions
+budget, encryption, lifetime, retention, timeout, endpoint, region, jitter or currency attribute. Owner questions
 also require an ownership cue. A summary cannot be the only returned factual evidence;
 `k: 1` keeps a source, and larger budgets can still pair summaries with sources.
 
 This is a bounded lexical check, **not semantic entailment or an answer generator**. It
-recognizes English questions starting with what/which/who/where/when/why/how, extracts
+recognizes English questions starting with what/which/who/where/when/why/how, plus
+bounded request wrappers such as "Please tell me…", "Could you show me…" and
+"At what time…". It extracts
 names from capitalization and common subject positions (including lowercase subjects),
 normalizes a small set of domain aliases, and requires at least half the remaining topic
 terms in a matching statement. Explicit environment labels must agree; a namespace
@@ -67,6 +69,20 @@ instructions without another explicit name/recognized subject. Namespace members
 alone cannot override an explicit different project. These rules have limited grammar
 and synonym coverage; unusual wording and implicit relationships can still be missed
 or misclassified. A returned record is neither certified true nor certified complete.
+
+Question scaffolding and pronouns are excluded from name extraction, including title-cased
+"Responsible For" and "its" in a timeout question. Lowercase subjects after auxiliaries
+require a recognized resource or predicate, avoiding false names such as "changing" in
+"Why does changing metadata…". URL/path, retention/retained, backup/snapshot and
+recovery/RTO wording share bounded lexical concepts. Endpoint requests do not require
+HTTP/probe/call wording in the same statement as the endpoint. Backup-time questions
+require a schedule cue, and recovery-duration questions require a duration tied to a
+recovery objective or "recover within/in/under" wording; a restore rehearsal or drill
+frequency alone is insufficient. QA and UAT are distinct environments, not aliases for
+testing or staging. Currency evidence can use an explicit currency term or one of the
+recognized uppercase codes (USD, EUR, GBP, CAD, AUD, JPY, CHF, CNY, INR). These are finite
+language rules, not unrestricted synonym or currency support. Interpreted questions
+use the factual evidence path rather than broad topic coverage.
 
 The existing confidence fallback runs first, preserving ranking when it already finds
 matching source evidence. If it does not, recall retries the live and archived pool with
@@ -120,6 +136,32 @@ comparison; separate factual-question controls require the wrong project to be e
 Reports are `recall-realistic-missing-answer-net*.json`, uploaded by the existing CI
 artifact rule. They distinguish correct abstentions from positive-source hits and retain
 each query/route's returned IDs and diagnostic status for inspection.
+
+### Question interpretation and false abstentions
+
+`recall-question-interpretation-v1.json` freezes the 32 questions from the assessment
+after merged PR #41: eight canonical controls, 16 paraphrases and eight negative cases.
+The original 52-memory corpus and designated source labels are unchanged. Each negative
+is paired with a newly supplied answer to detect an always-abstain solution. The archived
+Engram cache incident was already audited as a valid alternative for the metadata question
+before implementation; it is listed separately from that question's designated source.
+
+Real ONNX/default recall on direct, expert and broadcast routes produces 120 observations:
+24 missing-answer observations and 96 answerable observations. Before this change, 12/24
+correctly abstained and 66/96 found an accepted answer (63 designated-source hits). After
+the change, 24/24 correctly abstain and 96/96 find an accepted answer (93 designated-source
+hits). All seven previously empty paraphrases also retrieve their isolated correct source
+on all three routes. These inspected regression cases do not estimate general answer accuracy.
+
+Reports are `recall-realistic-question-interpretation-net*.json`, uploaded by the existing
+CI rule. They retain designated hits, accepted alternative hits, returned IDs, diagnostics
+and direct/expert parity separately. Expert tests provide a perfect routing hint and
+exercise interpretation after selection; empty-expert fallback remains a separate task.
+Controlled cases additionally reject wrong projects/environments, incomplete attributes,
+historical restore records, drill durations, stored questions and incompatible sentence
+continuations, while checking selected-only access/archive behavior and opt-outs.
+Existing missing-answer, original recall, broad coverage and contradiction/resolution
+fixtures and gates are retained without relabeling or lowering floors.
 
 ### Hybrid-search filter enforcement
 
@@ -702,7 +744,7 @@ possible retrieval failure.
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~MissingAnswerRecallEvaluationTests|FullyQualifiedName~RecallQueryEvidenceTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~MissingAnswerRecallEvaluationTests|FullyQualifiedName~QuestionInterpretation|FullyQualifiedName~RecallQueryEvidenceTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory

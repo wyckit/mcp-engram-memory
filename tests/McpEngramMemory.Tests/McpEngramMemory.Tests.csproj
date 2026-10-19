@@ -41,6 +41,7 @@
     <None Update="Fixtures/recall-broad-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-broad-v1.baseline.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-missing-answer-v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/recall-question-interpretation-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-realistic-v1.baseline.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-conflicts-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-conflicts-broad-v1.json" CopyToOutputDirectory="PreserveNewest" />
