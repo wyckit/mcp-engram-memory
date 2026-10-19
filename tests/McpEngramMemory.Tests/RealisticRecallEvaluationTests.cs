@@ -12,6 +12,38 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
+    [Theory]
+    [InlineData("atlas-timeout-old", "atlas-timeout", "What was the Atlas gateway timeout before the May incident review?")]
+    [InlineData("atlas-owner-old", "atlas-owner", "Who was the Atlas deployment owner before the platform handover?")]
+    [InlineData("atlas-region-old", "atlas-region", "Where was the Atlas primary database before the June migration?")]
+    public void HistoricalQuestionsPreserveBothVersionsAndRelevanceOrder(string historicalId, string currentId, string query)
+    {
+        var corpus = JsonSerializer.Deserialize<Corpus>(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "recall-realistic-v1.json")), Json)!;
+        using var embedding = new OnnxEmbeddingService();
+        var pair = corpus.Entries.Where(e => e.Id == historicalId || e.Id == currentId).ToList();
+        Assert.Equal(2, pair.Count);
+        foreach (string route in new[] { "direct", "expert", "broadcast" })
+        {
+            using var store = new RecallTestStore(embedding);
+            foreach (var memory in pair)
+                store.Index.Upsert(new CognitiveEntry(memory.Id, embedding.Embed(memory.Text), memory.Ns,
+                    memory.Text, lifecycleState: memory.State));
+            // History bypasses currentness selection; do not assume a local relevance
+            // model always puts the historical value first. Both versions must survive.
+            var baseline = store.Index.Search(new SearchRequest
+            {
+                Query = embedding.Embed(query), QueryText = query, Namespace = "expert_atlas", TenantId = "",
+                K = 5, MinScore = .3f, Hybrid = true, Rerank = true
+            });
+            if (route == "expert") store.Dispatcher.CreateExpert("atlas", query);
+            var result = Assert.IsType<RecallResult>(store.Tools().Recall(query, route == "direct" ? "expert_atlas" : null));
+            Assert.Contains(result.Results, r => r.Id == historicalId);
+            Assert.Contains(result.Results, r => r.Id == currentId);
+            Assert.Equal(baseline.Select(r => (r.Id, r.Score)), result.Results.Select(r => (r.Id, r.Score)));
+        }
+    }
+
     [Fact]
     public void EvaluateRealisticRecallAcrossRoutes()
     {
@@ -115,6 +147,11 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
         Assert.All(rows.Where(r => r.Id == "b04"), r => Assert.Equal(1.0, r.HitAt5));
         Assert.All(rows.Where(r => r.Id == "b05"), r => Assert.True(r.Mrr >= 1.0 / 3,
             $"Retrieval source buried on {r.Route}; inspect {path}."));
+
+        // Status cues come only from the stored text, never these evaluation labels.
+        // Gate every route so aggregate gains cannot hide a stale top answer returning.
+        Assert.All(rows, r => Assert.Equal(0.0, r.StaleTop1));
+        Assert.All(rows.Where(r => r.Id is "c03" or "c05"), r => Assert.Equal(1.0, r.Mrr));
     }
 
     private static Observation Measure(Question q, string route, RecallResult result, Corpus corpus,

@@ -68,6 +68,11 @@ Minimal profile. `spectral_recall` is a separate standard/full-profile tool — 
 | `reflect` | Store a lesson or retrospective with auto-linking to related memories. Wraps store_memory + link_memories for end-of-session knowledge capture. |
 | `get_context_block` | Assemble a prompt-cache-aware context block from memories for direct LLM consumption. Returns a formatted text block optimized for injection into system prompts or context windows. |
 
+With reranking enabled, `recall` demotes records explicitly marked superseded/obsolete for
+current-answer queries. Recognized historical/comparison queries retain relevance ordering,
+and `rerank: false` opts out of that selection policy. Superseded archived records remain
+archived when recalled. See [status cues and limitations](recall-evaluation.md#superseded-answers-and-historical-queries).
+
 ### Knowledge Graph (4 tools)
 
 | Tool | Description |

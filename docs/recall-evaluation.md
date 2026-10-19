@@ -13,13 +13,16 @@ Direct, expert-routed, and broadcast recall now use the same namespace retrieval
 
 1. Apply `hybrid`, `rerank`, `minScore`, and `summaryFirst` to retrieval.
 2. If the live results are empty or low-scoring, search archived memories with those same options.
-3. Honor `expandGraph` and apply `spectralMode` within each searched namespace.
+3. Honor `expandGraph` and apply `spectralMode` within each searched namespace. With reranking
+   enabled, prefer unmarked candidates over explicitly superseded records for current-answer
+   queries, both before namespace truncation and during final selection.
 4. Select at most `k` results, keeping linked sources alongside retained summaries when
    possible; broadcast considers up to `k` from each readable namespace and applies the
    same selection policy to the combined candidates.
 5. Record access only for returned memories, using their actual source namespaces. Recover
    returned archived search hits with cosine similarity at least 0.7 only when the caller
-   has write permission. Graph-only neighbors do not trigger resurrection.
+   has write permission. Graph-only neighbors and explicitly superseded records do not
+   trigger resurrection.
 
 Keyword rescue respects the requested cosine threshold. Expansion from ordinary source
 memories can deliberately add related context below that threshold. Summary drilldown
@@ -48,7 +51,7 @@ Already-retrieved candidates keep their scores.
 
 With default selection, each retained summary can bring up to two of its highest-scored
 linked non-summary candidates into the result budget. This allows an overview, two supporting
-details, and independent hits within the default five slots. The highest-ranked hit is
+details, and independent hits within the default five slots. The highest-ranked hit after status ordering is
 protected; small budgets and earlier pairings can leave fewer source slots. Supporting
 candidates follow their summary, unless they were already ranked ahead of it. Selection
 does not change scores, so the returned order need not be strictly descending by score.
@@ -59,6 +62,41 @@ and graph expansion. It does not add a model call, fetch missing sources, or rel
 and namespace access checks. A summary without eligible sources remains usable. Setting
 `summaryFirst: true` keeps explicit summary priority and bypasses pairing; `expandGraph: false`
 also bypasses pairing. These switches do not restore summary-based broad cluster boosts.
+
+## Superseded answers and historical queries
+
+Default `recall` selection places candidates explicitly marked as superseded/obsolete after
+other candidates. This applies on direct, expert, and broadcast routes, including after graph
+boosts and summary selection. It does not rewrite relevance scores or remove stored memories.
+An unmarked candidate is not necessarily current or authoritative; it simply lacks a recognized
+obsolete-record declaration.
+
+The local, case-insensitive English detector recognizes explicit leading labels such as
+`[obsolete]` or `Superseded:`, leading past-record descriptions such as `Superseded ... was ...`
+or `Superseded ... decision from ...`, and self-status sentences such as `This ownership record
+is obsolete after the handover.` Mentions in other records, negations (`is not obsolete`), and
+conditional wording (`is obsolete only if ...`) are not enough. It does not inspect memory IDs,
+creation/access dates, fixture labels, or graph direction to infer which fact is correct.
+
+If the initial retrieval contains a superseded candidate and fewer than `k` unmarked alternatives,
+recall retries that search once with a requested pool of `2k`. Existing vector/token oversampling
+still applies, and `minScore`, lifecycle filters, tenant, and namespace permissions stay fixed.
+This prevents a stale first hit from hiding a replacement just outside a small result limit.
+There is no additional embedding or model call, but affected namespaces may need another search.
+The retry is bounded and does not guarantee discovery of every replacement.
+
+Summary pairing does not force superseded sources back ahead of unmarked candidates. Explicit
+`summaryFirst: true` still takes precedence over status ordering between summaries and ordinary
+memories. `rerank: false` bypasses status ordering and the wider search. Recognized historical or
+comparison queries also retain relevance ordering, for example `What was ... before the migration?`,
+`Show the historical ...`, and `Compare previous and current ...`. Replacement questions such as
+`Which timeout replaced the old setting?` continue to prefer unmarked candidates. These are limited
+language cues, not a general temporal-query parser; `rerank: false` provides an explicit opt-out.
+
+When only superseded hits are available, they can still be returned. A recognized superseded
+archive remains archived even for a historical query or with reranking disabled: recalling history
+does not make the fact current again. Other archive recovery and final-only access tracking are
+unchanged. The lower-level `search_memory` and Core ranking APIs are unchanged.
 
 ## Cases and measurements
 
@@ -151,12 +189,43 @@ and thresholds, small/shared budgets, explicit options, duplicate IDs, tenant/na
 permissions, and access/archive effects. The real-model evaluation additionally pins the
 recovered `b03`/`b04` hits and `b05` source rank so aggregate gains cannot conceal their return.
 
+## Stale-answer ranking comparison
+
+Measured against merged PR #33 (`1879949`) with the same 52 memories, 36 questions, relevance
+labels, and original quality reference. All 108 query/route observations still hit a relevant
+memory. Recall@5 and source recall are unchanged, and no per-query Recall/MRR/nDCG regresses.
+Direct/expert IDs and scores continue to agree on all 36 questions.
+
+| Split / route | MRR before → after | nDCG@5 before → after | Stale top answers before → after |
+|---|---|---|---|
+| Development / direct | 0.9583 → 0.9792 | 0.9030 → 0.9184 | 1/24 → 0/24 |
+| Development / expert | 0.9583 → 0.9792 | 0.9030 → 0.9184 | 1/24 → 0/24 |
+| Development / broadcast | 0.9181 → 0.9389 | 0.8758 → 0.8912 | 1/24 → 0/24 |
+| Held-out / direct | 0.8472 → 0.8889 | 0.8498 → 0.8805 | 1/12 → 0/12 |
+| Held-out / expert | 0.8472 → 0.8889 | 0.8498 → 0.8805 | 1/12 → 0/12 |
+| Held-out / broadcast | 0.8403 → 0.8819 | 0.8440 → 0.8748 | 1/12 → 0/12 |
+
+The current region (`c03`) and timeout (`c05`) move from rank 2 to rank 1 on every route.
+New gates require zero labeled stale top answers and rank 1 on those two cases. Labels are
+used only to evaluate results, never passed to retrieval. Separate real-model controls use
+the same three old/current fact pairs and historical questions on all routes: both versions
+remain retrievable with the original relevance scores and order. This does not guarantee the
+historical version ranks first; the timeout history control still ranks the current record
+first under the unchanged relevance model.
+
+Controlled tests cover status declarations versus mentions/negation/conditions, replacement
+versus history intent, `k=1`, hybrid/vector paths, graph boosts, summary priority, restart,
+permissions, thresholds, final-only access updates, and obsolete archive recovery. Unmarked
+stale facts remain unresolved, as do general date/authority inference and the existing `b01`
+broad-query coverage weakness. Both fixture splits remain inspected regression cases rather
+than blind validation.
+
 ## Run and review
 
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory
