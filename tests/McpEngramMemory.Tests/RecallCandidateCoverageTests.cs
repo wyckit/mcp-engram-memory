@@ -24,7 +24,9 @@ public class RecallCandidateCoverageTests
             store.Add("filler-" + i, "atlas", "unrelated gardening notes", cosine: .35f);
             store.Add("filler-" + i, "boreal", "unrelated gardening notes", cosine: .35f);
         }
-        var result = Assert.IsType<RecallResult>(store.Tools().Recall(Query, k: 2,
+        // A topic search retains both projects so this still tests score calibration.
+        // Factual questions now exclude the wrong project before the broadcast merge.
+        var result = Assert.IsType<RecallResult>(store.Tools().Recall("Atlas gateway timeout", k: 2,
             expandGraph: false, spectralMode: "none"));
         Assert.Equal("answer", result.Results[0].Id);
         Assert.True(result.Results[0].Score > result.Results[1].Score);
