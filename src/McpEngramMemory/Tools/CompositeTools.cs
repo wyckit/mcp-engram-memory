@@ -210,7 +210,8 @@ public sealed class CompositeTools
             return new RecallResult("direct", ns, new List<CognitiveSearchResult>(),
                 $"No accessible memories in namespace '{ns}'.");
 
-        var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode);
+        var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode,
+            rerank && RecallFreshness.PrefersCurrent(query));
         if (ns is not null)
         {
             var (candidates, deep) = RecallNamespace(query, vector, ns, options);
@@ -434,7 +435,7 @@ public sealed class CompositeTools
     }
 
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
-        bool SummaryFirst, bool ExpandGraph, string SpectralMode);
+        bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent);
 
     // Namespace stays internal so the public MCP result shape remains unchanged. Graph
     // neighbors may belong to another readable namespace; bare IDs are not storage keys.
@@ -450,16 +451,29 @@ public sealed class CompositeTools
         var states = new HashSet<string> { "stm", "ltm" };
         IReadOnlyList<CognitiveSearchResult> Search(HashSet<string> includeStates)
         {
-            var found = _index.Search(new SearchRequest
+            IReadOnlyList<CognitiveSearchResult> Retrieve(int count)
             {
-                Query = vector, QueryText = options.Hybrid ? query : null,
-                Namespace = ns, TenantId = _access.TenantId,
-                K = !options.Hybrid && options.Rerank ? options.K * 2 : options.K,
-                MinScore = options.MinScore, IncludeStates = includeStates,
-                Hybrid = options.Hybrid, Rerank = options.Rerank, SummaryFirst = options.SummaryFirst
-            });
-            if (!options.Hybrid && options.Rerank) found = _index.Rerank(query, found);
-            return OrderRecall(found, options.SummaryFirst).Take(options.K).ToList();
+                var found = _index.Search(new SearchRequest
+                {
+                    Query = vector, QueryText = options.Hybrid ? query : null,
+                    Namespace = ns, TenantId = _access.TenantId,
+                    K = !options.Hybrid && options.Rerank ? count * 2 : count,
+                    MinScore = options.MinScore, IncludeStates = includeStates,
+                    Hybrid = options.Hybrid, Rerank = options.Rerank, SummaryFirst = options.SummaryFirst
+                });
+                return !options.Hybrid && options.Rerank ? _index.Rerank(query, found) : found;
+            }
+            var results = Retrieve(options.K);
+            // A superseded top hit must not hide its replacement just outside k.
+            // Retry once only if status demotion would leave fewer than k unmarked
+            // hits. Vector reranking may already have retrieved enough alternatives.
+            if (options.PreferCurrent)
+            {
+                int superseded = results.Count(r => RecallFreshness.IsSuperseded(r.Text));
+                if (superseded > 0 && results.Count - superseded < options.K)
+                    results = Retrieve(options.K * 2);
+            }
+            return OrderRecall(results, options).Take(options.K).ToList();
         }
 
         var results = Search(states);
@@ -496,13 +510,16 @@ public sealed class CompositeTools
     }
 
     private static IOrderedEnumerable<CognitiveSearchResult> OrderRecall(
-        IEnumerable<CognitiveSearchResult> results, bool summaryFirst) =>
-        results.OrderByDescending(r => summaryFirst && r.IsSummaryNode).ThenByDescending(r => r.Score);
+        IEnumerable<CognitiveSearchResult> results, RecallOptions options) =>
+        results.OrderByDescending(r => options.SummaryFirst && r.IsSummaryNode)
+            .ThenBy(r => options.PreferCurrent && RecallFreshness.IsSuperseded(r.Text))
+            .ThenByDescending(r => r.Score);
 
     private IReadOnlyList<RecallCandidate> SelectRecallCandidates(
         IEnumerable<RecallCandidate> candidates, RecallOptions options)
     {
         var ranked = candidates.OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
+            .ThenBy(c => options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))
             .ThenByDescending(c => c.Result.Score)
             .ThenBy(c => c.Namespace, StringComparer.Ordinal).ThenBy(c => c.Result.Id, StringComparer.Ordinal)
             .DistinctBy(c => (c.Namespace, c.Result.Id)).ToList();
@@ -518,7 +535,8 @@ public sealed class CompositeTools
             { (selected[0].Namespace, selected[0].Result.Id) };
         var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
         var pairs = new Dictionary<(string Namespace, string Id), List<RecallCandidate>>();
-        foreach (var summary in selected.Where(c => c.Result.IsSummaryNode).ToList())
+        foreach (var summary in selected.Where(c => c.Result.IsSummaryNode &&
+            !(options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))).ToList())
         {
             if (!selected.Contains(summary) || !topology.IsTopologySafe(summary.Result.Id)) continue;
             var linkedKeys = _graph.GetNeighbors(summary.Result.Id, relation: null, direction: "both",
@@ -526,6 +544,7 @@ public sealed class CompositeTools
                 .Where(n => n.Edge.Relation != "contradicts")
                 .Select(n => (n.Entry.Namespace, n.Entry.Id)).ToHashSet();
             var sources = ranked.Where(c => !c.Result.IsSummaryNode &&
+                !(options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text)) &&
                 linkedKeys.Contains((c.Namespace, c.Result.Id))).Take(Math.Min(SummarySourceLimit, options.K - 1));
             foreach (var source in sources)
             {
@@ -564,7 +583,8 @@ public sealed class CompositeTools
         foreach (var candidate in SelectRecallCandidates(candidates, options))
         {
             var result = candidate.Result;
-            if (candidate.Resurrect && _access.CanWrite(candidate.Namespace) &&
+            // Historical usefulness does not make a superseded fact current again.
+            if (candidate.Resurrect && !RecallFreshness.IsSuperseded(result.Text) && _access.CanWrite(candidate.Namespace) &&
                 _index.SetLifecycleState(result.Id, "stm", candidate.Namespace, _access.TenantId))
                 result = result with { LifecycleState = "stm" };
             _index.RecordAccess(result.Id, candidate.Namespace, _access.TenantId);
