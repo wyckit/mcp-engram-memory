@@ -187,19 +187,35 @@ public class Round18RegressionTests : IDisposable
     /// namespace's pending incremental work — a frozen increment firing after it can no
     /// longer overwrite fresher rows with stale values.
     /// </summary>
-    [Fact]
-    public async Task SqliteTimers_FullSaveSubsumesPendingIncrements()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SqliteTimers_FullSaveSubsumesPendingIncrements(bool fullSaveFirst)
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"round18_sub_{Guid.NewGuid():N}.db");
         try
         {
-            using var provider = new SqliteStorageProvider(dbPath, debounceMs: 30);
+            var clock = new ControlledTimeProvider();
+            using var provider = new SqliteStorageProvider(dbPath, debounceMs: 30) { TimerProvider = clock };
             var v1 = new CognitiveEntry("e", new[] { 1f, 0f }, "sub", text: "v1", lifecycleState: "ltm");
             var v2 = new CognitiveEntry("e", new[] { 1f, 0f }, "sub", text: "v2", lifecycleState: "ltm");
             provider.ScheduleUpsertEntry("sub", v1);
+            var incremental = clock.Latest;
             provider.ScheduleSave("sub", () => new NamespaceData { Entries = new List<CognitiveEntry> { v2 } });
+            var full = clock.Latest;
 
-            await Task.Delay(900);
+            // Exercise both callback orders directly, including a queued incremental callback
+            // arriving after the full save subsumed its work. No elapsed-time assumption.
+            if (fullSaveFirst)
+            {
+                full.DeliverQueuedCallback();
+                incremental.DeliverQueuedCallback();
+            }
+            else
+            {
+                incremental.DeliverQueuedCallback();
+                full.DeliverQueuedCallback();
+            }
 
             Assert.Equal("v2", Assert.Single(provider.LoadNamespace("sub").Entries).Text);
         }

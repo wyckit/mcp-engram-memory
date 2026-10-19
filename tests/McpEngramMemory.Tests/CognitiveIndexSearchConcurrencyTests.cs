@@ -19,7 +19,7 @@ namespace McpEngramMemory.Tests;
 /// exercised write-during-search on the SAME namespace. This test does, and is built so it cannot
 /// pass without genuine overlap: readers and the writer run on dedicated OS threads (never the
 /// ThreadPool, so no reader can be starved out of the window) released together by a Barrier, and the
-/// test asserts both a floor of completed writes and a floor of completed searches. If readers never
+/// test asserts exact counts of writes and searches in synchronized batches. If readers never
 /// searched, the search-count assertion fails rather than the test silently passing. With the read
 /// lock now held across the whole BM25/hybrid path the writer simply waits, so no search throws; if
 /// the lock hold is ever narrowed again, this fails intermittently (and did fail deterministically
@@ -31,6 +31,7 @@ public class CognitiveIndexSearchConcurrencyTests : IDisposable
     private readonly PersistenceManager _persistence;
     private readonly CognitiveIndex _index;
     private readonly HashEmbeddingService _embedding;
+    private readonly ConcurrentTestWorkers _workers = new();
 
     public CognitiveIndexSearchConcurrencyTests()
     {
@@ -71,80 +72,67 @@ public class CognitiveIndexSearchConcurrencyTests : IDisposable
         const string ns = "race-ns";
         const int seedCount = 120;
         const int readerCount = 3;
-        const int minWriteRounds = 400;    // writer completes at least this many churn rounds (×3 ops)
-        const int minSearches = 200;       // readers must log at least this many overlapping searches
-        const int maxWriteRounds = 20_000; // safety cap: a starved reader fails an assertion, not forever
+        const int batches = 40;
+        const int writesPerBatch = 10;
+        const int searchesPerBatch = 2;
 
         for (int i = 0; i < seedCount; i++)
             _index.Upsert(MakeEntry(i, ns));
 
-        Exception? failure = null;
         long searchCount = 0, writeOps = 0;
-        void Record(Exception ex) { lock (ns) { failure ??= ex; } }
-
-        // Dedicated OS threads (not the ThreadPool) so no reader can be starved out of the window, and
-        // a Barrier so every thread enters its loop at the same instant — the searches and the writes
-        // therefore genuinely overlap in wall-clock time rather than running end to end.
-        using var start = new Barrier(readerCount + 1);
-        using var writerDone = new ManualResetEventSlim(false);
-
-        var writer = new Thread(() =>
+        var phase = new Barrier(readerCount + 1);
+        try
         {
-            try
+            // Fixed batches keep both sides in the race. The old writer kept mutating until
+            // readers reached their floor, while readers searched until the writer finished.
+            // Under contention that loop could inflate work toward its 20,000-round safety cap.
+            // Here every batch starts together and the next waits for both sides to progress.
+            var actions = new List<Action<CancellationToken>>
             {
-                start.SignalAndWait();
-                int round = 0;
-                // Keep churning the searched namespace's BM25 postings until a solid batch is done AND
-                // the readers have proven they searched concurrently. The cap turns a starved reader
-                // into a loud assertion failure rather than an infinite loop.
-                while (round < minWriteRounds || Volatile.Read(ref searchCount) < minSearches)
+                token =>
                 {
-                    if (round >= maxWriteRounds) break;
-                    int i = round % seedCount;
-                    _index.Upsert(MakeEntry(i, ns));    // re-index existing id → BM25 Remove+Add
-                    int j = (round + seedCount / 2) % seedCount;
-                    _index.Delete($"e{j:D4}", ns, tenantId: "");   // BM25 Remove
-                    _index.Upsert(MakeEntry(j, ns));    // BM25 Add back
-                    Interlocked.Add(ref writeOps, 3);
-                    round++;
-                }
-            }
-            catch (Exception ex) { Record(ex); }
-            finally { writerDone.Set(); }
-        }) { IsBackground = true, Name = "race-writer" };
-
-        var readers = Enumerable.Range(0, readerCount).Select(r =>
-            new Thread(() =>
-            {
-                try
-                {
-                    start.SignalAndWait();
-                    while (!writerDone.IsSet)
+                    for (int batch = 0; batch < batches; batch++)
                     {
-                        var results = _index.Search(HybridQuery(ns));
-                        Assert.NotNull(results);
-                        Interlocked.Increment(ref searchCount);
+                        phase.SignalAndWait(token);
+                        for (int round = 0; round < writesPerBatch; round++)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            int i = (batch * writesPerBatch + round) % seedCount;
+                            _index.Upsert(MakeEntry(i, ns));
+                            int j = (i + seedCount / 2) % seedCount;
+                            _index.Delete($"e{j:D4}", ns, tenantId: "");
+                            _index.Upsert(MakeEntry(j, ns));
+                            Interlocked.Add(ref writeOps, 3);
+                        }
                     }
                 }
-                catch (Exception ex) { Record(ex); }
-            }) { IsBackground = true, Name = $"race-reader-{r}" }
-        ).ToArray();
+            };
+            for (int reader = 0; reader < readerCount; reader++)
+                actions.Add(token =>
+                {
+                    var query = HybridQuery(ns);
+                    for (int batch = 0; batch < batches; batch++)
+                    {
+                        phase.SignalAndWait(token);
+                        for (int search = 0; search < searchesPerBatch; search++)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            Assert.NotNull(_index.Search(query));
+                            Interlocked.Increment(ref searchCount);
+                        }
+                    }
+                });
+            _workers.Run(TimeSpan.FromSeconds(30), actions.ToArray());
+        }
+        finally
+        {
+            if (_workers.IsQuiescent) phase.Dispose();
+        }
 
-        writer.Start();
-        foreach (var t in readers) t.Start();
-
-        Assert.True(writer.Join(TimeSpan.FromSeconds(30)), "writer thread did not finish in time");
-        foreach (var t in readers)
-            Assert.True(t.Join(TimeSpan.FromSeconds(5)), "a reader thread did not finish in time");
-
-        // No search threw while the namespace was mutated underneath it...
-        Assert.Null(failure);
-        // ...and both sides actually ran, concurrently: the writer completed its churn batch and the
-        // readers logged many searches during that same window (they only loop while the writer runs).
-        Assert.True(Volatile.Read(ref writeOps) >= minWriteRounds * 3,
-            $"writer made too few mutations ({writeOps}) to exercise the race");
-        Assert.True(Volatile.Read(ref searchCount) >= minSearches,
-            $"readers made too few concurrent searches ({searchCount}) to prove overlap");
+        // Preserve the original mutation floor (1,200) and exceed its search floor (200),
+        // with exact counts so cancellation or a skipped worker cannot produce a false pass.
+        Assert.Equal(batches * writesPerBatch * 3, writeOps);
+        Assert.Equal(batches * searchesPerBatch * readerCount, searchCount);
 
         // Index is still consistent and searchable after the churn.
         Assert.Equal(seedCount, _index.CountInNamespace(ns));
@@ -153,7 +141,9 @@ public class CognitiveIndexSearchConcurrencyTests : IDisposable
 
     public void Dispose()
     {
+        if (!_workers.IsQuiescent) return;
         _index.Dispose();
+        _persistence.Dispose();
         try { if (Directory.Exists(_dataPath)) Directory.Delete(_dataPath, recursive: true); }
         catch { /* best-effort tempdir cleanup */ }
     }

@@ -27,7 +27,7 @@ jobs:
         run: dotnet build McpEngramMemory.slnx --no-restore -c Release
 
       - name: Test (excluding MSA benchmarks)
-        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFileName=results.trx" --filter "Category!=MSA"
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

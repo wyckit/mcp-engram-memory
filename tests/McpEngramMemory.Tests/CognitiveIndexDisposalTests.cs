@@ -108,7 +108,7 @@ public sealed class CognitiveIndexDisposalTests : IDisposable
             _gate = _ownedGate;
             _ownedPersistence = new PersistenceManager(dataPath);
             Index = new CognitiveIndex(new BlockingStorageProvider(_ownedPersistence, _gate, _ownedInLock));
-            (_holder, _waiter) = Start(Index, _ownedInLock);
+            (_holder, _waiter) = Start(Index, _ownedInLock, _gate);
         }
 
         public ContendedLockScenario(CognitiveIndex index, ManualResetEventSlim gate, ManualResetEventSlim inLock)
@@ -116,10 +116,11 @@ public sealed class CognitiveIndexDisposalTests : IDisposable
             _gate = gate;
             _ownedGate = null!;
             Index = index;
-            (_holder, _waiter) = Start(index, inLock);
+            (_holder, _waiter) = Start(index, inLock, _gate);
         }
 
-        private static (Thread Holder, Thread Waiter) Start(CognitiveIndex index, ManualResetEventSlim inLock)
+        private static (Thread Holder, Thread Waiter) Start(CognitiveIndex index,
+            ManualResetEventSlim inLock, ManualResetEventSlim release)
         {
             // Holder: ScheduleSave is invoked while the per-namespace write lock is held, so
             // blocking there pins the lock deterministically rather than by timing.
@@ -130,29 +131,35 @@ public sealed class CognitiveIndexDisposalTests : IDisposable
             }) { IsBackground = true };
             holder.Start();
 
-            if (!inLock.Wait(TimeSpan.FromSeconds(10)))
-                throw new InvalidOperationException("holder never reached the storage callback");
-
             // Waiter: same namespace, so it queues on the write lock the holder owns.
             var waiter = new Thread(() =>
             {
                 try { index.Upsert(Entry("waiter", "ns-a")); }
                 catch { /* expected once the lock is torn down */ }
             }) { IsBackground = true };
-            waiter.Start();
-
-            // The one timing dependency here. The waiter does nothing but call Upsert, which blocks
-            // on EnterWriteLock almost immediately; this only has to outlast thread start-up. If it
-            // were ever too short the test would report a false pass, so it is generous.
-            Thread.Sleep(TimeSpan.FromMilliseconds(500));
-            return (holder, waiter);
+            try
+            {
+                Assert.True(inLock.Wait(TimeSpan.FromSeconds(10)), "holder never reached the storage callback");
+                waiter.Start();
+                Assert.True(SpinWait.SpinUntil(() => index.PartitionWaitingWriters("ns-a", "") == 1,
+                    TimeSpan.FromSeconds(10)), "waiter never queued behind the held namespace lock");
+                return (holder, waiter);
+            }
+            catch
+            {
+                release.Set();
+                holder.Join(TimeSpan.FromSeconds(10));
+                if (waiter.IsAlive) waiter.Join(TimeSpan.FromSeconds(10));
+                throw;
+            }
         }
 
         public void Dispose()
         {
             _gate.Set();
-            _holder.Join(TimeSpan.FromSeconds(10));
-            _waiter.Join(TimeSpan.FromSeconds(10));
+            var holderStopped = _holder.Join(TimeSpan.FromSeconds(10));
+            var waiterStopped = _waiter.Join(TimeSpan.FromSeconds(10));
+            Assert.True(holderStopped && waiterStopped, "contention workers did not drain before disposal");
             _ownedPersistence?.Dispose();
             _ownedInLock?.Dispose();
             _ownedGate?.Dispose();
@@ -182,7 +189,8 @@ public sealed class CognitiveIndexDisposalTests : IDisposable
         public void ScheduleSave(string ns, Func<NamespaceData> dataProvider)
         {
             _entered.Set();
-            _release.Wait(TimeSpan.FromSeconds(30));
+            // Released explicitly by the scenario's teardown, never by an elapsed sleep.
+            _release.Wait();
             _inner.ScheduleSave(ns, dataProvider);
         }
 

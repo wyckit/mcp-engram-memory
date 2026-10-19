@@ -420,7 +420,13 @@ public class Round17RegressionTests : IDisposable
                 new("kc", "dfr", new List<string> { "e" })
             });
 
-            await Task.Delay(800);
+            // The real timer is allowed to be scheduled late on a busy runner. Observe
+            // durability within a bounded deadline, without forcing a synchronous flush.
+            // StorageTimerOwnershipTests separately delivers graph-before-entry callbacks
+            // deterministically and proves that deferral rearms rather than drops the save.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            while (provider.LoadClusters().Count == 0 && deadline.Elapsed < TimeSpan.FromSeconds(10))
+                await Task.Delay(10);
 
             Assert.Single(provider.LoadClusters());
             Assert.Equal("e", Assert.Single(provider.LoadNamespace("dfr").Entries).Id);
