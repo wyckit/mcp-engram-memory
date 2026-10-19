@@ -14,13 +14,16 @@ Direct, expert-routed, and broadcast recall now use the same namespace retrieval
 1. Apply `hybrid`, `rerank`, `minScore`, and `summaryFirst` to retrieval.
 2. If the live results are empty or low-scoring, search archived memories with those same options.
 3. Honor `expandGraph` and apply `spectralMode` within each searched namespace.
-4. Select at most `k` results; broadcast considers up to `k` from each readable namespace.
+4. Select at most `k` results, keeping linked sources alongside retained summaries when
+   possible; broadcast considers up to `k` from each readable namespace and applies the
+   same selection policy to the combined candidates.
 5. Record access only for returned memories, using their actual source namespaces. Recover
    returned archived search hits with cosine similarity at least 0.7 only when the caller
    has write permission. Graph-only neighbors do not trigger resurrection.
 
-Keyword rescue respects the requested cosine threshold. Graph expansion can deliberately
-add related context below that threshold; disabling expansion also prevents broad-mode
+Keyword rescue respects the requested cosine threshold. Expansion from ordinary source
+memories can deliberately add related context below that threshold. Summary drilldown
+requires compatible embeddings and query cosine at least `minScore`; disabling expansion also prevents broad-mode
 traversal from introducing new candidates. Ambiguous bare IDs cannot be used to cross
 namespace boundaries. Broadcast deduplicates by namespace plus ID and preserves distinct
 memories that happen to share an ID.
@@ -28,8 +31,34 @@ memories that happen to share an ID.
 Explicit `summaryFirst: true` is honored after hybrid/token/spectral ranking and before
 the final limit. When Core `SearchRequest.Diversity` is also requested, MMR still selects
 the result set and summary priority orders that selection.
-The default remains false. Adaptive summary/source balancing is separate future work.
+The default remains false; the summary/source policy below applies with graph expansion on.
 MCP names, argument defaults, result schemas, and route strategy labels are unchanged.
+
+## Summary and source selection
+
+An overview can link many unrelated facts. Its links do not establish that those facts form
+one query-relevant cluster: broad-mode dominance and traversal now use source-to-source
+connections, excluding summary nodes even when they are reached outside the initial pool.
+A relevant summary can still be returned at its retrieval score.
+
+New graph candidates reached from a summary receive the summary's retrieval score multiplied
+by their query cosine, clamped to `[0, 1]`. This ranks the drilldown by query relevance without
+comparing raw cosine to hybrid/RRF scores or giving every linked fact the same score.
+Already-retrieved candidates keep their scores.
+
+With default selection, each retained summary can bring up to two of its highest-scored
+linked non-summary candidates into the result budget. This allows an overview, two supporting
+details, and independent hits within the default five slots. The highest-ranked hit is
+protected; small budgets and earlier pairings can leave fewer source slots. Supporting
+candidates follow their summary, unless they were already ranked ahead of it. Selection
+does not change scores, so the returned order need not be strictly descending by score.
+Shared sources appear once, and `contradicts` links do not force a supporting pair.
+
+Pairing only uses candidates already retrieved through authorized, tenant-scoped search
+and graph expansion. It does not add a model call, fetch missing sources, or relax lifecycle
+and namespace access checks. A summary without eligible sources remains usable. Setting
+`summaryFirst: true` keeps explicit summary priority and bypasses pairing; `expandGraph: false`
+also bypasses pairing. These switches do not restore summary-based broad cluster boosts.
 
 ## Cases and measurements
 
@@ -38,7 +67,8 @@ The versioned fixture and its initial quality reference live in
 There are 24 development questions and 12 held-out paraphrases, with six questions per
 scenario. Labels come from the authored source facts. Held-out here means a fixed separate
 reporting split over the same corpus, not an independent hidden production dataset.
-No ranking weights were tuned against either split in this change.
+Both splits have been inspected during summary-selection development; the held-out name
+does not imply blind validation. The original labels and aggregate baseline remain unchanged.
 
 Each question gets a fresh store for each route, so access and resurrection from a previous
 query cannot influence it. Expert profiles deliberately match the query: this checks the
@@ -86,15 +116,47 @@ ordering. `b03` ("Engram caching") now misses its source labels, and `c05` puts 
 timeout before the corrected value. Across routes, `c03` also puts an old region first;
 `c06` and `b05` illustrate summaries competing with specific sources. Stale Top-1 after
 the change is 2/36 for every route (previously 1/36 direct, 2/36 expert, 1/36 broadcast).
-These failures remain visible for the next summary-selection/correction-ranking work;
+These were the remaining failures after the route-consistency change;
 the corpus labels have not been changed to count obsolete facts as correct.
+
+## Summary-selection comparison
+
+Measured against merged PR #32 (`74600b3e`), using the same corpus, labels, model, and
+public defaults. Each cell below is before → after; values are rounded to four decimals.
+
+| Split / route | Hit@5 | Recall@5 | Source Recall@5 | MRR | nDCG@5 |
+|---|---|---|---|---|---|
+| Development / direct | 0.9583 → 1.0000 | 0.9063 → 0.9132 | 0.9028 → 0.9028 | 0.9375 → 0.9583 | 0.9001 → 0.9030 |
+| Development / expert | 0.9583 → 1.0000 | 0.9063 → 0.9132 | 0.9028 → 0.9028 | 0.9375 → 0.9583 | 0.9001 → 0.9030 |
+| Development / broadcast | 0.9167 → 1.0000 | 0.8924 → 0.8993 | 0.8889 → 0.8889 | 0.8958 → 0.9181 | 0.8755 → 0.8758 |
+| Held-out / direct | 1.0000 → 1.0000 | 0.9236 → 0.9236 | 0.9167 → 0.9167 | 0.8403 → 0.8472 | 0.8434 → 0.8498 |
+| Held-out / expert | 1.0000 → 1.0000 | 0.9236 → 0.9236 | 0.9167 → 0.9167 | 0.8403 → 0.8472 | 0.8434 → 0.8498 |
+| Held-out / broadcast | 1.0000 → 1.0000 | 0.9236 → 0.9236 | 0.9167 → 0.9167 | 0.8333 → 0.8403 | 0.8376 → 0.8440 |
+
+All three routes now hit a labeled relevant result for all 36 questions. `b03` ("Engram
+caching") retrieves `engram-cache` at rank 2 direct/expert and rank 3 broadcast, where it
+previously missed. `b04` also gains a broadcast hit, and `b05` retrieves a relevant source
+at rank 3 instead of 4. Direct/expert IDs and scores still agree on all 36 questions.
+
+The per-query trade-off is `b01` ("Atlas operations"): Recall@5 falls from 0.75 to 0.25
+on every route. Previously, the summary hub gave unrelated sources equal boosted scores,
+and ID tie-breaking happened to select labeled backup/endpoint facts. Query-based drilldown
+now selects owner/drill details, including a superseded owner, instead. The fixture labels
+have not been broadened to hide that loss. Aggregate source recall is unchanged because
+source gains on other questions offset it. Correction ranking is still needed: `c03` and
+`c05` continue to return superseded answers first (Stale Top-1 remains 2/36 per route).
+
+Controlled tests cover summary hubs, summaries beyond the first graph hop, source relevance
+and thresholds, small/shared budgets, explicit options, duplicate IDs, tenant/namespace
+permissions, and access/archive effects. The real-model evaluation additionally pins the
+recovered `b03`/`b04` hits and `b05` source rank so aggregate gains cannot conceal their return.
 
 ## Run and review
 
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory

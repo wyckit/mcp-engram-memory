@@ -104,6 +104,17 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
                 current.StaleTop1 <= expected.StaleTop1 + tolerance,
                 $"Quality regression in {current.Split}/{current.Route}; inspect {path} before changing the reference.");
         }
+
+        // Pin the summary-selection improvements as well as the unchanged initial
+        // aggregate baseline: gains elsewhere must not mask these misses returning.
+        Assert.All(rows.Where(r => r.Id == "b03"), r =>
+        {
+            Assert.Contains("engram-cache", r.ReturnedIds);
+            Assert.True(r.Mrr >= 1.0 / 3, $"Caching source buried on {r.Route}; inspect {path}.");
+        });
+        Assert.All(rows.Where(r => r.Id == "b04"), r => Assert.Equal(1.0, r.HitAt5));
+        Assert.All(rows.Where(r => r.Id == "b05"), r => Assert.True(r.Mrr >= 1.0 / 3,
+            $"Retrieval source buried on {r.Route}; inspect {path}."));
     }
 
     private static Observation Measure(Question q, string route, RecallResult result, Corpus corpus,
