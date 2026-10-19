@@ -432,7 +432,7 @@ input schemas are preserved, including in-process hosts without a governed store
 Evidence reads do not increment access counts, change facts/status, or resurrect archives.
 All reported conflicting archives remain archived, even when a choice has support.
 Only selected primary results retain normal access recording. No persistent cache is
-introduced: snapshots are reused within one recall call, with a shared one-second lookup
+introduced: snapshots are reused within one recall call, with a shared five-second lookup
 budget and at most 16 supporting sources per publication. Hitting the eight-pair diagnostic
 cap disables resolution for that call rather than deciding from a potentially truncated
 group. A timeout or store I/O failure withholds all optional preferences for that call.

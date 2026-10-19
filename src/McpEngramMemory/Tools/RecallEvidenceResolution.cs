@@ -26,7 +26,9 @@ internal sealed class RecallEvidenceResolution(CognitiveIndex index, NamespaceAc
         // Governed promotion does not admit legacy/default identities. Never manufacture
         // authority for that compatibility mode from ordinary memory metadata.
         if (access.TenantId.Length == 0 || access.AgentId == AgentIdentity.DefaultAgentId) return conflicts;
-        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        // Allow cold storage and busy hosts to complete legitimate reads. One second
+        // proved too short under concurrent framework/ONNX workloads in CI.
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var output = conflicts.ToArray();
         for (int i = 0; i < conflicts.Count; i++)
         {
