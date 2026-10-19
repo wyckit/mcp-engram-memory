@@ -310,11 +310,11 @@ summary is not treated as a factual claimant. Cross-namespace graph neighbors ar
 as if they belonged to the original namespace. No timestamp, insertion order, ID, arbitrary
 metadata, graph direction, or vector similarity is treated as proof of truth.
 
-This is conservative conflict surfacing, not general contradiction detection or automatic
-resolution. It can miss unlisted phrasings, unsupported languages/values, distant candidates,
+The detector provides conservative conflict surfacing, not general contradiction detection.
+It can miss unlisted phrasings, unsupported languages/values, distant candidates,
 cross-namespace conflicts, or qualified claims. A missing diagnostic does not certify
-consistency. It also does not change ingest-time duplicate blocking or connect raw memories
-to the separate governed-knowledge authority model.
+consistency. Ingest-time duplicate blocking is unchanged. Explicit governed evidence can
+now supply a preference for a detected pair, subject to the checks below.
 
 ### Evaluation
 
@@ -362,12 +362,126 @@ these numbers do not establish open-domain semantic accuracy. No model/dependenc
 call, result schema, retrieval limit, or authority-resolution behavior was added. New reports
 are named `recall-realistic-broader-conflicts-net*.json` and are included in the CI artifact.
 
+## Evidence-based resolution
+
+Recall can now attach a supported choice to a detected disagreement without rewriting
+either memory or changing retrieval scores, ordering, or `k`. This is a read-time,
+pair-scoped decision based on the accessible evidence inspected during that call. It is
+not an external truth verifier, a new authority score, or a persistent adjudication.
+The existing governed verifier checks source stability, not semantic truth; recall
+additionally requires the governed claim and its source text to match the disputed facts
+using the same bounded English parser as detection. No model call or dependency is added.
+
+### Connect an existing governed publication
+
+1. Use a named principal with a nonempty tenant and an owned namespace. These are the
+   existing `promote_knowledge` requirements; legacy/default mode cannot create this
+   authority. Publishing through MCP requires the `full` profile. Reading an already
+   published reference through `recall` works in every profile with the built-in host.
+2. Retain a separate source memory containing evidence for the claim. Call
+   `promote_knowledge` with the claim and the exact source ID(s). Preserve any known
+   contradicting evidence; a disputed publication will not resolve a recall conflict.
+3. Attach the returned artifact ID and content hash to the candidate memory's metadata
+   as `recallKnowledge`, preserving its text and other metadata. The reference is scoped
+   to the candidate's namespace and the caller's tenant; it cannot redirect either one:
+
+   ```json
+   {
+     "recallKnowledge": {
+       "id": "atlas-gateway-timeout",
+       "contentHash": "<exact 64-character contentHash returned by promote_knowledge>"
+     }
+   }
+   ```
+
+   `remember` accepts this nested metadata object. If its existing near-duplicate guard
+   blocks an intentional update among contradictory memories, use `store_memory` with
+   the same ID, text, category, metadata and lifecycle state. That explicit upsert bypasses
+   duplicate blocking; it is not a metadata-only patch. Do not update the cited source
+   itself with this reference: candidates cannot cite themselves or the opposing memory.
+
+The metadata is only a locator. It cannot assert verification, authority, permissions or
+support. The version must still be the active committed version with a valid canonical
+hash, `Active` status, `Supported`/`Verified`/`Established` maturity, current validity, no
+supersession timestamp, and no attached contradicting evidence. Recall checks readable
+version/evidence/provenance permissions, the publication's evidence-verifier reference,
+and its matching allowed commit audit. Maturity alone does not establish truth.
+
+Every supporting source must still exist in the exact tenant/namespace, be readable,
+be live and non-summary, and match the publication's existing content hash (identity,
+text, category and metadata). Each source must address a disputed fact, none may contradict
+one, and together they must cover **all** parsed disagreements in the pair. Internal
+contradictions in the proposed preferred memory also prevent resolution. Hashes prove
+content correspondence, not source reliability or real-world independence. A separate
+memory can still be a copied or mistaken source; publication and source quality remain
+the publisher's responsibility.
+
+Two cited sides, even if one citation is invalid or inaccessible, remain unresolved.
+An unresolved cited disagreement also vetoes preferences in its connected group of
+reported conflicts. Uncited repetitions neither add support nor constitute a vote.
+Missing/inaccessible/invalid/unavailable evidence is indistinguishable in the diagnostic.
+History/comparison queries and `rerank: false` retain their existing opt-out behavior.
+
+For a supported pair, `conflicts[].status` becomes `resolved` and `resolution` provides
+`basis: "governed_support"`, the preferred memory's `preferredId`/`ns`, exact knowledge
+ID/version/hash, provenance ID, and original source text with IDs/namespaces/hashes.
+The existing detection `basis`, `subject`, and both conflicting texts remain intact.
+Unresolved pairs omit `resolution`. Existing positional result constructors and MCP
+input schemas are preserved, including in-process hosts without a governed store.
+
+Evidence reads do not increment access counts, change facts/status, or resurrect archives.
+All reported conflicting archives remain archived, even when a choice has support.
+Only selected primary results retain normal access recording. No persistent cache is
+introduced: snapshots are reused within one recall call, with a shared one-second lookup
+budget and at most 16 supporting sources per publication. Hitting the eight-pair diagnostic
+cap disables resolution for that call rather than deciding from a potentially truncated
+group. A timeout or store I/O failure withholds all optional preferences for that call.
+Detection's existing retrieval/extraction bounds still apply. The read is not an
+atomic transaction across all memory and governance records; citations describe the
+versions checked during the call.
+
+### Resolution evaluation and retained retrieval limits
+
+`recall-resolution-v1.json` adds 26 inspected cases over the unchanged original 52-memory
+corpus, using real ONNX embeddings and actual governed publications. It covers settings,
+ownership, region, feature flags, negation, multiple claims, both preferred sides, `k: 1`,
+and restarts. Controls cover missing/changed/archived/self-cited evidence, unrelated or
+contrary sources, disputed/stale/private knowledge, two supported sides, partial support,
+environment mismatch and qualification. Named tenant principals exercise direct and
+authorized broadcast recall. Expert dispatch is intentionally disabled for these principals
+by the existing isolation policy; the original three-route evaluations remain unchanged.
+
+Of 24 positive query/route observations, **21 resolve**, and the other **3 retain retrieval
+misses**. All 28 negative observations remain unresolved. Every retrieved positive pair
+resolves to the expected ID with source citations. Primary IDs/scores match a run with the
+governed store unavailable. The misses are retained explicitly, not relabeled as successes:
+
+| Case | Route | Retained limitation |
+|------|-------|---------------------|
+| `multiple-claims`, `k: 5` | broadcast | Other-namespace results occupy the final result budget; neither Atlas claimant is selected. |
+| `restart`, `k: 1` | direct and broadcast | The claim and its matching source occupy the two-candidate evidence pool; the opposing claim is outside it. |
+
+Wider companion cases (`multiple-claims-wide`, `k: 10`; `restart-wide`, `k: 5`) retrieve
+and resolve the same disagreements. These are known retrieval coverage limits, not a
+claim of 100% end-to-end resolution. The original 36 questions and both earlier conflict
+supplements retain their labels and gates. New reports are
+`recall-realistic-resolution-net*.json`, included in the existing CI artifact. They report
+retrieval misses separately from missed resolutions of visible pairs and false resolutions,
+and include full citations. Publication hashes/IDs contain per-run timestamps/identities;
+compare resolution decisions and source IDs across runs, not those generated identifiers.
+
+Controlled tests additionally exercise validity/status/maturity, source permissions,
+private/foreign twins, corrupt or absent provenance/audit, bounds and cancellation,
+connected conflicting support, internal contradictions, multiple supporting sources,
+archive behavior and optional dependency injection. This is an authored regression
+suite, not blind validation or a measure of open-domain factual accuracy.
+
 ## Run and review
 
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory

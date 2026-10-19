@@ -74,7 +74,7 @@ and `rerank: false` opts out of that selection policy. Superseded archived recor
 archived when recalled. See [status cues and limitations](recall-evaluation.md#superseded-answers-and-historical-queries).
 
 Default current-intent recall also reports possible unmarked disagreements in an optional
-`conflicts` array. Each item has `status: "unresolved"`, a detection `basis`
+`conflicts` array. Each item defaults to `status: "unresolved"`, a detection `basis`
 (`same_subject_different_value` or `explicit_negation`), the `subject`,
 and two evidence records containing `id`, `ns`, and original `text`. These are candidates
 for verification, not a decision about which claim is correct. Ranked results and scores
@@ -82,6 +82,18 @@ stay unchanged; evidence can include a hit just outside `k`. The array is omitte
 no supported disagreement is found. Supported paraphrases, explicit denials, and multiple
 claims in a memory are compared without choosing a factual winner. See
 [scope and limits](recall-evaluation.md#unmarked-disagreements).
+
+For a named principal in a non-legacy tenant, an explicit `recallKnowledge` metadata
+reference can connect a claim to an existing governed publication. When exactly one
+side has readable, current, matching governed support, its conflict can have
+`status: "resolved"` with an additive `resolution` object: `basis: "governed_support"`,
+`preferredId`, `ns`, `knowledgeId`, `knowledgeVersion`, `knowledgeContentHash`,
+`provenanceId`, and `sources` (`id`, `ns`, original `text`, `contentHash`). This is an
+evidence-supported preference for that pair, not certification of external truth.
+Primary result ordering, scores, `k`, and stored facts remain unchanged. Both conflicting
+texts stay visible; clients should read `resolution` rather than assume the first hit won.
+Missing, stale, inaccessible, ambiguous or conflicting support leaves the conflict
+unresolved and omits `resolution`. See [setup, checks and coverage](recall-evaluation.md#evidence-based-resolution).
 
 ### Knowledge Graph (4 tools)
 
