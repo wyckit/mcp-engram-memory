@@ -13,7 +13,9 @@ Direct, expert-routed, and broadcast recall now use the same namespace retrieval
 
 1. Apply `hybrid`, `rerank`, `minScore`, and `summaryFirst` to retrieval.
 2. For eligible broad topic queries, probe a bounded live-and-archived candidate pool as described
-   below. Otherwise, search archives only if the live results are empty or low-scoring.
+   below. Otherwise, search archives if the live results are empty or low-scoring.
+   Supported factual questions also retry a bounded window when the initial results
+   contain no source matching the requested subject, environment and topic.
 3. Honor `expandGraph` and apply `spectralMode` within each searched namespace. With reranking
    enabled, prefer unmarked candidates over explicitly superseded records for current-answer
    queries, both before namespace truncation and during final selection.
@@ -40,7 +42,84 @@ the result set and summary priority orders that selection.
 The default remains false; the summary/source pairing below applies with graph expansion on
 when broad topic coverage does not activate.
 MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
-Recall adds an optional top-level `conflicts` diagnostic for supported unmarked disagreements.
+Recall adds optional top-level `conflicts` and `queryEvidence` diagnostics.
+
+### Missing answers and project/environment scope
+
+With reranking enabled, current factual questions now screen candidate evidence before
+graph expansion and again before final selection on all three routes. For example, an
+Atlas production endpoint cannot answer a question about Atlas staging, and a Boreal
+deployment owner cannot answer a question about an unknown Orion project. Shared words
+such as the project name or database alone cannot substitute for a requested password,
+budget, encryption, lifetime, retention, timeout or region attribute. Owner questions
+also require an ownership cue. A summary cannot be the only returned factual evidence;
+`k: 1` keeps a source, and larger budgets can still pair summaries with sources.
+
+This is a bounded lexical check, **not semantic entailment or an answer generator**. It
+recognizes English questions starting with what/which/who/where/when/why/how, extracts
+names from capitalization and common subject positions (including lowercase subjects),
+normalizes a small set of domain aliases, and requires at least half the remaining topic
+terms in a matching statement. Explicit environment labels must agree; a namespace
+never supplies an unstated environment. An immediately following generic continuation
+can inherit scope from the previous statement unless it specifies another recognized
+subject or environment. A namespace can supply an omitted project name only for generic
+instructions without another explicit name/recognized subject. Namespace membership
+alone cannot override an explicit different project. These rules have limited grammar
+and synonym coverage; unusual wording and implicit relationships can still be missed
+or misclassified. A returned record is neither certified true nor certified complete.
+
+The existing confidence fallback runs first, preserving ranking when it already finds
+matching source evidence. If it does not, recall retries the live and archived pool with
+`k + min(max(k, 15), 32)` candidates (subject to integer bounds), then filters again.
+The existing vector-only reranker may retrieve twice that pool internally. This adds no
+embedding/model call or persistent cache. Candidate checks examine at most 32 statements
+per record and reject texts longer than 16,384 characters. Queries over 1,024 characters,
+unsupported/non-question forms and questions with no discriminating terms bypass the
+check. History/comparison intent, `rerank: false`, and `summaryFirst: true` also preserve
+their existing behavior. Broad topic searches retain the coverage policy below. Raw
+`search_memory` is unchanged.
+
+When no eligible source survives, `results` is empty and the response adds:
+
+```json
+"queryEvidence": {
+  "status": "insufficient_evidence",
+  "message": "No source in the eligible recall window matched the question's subject, environment and topic. This does not establish that an answer is absent from all stored memories."
+}
+```
+
+The diagnostic describes this retrieval attempt, not global absence from the store.
+It is omitted for retained evidence and bypassed checks; omission is not a positive
+answerability signal. No MCP input, tool name, positional result constructor or primary
+result field changes. Existing tenant/namespace permissions, cosine thresholds,
+contradiction diagnostics and archive resurrection rules still apply. Rejected candidates
+and diagnostic-only evidence receive no access or lifecycle updates. A newly stored
+answer becomes eligible on the next recall.
+
+`recall-missing-answer-v1.json` adds 16 absent-answer questions over the unchanged
+52-memory corpus: four missing attributes, four environment mismatches, four unknown
+projects and four unrelated questions. Each is paired with a newly supplied fictional
+answer, alongside eight existing positive controls. It was authored before the fix and
+is an inspected regression set, not a blind holdout. Real ONNX embeddings and default
+direct/expert/broadcast recall produce 120 observations per framework. Before the fix,
+all **48 negative observations returned context**; after the fix, all **48 return empty
+evidence with the diagnostic**, while all **72 positive observations retain their
+expected source**. Returning unrelated context is a retrieval failure here, not a measured
+LLM hallucination.
+
+Against merged PR #40, all 108 original query/route observations retain or improve
+Hit@5, Recall@5, source recall, MRR, nDCG and stale-top-answer rate. The broad supplement
+and contradiction/resolution gates remain in place. Original corpus labels, baselines
+and floors are unchanged. `RecallQueryEvidenceTests` adds controls for lowercase names,
+sentence continuations, missing attributes, environment aliases, wrong-scope results
+ahead of a valid source, summary-only windows, graph neighbors, archive recovery,
+private/foreign tenant twins, opt-outs and bounded retrieval. The original hybrid score
+calibration control now uses a topic query so both projects remain eligible for that
+comparison; separate factual-question controls require the wrong project to be excluded.
+
+Reports are `recall-realistic-missing-answer-net*.json`, uploaded by the existing CI
+artifact rule. They distinguish correct abstentions from positive-source hits and retain
+each query/route's returned IDs and diagnostic status for inspection.
 
 ### Hybrid-search filter enforcement
 
@@ -623,7 +702,7 @@ possible retrieval failure.
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~MissingAnswerRecallEvaluationTests|FullyQualifiedName~RecallQueryEvidenceTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory

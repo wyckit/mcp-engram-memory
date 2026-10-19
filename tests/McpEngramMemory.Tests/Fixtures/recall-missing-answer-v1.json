@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "description": "Authored before the missing-answer fix. Original 52-memory corpus, 16 absent-answer questions each paired with a newly supplied answer, plus eight existing positive controls. Inspected regressions, not a blind holdout. Namespace membership is not proof of project scope.",
+  "queries": [
+    {
+      "id": "missing-budget",
+      "kind": "missing-fact",
+      "ns": "expert_atlas",
+      "query": "What is Atlas monthly cloud budget?",
+      "expected": null,
+      "answer": "Atlas monthly cloud budget is USD 12000."
+    },
+    {
+      "id": "missing-security-owner",
+      "kind": "missing-fact",
+      "ns": "expert_boreal",
+      "query": "Who owns Boreal security reviews?",
+      "expected": null,
+      "answer": "Elena owns Boreal security reviews."
+    },
+    {
+      "id": "missing-encryption",
+      "kind": "missing-fact",
+      "ns": "expert_engram",
+      "query": "Which encryption algorithm protects Engram stored memories?",
+      "expected": null,
+      "answer": "Engram stored memories use AES-256-GCM encryption."
+    },
+    {
+      "id": "missing-token-lifetime",
+      "kind": "missing-fact",
+      "ns": "expert_atlas",
+      "query": "What is the Atlas OAuth token lifetime?",
+      "expected": null,
+      "answer": "Atlas OAuth tokens expire after one hour."
+    },
+    {
+      "id": "staging-endpoint",
+      "kind": "wrong-scope",
+      "ns": "expert_atlas",
+      "query": "What is Atlas staging readiness endpoint?",
+      "expected": null,
+      "answer": "Atlas staging readiness endpoint is /stage/ready on port 9443."
+    },
+    {
+      "id": "staging-owner",
+      "kind": "wrong-scope",
+      "ns": "expert_boreal",
+      "query": "Who owns Boreal staging deployments?",
+      "expected": null,
+      "answer": "Theo owns Boreal staging deployments."
+    },
+    {
+      "id": "staging-retention",
+      "kind": "wrong-scope",
+      "ns": "expert_atlas",
+      "query": "How long are Atlas staging backups retained?",
+      "expected": null,
+      "answer": "Atlas staging backups are retained for seven days."
+    },
+    {
+      "id": "staging-region",
+      "kind": "wrong-scope",
+      "ns": "expert_boreal",
+      "query": "Where is the Boreal staging database hosted?",
+      "expected": null,
+      "answer": "Boreal staging database is hosted in eu-north-1."
+    },
+    {
+      "id": "unknown-owner",
+      "kind": "unknown-project",
+      "ns": "expert_atlas",
+      "query": "Who owns Orion production deployments?",
+      "expected": null,
+      "answer": "Elena owns Orion production deployments."
+    },
+    {
+      "id": "unknown-endpoint",
+      "kind": "unknown-project",
+      "ns": "expert_boreal",
+      "query": "What is Orion readiness endpoint?",
+      "expected": null,
+      "answer": "Orion readiness endpoint is /orion/ready."
+    },
+    {
+      "id": "unknown-timeout",
+      "kind": "unknown-project",
+      "ns": "expert_atlas",
+      "query": "What is Orion payment gateway timeout?",
+      "expected": null,
+      "answer": "Orion payment gateway timeout is 12 seconds."
+    },
+    {
+      "id": "unknown-backup",
+      "kind": "unknown-project",
+      "ns": "expert_boreal",
+      "query": "When do Orion database backups run?",
+      "expected": null,
+      "answer": "Orion database backups run at 06:00 UTC daily."
+    },
+    {
+      "id": "unrelated-bread",
+      "kind": "unrelated",
+      "ns": "expert_atlas",
+      "query": "How do I bake sourdough bread?",
+      "expected": null,
+      "answer": "To bake sourdough bread, mix flour, water, salt and starter, let the dough ferment, then bake it."
+    },
+    {
+      "id": "unrelated-tides",
+      "kind": "unrelated",
+      "ns": "expert_boreal",
+      "query": "What causes ocean tides?",
+      "expected": null,
+      "answer": "Ocean tides are caused by gravitational forces from the Moon and Sun."
+    },
+    {
+      "id": "unrelated-music",
+      "kind": "unrelated",
+      "ns": "expert_engram",
+      "query": "Who composed The Magic Flute?",
+      "expected": null,
+      "answer": "Wolfgang Amadeus Mozart composed The Magic Flute."
+    },
+    {
+      "id": "unrelated-mountain",
+      "kind": "unrelated",
+      "ns": "expert_atlas",
+      "query": "What is the tallest mountain in Japan?",
+      "expected": null,
+      "answer": "Mount Fuji is the tallest mountain in Japan."
+    },
+    {
+      "id": "known-owner",
+      "kind": "answerable",
+      "ns": "expert_atlas",
+      "query": "Who owns Atlas production deployments?",
+      "expected": "atlas-owner",
+      "answer": null
+    },
+    {
+      "id": "known-endpoint",
+      "kind": "answerable",
+      "ns": "expert_boreal",
+      "query": "What is Boreal production readiness endpoint?",
+      "expected": "boreal-endpoint",
+      "answer": null
+    },
+    {
+      "id": "known-timeout",
+      "kind": "answerable",
+      "ns": "expert_atlas",
+      "query": "What is Atlas payment gateway timeout?",
+      "expected": "atlas-timeout",
+      "answer": null
+    },
+    {
+      "id": "known-backup",
+      "kind": "answerable",
+      "ns": "expert_boreal",
+      "query": "When do Boreal database backups run?",
+      "expected": "boreal-backup",
+      "answer": null
+    },
+    {
+      "id": "known-retention",
+      "kind": "answerable",
+      "ns": "expert_atlas",
+      "query": "How long are Atlas PostgreSQL backups retained?",
+      "expected": "atlas-backup",
+      "answer": null
+    },
+    {
+      "id": "known-cache",
+      "kind": "answerable",
+      "ns": "expert_engram",
+      "query": "What does the Engram context version fingerprint cover?",
+      "expected": "engram-cache",
+      "answer": null
+    },
+    {
+      "id": "known-retry",
+      "kind": "answerable",
+      "ns": "expert_boreal",
+      "query": "How many times do Boreal clients retry HTTP 503 failures?",
+      "expected": "boreal-retry",
+      "answer": null
+    },
+    {
+      "id": "known-recovery",
+      "kind": "answerable",
+      "ns": "expert_atlas",
+      "query": "What is Atlas recovery time objective?",
+      "expected": "atlas-drill",
+      "answer": null
+    }
+  ]
+}

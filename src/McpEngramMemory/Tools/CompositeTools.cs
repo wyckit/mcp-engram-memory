@@ -222,15 +222,15 @@ public sealed class CompositeTools
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
         try
         {
-        if (ns is not null && !_access.CanRead(ns))
-            return new RecallResult("direct", ns, new List<CognitiveSearchResult>(),
-                $"No accessible memories in namespace '{ns}'.");
-
         var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode,
             rerank && RecallFreshness.PrefersCurrent(query),
             hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
                 (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") &&
-                InferSpectralMode(query) == SpectralRetrievalMode.Broad && BroadRecallRanking.IsTopicQuery(query));
+                InferSpectralMode(query) == SpectralRetrievalMode.Broad && BroadRecallRanking.IsTopicQuery(query),
+            rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) ? RecallQueryEvidence.Parse(query) : null);
+        if (ns is not null && !_access.CanRead(ns))
+            return await CompleteRecallAsync("direct", ns, [], options,
+                $"No accessible memories in namespace '{ns}'.").ConfigureAwait(false);
         if (ns is not null)
         {
             var (candidates, deep, broad) = RecallNamespace(query, vector, ns, options);
@@ -464,7 +464,8 @@ public sealed class CompositeTools
     }
 
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
-        bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent, bool BroadCoverage);
+        bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent, bool BroadCoverage,
+        RecallQueryEvidence? QueryEvidence);
 
     // Keep namespace provenance for selection and conflict evidence. Graph neighbors
     // may belong to another readable namespace; bare IDs are not storage keys.
@@ -562,6 +563,24 @@ public sealed class CompositeTools
             }
         }
 
+        if (options.QueryEvidence is not null)
+        {
+            bool Eligible(CognitiveSearchResult r) => options.QueryEvidence.Matches(r.Text, ns);
+            // Apply evidence requirements after the established confidence fallback:
+            // filtering must not change archive ranking when live evidence already fits.
+            // If only mismatches/summaries occupy k, retry a bounded larger window.
+            if (!results.Any(r => !r.IsSummaryNode && Eligible(r)))
+            {
+                HashSet<string> allStates = ["stm", "ltm", "archived"];
+                var (recovered, recoveredEvidence) = Search(allStates, BroadRecallRanking.CandidateLimit(options.K));
+                results = recovered;
+                evidence = recoveredEvidence;
+                states = allStates;
+                deep = recovered.Any(r => r.LifecycleState == "archived" && Eligible(r));
+            }
+            results = results.Where(Eligible).ToList();
+        }
+
         var sources = results.ToDictionary(r => r.Id, _ => ns);
         // Recovery eligibility uses semantic similarity, not RRF or graph-boosted scores.
         var recoverable = results.Where(r => deep && r.LifecycleState == "archived")
@@ -635,13 +654,23 @@ public sealed class CompositeTools
     private IReadOnlyList<RecallCandidate> SelectRecallCandidates(
         IEnumerable<RecallCandidate> candidates, RecallOptions options)
     {
-        var ranked = candidates.OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
+        var ranked = candidates.Where(c => options.QueryEvidence is null || options.QueryEvidence.Matches(c.Result.Text, c.Namespace))
+            .OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
             .ThenBy(c => options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))
             .ThenByDescending(c => c.Result.Score)
             .ThenBy(c => c.Namespace, StringComparer.Ordinal).ThenBy(c => c.Result.Id, StringComparer.Ordinal)
             .DistinctBy(c => (c.Namespace, c.Result.Id)).ToList();
+        if (options.QueryEvidence is not null)
+        {
+            // Overviews remain useful alongside sources but cannot establish that a
+            // factual answer was retrieved. Small budgets keep actual source evidence.
+            if (!ranked.Any(c => !c.Result.IsSummaryNode)) return [];
+            if (options.K == 1) return ranked.Where(c => !c.Result.IsSummaryNode).Take(1).ToList();
+        }
         if (options.BroadCoverage) return SelectBroadCandidates(ranked, options.K);
         var selected = ranked.Take(options.K).ToList();
+        if (options.QueryEvidence is not null && selected.All(c => c.Result.IsSummaryNode))
+            selected[^1] = ranked.First(c => !c.Result.IsSummaryNode);
         if (options.SummaryFirst || !options.ExpandGraph || selected.Count < 2 ||
             !selected.Any(c => c.Result.IsSummaryNode)) return selected;
 
@@ -756,7 +785,10 @@ public sealed class CompositeTools
         }
         return new RecallResult(strategy, ns, results, routingInfo)
         {
-            Conflicts = conflicts.Count > 0 ? conflicts : null
+            Conflicts = conflicts.Count > 0 ? conflicts : null,
+            QueryEvidence = options.QueryEvidence is not null && results.Count == 0
+                ? new RecallQueryEvidenceResult("insufficient_evidence", "No source in the eligible recall window matched the question's subject, environment and topic. This does not establish that an answer is absent from all stored memories.")
+                : null
         };
     }
 
@@ -1184,12 +1216,19 @@ public sealed record RecallResult(
     [property: JsonPropertyName("results")] IReadOnlyList<CognitiveSearchResult> Results,
     [property: JsonPropertyName("routingInfo")] string? RoutingInfo = null)
 {
+    [JsonPropertyName("queryEvidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RecallQueryEvidenceResult? QueryEvidence { get; init; }
     // Additive diagnostic; preserve the existing constructor/deconstruction and omit
     // it entirely for ordinary results. A missing diagnostic does not certify truth.
     [JsonPropertyName("conflicts")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<RecallConflict>? Conflicts { get; init; }
 }
+
+public sealed record RecallQueryEvidenceResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("message")] string Message);
 
 public sealed record RecallConflict(
     [property: JsonPropertyName("status")] string Status,
