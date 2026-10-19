@@ -30,6 +30,36 @@ dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj \
   -f net8.0 --artifacts-path artifacts/governance-tests
 ```
 
+## Concurrency and storage timer regressions
+
+Run the focused reliability checks across all three target frameworks:
+
+```bash
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release \
+  --filter "FullyQualifiedName~StorageTimerOwnershipTests|FullyQualifiedName~ConcurrentTestWorkersTests|FullyQualifiedName~CognitiveIndexSearchConcurrencyTests|FullyQualifiedName~CognitiveIndexDisposalTests|FullyQualifiedName~LockUpgradeRegressionTests|FullyQualifiedName~GraphTimerDeferral|FullyQualifiedName~SqliteTimers_FullSaveSubsumes" \
+  --logger "trx;LogFilePrefix=reliability"
+```
+
+The timer tests explicitly deliver callbacks that were queued before cancellation. JSON and SQLite
+must ignore an old callback after replacement or flush, retain failed writes, drain on disposal,
+and defer graph writes until entry work commits. SQLite also checks both full-save/incremental
+callback orders and tenant-scoped incremental deletes. The internal clock defaults to
+`TimeProvider.System`; public constructors and storage formats are unchanged. SQL Server uses the
+same ownership checks; its live storage tests require `ENGRAM_TEST_SQLSERVER_CONNECTION`.
+
+Concurrency tests use a small number of dedicated workers and synchronized batches, with exact
+mutation/search counts and maintenance-progress assertions. They retain their 30/60-second work
+deadlines and cancel and join workers on failure. A worker that cannot drain is reported as a
+failure; its fixture is retained rather than disposed underneath it. Disposal tests wait for an
+actual queued writer. The real SQLite timer smoke test polls durable state within a deadline
+without calling `Flush`; it does not assume a callback ran after a fixed sleep.
+
+For release validation, also run the complete non-MSA suite with the default concurrent target
+framework execution and compare the recall reports described in [recall-evaluation.md](recall-evaluation.md).
+Do not hide a timeout by disabling concurrency or retrying until green. A timeout alone does not
+establish a production deadlock: inspect progress and cleanup evidence. Use `LogFilePrefix` so
+concurrent frameworks retain separate test-result files; CI uploads each one.
+
 ## Tool profile count regression check
 
 For a quick check of the published tool counts:

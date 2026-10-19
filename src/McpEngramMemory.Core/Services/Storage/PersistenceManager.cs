@@ -28,6 +28,9 @@ public sealed class PersistenceManager : IStorageProvider
     private readonly ILogger<PersistenceManager>? _logger;
     private bool _disposed;
 
+    // Internal clock seam for deterministic queued-callback regression tests.
+    internal TimeProvider TimerProvider { get; init; } = TimeProvider.System;
+
     // Tracks every write running file I/O outside the timer lock — debounced callbacks AND
     // synchronous collapse-history RMWs. Flush() waits on _writesIdle so callers (e.g. tests
     // deleting the data dir on teardown) cannot race a still-running write. Every tracked
@@ -36,20 +39,20 @@ public sealed class PersistenceManager : IStorageProvider
     private readonly ManualResetEventSlim _writesIdle = new(initialState: true);
 
     // Pending namespace saves (keyed by namespace name)
-    private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
+    private readonly Dictionary<string, (ITimer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
     // Pending global edge save (separate from namespace saves to avoid dummy-data overwrite)
-    private Timer? _pendingEdgeTimer;
+    private ITimer? _pendingEdgeTimer;
     private Func<List<GraphEdge>>? _pendingEdgeProvider;
 
     // Pending cluster save
-    private Timer? _pendingClusterTimer;
+    private ITimer? _pendingClusterTimer;
     private Func<List<SemanticCluster>>? _pendingClusterProvider;
 
     // Pending collapse history save
 
     // Pending decay config save
-    private Timer? _pendingDecayConfigTimer;
+    private ITimer? _pendingDecayConfigTimer;
     private Func<Dictionary<string, DecayConfig>>? _pendingDecayConfigProvider;
 
     /// <summary>JSON backend does not support incremental writes — always uses full namespace snapshots.</summary>
@@ -257,7 +260,8 @@ public sealed class PersistenceManager : IStorageProvider
             if (_pendingNsSaves.TryGetValue(ns, out var existing))
                 existing.Timer.Dispose();
 
-            var timer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 // CAPTURE AND COMMIT under the flush gate, like the SQL providers: a callback
                 // that captured before a flush drained cannot land its (older) snapshot after
@@ -272,7 +276,8 @@ public sealed class PersistenceManager : IStorageProvider
                     Func<NamespaceData>? provider = null;
                     lock (_timerLock)
                     {
-                        if (_pendingNsSaves.TryGetValue(ns, out var entry))
+                        if (_pendingNsSaves.TryGetValue(ns, out var entry)
+                            && ReferenceEquals(entry.Timer, timer))
                         {
                             provider = entry.DataProvider;
                             entry.Timer.Dispose();
@@ -338,7 +343,8 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingEdgeTimer?.Dispose();
             _pendingEdgeProvider = dataProvider;
 
-            _pendingEdgeTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 // CAPTURE AND TRACK inside the flush gate, like the namespace callback: a
                 // callback that marked itself in-flight BEFORE blocking on the gate deadlocked
@@ -349,6 +355,10 @@ public sealed class PersistenceManager : IStorageProvider
                     Func<List<GraphEdge>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingEdgeTimer, timer)) return;
+
                         // CROSS-QUEUE CAUSAL ORDER on the timer path — see TryFlushCore's
                         // part 2: a graph-level save referencing entries by id must not
                         // commit while namespace writes are still pending, or a crash
@@ -393,6 +403,7 @@ public sealed class PersistenceManager : IStorageProvider
                         });
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingEdgeTimer = timer;
         }
     }
 
@@ -409,7 +420,8 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingClusterTimer?.Dispose();
             _pendingClusterProvider = dataProvider;
 
-            _pendingClusterTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 // CAPTURE AND TRACK inside the flush gate, like the namespace callback: a
                 // callback that marked itself in-flight BEFORE blocking on the gate deadlocked
@@ -420,6 +432,10 @@ public sealed class PersistenceManager : IStorageProvider
                     Func<List<SemanticCluster>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingClusterTimer, timer)) return;
+
                         // CROSS-QUEUE CAUSAL ORDER on the timer path — see TryFlushCore's
                         // part 2: a graph-level save referencing entries by id must not
                         // commit while namespace writes are still pending, or a crash
@@ -464,6 +480,7 @@ public sealed class PersistenceManager : IStorageProvider
                         });
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingClusterTimer = timer;
         }
     }
 
@@ -848,7 +865,8 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingDecayConfigTimer?.Dispose();
             _pendingDecayConfigProvider = dataProvider;
 
-            _pendingDecayConfigTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 // CAPTURE AND TRACK inside the flush gate, like the namespace callback: a
                 // callback that marked itself in-flight BEFORE blocking on the gate deadlocked
@@ -859,6 +877,10 @@ public sealed class PersistenceManager : IStorageProvider
                     Func<Dictionary<string, DecayConfig>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingDecayConfigTimer, timer)) return;
+
                         // CROSS-QUEUE CAUSAL ORDER on the timer path — see TryFlushCore's
                         // part 2: a graph-level save referencing entries by id must not
                         // commit while namespace writes are still pending, or a crash
@@ -903,6 +925,7 @@ public sealed class PersistenceManager : IStorageProvider
                         });
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingDecayConfigTimer = timer;
         }
     }
 

@@ -16,11 +16,10 @@
 //   2. Same-namespace serialization: maintenance on namespace A and foreground
 //      writes to namespace A serialize gracefully under the RWLS write-lock
 //      protocol — no deadlock, forward progress guaranteed.
-//   3. Quantitative: namespace B writes each complete in <500 ms (cross-ns
-//      independence); all namespace A writes complete within 30 s total (same-ns
-//      serialization, not starvation).
+//   3. Quantitative: every writer completes its exact workload, each write in
+//      <10 s and all lanes within 60 s. These are progress bounds, not a proof
+//      that any timeout necessarily means a production deadlock.
 
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services;
@@ -60,25 +59,16 @@ public class LockUpgradeRegressionTests : IDisposable
         _lifecycle = new LifecycleEngine(_index, _persistence, _diffusion);
     }
 
+    private readonly ConcurrentTestWorkers _workers = new();
+
     public void Dispose()
     {
-        // Every test here drives maintenance and writer tasks against _index. CognitiveIndex.Dispose
-        // tears down the per-namespace ReaderWriterLockSlim instances and documents that the caller
-        // must quiesce in-flight work first, so a pass still holding a lock makes it throw
-        // SynchronizationLockException.
-        //
-        // That matters on the failure path: when a test's drain assertion fails it returns with
-        // those tasks still running, and the teardown exception would replace the assertion message
-        // — you lose the actual diagnosis and see a lock-disposal error instead. Every test in this
-        // class asserts its own drain, so tolerating it here hides nothing a passing run relies on.
-        try { _index.Dispose(); }
-        catch (SynchronizationLockException) { /* a failing test's own assertion is the real signal */ }
-
+        // A detected, uninterruptible deadlock must fail without disposing the index under it.
+        if (!_workers.IsQuiescent) return;
+        _index.Dispose();
         _persistence.Dispose();
         try { Directory.Delete(_dataPath, recursive: true); } catch { /* best-effort */ }
     }
-
-    // ── Helpers ────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Deterministic vector: a one-hot at position (i % dims). Produces valid
@@ -124,397 +114,130 @@ public class LockUpgradeRegressionTests : IDisposable
 
     // ── Test 1: RunConsolidationPass — cross-namespace independence ────────────
 
-    /// <summary>
-    /// Core regression: RunConsolidationPass on namespace A must not block
-    /// foreground writes to namespace B.
-    ///
-    /// Mechanism: if maintenance held a read lock on "ns-a" while calling
-    /// SetLifecycleState (which takes a write lock on the resolved namespace),
-    /// RWLS would deadlock. The snapshot pattern avoids this — GetAllInNamespace
-    /// returns a materialized List and releases the lock before iteration begins.
-    ///
-    /// Cross-ns independence means B writes must not block on A's maintenance,
-    /// because B's lock is completely independent of A's. We assert each
-    /// individual B write completes within a reasonable upper bound (the
-    /// 30 s outer deadline is the deadlock detector; the per-write threshold
-    /// is a generous CI-tolerant bound).
-    /// </summary>
-    [Fact]
-    public async Task ConsolidationPass_OnNsA_DoesNotBlockWritesToNsB()
+    // One dedicated worker per lane, not one blocking ThreadPool work item per write.
+    // Rejoin at every batch so maintenance and writers each make measured progress before
+    // another batch starts. Work counts, seed sizes and latency limits stay explicit.
+    private void RunBatches(int batches, params Action<int, CancellationToken>[] lanes)
     {
-        const int seedCount = 500;
-        const int bWriters = 100;
-        const int aWriters = 100;
-        const int dims = 64;
-
-        // Pre-seed both namespaces so GetAllInNamespace has real work.
-        SeedNamespace("ns-a", seedCount);
-        SeedNamespace("ns-b", seedCount);
-
-        // Synchronize: wait until all threads are ready before unleashing them.
-        using var startGate = new ManualResetEventSlim(false);
-
-        // ── Consolidation pass on ns-a (runs until it finishes) ───────────────
-        // NOTE: wrap each pass in try-catch because the randomized eigensolver
-        // can throw InvalidOperationException on numerical assertions when the
-        // graph is modified concurrently (the ConsolidationBackgroundService
-        // does the same). The lock-safety claim is "no deadlock", not "no
-        // transient numerical failure".
-        var maintenanceTask = Task.Run(() =>
+        var phase = new Barrier(lanes.Length);
+        var completed = new int[lanes.Length];
+        try
         {
-            startGate.Wait();
-            // Run multiple passes so the maintenance work overlaps with writers.
-            for (int pass = 0; pass < 3; pass++)
-            {
-                try { _lifecycle.RunConsolidationPass("ns-a", tenantId: ""); }
-                catch (InvalidOperationException) { /* eigensolver numerical noise under concurrent load — not a deadlock */ }
-            }
-        });
-
-        // ── ns-b writers: measure per-write latency ───────────────────────────
-        var bLatencies = new ConcurrentBag<long>();
-        var bTasks = Enumerable.Range(0, bWriters).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var sw = Stopwatch.StartNew();
-            _index.Upsert(new CognitiveEntry(
-                $"ns-b-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                "ns-b",
-                $"concurrent write {i}"));
-            sw.Stop();
-            bLatencies.Add(sw.ElapsedMilliseconds);
-        })).ToArray();
-
-        // ── ns-a writers: measure total completion time ───────────────────────
-        // ns-a writers will serialize with the maintenance pass (same namespace,
-        // same RWLS write lock on transitions) but must never deadlock.
-        var aLatencies = new ConcurrentBag<long>();
-        var aTasks = Enumerable.Range(0, aWriters).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var sw = Stopwatch.StartNew();
-            _index.Upsert(new CognitiveEntry(
-                $"ns-a-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                "ns-a",
-                $"concurrent write {i}"));
-            sw.Stop();
-            aLatencies.Add(sw.ElapsedMilliseconds);
-        })).ToArray();
-
-        // Release all threads simultaneously.
-        startGate.Set();
-
-        // Generous outer deadline: a deadlock manifests as a timeout.
-        var allTasks = Task.WhenAll(new[] { maintenanceTask }.Concat(bTasks).Concat(aTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
-
-        Assert.True(
-            ReferenceEquals(winner, allTasks),
-            "Test timed out after 60 s — this indicates a deadlock in the lock-upgrade path. " +
-            "If RunConsolidationPass holds a read lock on ns-a while calling SetLifecycleState " +
-            "(which acquires a write lock), RWLS will deadlock.");
-
-        await allTasks; // propagate exceptions if any
-
-        // ── Assertion 1: ns-b writes must each be fast (cross-ns independent) ─
-        // A value of ~0-5 ms is typical on dev machines; 10000 ms is a
-        // conservative bound that tolerates GitHub Actions runner CPU
-        // contention. The true deadlock signal is the 30 s outer timeout
-        // above; this per-write bound is a coarse "writes complete in
-        // bounded time" check.
-        var maxBLatency = bLatencies.DefaultIfEmpty(0).Max();
-        Assert.True(
-            maxBLatency < 10000,
-            $"ns-b write latency exceeded 10000 ms (max={maxBLatency} ms). " +
-            $"This suggests RunConsolidationPass is holding a cross-namespace lock " +
-            $"that blocks ns-b writers — cross-namespace operations should be fully independent.");
-
-        // ── Assertion 2: all ns-b and ns-a writes completed (no lost updates) ─
-        Assert.Equal(bWriters, _index.CountInNamespace("ns-b") - seedCount);
-
-        // ── Documentation: expected ns-a behavior ────────────────────────────
-        // ns-a writes serialize with the maintenance pass under each entry's
-        // per-namespace write lock. This is expected serialization, not deadlock.
-        // Writes should still complete within the 30 s outer deadline above.
-        // We verify forward progress: all aWriters entries must be present.
-        Assert.Equal(aWriters, _index.CountInNamespace("ns-a") - seedCount);
-    }
-
-    // ── Test 2: RunDecayCycle — cross-namespace independence ──────────────────
-
-    /// <summary>
-    /// Same structural test as above but for RunDecayCycle. The decay cycle
-    /// calls SetActivationEnergyAndState per entry (write lock per entry), so
-    /// the same lock-upgrade risk exists if the snapshot-then-release pattern
-    /// were ever broken.
-    /// </summary>
-    [Fact]
-    public async Task DecayCycle_OnNsA_DoesNotBlockWritesToNsB()
-    {
-        const int seedCount = 500;
-        const int bWriters = 100;
-        const int dims = 64;
-
-        SeedNamespace("ns-decay-a", seedCount);
-        SeedNamespace("ns-decay-b", seedCount);
-
-        using var startGate = new ManualResetEventSlim(false);
-
-        var maintenanceTask = Task.Run(() =>
-        {
-            startGate.Wait();
-            for (int pass = 0; pass < 4; pass++)
-                _lifecycle.RunDecayCycle("ns-decay-a", tenantId: "");
-        });
-
-        var bLatencies = new ConcurrentBag<long>();
-        var bTasks = Enumerable.Range(0, bWriters).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var sw = Stopwatch.StartNew();
-            _index.Upsert(new CognitiveEntry(
-                $"ns-decay-b-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                "ns-decay-b",
-                $"concurrent write {i}"));
-            sw.Stop();
-            bLatencies.Add(sw.ElapsedMilliseconds);
-        })).ToArray();
-
-        startGate.Set();
-
-        var allTasks = Task.WhenAll(new[] { maintenanceTask }.Concat(bTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
-
-        Assert.True(
-            ReferenceEquals(winner, allTasks),
-            "Test timed out after 60 s — deadlock in RunDecayCycle lock path.");
-
-        await allTasks;
-
-        var maxBLatency = bLatencies.DefaultIfEmpty(0).Max();
-        Assert.True(
-            maxBLatency < 10000,
-            $"ns-decay-b write latency exceeded 10000 ms (max={maxBLatency} ms). " +
-            $"Cross-namespace independence violated by RunDecayCycle.");
-    }
-
-    // ── Test 3: AutoLinkScanner.Scan — lock independence ─────────────────────
-
-    /// <summary>
-    /// AutoLinkScanner.Scan calls GetAllInNamespace (read lock → snapshot →
-    /// release) then writes only to KnowledgeGraph (its own separate lock).
-    /// No write-back to CognitiveIndex happens during the scan, so there is zero
-    /// risk of lock-upgrade; this test confirms no regression is introduced.
-    /// </summary>
-    [Fact]
-    public async Task AutoLinkScan_DoesNotBlockCognitiveIndexWrites()
-    {
-        const int seedCount = 200;
-        const int writers = 50;
-        const int dims = 64;
-
-        SeedNamespace("ns-autolink", seedCount);
-
-        var duplicateDetector = new McpEngramMemory.Core.Services.Intelligence.DuplicateDetector();
-        var scanner = new AutoLinkScanner(_index, _graph, duplicateDetector);
-
-        using var startGate = new ManualResetEventSlim(false);
-
-        var scanTask = Task.Run(() =>
-        {
-            startGate.Wait();
-            for (int i = 0; i < 3; i++)
-                scanner.Scan("ns-autolink", threshold: null, maxNewEdges: null, tenantId: "");
-        });
-
-        var latencies = new ConcurrentBag<long>();
-        var writerTasks = Enumerable.Range(0, writers).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var sw = Stopwatch.StartNew();
-            _index.Upsert(new CognitiveEntry(
-                $"ns-autolink-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                "ns-autolink",
-                $"writer {i}"));
-            sw.Stop();
-            latencies.Add(sw.ElapsedMilliseconds);
-        })).ToArray();
-
-        startGate.Set();
-
-        var allTasks = Task.WhenAll(new[] { scanTask }.Concat(writerTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
-
-        Assert.True(
-            ReferenceEquals(winner, allTasks),
-            "Test timed out after 60 s — AutoLinkScanner is blocking CognitiveIndex writes.");
-
-        await allTasks;
-
-        // AutoLinkScanner only holds a read lock briefly (snapshot phase), so
-        // concurrent upserts to the same namespace should complete quickly.
-        // 10000 ms is the conservative bound (tolerates CI CPU contention on
-        // GitHub Actions; the true deadlock signal is the 30 s outer timeout).
-        var maxLatency = latencies.DefaultIfEmpty(0).Max();
-        Assert.True(
-            maxLatency < 10000,
-            $"ns-autolink write latency exceeded 10000 ms (max={maxLatency} ms).");
-    }
-
-    // ── Test 4: AccretionScanner.ScanNamespace — lock independence ────────────
-
-    /// <summary>
-    /// AccretionScanner.ScanNamespace calls GetAllInNamespace (snapshot) then
-    /// uses its own internal ReaderWriterLockSlim (_lock) independently. No
-    /// CognitiveIndex write lock is held during the DBSCAN computation or during
-    /// _lock operations. Cross-ns writes and same-ns writes must make progress.
-    /// </summary>
-    [Fact]
-    public async Task AccretionScan_DoesNotBlockCognitiveIndexWrites()
-    {
-        const int seedCount = 300;
-        const int bWriters = 100;
-        const int dims = 64;
-
-        // Seed with LTM entries so DBSCAN has candidates to scan.
-        for (int i = 0; i < seedCount; i++)
-        {
-            var entry = new CognitiveEntry(
-                $"ns-accretion-{i:D4}",
-                MakeVector(i, dims),
-                "ns-accretion",
-                $"ltm seed {i}",
-                lifecycleState: "ltm");
-            _index.Upsert(entry);
+            _workers.Run(TimeSpan.FromSeconds(60), lanes.Select((lane, i) =>
+                (Action<CancellationToken>)(token =>
+                {
+                    for (int batch = 0; batch < batches; batch++)
+                    {
+                        phase.SignalAndWait(token);
+                        token.ThrowIfCancellationRequested();
+                        lane(batch, token);
+                        completed[i]++;
+                    }
+                })).ToArray());
+            Assert.All(completed, count => Assert.Equal(batches, count));
         }
-        SeedNamespace("ns-accretion-b", seedCount);
-
-        var accretion = new McpEngramMemory.Core.Services.Intelligence.AccretionScanner(_index);
-
-        using var startGate = new ManualResetEventSlim(false);
-
-        var scanTask = Task.Run(() =>
+        finally
         {
-            startGate.Wait();
-            for (int i = 0; i < 2; i++)
-                accretion.ScanNamespace("ns-accretion", tenantId: "", epsilon: 0.15f, minPoints: 3);
-        });
-
-        var bLatencies = new ConcurrentBag<long>();
-        var bTasks = Enumerable.Range(0, bWriters).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var sw = Stopwatch.StartNew();
-            _index.Upsert(new CognitiveEntry(
-                $"ns-accretion-b-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                "ns-accretion-b",
-                $"concurrent write {i}"));
-            sw.Stop();
-            bLatencies.Add(sw.ElapsedMilliseconds);
-        })).ToArray();
-
-        startGate.Set();
-
-        var allTasks = Task.WhenAll(new[] { scanTask }.Concat(bTasks));
-        var winner = await Task.WhenAny(allTasks, Task.Delay(TimeSpan.FromSeconds(60)));
-
-        Assert.True(
-            ReferenceEquals(winner, allTasks),
-            "Test timed out after 60 s — AccretionScanner is blocking CognitiveIndex writes.");
-
-        await allTasks;
-
-        var maxBLatency = bLatencies.DefaultIfEmpty(0).Max();
-        Assert.True(
-            maxBLatency < 10000,
-            $"ns-accretion-b write latency exceeded 10000 ms (max={maxBLatency} ms). " +
-            $"AccretionScanner should not interfere with cross-namespace writes.");
+            if (_workers.IsQuiescent) phase.Dispose();
+        }
     }
 
-    // ── Test 5: Deadlock stress — all maintenance passes, both namespaces ─────
-
-    /// <summary>
-    /// Stress test that runs all four maintenance pass types concurrently against
-    /// two namespaces while foreground writers hammer both. Any deadlock will
-    /// cause the outer 30 s deadline to trigger.
-    ///
-    /// This is the broadest regression guard: if any future refactor introduces
-    /// a held-read + write-attempt pattern, this test will deadlock and fail.
-    /// </summary>
-    [Fact]
-    public async Task AllMaintenancePasses_ConcurrentWithWrites_NoDeadlock()
+    private Action<int, CancellationToken> Writer(string ns, int count, int batches, int seedCount)
     {
-        const int seedCount = 200;
-        const int dims = 64;
+        var latencies = new List<long>(); // only this lane writes; assertions follow its last batch
+        return (batch, token) =>
+        {
+            for (int i = batch; i < count; i += batches)
+            {
+                token.ThrowIfCancellationRequested();
+                var elapsed = Stopwatch.StartNew();
+                _index.Upsert(new CognitiveEntry($"{ns}-new-{i:D4}", MakeVector(i + seedCount), ns,
+                    $"concurrent write {i}"));
+                latencies.Add(elapsed.ElapsedMilliseconds);
+            }
+            if (batch == batches - 1)
+            {
+                Assert.Equal(count, latencies.Count);
+                Assert.True(latencies.Max() < 10000,
+                    $"{ns} write latency exceeded 10000 ms (max={latencies.Max()} ms).");
+                Assert.Equal(seedCount + count, _index.CountInNamespace(ns));
+            }
+        };
+    }
 
-        SeedNamespace("stress-a", seedCount);
-        SeedNamespace("stress-b", seedCount);
+    private void Decay(string ns)
+    {
+        var result = _lifecycle.RunDecayCycle(ns, tenantId: "");
+        Assert.Empty(result.FailedNamespaces ?? Array.Empty<string>());
+        Assert.True(result.ProcessedCount > 0, "decay must process entries, not merely return");
+    }
 
-        // Seed with LTM entries for AccretionScanner
-        for (int i = 0; i < seedCount; i++)
-            _index.Get($"stress-a-{i:D4}")!.LifecycleState = "ltm";
+    private void Consolidate(string ns)
+    {
+        var result = _lifecycle.RunConsolidationPass(ns, tenantId: "");
+        Assert.Empty(result.FailedNamespaces ?? Array.Empty<string>());
+        Assert.True(result.ProcessedEntries > 0, "consolidation must process entries, not silently fail or skip");
+    }
 
-        var duplicateDetector = new McpEngramMemory.Core.Services.Intelligence.DuplicateDetector();
-        var autoLink = new AutoLinkScanner(_index, _graph, duplicateDetector);
+    [Fact]
+    public void ConsolidationPass_OnNsA_DoesNotBlockWritesToNsB()
+    {
+        SeedNamespace("ns-a", 500);
+        SeedNamespace("ns-b", 500);
+        RunBatches(3, (_, _) => Consolidate("ns-a"),
+            Writer("ns-b", 100, 3, 500), Writer("ns-a", 100, 3, 500));
+    }
+
+    [Fact]
+    public void DecayCycle_OnNsA_DoesNotBlockWritesToNsB()
+    {
+        SeedNamespace("ns-decay-a", 500);
+        SeedNamespace("ns-decay-b", 500);
+        RunBatches(4, (_, _) => Decay("ns-decay-a"), Writer("ns-decay-b", 100, 4, 500));
+    }
+
+    [Fact]
+    public void AutoLinkScan_DoesNotBlockCognitiveIndexWrites()
+    {
+        SeedNamespace("ns-autolink", 200);
+        var scanner = new AutoLinkScanner(_index, _graph,
+            new McpEngramMemory.Core.Services.Intelligence.DuplicateDetector());
+        RunBatches(3, (_, _) => Assert.True(scanner.Scan("ns-autolink", threshold: null,
+            maxNewEdges: null, tenantId: "").ScannedEntries > 0), Writer("ns-autolink", 50, 3, 200));
+    }
+
+    [Fact]
+    public void AccretionScan_DoesNotBlockCognitiveIndexWrites()
+    {
+        for (int i = 0; i < 300; i++)
+            _index.Upsert(new CognitiveEntry($"ns-accretion-{i:D4}", MakeVector(i), "ns-accretion",
+                $"ltm seed {i}", lifecycleState: "ltm"));
+        SeedNamespace("ns-accretion-b", 300);
+        var scanner = new McpEngramMemory.Core.Services.Intelligence.AccretionScanner(_index);
+        RunBatches(2, (_, _) => Assert.True(scanner.ScanNamespace("ns-accretion", tenantId: "",
+            epsilon: 0.15f, minPoints: 3).ScannedCount > 0), Writer("ns-accretion-b", 100, 2, 300));
+    }
+
+    [Fact]
+    public void AllMaintenancePasses_ConcurrentWithWrites_NoDeadlock()
+    {
+        SeedNamespace("stress-a", 200);
+        SeedNamespace("stress-b", 200);
+        foreach (var entry in _index.GetAllInNamespace("stress-b", tenantId: ""))
+            _index.SetLifecycleState(entry.Id, "ltm", "stress-b", tenantId: "");
+        var autoLink = new AutoLinkScanner(_index, _graph,
+            new McpEngramMemory.Core.Services.Intelligence.DuplicateDetector());
         var accretion = new McpEngramMemory.Core.Services.Intelligence.AccretionScanner(_index);
 
-        using var startGate = new ManualResetEventSlim(false);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-
-        // Maintenance tasks — run until cancellation
-        Task MaintenanceLoop(Func<bool> body) => Task.Run(() =>
-        {
-            startGate.Wait();
-            while (!cts.IsCancellationRequested)
-                body();
-        });
-
-        var maintenance = new[]
-        {
-            MaintenanceLoop(() => { _lifecycle.RunDecayCycle("stress-a", tenantId: ""); return true; }),
-            MaintenanceLoop(() => { _lifecycle.RunConsolidationPass("stress-a", tenantId: ""); return true; }),
-            MaintenanceLoop(() => { autoLink.Scan("stress-b", threshold: null, maxNewEdges: null, tenantId: ""); return true; }),
-            MaintenanceLoop(() => { accretion.ScanNamespace("stress-b", tenantId: ""); return true; }),
-        };
-
-        // Foreground writers to both namespaces
-        var writers = Enumerable.Range(0, 200).Select(i => Task.Run(() =>
-        {
-            startGate.Wait();
-            var ns = (i % 2 == 0) ? "stress-a" : "stress-b";
-            _index.Upsert(new CognitiveEntry(
-                $"stress-new-{i:D4}",
-                MakeVector(i + seedCount, dims),
-                ns,
-                $"stress write {i}"));
-        })).ToArray();
-
-        startGate.Set();
-        await Task.WhenAll(writers); // foreground writers must all complete
-
-        cts.Cancel(); // stop maintenance loops
-
-        // A loop only observes cancellation between iterations, and one iteration is a full pass
-        // over 200 entries — under CI contention that comfortably outruns a few seconds. The old
-        // 5 s budget was also never enforced: its result was assigned and dropped, so the test
-        // returned while maintenance still held per-namespace locks, and teardown then died with
-        // SynchronizationLockException instead of reporting anything useful. Use the same 60 s
-        // deadline as the rest of this class, and actually assert it.
-        var allMaintenance = Task.WhenAll(maintenance);
-        var winner = await Task.WhenAny(allMaintenance, Task.Delay(TimeSpan.FromSeconds(60)));
-
-        Assert.True(
-            ReferenceEquals(winner, allMaintenance),
-            "Maintenance passes did not exit within 60 s of cancellation — this indicates a " +
-            "deadlock in the lock-upgrade path rather than merely slow progress.");
-
-        await allMaintenance; // propagate exceptions if any
-
-        Assert.Equal(200, writers.Count(t => t.IsCompletedSuccessfully));
+        // Every maintenance lane completes two passes, instead of running an unbounded loop
+        // until 200 queued writer tasks happen to get scheduled. Both namespaces get 100 writes.
+        RunBatches(2,
+            (_, _) => Decay("stress-a"),
+            (_, _) => Consolidate("stress-a"),
+            (_, _) => Assert.True(autoLink.Scan("stress-b", threshold: null,
+                maxNewEdges: null, tenantId: "").ScannedEntries > 0),
+            (_, _) => Assert.True(accretion.ScanNamespace("stress-b", tenantId: "").ScannedCount > 0),
+            Writer("stress-a", 100, 2, 200),
+            Writer("stress-b", 100, 2, 200));
     }
 }

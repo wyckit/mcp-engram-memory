@@ -34,17 +34,20 @@ public sealed class SqlServerStorageProvider : IStorageProvider
     private readonly ILogger<SqlServerStorageProvider>? _logger;
     private bool _disposed;
 
-    private readonly Dictionary<string, (Timer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
+    // Internal clock seam for deterministic queued-callback regression tests.
+    internal TimeProvider TimerProvider { get; init; } = TimeProvider.System;
+
+    private readonly Dictionary<string, (ITimer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
 
     private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts = new();
     private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes = new();
-    private readonly Dictionary<string, Timer> _incrementalTimers = new();
+    private readonly Dictionary<string, ITimer> _incrementalTimers = new();
 
-    private Timer? _pendingEdgeTimer;
+    private ITimer? _pendingEdgeTimer;
     private Func<List<GraphEdge>>? _pendingEdgeProvider;
-    private Timer? _pendingClusterTimer;
+    private ITimer? _pendingClusterTimer;
     private Func<List<SemanticCluster>>? _pendingClusterProvider;
-    private Timer? _pendingDecayConfigTimer;
+    private ITimer? _pendingDecayConfigTimer;
     private Func<Dictionary<string, DecayConfig>>? _pendingDecayConfigProvider;
 
     public SqlServerStorageProvider(
@@ -483,7 +486,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             if (_pendingNsSaves.TryGetValue(ns, out var existing))
                 existing.Timer.Dispose();
 
-            var timer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 // CAPTURE AND WRITE both inside the flush gate: capturing outside let this
                 // callback hold an older snapshot at the gate while a newer flush committed,
@@ -494,7 +498,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     Func<NamespaceData>? provider = null;
                     lock (_timerLock)
                     {
-                        if (_pendingNsSaves.TryGetValue(ns, out var entry))
+                        if (_pendingNsSaves.TryGetValue(ns, out var entry)
+                            && ReferenceEquals(entry.Timer, timer))
                         {
                             provider = entry.DataProvider;
                             entry.Timer.Dispose();
@@ -585,8 +590,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
         if (_incrementalTimers.TryGetValue(ns, out var existing))
             existing.Dispose();
 
-        Timer? selfRef = null;
-        selfRef = new Timer(_ =>
+        ITimer? selfRef = null;
+        selfRef = TimerProvider.CreateTimer(_ =>
         {
             // The WHOLE capture-and-write runs under the flush gate: a TryFlush interleaving
             // between this callback's capture and its commit could otherwise retain a batch
@@ -600,6 +605,10 @@ public sealed class SqlServerStorageProvider : IStorageProvider
 
                 lock (_timerLock)
                 {
+                    // Validate ownership BEFORE taking the batch, not just before removal.
+                    if (!_incrementalTimers.TryGetValue(ns, out var current)
+                        || !ReferenceEquals(current, selfRef)) return;
+
                     if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
                     {
                         upserts = new(u);
@@ -610,8 +619,8 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                         deletes = new(d);
                         d.Clear();
                     }
-                    if (_incrementalTimers.TryGetValue(ns, out var current) && ReferenceEquals(current, selfRef))
-                        _incrementalTimers.Remove(ns);
+                    current.Dispose();
+                    _incrementalTimers.Remove(ns);
                 }
 
                 if (!WriteIncrementalChanges(ns, upserts, deletes))
@@ -700,13 +709,18 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             if (_disposed) return;
             _pendingEdgeTimer?.Dispose();
             _pendingEdgeProvider = dataProvider;
-            _pendingEdgeTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 lock (_flushGate)
                 {
                     Func<List<GraphEdge>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingEdgeTimer, timer)) return;
+
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingEdgeTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -735,6 +749,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     }
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingEdgeTimer = timer;
         }
     }
 
@@ -745,13 +760,18 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             if (_disposed) return;
             _pendingClusterTimer?.Dispose();
             _pendingClusterProvider = dataProvider;
-            _pendingClusterTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 lock (_flushGate)
                 {
                     Func<List<SemanticCluster>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingClusterTimer, timer)) return;
+
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingClusterTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -780,6 +800,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     }
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingClusterTimer = timer;
         }
     }
 
@@ -1021,13 +1042,18 @@ public sealed class SqlServerStorageProvider : IStorageProvider
             if (_disposed) return;
             _pendingDecayConfigTimer?.Dispose();
             _pendingDecayConfigProvider = dataProvider;
-            _pendingDecayConfigTimer = new Timer(_ =>
+            ITimer? timer = null;
+            timer = TimerProvider.CreateTimer(_ =>
             {
                 lock (_flushGate)
                 {
                     Func<Dictionary<string, DecayConfig>>? provider;
                     lock (_timerLock)
                     {
+                        // A disposed timer may already have a callback queued. Only the
+                        // current timer owns this slot (including any deferral/rearm).
+                        if (!ReferenceEquals(_pendingDecayConfigTimer, timer)) return;
+
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingDecayConfigTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -1062,6 +1088,7 @@ public sealed class SqlServerStorageProvider : IStorageProvider
                     }
                 }
             }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            _pendingDecayConfigTimer = timer;
         }
     }
 
