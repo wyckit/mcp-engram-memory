@@ -210,6 +210,49 @@ continuations, while checking selected-only access/archive behavior and opt-outs
 Existing missing-answer, original recall, broad coverage and contradiction/resolution
 fixtures and gates are retained without relabeling or lowering floors.
 
+### Non-answer evidence and populated experts
+
+For supported factual questions, a matching topic alone is insufficient when the text
+explicitly defers the answer. Predicate-bound checks remove clauses such as "endpoint
+is documented in the handbook", "owner is unknown", "retention is pending confirmation"
+and `endpoint: TBD` before testing the remaining evidence. They also recognize explicit
+`see`/`consult`/`refer to` pointers. Subject lists such as "endpoint path and port" remain
+together; an unrelated unknown clause does not discard a separate factual clause.
+
+Scope checks use the original statement, so removal cannot erase a conflicting project
+or environment. Conjoined project subjects are checked too, while ordinary action words
+such as "approves" are not treated as project names. Actual values alongside references,
+same-scope continuations, explanations, and questions about where documentation is kept
+remain eligible. Asking for a *documented fact* still requires more than a document pointer.
+Historical/comparison queries and the existing `rerank: false` / `summaryFirst: true`
+opt-outs keep their behavior.
+
+The existing bounded candidate retry, archive recovery, graph filtering and expert fallback
+all consume the same evidence check. A populated expert with only rejected notes therefore
+falls through to the next expert or authorized broadcast, without recording access to the
+notes or resurrecting them. Explicit namespaces never broaden, and identified callers
+retain their tenant/namespace-authorized path. No new routing algorithm, embedding call,
+threshold, MCP input or response field is introduced.
+
+`recall-non-answer-v1.json` freezes the six post-#43 assessment cases. Real ONNX/default
+recall uses the unchanged original 52 memories and six fixed personas, with reference-only
+notes in the overlapping specialists. Available answers, absent answers and answers supplied
+within the same note run on direct, broadcast and populated-expert routes, before and after
+persistence restart: 108 observations per framework. Reports are
+`recall-realistic-non-answer-net*.json` and are uploaded by the existing CI artifact rule.
+The original and all prior supplemental fixtures, labels and regression floors remain intact.
+
+Against merged PR #43, populated-expert hits for available answers improve from **0/12 to
+12/12** (six cases with and without restart). Direct/broadcast hits remain **24/24**;
+missing-answer abstentions improve from **0/36 to 36/36**; answers supplied within the
+same reference note remain **36/36** across routes. Reference-only notes are excluded
+from the available-answer results as well, rather than merely ranked below the real answer.
+
+This remains bounded English lexical filtering, not semantic entailment or a guarantee that
+every passing statement answers the question. Unrecognized non-answer phrasing and incomplete
+facts can still pass; these authored cases measure the stated failure mode, not production
+answer accuracy. Broader noisy-corpus and scale validation remain separate work.
+
 ### Hybrid-search filter enforcement
 
 Keyword candidates must pass the requested lifecycle and category filters before entering

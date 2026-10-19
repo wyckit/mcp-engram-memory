@@ -13,6 +13,8 @@ tools with `ConstitutionMcpFilter`; embedded hosts compose the same Core service
 The composite `recall` tool uses one retrieval pipeline for direct, expert, and broadcast routes.
 When automatic expert routing yields no eligible evidence, it tries the remaining candidates
 in its three-profile window, then falls back to authorized broadcast using the same query embedding.
+For supported factual questions, explicit non-answer notes (such as an unknown value or a pointer
+to a handbook) do not establish eligible evidence and cannot stop that fallback by themselves.
 See [recall route semantics and evaluation](recall-evaluation.md) for option behavior and quality checks.
 
 ### Governance, Knowledge, Planning, and Assets

@@ -19,7 +19,8 @@ internal sealed partial class RecallQueryEvidence
         "retention retained responsible responsibility for of to from with in at by its his her it this that " +
         "fields included period quickly wait take keep nightly night rto url http qa uat currency jitter deadline " +
         "what which who where when why how is are do does did must should can could would will may i we you our their " +
-        "set get use return run restart archived after before since during " +
+        "set get use uses return returns run runs restart archived after before since during " +
+        "own owns approve approves cover covers " +
         "january february march april may june july august september october november december").Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, string> Environments = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -37,12 +38,15 @@ internal sealed partial class RecallQueryEvidence
     private readonly bool _owner;
     private readonly bool _backupSchedule;
     private readonly bool _recoveryDuration;
+    private readonly bool _rejectNonAnswers;
+    private readonly bool _referenceQuestion;
 
     private RecallQueryEvidence(HashSet<string> names, HashSet<string> environments, HashSet<string> focus,
-        bool owner, bool backupSchedule, bool recoveryDuration)
+        bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion)
     {
         (_names, _environments, _focus, _owner) = (names, environments, focus, owner);
         (_backupSchedule, _recoveryDuration) = (backupSchedule, recoveryDuration);
+        (_rejectNonAnswers, _referenceQuestion) = (rejectNonAnswers, referenceQuestion);
         // Shared project/resource words cannot substitute for a requested attribute.
         _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency"))
             .ToHashSet(StringComparer.Ordinal);
@@ -79,7 +83,7 @@ internal sealed partial class RecallQueryEvidence
         return focus.Count == 0 ? null : new(names, environments, focus,
             query.TrimStart().StartsWith("who ", StringComparison.OrdinalIgnoreCase) && focus.Contains("own"),
             query.TrimStart().StartsWith("when ", StringComparison.OrdinalIgnoreCase) && focus.Contains("backup"),
-            recoveryDuration);
+            recoveryDuration, FactualQuestion().IsMatch(query), ReferenceQuestion().IsMatch(query));
     }
 
     private static string NormalizeQuestion(string query)
@@ -122,19 +126,57 @@ internal sealed partial class RecallQueryEvidence
             // another explicit name or supply an unstated environment.
             if (_names.Any(n => !effectiveNames.Contains(n) &&
                 (!namespaceWords.Contains(n) || otherName || !ImplicitSubject().IsMatch(statement)))) continue;
-            var terms = Terms(statement);
-            if (RegionValue().IsMatch(statement)) terms.Add("region");
-            if (CurrencyValue().IsMatch(statement)) terms.Add("currency");
+            // Scope is checked against the ORIGINAL statement above. Removing an
+            // unrelated non-answer clause must never remove a contrary project or
+            // environment and turn its remaining value into an in-scope answer.
+            string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement) : statement;
+            var terms = Terms(answerText);
+            if (RegionValue().IsMatch(answerText)) terms.Add("region");
+            if (CurrencyValue().IsMatch(answerText)) terms.Add("currency");
             if (!_attributes.IsSubsetOf(terms)) continue;
             if (_owner && !terms.Contains("own")) continue;
             // A restore rehearsal is not a backup schedule; a drill's frequency is
             // not a recovery duration. Shared resource words alone cannot answer either.
-            if (_backupSchedule && (!terms.Contains("backup") || !Schedule().IsMatch(statement))) continue;
-            if (_recoveryDuration && (!terms.Contains("recover") || !Duration().IsMatch(statement) ||
-                (!terms.Contains("objective") && !RecoverWithin().IsMatch(statement)))) continue;
+            if (_backupSchedule && (!terms.Contains("backup") || !Schedule().IsMatch(answerText))) continue;
+            if (_recoveryDuration && (!terms.Contains("recover") || !Duration().IsMatch(answerText) ||
+                (!terms.Contains("objective") && !RecoverWithin().IsMatch(answerText)))) continue;
             if (_focus.Count(terms.Contains) * 2 >= _focus.Count) return true;
         }
         return false;
+    }
+
+    private string WithoutNonAnswerClauses(string statement) => string.Join(" ",
+        EvidenceClauses(statement).Where(clause =>
+        {
+            // Predicate-bound exclusions, not a blacklist of words such as
+            // "unknown" anywhere in an otherwise useful explanation or value.
+            if (MissingValue().IsMatch(clause) || DeferredValue().IsMatch(clause)) return false;
+            if (_referenceQuestion) return true;
+            if (ReferenceInstruction().IsMatch(clause)) return false;
+            var reference = ReferencePredicate().Match(clause);
+            // "is documented in the handbook as /ready" supplies a value;
+            // "is documented in /runbooks/ready" only points to a document.
+            return !reference.Success || ReferenceValue().IsMatch(clause[(reference.Index + reference.Length)..]);
+        }));
+
+    private static IEnumerable<string> EvidenceClauses(string statement)
+    {
+        int start = 0, scanned = 0;
+        bool hasPredicate = false;
+        foreach (Match boundary in Clauses().Matches(statement))
+        {
+            // Scan each fragment once, even for a long subject list with no verb.
+            string fragment = statement[scanned..boundary.Index];
+            hasPredicate |= ClausePredicate().IsMatch(fragment) || MissingValue().IsMatch(fragment);
+            scanned = boundary.Index + boundary.Length;
+            // Do not split a subject list ("endpoint path and port are documented")
+            // into a dangling topic-only prefix that would pass the lexical guard.
+            if (!hasPredicate) continue;
+            yield return statement[start..boundary.Index];
+            start = scanned;
+            hasPredicate = false;
+        }
+        yield return statement[start..];
     }
 
     private static HashSet<string> EnvironmentTerms(string text) => EnvironmentWords().Matches(text)
@@ -162,6 +204,24 @@ internal sealed partial class RecallQueryEvidence
     }).ToHashSet(StringComparer.Ordinal);
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
+    [GeneratedRegex(@"^\s*(?:(?:what|which|who|where|when)\b|how\s+(?:long|many|much|quickly|fast)\b)", Options)]
+    private static partial Regex FactualQuestion();
+    [GeneratedRegex(@"^\s*(?:where\b.*\b(?:documented|recorded|listed|specified)\s*[?.!]*\s*$|(?:which|what)\s+(?:document|handbook|runbook|checklist|reference)\b)", Options)]
+    private static partial Regex ReferenceQuestion();
+    [GeneratedRegex(@",\s+|\s+(?:and|but|however|whereas)\s+", Options)]
+    private static partial Regex Clauses();
+    [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must)\s+\S+", Options)]
+    private static partial Regex ClausePredicate();
+    [GeneratedRegex(@"(?:\b(?:is|are|was|were|remains?|as)\s+(?:(?:currently|still)\s+)?|[:=]\s*)[<\[]?(?:TBD|TBC|unknown|undecided|unspecified|pending|not\s+(?:yet\s+)?(?:known|determined|decided|specified|documented|recorded|provided|available)|to\s+be\s+(?:determined|decided|confirmed|assigned))\b", Options)]
+    private static partial Regex MissingValue();
+    [GeneratedRegex(@"\b(?:(?:will|must|needs?\s+to|has\s+to|have\s+to)\s+be|(?:has|have)\s+not\s+(?:yet\s+)?been)\s+(?:determined|decided|confirmed|assigned|specified|documented|recorded|provided)\b", Options)]
+    private static partial Regex DeferredValue();
+    [GeneratedRegex(@"(?:^\s*|[:=]\s*)(?:see|consult|check|refer\s+to)\s+", Options)]
+    private static partial Regex ReferenceInstruction();
+    [GeneratedRegex(@"\b(?:is|are|was|were|remains?)\s+(?:only\s+)?(?:documented|recorded|listed|specified|described|detailed)\s+(?:in|at|under)\b", Options)]
+    private static partial Regex ReferencePredicate();
+    [GeneratedRegex(@"\bas\s+\S+", Options)]
+    private static partial Regex ReferenceValue();
     [GeneratedRegex(@"^\s*(?:what|which|who|where|when|why|how)\b\s*", Options)]
     private static partial Regex Question();
     [GeneratedRegex(@"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:tell|show)\s+me\s+", Options)]
@@ -200,7 +260,7 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ImplicitSubject();
     [GeneratedRegex(@"^\s*(?:the|this|it|its|before|after|namespace|context)\b", Options)]
     private static partial Regex Continuation();
-    [GeneratedRegex(@"(?:^\s*(?:the\s+)?|\b(?:for|of|to|about|from|with|set|use|get)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)\s+(?:production|prod|staging|stage|development|dev|testing|test|qa|uat|gateway|database|backups?|deployments?|endpoint|readiness|rollback|recovery|security|payment)\b", Options)]
+    [GeneratedRegex(@"(?:^\s*(?:the\s+)?|\b(?:for|of|to|about|from|with|set|use|get|and|but|however|whereas)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)\s+(?:production|prod|staging|stage|development|dev|testing|test|qa|uat|gateway|database|backups?|deployments?|endpoint|readiness|rollback|recovery|security|payment)\b", Options)]
     private static partial Regex CandidateSubjects();
     [GeneratedRegex(@"\b(?:production|staging|development|testing|prod|stage|dev|test|qa|uat)\b", Options)]
     private static partial Regex EnvironmentWords();
