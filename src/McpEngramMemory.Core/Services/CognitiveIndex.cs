@@ -1536,6 +1536,38 @@ public sealed class CognitiveIndex : IDisposable
     }
 
     /// <summary>
+    /// Last-resort recall recovery after approximate/top-k candidates fail evidence checks.
+    /// Filter before exact scoring/truncation so rejected neighbors cannot hide a source.
+    /// This is O(N) in one tenant/namespace, read-only, and never changes normal search.
+    /// </summary>
+    internal IReadOnlyList<CognitiveSearchResult> SearchEligible(SearchRequest request, Func<CognitiveEntry, bool> eligible)
+    {
+        if (request.Query is null || request.Query.Length == 0)
+            throw new ArgumentException("Query vector must not be null or empty.", nameof(request));
+        if (request.K <= 0) throw new ArgumentOutOfRangeException(nameof(request), "K must be positive.");
+        Tenancy.ValidatePartitionComponent(request.Namespace, nameof(request));
+        var key = new NsKey(Tenancy.Normalize(request.TenantId), request.Namespace);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        nsLock.EnterReadLock();
+        try
+        {
+            _store.EnsureLoaded(request.Namespace);
+            var entries = _store.GetNamespace(key);
+            if (entries is null) return [];
+            var states = request.IncludeStates ?? new HashSet<string> { "stm", "ltm" };
+            // No ANN or quantized screening in this recovery pass. Ineligible records
+            // cannot consume either candidate budget; existing vector thresholds apply.
+            var snapshot = entries.Values.Where(t => states.Contains(t.Entry.LifecycleState) &&
+                    (request.Category is null || request.Category == t.Entry.Category) &&
+                    t.Entry.Vector.Length == request.Query.Length && eligible(t.Entry))
+                .Select(t => (t.Entry, t.Norm, (QuantizedVector?)null)).ToList();
+            return _vectorSearch.Search(request.Query, snapshot, request.K, request.MinScore,
+                request.Category, states, request.SummaryFirst);
+        }
+        finally { nsLock.ExitReadLock(); }
+    }
+
+    /// <summary>
     /// Namespace-scoped k-nearest-neighbor search with two-stage Int8 screening pipeline.
     /// <paramref name="tenantId"/> is required and sits directly after the namespace so the
     /// tenant-qualified identity reads first; pass "" for the legacy partition.

@@ -49,14 +49,16 @@ public class RecallQuestionInterpretationTests
     }
 
     [Theory]
-    [InlineData("Please tell me what was Nectar staging readiness endpoint?")]
-    [InlineData("Can you tell me how Nectar staging and production readiness endpoints compare?")]
-    public void WrappedHistoricalAndComparisonRequestsKeepTheirOptOut(string query)
+    [InlineData("Please tell me what was Nectar staging readiness endpoint?", false)]
+    [InlineData("Please tell me what was Nectar production readiness endpoint?", true)]
+    [InlineData("Can you tell me how Nectar staging and production readiness endpoints compare?", true)]
+    public void WrappedHistoryAndComparisonsKeepContextWithinRequestedScope(string query, bool matches)
     {
         using var store = new RecallTestStore();
         store.Add("context", Ns, "Nectar production readiness endpoint is /prod.");
         var result = Assert.IsType<RecallResult>(store.Tools().Recall(query, Ns));
-        Assert.Single(result.Results);
+        if (matches) Assert.Single(result.Results);
+        else Assert.Empty(result.Results);
         Assert.Null(result.QueryEvidence);
     }
 

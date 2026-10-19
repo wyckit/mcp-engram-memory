@@ -68,8 +68,8 @@ jobs:
             10.0.x
       - name: Evaluate 1,000 and 5,000 memories
         run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter "Category=RecallScale" --logger "trx;LogFileName=recall-scale.trx"
-      - name: Check complete reports and summarize release blockers
-        run: python scripts/check-noisy-recall.py artifacts/recall-scale
+      - name: Require complete reports and zero declared recall blockers
+        run: python scripts/check-noisy-recall.py artifacts/recall-scale --release
       - name: Test report gate
         run: python -m unittest discover -s scripts/tests -p test_noisy_recall_gate.py
       - name: Upload scale evidence

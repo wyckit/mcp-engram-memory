@@ -41,8 +41,9 @@ Release blockers are any scope mismatch on an explicitly scoped question, an
 unsupported conflict resolution, or a miss/non-abstention on a query marked
 `critical` before measurement. Other novel paraphrase misses and incomplete broad
 coverage require triage. A strict release report gate must fail when blockers are
-present. Ordinary evaluation CI verifies execution, safety invariants and complete
-reports; it does not certify release readiness.
+present. Evaluation tests verify execution and safety invariants. Following the
+[candidate recovery and scope fixes](recall-candidate-recovery.md), scale CI also
+requires the strict report gate. It does not certify overall release readiness.
 
 Existing recall fixtures, thresholds and gates remain unchanged. Do not add a
 baseline that normalizes away failures found by this evaluation.
@@ -162,6 +163,6 @@ concrete follow-up for release-test reliability, not proof of a production lost 
 This PR preserves that test and its assertions. Retain the failed TRX even if later
 runs pass; investigate/fix the cutoff before treating release validation as reliable.
 
-Suggested next work: fix scoped candidate recovery and keep project/environment
-checks active for broad/history queries, then rerun these unchanged cases. Resolve
-the independent stress-test cutoff issue before the final release validation cycle.
+The [candidate recovery and scope follow-up](recall-candidate-recovery.md) addresses
+these recall blockers against the unchanged cases. The independent stress-test
+cutoff issue still needs resolution before the final release validation cycle.
