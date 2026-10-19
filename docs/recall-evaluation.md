@@ -39,6 +39,41 @@ The default remains false; the summary/source policy below applies with graph ex
 MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
 Recall adds an optional top-level `conflicts` diagnostic for supported unmarked disagreements.
 
+### Comparable broadcast scores
+
+For current-answer queries with hybrid search and reranking enabled, broadcast recalculates
+scores when more than one namespace contributes candidates. Each candidate uses the same
+blend of actual query cosine (60%) and token relevance (40%), including singleton namespace
+pools; queries with no lexical terms use cosine alone. Previously, a namespace taking the hybrid high-confidence shortcut returned cosine-based
+scores while another taking rank fusion returned much smaller RRF-based scores. Comparing
+those values directly could exclude the correct project's memories from the final budget.
+
+Calibration occurs after each namespace's retrieval, archive fallback, graph expansion and
+spectral selection. Those stages still determine the candidates; their local score boosts
+are not carried into the cross-namespace relevance comparison. Final status ordering and
+summary/source pairing still apply. The merge keeps namespace-qualified identities and the
+original search evidence when a memory also arrives through another namespace's graph.
+It does not widen permissions or the primary result budget. Direct/expert recall, single
+contributing namespace recall, raw search, vector-only search, historical/comparison intent
+and `rerank: false` retain their existing score behavior.
+
+Against merged PR #37 (`108504a1`), the unchanged 36-question corpus has no per-query
+regressions in Hit@5, Recall@5, source recall, MRR, nDCG or stale-top-answer rate. All 72
+direct/expert observations retain their IDs and quality metrics. Broadcast changes the
+returned IDs/order for 29 questions; four improve measured answer quality and the rest
+retain it. Overall broadcast MRR rises from **0.9199 to 0.9537**, Recall@5 from **0.9074
+to 0.9167**, source recall from **0.8981 to 0.9074**, and nDCG from **0.8857 to 0.9100**.
+Hit@5 remains 1.0 and stale-top-answer rate remains zero. No baseline or labels were changed.
+
+| Broadcast case | Before → after |
+|----------------|----------------|
+| `c06`, Atlas rollback approval | MRR 0.25 → 0.50; nDCG 0.4307 → 0.6309 |
+| `s01`, Engram cache invalidation | nDCG 0.8772 → 1.0000 |
+| `b03`, Engram caching | MRR 0.3333 → 0.50; nDCG 0.2346 → 0.2961 |
+| `b04`, Atlas retries | Recall@5 0.3333 → 0.6667; MRR 0.20 → 1.00; nDCG 0.1815 → 0.6714 |
+
+These are inspected regression cases, not a claim about unseen query quality.
+
 ## Summary and source selection
 
 An overview can link many unrelated facts. Its links do not establish that those facts form
@@ -296,7 +331,7 @@ following sentences into unconditional facts. Supported conditional, historical,
 modal, and ambiguous wording conservatively excludes the whole record.
 
 When the initial retrieval includes a supported claim, recall inspects a bounded relevance
-window in that same authorized namespace: requested `k + min(k, 32)` candidates, reusing
+window in that same authorized namespace: requested `k + min(max(k, 8), 32)` candidates, reusing
 existing vector/status overfetch when sufficient. Vector reranking retains its existing
 internal 2x overfetch. At most 64 evidence candidates per namespace, 32 selected primary
 hits, and 8 distinct conflict pairs are examined/reported. The original `minScore`, tenant,
@@ -443,7 +478,7 @@ Detection's existing retrieval/extraction bounds still apply. The read is not an
 atomic transaction across all memory and governance records; citations describe the
 versions checked during the call.
 
-### Resolution evaluation and retained retrieval limits
+### Resolution evaluation and candidate coverage
 
 `recall-resolution-v1.json` adds 26 inspected cases over the unchanged original 52-memory
 corpus, using real ONNX embeddings and actual governed publications. It covers settings,
@@ -454,19 +489,20 @@ environment mismatch and qualification. Named tenant principals exercise direct 
 authorized broadcast recall. Expert dispatch is intentionally disabled for these principals
 by the existing isolation policy; the original three-route evaluations remain unchanged.
 
-Of 24 positive query/route observations, **21 resolve**, and the other **3 retain retrieval
-misses**. All 28 negative observations remain unresolved. Every retrieved positive pair
-resolves to the expected ID with source citations. Primary IDs/scores match a run with the
-governed store unavailable. The misses are retained explicitly, not relabeled as successes:
+All **24 positive query/route observations resolve**, with **zero retrieval misses** and
+zero missed resolutions among visible pairs. All 28 negative observations remain unresolved.
+Every positive pair resolves to the expected ID with source citations. Primary IDs/scores
+match a run with the governed store unavailable: evidence resolution does not influence
+ranking. The three misses recorded in PR #37 are now required to pass at their original `k`:
 
-| Case | Route | Retained limitation |
+| Case | Route | Coverage fix |
 |------|-------|---------------------|
-| `multiple-claims`, `k: 5` | broadcast | Other-namespace results occupy the final result budget; neither Atlas claimant is selected. |
-| `restart`, `k: 1` | direct and broadcast | The claim and its matching source occupy the two-candidate evidence pool; the opposing claim is outside it. |
+| `multiple-claims`, `k: 5` | broadcast | Common-scale merge retains the Atlas facts instead of filling the budget with Boreal results. |
+| `restart`, `k: 1` | direct and broadcast | A larger bounded evidence window finds the opposing claim despite the matching source copy. Equivalent-claim anchors retain the original pair even when the uncited copy is the sole primary hit. |
 
-Wider companion cases (`multiple-claims-wide`, `k: 10`; `restart-wide`, `k: 5`) retrieve
-and resolve the same disagreements. These are known retrieval coverage limits, not a
-claim of 100% end-to-end resolution. The original 36 questions and both earlier conflict
+Wider companion cases (`multiple-claims-wide`, `k: 10`; `restart-wide`, `k: 5`) still retrieve
+and resolve the same disagreements. The known-miss allowance is removed; every fixture pair
+must surface, including negative controls that must remain unresolved. The original 36 questions and both earlier conflict
 supplements retain their labels and gates. New reports are
 `recall-realistic-resolution-net*.json`, included in the existing CI artifact. They report
 retrieval misses separately from missed resolutions of visible pairs and false resolutions,
@@ -478,6 +514,16 @@ private/foreign twins, corrupt or absent provenance/audit, bounds and cancellati
 connected conflicting support, internal contradictions, multiple supporting sources,
 archive behavior and optional dependency injection. This is an authored regression
 suite, not blind validation or a measure of open-domain factual accuracy.
+
+Candidate-coverage controls exercise mixed hybrid paths at different namespace sizes,
+singleton scoring, opt-outs, a noncontributing namespace, graph/search provenance,
+multiple copies, all three routes and restarts. Equivalent anchors only diagnose claims
+also expressed by a selected hit; unrelated facts elsewhere in an anchor are not pulled
+into the warning. Diagnostic-only anchors and alternatives do not receive access or
+lifecycle updates, and duplicates never count as votes. The evidence window and eight-pair
+cap remain bounded: sufficiently many copies or distant claims can still escape detection
+or leave a conflict unresolved. This fix closes the three measured misses, not every
+possible retrieval failure.
 
 ## Run and review
 

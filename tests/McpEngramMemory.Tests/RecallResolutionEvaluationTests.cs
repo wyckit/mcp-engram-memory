@@ -95,11 +95,7 @@ public class RecallResolutionEvaluationTests(ITestOutputHelper output)
         string path = Path.Combine(directory, $"recall-realistic-resolution-net{Environment.Version.Major}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(report, Json));
         output.WriteLine($"Resolution evaluation: {path}; resolved={report.Resolved}, retrieval misses={report.RetrievalMisses}, missed visible={report.MissedVisibleResolutions}, false={report.FalseResolutions}");
-        // Retain the initial k=1/5 misses instead of relabeling them as successful
-        // resolutions. Wider companion cases exercise the same facts with more context.
-        string[] knownRetrievalMisses = ["multiple-claims/broadcast", "restart/broadcast", "restart/direct"];
-        Assert.All(rows.Where(r => !r.ConflictSurfaced), r =>
-            Assert.Contains(r.Id + "/" + r.Route, knownRetrievalMisses));
+        Assert.All(rows, r => Assert.True(r.ConflictSurfaced, $"Retrieval miss: {r.Id}/{r.Route}"));
         Assert.All(rows.Where(r => r.ConflictSurfaced), r => Assert.Equal(r.ExpectedResolved, r.Resolved));
         Assert.All(rows.Where(r => !r.ConflictSurfaced), r => Assert.False(r.Resolved));
         Assert.All(rows, r => Assert.True(r.RankingUnchanged, $"Ranking changed: {r.Id}/{r.Route}"));
