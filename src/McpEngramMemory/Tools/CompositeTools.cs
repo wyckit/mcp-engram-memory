@@ -222,12 +222,13 @@ public sealed class CompositeTools
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
         try
         {
+        var queryEvidence = rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) ? RecallQueryEvidence.Parse(query) : null;
         var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode,
             rerank && RecallFreshness.PrefersCurrent(query),
-            hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
+            queryEvidence is null && hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
                 (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") &&
                 InferSpectralMode(query) == SpectralRetrievalMode.Broad && BroadRecallRanking.IsTopicQuery(query),
-            rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) ? RecallQueryEvidence.Parse(query) : null);
+            queryEvidence);
         if (ns is not null && !_access.CanRead(ns))
             return await CompleteRecallAsync("direct", ns, [], options,
                 $"No accessible memories in namespace '{ns}'.").ConfigureAwait(false);
