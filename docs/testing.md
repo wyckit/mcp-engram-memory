@@ -72,6 +72,8 @@ gaps; `scripts/check-noisy-recall.py <fresh-output-directory> --release` fails o
 predeclared release blockers even when the evaluation tests themselves pass.
 Scale CI now requires that strict gate. See [scoped candidate recovery](recall-candidate-recovery.md)
 for the fix, regression contract and remaining limitations.
+The [natural-question evidence correction](recall-natural-questions.md) adds
+regression assertions for six existing cases without changing the frozen labels.
 
 ## Tool profile count regression check
 

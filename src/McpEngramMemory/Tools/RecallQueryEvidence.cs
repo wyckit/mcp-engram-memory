@@ -38,17 +38,22 @@ internal sealed partial class RecallQueryEvidence
     private readonly bool _owner;
     private readonly bool _backupSchedule;
     private readonly bool _recoveryDuration;
+    private readonly bool _observedRecovery;
+    private readonly bool _explicitValue;
     private readonly bool _rejectNonAnswers;
     private readonly bool _referenceQuestion;
     private readonly bool _scopeOnly;
 
     private RecallQueryEvidence(HashSet<string> names, HashSet<string> environments, HashSet<string> focus,
-        bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion, bool scopeOnly = false)
+        bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion,
+        bool scopeOnly = false, bool observedRecovery = false)
     {
         (_names, _environments, _focus, _owner) = (names, environments, focus, owner);
         (_backupSchedule, _recoveryDuration) = (backupSchedule, recoveryDuration);
         (_rejectNonAnswers, _referenceQuestion) = (rejectNonAnswers, referenceQuestion);
         _scopeOnly = scopeOnly;
+        _observedRecovery = observedRecovery;
+        _explicitValue = focus.Contains("value") && !referenceQuestion;
         // Shared project/resource words cannot substitute for a requested attribute.
         _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency"))
             .ToHashSet(StringComparer.Ordinal);
@@ -96,17 +101,26 @@ internal sealed partial class RecallQueryEvidence
         if (focus.Contains("endpoint")) focus.ExceptWith(Terms("http probes call"));
         bool recoveryDuration = RecoveryObjective().IsMatch(query) ||
             (QuickRecovery().IsMatch(query) && focus.Contains("recover"));
+        bool observedRecovery = recoveryDuration && !RecoveryObjective().IsMatch(query) &&
+            ObservedRecoveryQuestion().IsMatch(query);
         if (recoveryDuration) focus.ExceptWith(Terms("time objective"));
         return focus.Count == 0 ? null : new(names, environments, focus,
             query.TrimStart().StartsWith("who ", StringComparison.OrdinalIgnoreCase) && focus.Contains("own"),
             query.TrimStart().StartsWith("when ", StringComparison.OrdinalIgnoreCase) && focus.Contains("backup"),
-            recoveryDuration, FactualQuestion().IsMatch(query), ReferenceQuestion().IsMatch(query));
+            recoveryDuration, FactualQuestion().IsMatch(query), ReferenceQuestion().IsMatch(query),
+            observedRecovery: observedRecovery);
     }
 
     private static string NormalizeQuestion(string query)
     {
         var request = RequestPrefix().Match(query);
         if (request.Success) query = query[request.Length..];
+        // Keep the condition for scope extraction, but separate it from the requested
+        // attribute. Dropping it would discard the only project/environment label.
+        var conditional = ConditionalQuestion().Match(query);
+        if (conditional.Success) query = conditional.Groups[2].Value + " when " + conditional.Groups[1].Value;
+        query = LooksAfter().Replace(query, "owns");
+        query = RollBack().Replace(query, "rollback");
         query = AtWhatTime().Replace(query, "When ");
         if (request.Success && !Question().IsMatch(query)) query = "What is " + query;
         // Preserve the requested timeout before stripping a contextual before/after tail.
@@ -119,11 +133,14 @@ internal sealed partial class RecallQueryEvidence
         var namespaceWords = Words().Matches(ns.Replace('_', ' ')).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var precedingNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var precedingEnvironments = new HashSet<string>();
+        HashSet<string> precedingTerms = [];
         bool scopeMatched = false;
         var statements = Statements().Split(text);
         if (_scopeOnly && statements.Length > 32) return false;
         foreach (string statement in statements.Take(32))
         {
+            var contextTerms = precedingTerms;
+            precedingTerms = [];
             if (Question().IsMatch(NormalizeQuestion(statement))) continue;
             var words = Words().Matches(statement).Select(m => m.Value).ToArray();
             var literals = words.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -161,6 +178,18 @@ internal sealed partial class RecallQueryEvidence
             // environment and turn its remaining value into an in-scope answer.
             string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement) : statement;
             var terms = Terms(answerText);
+            precedingTerms = terms;
+            if (_explicitValue)
+            {
+                // A rotation/activity note is not a value. A generic continuation
+                // can inherit its topic only after the original scope checks pass.
+                if (!ValueBinding().Matches(answerText).Any(m =>
+                    Terms(m.Groups[1].Value).Any(t => t == "value" || _focus.Contains(t)) &&
+                    !ValueActivity().IsMatch(answerText[m.Groups[2].Index..]))) continue;
+                terms = new(terms, StringComparer.Ordinal);
+                terms.Add("value");
+                if (ValueContinuation().IsMatch(answerText)) terms.UnionWith(contextTerms);
+            }
             if (RegionValue().IsMatch(answerText)) terms.Add("region");
             if (CurrencyValue().IsMatch(answerText)) terms.Add("currency");
             if (!_attributes.IsSubsetOf(terms)) continue;
@@ -169,7 +198,8 @@ internal sealed partial class RecallQueryEvidence
             // not a recovery duration. Shared resource words alone cannot answer either.
             if (_backupSchedule && (!terms.Contains("backup") || !Schedule().IsMatch(answerText))) continue;
             if (_recoveryDuration && (!terms.Contains("recover") || !Duration().IsMatch(answerText) ||
-                (!terms.Contains("objective") && !RecoverWithin().IsMatch(answerText)))) continue;
+                (_observedRecovery ? !ElapsedRecovery().IsMatch(answerText) :
+                    !terms.Contains("objective") && !RecoverWithin().IsMatch(answerText)))) continue;
             if (_focus.Count(terms.Contains) * 2 >= _focus.Count) return true;
         }
         return scopeMatched;
@@ -180,7 +210,8 @@ internal sealed partial class RecallQueryEvidence
         {
             // Predicate-bound exclusions, not a blacklist of words such as
             // "unknown" anywhere in an otherwise useful explanation or value.
-            if (MissingValue().IsMatch(clause) || DeferredValue().IsMatch(clause)) return false;
+            if (MissingValue().IsMatch(clause) || DeliberatelyMissingValue().IsMatch(clause) ||
+                DeferredValue().IsMatch(clause) || OmittedValue().IsMatch(clause)) return false;
             if (_referenceQuestion) return true;
             if (ReferenceInstruction().IsMatch(clause)) return false;
             var reference = ReferencePredicate().Match(clause);
@@ -215,7 +246,8 @@ internal sealed partial class RecallQueryEvidence
         .Select(m => Environments[m.Value]).ToHashSet();
 
     private static HashSet<string> Terms(string text) => BM25Index.Tokenize(
-        BackUp().Replace(RecoveryObjective().Replace(text, "recovery time objective"), "backup")).Select(t => t switch
+        RollBack().Replace(LooksAfter().Replace(BackUp().Replace(
+            RecoveryObjective().Replace(text, "recovery time objective"), "backup"), "owns"), "rollback")).Select(t => t switch
     {
         "owner" or "own" or "approv" or "approve" or "approval" or "respons" or "responsible" or "responsibility" => "own",
         "deploy" or "deployment" or "releas" or "release" => "deploy",
@@ -244,6 +276,10 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ClausePredicate();
     [GeneratedRegex(@"(?:\b(?:is|are|was|were|remains?|as)\s+(?:(?:currently|still)\s+)?|[:=]\s*)[<\[]?(?:TBD|TBC|unknown|undecided|unspecified|pending|not\s+(?:yet\s+)?(?:known|determined|decided|specified|documented|recorded|provided|available)|to\s+be\s+(?:determined|decided|confirmed|assigned))\b", Options)]
     private static partial Regex MissingValue();
+    [GeneratedRegex(@"\b(?:is|are|was|were)\s+(?:intentionally|deliberately)\s+not\s+(?:recorded|documented|provided|specified|available)\b", Options)]
+    private static partial Regex DeliberatelyMissingValue();
+    [GeneratedRegex(@"\b(?:does?|did)\s+not\s+(?:identify|name|specify|provide|record|state|include)\b", Options)]
+    private static partial Regex OmittedValue();
     [GeneratedRegex(@"\b(?:(?:will|must|needs?\s+to|has\s+to|have\s+to)\s+be|(?:has|have)\s+not\s+(?:yet\s+)?been)\s+(?:determined|decided|confirmed|assigned|specified|documented|recorded|provided)\b", Options)]
     private static partial Regex DeferredValue();
     [GeneratedRegex(@"(?:^\s*|[:=]\s*)(?:see|consult|check|refer\s+to)\s+", Options)]
@@ -256,6 +292,18 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex Question();
     [GeneratedRegex(@"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:tell|show)\s+me\s+", Options)]
     private static partial Regex RequestPrefix();
+    [GeneratedRegex(@"^\s*(?:if|when)\s+([^,\r\n]+),\s*((?:what|which|who|where|when|why|how)\b[^\r\n]*)$", Options)]
+    private static partial Regex ConditionalQuestion();
+    [GeneratedRegex(@"\blooks?\s+after\b", Options)]
+    private static partial Regex LooksAfter();
+    [GeneratedRegex(@"\brolls?\s+back\b", Options)]
+    private static partial Regex RollBack();
+    [GeneratedRegex(@"\b([\p{L}][\p{L}\p{N}_-]*)(?:\s+itself)?\s*(?:\b(?:is|are|equals?)\s+|[:=]\s*)(\S+)", Options)]
+    private static partial Regex ValueBinding();
+    [GeneratedRegex(@"^(?:rotated|changed|updated|reviewed|checked)\s+(?:every|daily|weekly|monthly|regularly|during|after|before|by|on|at)\b", Options)]
+    private static partial Regex ValueActivity();
+    [GeneratedRegex(@"^\s*(?:the|its|this)\s+value(?:\s+itself)?\s*(?:\b(?:is|equals?)\s+|[:=])", Options)]
+    private static partial Regex ValueContinuation();
     [GeneratedRegex(@"^\s*(?:(?:previous|historical|old|compare)\s+|(?:history|overview|summary|comparison)\s+(?:of|for)\s+)", Options)]
     private static partial Regex ScopePrefix();
     [GeneratedRegex(@"^\s*(?:\[(?:superseded|obsolete|archived)\]|(?:superseded|obsolete|archived)\s*:?)\s*", Options)]
@@ -270,6 +318,10 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex RecoveryObjective();
     [GeneratedRegex(@"^\s*how\s+(?:quickly|fast|long)\b", Options)]
     private static partial Regex QuickRecovery();
+    [GeneratedRegex(@"\b(?:did|took|take|taken|rehearsal|drill)\b", Options)]
+    private static partial Regex ObservedRecoveryQuestion();
+    [GeneratedRegex(@"\b(?:(?:recovered|restored)\s+(?:in|within|under)|(?:recovery|rehearsal|drill)\s+(?:took|lasted)|(?:completed|finished)\s+(?:\w+\s+){0,6}(?:recovery|rehearsal|drill)\s+(?:in|within|under))\s+", Options)]
+    private static partial Regex ElapsedRecovery();
     [GeneratedRegex(@"\b(?:\d{1,2}:\d{2}|daily|nightly|hourly|weekly|monthly|every\s+(?:day|night|hour|week|month)|midnight|noon)\b", Options)]
     private static partial Regex Schedule();
     [GeneratedRegex(@"\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:milliseconds?|seconds?|minutes?|hours?|days?)\b", Options)]
@@ -280,13 +332,13 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex CurrencyValue();
     [GeneratedRegex(@"[\p{L}\p{N}]+", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex Words();
-    [GeneratedRegex(@"(?:^\s*(?:who\s+owns?|(?:what|where)\s+(?:is|are)|when\s+(?:do|does)|how\s+long\s+(?:is|are))\s+(?:the\s+)?|\b(?:for|of)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)", Options)]
+    [GeneratedRegex(@"(?:^\s*(?:who\s+owns?|(?:what|where)\s+(?:is|are)|(?:which|what)\s+command\s+rollback|when\s+(?:do|does)|how\s+long\s+(?:is|are))\s+(?:the\s+)?|\b(?:for|of)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)", Options)]
     private static partial Regex SubjectSlots();
     [GeneratedRegex(@"\b(?:was|were)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]
     private static partial Regex HistoricalSubject();
     // Require a resource or predicate after the subject. An arbitrary word after an
     // auxiliary ("does changing", "can counts", "should approve") is not a name.
-    [GeneratedRegex(@"\b(?:does|do|should|must|may)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]
+    [GeneratedRegex(@"\b(?:does|do|did|should|must|may|when)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]
     private static partial Regex AuxiliarySubject();
     [GeneratedRegex(@"\b(?:after|before|now that|when|works?|avoids?)\b", Options)]
     private static partial Regex ContextTail();
