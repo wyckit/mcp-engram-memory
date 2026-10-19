@@ -44,6 +44,53 @@ when broad topic coverage does not activate.
 MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
 Recall adds optional top-level `conflicts` and `queryEvidence` diagnostics.
 
+### Empty-expert routing fallback
+
+Automatic recall treats an expert persona match as a routing hint. If its namespace
+produces no eligible evidence after the normal retrieval, archive, scope and graph
+pipeline, recall tries the remaining candidates from the existing three-profile routing
+window, in score order. Each readable target namespace is searched once, even if multiple
+profiles point to it. The first nonempty eligible result keeps the existing `expert_routed`
+strategy and namespace; a partially populated result is not filled from other experts.
+
+If all candidates are exhausted, the existing authorized broadcast path searches the
+remaining namespaces with the same query vector and options. Failed namespace outcomes
+are reused only within that call. This adds at most three expert namespace probes before
+the existing broadcast scan, not an unbounded recursive routing search. Broadcast still
+scans all accessible non-system, non-debate namespaces and applies its normal score
+calibration and final `k` budget. Its `routingInfo` notes that routed experts had no eligible
+evidence, without listing failed or inaccessible expert identities. No new result fields,
+MCP arguments, embedding calls, thresholds or dispatcher scoring rules are introduced.
+
+Only an expert that supplies eligible results receives a dispatch-count update; failed
+probes do not record memory access or resurrect archives. The normal final-selection
+rules still govern those updates, including graph-only and disputed archive protections.
+Explicit namespace requests stay within that namespace. Identified callers continue to
+bypass the global expert dispatcher and use tenant/namespace-authorized broadcast;
+the legacy/default configuration remains explicitly unisolated. Evidence opt-outs retain
+their meaning: fallback tests whether the existing pipeline returned anything, not whether
+an external judge certified that result as an answer. A populated but semantically wrong
+expert can still stop routing when the bounded evidence checks do not recognize the mismatch.
+
+`recall-expert-routing-v1.json` freezes the six personas from the post-#41 assessment:
+three project descriptions and three deliberately empty overlapping specialists. The new
+evaluation uses the unchanged original 36 questions (including persistence restarts),
+32 interpretation questions and eight supplied answers, in four modes: direct, broadcast,
+fixed project personas and those personas plus the empty specialists. Real ONNX embeddings
+and public defaults produce 304 observations per framework. Personas are never copied
+from individual queries. This is controlled fault injection, not production routing accuracy.
+
+With overlapping empty experts, accepted-answer hits improve from **42/68 to 68/68**:
+the fix recovers 11 original questions, four canonical controls, six paraphrases and five
+supplied-answer cases. All **8/8 missing-answer cases still abstain** in that mode; all
+four modes together retain 272/272 accepted-answer hits and 32/32 correct abstentions.
+Designated-source hits are reported separately from the previously audited cache-incident
+alternative. Reports are `recall-realistic-expert-routing-net*.json`, included in existing
+CI artifacts. Controlled tests cover empty, wrong-topic, wrong-scope, summary-only,
+below-threshold and foreign-tenant evidence; later candidates and broadcast exhaustion;
+duplicate targets; partial results; graph evidence; selected-only access and recovery;
+permissions; opt-outs; and reuse of a single query embedding.
+
 ### Missing answers and project/environment scope
 
 With reranking enabled, current factual questions now screen candidate evidence before
@@ -744,7 +791,7 @@ possible retrieval failure.
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~MissingAnswerRecallEvaluationTests|FullyQualifiedName~QuestionInterpretation|FullyQualifiedName~RecallQueryEvidenceTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~ExpertRoutingRecallEvaluationTests|FullyQualifiedName~RecallExpertFallbackTests|FullyQualifiedName~MissingAnswerRecallEvaluationTests|FullyQualifiedName~QuestionInterpretation|FullyQualifiedName~RecallQueryEvidenceTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory
