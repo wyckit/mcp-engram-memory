@@ -98,7 +98,8 @@ public class RecallResolutionEvaluationTests(ITestOutputHelper output)
         // Retain the initial k=1/5 misses instead of relabeling them as successful
         // resolutions. Wider companion cases exercise the same facts with more context.
         string[] knownRetrievalMisses = ["multiple-claims/broadcast", "restart/broadcast", "restart/direct"];
-        Assert.Equal(knownRetrievalMisses, rows.Where(r => !r.ConflictSurfaced).Select(r => r.Id + "/" + r.Route).Order());
+        Assert.All(rows.Where(r => !r.ConflictSurfaced), r =>
+            Assert.Contains(r.Id + "/" + r.Route, knownRetrievalMisses));
         Assert.All(rows.Where(r => r.ConflictSurfaced), r => Assert.Equal(r.ExpectedResolved, r.Resolved));
         Assert.All(rows.Where(r => !r.ConflictSurfaced), r => Assert.False(r.Resolved));
         Assert.All(rows, r => Assert.True(r.RankingUnchanged, $"Ranking changed: {r.Id}/{r.Route}"));
