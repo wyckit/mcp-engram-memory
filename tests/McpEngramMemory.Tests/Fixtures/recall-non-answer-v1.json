@@ -1,0 +1,11 @@
+{
+  "definition": "Six authored fault-injection cases labeled before execution. These non-answer index entries mention the requested fact but never supply its value. Original corpus and fixed personas unchanged. No claim of production frequency or blind validation.",
+  "questions": [
+    {"id":"atlas-owner", "ns":"expert_atlas", "expertNs":"expert_release_ops", "query":"Who owns Atlas production deployments?", "answer":"atlas-owner", "nonAnswer":"Atlas production deployment owner is documented in the release checklist."},
+    {"id":"boreal-owner", "ns":"expert_boreal", "expertNs":"expert_release_ops", "query":"Who owns Boreal production deployments?", "answer":"boreal-owner", "nonAnswer":"Boreal production deployment owner is documented in the release checklist."},
+    {"id":"boreal-endpoint", "ns":"expert_boreal", "expertNs":"expert_readiness_ops", "query":"What URL does Boreal use for production health probes?", "answer":"boreal-endpoint", "nonAnswer":"Boreal production readiness endpoint path and port are documented in the service handbook."},
+    {"id":"atlas-endpoint", "ns":"expert_atlas", "expertNs":"expert_readiness_ops", "query":"What is the Atlas production readiness endpoint path?", "answer":"atlas-endpoint", "nonAnswer":"Atlas production readiness endpoint path and port are documented in the service handbook."},
+    {"id":"atlas-retention", "ns":"expert_atlas", "expertNs":"expert_database_ops", "query":"What is the retention period for Atlas database backups?", "answer":"atlas-backup", "nonAnswer":"Atlas PostgreSQL backup retention is documented in the operations handbook."},
+    {"id":"boreal-region", "ns":"expert_boreal", "expertNs":"expert_database_ops", "query":"Where is the Boreal primary database region?", "answer":"boreal-region", "nonAnswer":"Boreal primary database region is documented in the infrastructure inventory."}
+  ]
+}
