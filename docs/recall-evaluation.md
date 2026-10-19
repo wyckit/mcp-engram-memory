@@ -39,6 +39,28 @@ The default remains false; the summary/source policy below applies with graph ex
 MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
 Recall adds an optional top-level `conflicts` diagnostic for supported unmarked disagreements.
 
+### Hybrid-search filter enforcement
+
+Keyword candidates must pass the requested lifecycle and category filters before entering
+rank fusion, including when the semantic gate is inactive or there are no eligible vector
+hits. The fusion result builder uses only those admitted entries; it cannot resolve rejected
+keyword hits again. Previously, a live-only or category-filtered hybrid search could return
+excluded records, even as its sole top result. Namespace, tenant and minimum-cosine checks
+continue to apply through the index's scoped entry resolver.
+
+Explicit archive searches still return matching archives, and `recall` can deliberately
+widen to archived memories through its existing low-confidence fallback. Raw search does
+not resurrect returned archives. Empty lifecycle sets return no results.
+
+`HybridSearchFilterTests` covers these contracts, keyword-only rescue, the semantic gate
+on/off, reranking on/off, small result budgets, and the fusion, cascade and high-confidence
+paths. Sixteen of its 29 cases fail against the pre-fix implementation. Against merged
+PR #38, all 108 observations in the unchanged realistic corpus retain Hit@5, Recall@5,
+source recall, MRR, nDCG and stale-top-answer rate. Four result lists change in their
+non-answer context (`s04` on all routes and `a06` on broadcast). The original and broader
+contradiction reports and governed-resolution report retain their decisions and citations.
+No fixture labels, quality floors, MCP arguments or result schemas change.
+
 ### Comparable broadcast scores
 
 For current-answer queries with hybrid search and reranking enabled, broadcast recalculates
