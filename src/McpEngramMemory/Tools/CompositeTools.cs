@@ -229,6 +229,11 @@ public sealed class CompositeTools
                 (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") &&
                 InferSpectralMode(query) == SpectralRetrievalMode.Broad && BroadRecallRanking.IsTopicQuery(query),
             queryEvidence);
+        // Scope is independent of the short-query heuristic used for broad ranking.
+        // A longer deployment/recovery topic still names the same project/environment.
+        if (rerank && !summaryFirst && queryEvidence is null &&
+            (BroadRecallRanking.IsTopicQuery(query) || !options.PreferCurrent))
+            options = options with { Scope = RecallQueryEvidence.ParseScope(query) };
         if (ns is not null && !_access.CanRead(ns))
             return await CompleteRecallAsync("direct", ns, [], options,
                 $"No accessible memories in namespace '{ns}'.").ConfigureAwait(false);
@@ -256,7 +261,8 @@ public sealed class CompositeTools
                 if (!_access.CanRead(expert.TargetNamespace) || !attemptedExpertNamespaces.Add(expert.TargetNamespace))
                     continue;
                 var (candidates, _, broad) = RecallNamespace(query, vector, expert.TargetNamespace, options);
-                if (candidates.Count == 0) continue;
+                if (candidates.Count == 0 || (options.Scope is not null &&
+                    !candidates.Any(c => options.Scope.Matches(c.Result.Text, c.Namespace)))) continue;
 
                 _dispatcher.RecordDispatch(expert.ExpertId);
                 return await CompleteRecallAsync("expert_routed", expert.TargetNamespace, candidates, options with { BroadCoverage = broad },
@@ -474,7 +480,7 @@ public sealed class CompositeTools
 
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
         bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent, bool BroadCoverage,
-        RecallQueryEvidence? QueryEvidence);
+        RecallQueryEvidence? QueryEvidence, RecallQueryEvidence? Scope = null);
 
     // Keep namespace provenance for selection and conflict evidence. Graph neighbors
     // may belong to another readable namespace; bare IDs are not storage keys.
@@ -572,13 +578,21 @@ public sealed class CompositeTools
             }
         }
 
-        if (options.QueryEvidence is not null)
+        // Broad scores depend on the retrieved pool's topic frequencies. Keep that
+        // pool intact through calibration, then enforce scope at final selection.
+        // Otherwise removing unrelated contexts can demote an already-found source.
+        if (options.QueryEvidence is not null || (options.Scope is not null && !useBroad))
         {
-            bool Eligible(CognitiveSearchResult r) => options.QueryEvidence.Matches(r.Text, ns);
+            bool EligibleText(string? text) => (options.QueryEvidence is null || options.QueryEvidence.Matches(text, ns)) &&
+                (options.Scope is null || options.Scope.Matches(text, ns));
+            bool Eligible(CognitiveSearchResult r) => EligibleText(r.Text);
             // Apply evidence requirements after the established confidence fallback:
             // filtering must not change archive ranking when live evidence already fits.
-            // If only mismatches/summaries occupy k, retry a bounded larger window.
-            if (!results.Any(r => !r.IsSummaryNode && Eligible(r)))
+            // If only mismatches/summaries occupy k, retry a bounded larger window
+            // for factual/history requests. Broad retrieval already probes its
+            // wider archive pool; preserve its existing topic/coverage decisions.
+            if ((options.QueryEvidence is not null || !options.PreferCurrent) &&
+                !results.Any(r => !r.IsSummaryNode && Eligible(r)))
             {
                 HashSet<string> allStates = ["stm", "ltm", "archived"];
                 var (recovered, recoveredEvidence) = Search(allStates, BroadRecallRanking.CandidateLimit(options.K));
@@ -586,6 +600,24 @@ public sealed class CompositeTools
                 evidence = recoveredEvidence;
                 states = allStates;
                 deep = recovered.Any(r => r.LifecycleState == "archived" && Eligible(r));
+            }
+            if (options.QueryEvidence is not null && !results.Any(r => !r.IsSummaryNode && Eligible(r)))
+            {
+                // Both ranked windows can be full of reference-only notes or wrong
+                // scopes. Filter within this authorized partition BEFORE truncation.
+                // Reuse the query embedding, exact cosine threshold, and public k.
+                // Probe sources only: summaries cannot manufacture a factual answer.
+                int recoveryCount = BroadRecallRanking.CandidateLimit(options.K);
+                var recovered = _index.Rerank(query, _index.SearchEligible(new SearchRequest
+                {
+                    Query = vector, Namespace = ns, TenantId = _access.TenantId,
+                    K = recoveryCount, MinScore = options.MinScore, IncludeStates = states
+                }, e => !e.IsSummaryNode && EligibleText(e.Text)));
+                // Retain eligible summaries as graph anchors. A linked source may
+                // keep this expert route even when no local source was recovered.
+                results = results.Where(r => r.IsSummaryNode && Eligible(r)).Concat(recovered).ToList();
+                evidence = results.Take(64).ToList();
+                deep = results.Any(r => r.LifecycleState == "archived");
             }
             results = results.Where(Eligible).ToList();
         }
@@ -600,6 +632,12 @@ public sealed class CompositeTools
         var expanded = options.ExpandGraph
             ? ExpandWithGraph(results, states, sources, vector, options.MinScore)
             : results;
+        if (options.Scope is not null)
+        {
+            if (!useBroad)
+                expanded = expanded.Where(r => options.Scope.Matches(r.Text, sources.GetValueOrDefault(r.Id, ns))).ToList();
+            evidence = evidence.Where(r => options.Scope.Matches(r.Text, ns)).ToList();
+        }
         expanded = ApplySpectralRerankRestricted(ns, expanded, options.SpectralMode, query, options.K,
             options.ExpandGraph, states);
         var candidates = expanded.Select(r =>
@@ -663,7 +701,8 @@ public sealed class CompositeTools
     private IReadOnlyList<RecallCandidate> SelectRecallCandidates(
         IEnumerable<RecallCandidate> candidates, RecallOptions options)
     {
-        var ranked = candidates.Where(c => options.QueryEvidence is null || options.QueryEvidence.Matches(c.Result.Text, c.Namespace))
+        var ranked = candidates.Where(c => (options.QueryEvidence is null || options.QueryEvidence.Matches(c.Result.Text, c.Namespace)) &&
+                (options.Scope is null || options.Scope.Matches(c.Result.Text, c.Namespace)))
             .OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
             .ThenBy(c => options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))
             .ThenByDescending(c => c.Result.Score)

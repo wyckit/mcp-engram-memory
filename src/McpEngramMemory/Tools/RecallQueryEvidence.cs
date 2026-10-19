@@ -40,34 +40,51 @@ internal sealed partial class RecallQueryEvidence
     private readonly bool _recoveryDuration;
     private readonly bool _rejectNonAnswers;
     private readonly bool _referenceQuestion;
+    private readonly bool _scopeOnly;
 
     private RecallQueryEvidence(HashSet<string> names, HashSet<string> environments, HashSet<string> focus,
-        bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion)
+        bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion, bool scopeOnly = false)
     {
         (_names, _environments, _focus, _owner) = (names, environments, focus, owner);
         (_backupSchedule, _recoveryDuration) = (backupSchedule, recoveryDuration);
         (_rejectNonAnswers, _referenceQuestion) = (rejectNonAnswers, referenceQuestion);
+        _scopeOnly = scopeOnly;
         // Shared project/resource words cannot substitute for a requested attribute.
         _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency"))
             .ToHashSet(StringComparer.Ordinal);
     }
 
     public static RecallQueryEvidence? Parse(string query)
+        => Parse(query, scopeOnly: false);
+
+    // Historical and broad retrieval need scope checks without factual-answer or
+    // currentness requirements. Only explicit subject/resource patterns in a topic
+    // query supply names; arbitrary title-cased topic words are not project names.
+    public static RecallQueryEvidence? ParseScope(string query) => Parse(query, scopeOnly: true);
+
+    private static RecallQueryEvidence? Parse(string query, bool scopeOnly)
     {
         if (query.Length > 1024) return null;
         query = NormalizeQuestion(query);
-        if (!Question().IsMatch(query)) return null;
+        if (scopeOnly) query = ScopePrefix().Replace(query, "");
+        bool question = Question().IsMatch(query);
+        if (!question && !scopeOnly) return null;
         var words = Words().Matches(query).Select(m => m.Value).ToArray();
-        var names = words.Where(w => char.IsUpper(w[0]) && w.Any(char.IsLower) && !ScopeNoise.Contains(w))
+        var names = words.Where(w => question && char.IsUpper(w[0]) && w.Any(char.IsLower) && !ScopeNoise.Contains(w))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Also recognize lower-case subjects in common question forms.
         foreach (Match match in SubjectSlots().Matches(query).Concat(AuxiliarySubject().Matches(query)
-            .Where(m => SubjectPredicates.Contains(m.Groups[2].Value))))
+            .Where(m => SubjectPredicates.Contains(m.Groups[2].Value)))
+            .Concat(scopeOnly ? HistoricalSubject().Matches(query).Where(m => SubjectPredicates.Contains(m.Groups[2].Value)) : [])
+            .Concat(!question ? CandidateSubjects().Matches(query).Cast<Match>() : []))
         {
             string name = match.Groups[1].Value;
             if (!ScopeNoise.Contains(name)) names.Add(name);
         }
         var environments = EnvironmentTerms(query);
+        if (scopeOnly)
+            return names.Count == 0 && environments.Count == 0 ? null :
+                new(names, environments, [], false, false, false, false, false, scopeOnly: true);
         string body = Question().Replace(query, "", 1);
         body = ContextTail().Split(body)[0];
         var focus = Terms(body);
@@ -102,15 +119,21 @@ internal sealed partial class RecallQueryEvidence
         var namespaceWords = Words().Matches(ns.Replace('_', ' ')).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var precedingNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var precedingEnvironments = new HashSet<string>();
-        foreach (string statement in Statements().Split(text).Take(32))
+        bool scopeMatched = false;
+        var statements = Statements().Split(text);
+        if (_scopeOnly && statements.Length > 32) return false;
+        foreach (string statement in statements.Take(32))
         {
             if (Question().IsMatch(NormalizeQuestion(statement))) continue;
             var words = Words().Matches(statement).Select(m => m.Value).ToArray();
             var literals = words.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var environments = EnvironmentTerms(statement);
-            var subjects = CandidateSubjects().Matches(statement).Select(m => m.Groups[1].Value)
+            var subjects = CandidateSubjects().Matches(_scopeOnly ? ScopeStatusPrefix().Replace(statement, "") : statement)
+                .Select(m => m.Groups[1].Value)
                 .Where(w => !ScopeNoise.Contains(w)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             bool otherSubject = _names.Count > 0 && subjects.Any(s => !_names.Contains(s));
+            if (_scopeOnly && (otherSubject ||
+                (_environments.Count > 0 && environments.Except(_environments).Any()))) return false;
             bool continuation = Continuation().IsMatch(statement) && !otherSubject;
             var effectiveNames = literals.Where(_names.Contains).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (continuation) effectiveNames.UnionWith(precedingNames);
@@ -118,8 +141,15 @@ internal sealed partial class RecallQueryEvidence
             precedingNames = otherSubject ? [] : effectiveNames;
             precedingEnvironments = effectiveEnvironments;
             if (otherSubject) continue;
-            if (!_environments.IsSubsetOf(effectiveEnvironments) ||
+            // Broad/history context can omit an environment, but cannot contradict
+            // one explicitly requested. Factual answers still must state it. A
+            // comparison can include separate records for either requested environment.
+            if ((!_scopeOnly && !_environments.IsSubsetOf(effectiveEnvironments)) ||
                 (_environments.Count > 0 && effectiveEnvironments.Except(_environments).Any())) continue;
+            // Context may leave its project implicit too (for example a linked
+            // rollback explanation). Reject explicit contrary scopes above, without
+            // turning broad/history retrieval into a factual-answer requirement.
+            if (_scopeOnly) { scopeMatched = true; continue; }
             bool otherName = words.Any(w => char.IsUpper(w[0]) && w.Any(char.IsLower) &&
                 !ScopeNoise.Contains(w) && !_names.Contains(w)) || subjects.Any(s => !_names.Contains(s));
             // A namespace may provide an omitted project label, but never override
@@ -142,7 +172,7 @@ internal sealed partial class RecallQueryEvidence
                 (!terms.Contains("objective") && !RecoverWithin().IsMatch(answerText)))) continue;
             if (_focus.Count(terms.Contains) * 2 >= _focus.Count) return true;
         }
-        return false;
+        return scopeMatched;
     }
 
     private string WithoutNonAnswerClauses(string statement) => string.Join(" ",
@@ -226,6 +256,10 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex Question();
     [GeneratedRegex(@"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:tell|show)\s+me\s+", Options)]
     private static partial Regex RequestPrefix();
+    [GeneratedRegex(@"^\s*(?:(?:previous|historical|old|compare)\s+|(?:history|overview|summary|comparison)\s+(?:of|for)\s+)", Options)]
+    private static partial Regex ScopePrefix();
+    [GeneratedRegex(@"^\s*(?:\[(?:superseded|obsolete|archived)\]|(?:superseded|obsolete|archived)\s*:?)\s*", Options)]
+    private static partial Regex ScopeStatusPrefix();
     [GeneratedRegex(@"^\s*at\s+what\s+time\s+", Options)]
     private static partial Regex AtWhatTime();
     [GeneratedRegex(@"\s+before\s+timing\s+out\b", Options)]
@@ -248,6 +282,8 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex Words();
     [GeneratedRegex(@"(?:^\s*(?:who\s+owns?|(?:what|where)\s+(?:is|are)|when\s+(?:do|does)|how\s+long\s+(?:is|are))\s+(?:the\s+)?|\b(?:for|of)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)", Options)]
     private static partial Regex SubjectSlots();
+    [GeneratedRegex(@"\b(?:was|were)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]
+    private static partial Regex HistoricalSubject();
     // Require a resource or predicate after the subject. An arbitrary word after an
     // auxiliary ("does changing", "can counts", "should approve") is not a name.
     [GeneratedRegex(@"\b(?:does|do|should|must|may)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]

@@ -70,6 +70,8 @@ matrix on net8. Use `Category!=MSA&Category!=RecallScale` for the ordinary suite
 The report distinguishes hard tenant/ACL/durability checks from measured quality
 gaps; `scripts/check-noisy-recall.py <fresh-output-directory> --release` fails on
 predeclared release blockers even when the evaluation tests themselves pass.
+Scale CI now requires that strict gate. See [scoped candidate recovery](recall-candidate-recovery.md)
+for the fix, regression contract and remaining limitations.
 
 ## Tool profile count regression check
 

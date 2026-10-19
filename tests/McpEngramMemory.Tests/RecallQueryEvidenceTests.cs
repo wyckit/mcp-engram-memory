@@ -147,13 +147,11 @@ public class RecallQueryEvidenceTests
     }
 
     [Theory]
-    [InlineData("Nectar staging readiness endpoint", true, false)]
-    [InlineData("What was Nectar staging readiness endpoint?", true, false)]
     [InlineData("Compare Nectar staging and production readiness endpoints", true, false)]
     [InlineData(Query, false, false)]
     [InlineData(Query, true, true)]
     [InlineData("¿Cuál es el endpoint de Nectar?", true, false)]
-    public void TopicHistoryAndExplicitOptOutsRetainTheirRecallBehavior(string query, bool rerank, bool summaryFirst)
+    public void ComparisonsAndExplicitOptOutsRetainTheirRecallBehavior(string query, bool rerank, bool summaryFirst)
     {
         using var store = new RecallTestStore();
         store.Add("context", Ns, "Nectar production readiness endpoint is /prod.");
@@ -163,15 +161,15 @@ public class RecallQueryEvidenceTests
     }
 
     [Fact]
-    public void EmptyEvidenceDescribesABoundedSearchRatherThanGlobalAbsence()
+    public void RejectedCandidateWindowsRecoverEligibleEvidenceWithoutIncreasingPublicBudget()
     {
         using var store = new RecallTestStore();
         for (int i = 0; i < 40; i++) store.Add("wrong-" + i, Ns, "Nectar production readiness endpoint is /prod.", .99f);
         var answer = store.Add("answer", Ns, Answer, .4f);
         var small = Assert.IsType<RecallResult>(store.Tools().Recall(Query, Ns, k: 1, hybrid: false, expandGraph: false));
-        Assert.Empty(small.Results);
-        Assert.Contains("does not establish", small.QueryEvidence!.Message);
-        Assert.Equal(1, answer.AccessCount);
+        Assert.Equal("answer", Assert.Single(small.Results).Id);
+        Assert.Null(small.QueryEvidence);
+        Assert.Equal(2, answer.AccessCount);
         var wide = Assert.IsType<RecallResult>(store.Tools().Recall(Query, Ns, k: 50, hybrid: false, expandGraph: false));
         Assert.Equal("answer", Assert.Single(wide.Results).Id);
         Assert.Null(wide.QueryEvidence);
