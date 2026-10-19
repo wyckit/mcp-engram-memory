@@ -54,10 +54,10 @@ public class RecallResolutionEvaluationTests(ITestOutputHelper output)
                 if (test.Restart) store.Restart();
                 string agent = test.Mode == "private" ? "bob" : Agent;
                 string? requestedNs = route == "direct" ? Ns : null;
-                var baseline = Assert.IsType<RecallResult>(store.Tools(agent, Tenant, new EmptyKnowledgeStore())
-                    .Recall(test.Query, requestedNs, k: test.K));
+                var baseline = Assert.IsType<RecallResult>(await store.Tools(agent, Tenant, new EmptyKnowledgeStore())
+                    .RecallAsync(test.Query, requestedNs, k: test.K));
                 var timer = Stopwatch.StartNew();
-                var result = Assert.IsType<RecallResult>(store.Tools(agent, Tenant).Recall(test.Query, requestedNs, k: test.K));
+                var result = Assert.IsType<RecallResult>(await store.Tools(agent, Tenant).RecallAsync(test.Query, requestedNs, k: test.K));
                 timer.Stop();
                 var pair = result.Conflicts?.SingleOrDefault(c => c.Evidence.Select(e => e.Id).Order().SequenceEqual(new[] { "a", "b" }));
                 rows.Add(new(test.Id, route, test.Resolved, pair?.Status == "resolved", pair?.Resolution?.PreferredId,

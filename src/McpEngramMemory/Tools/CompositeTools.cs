@@ -193,9 +193,15 @@ public sealed class CompositeTools
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
     }
 
+    /// <summary>Compatibility API for synchronous in-process hosts. Prefer RecallAsync for concurrent serving.</summary>
+    public object Recall(string query, string? ns = null, int k = 5, float minScore = 0.3f,
+        bool hybrid = true, bool rerank = true, bool summaryFirst = false, bool expandGraph = true,
+        string spectralMode = "auto") =>
+        RecallAsync(query, ns, k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode).GetAwaiter().GetResult();
+
     [McpServerTool(Name = "recall", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Find memories in one namespace (or auto-route across all) — the default search for any retrieval task. Don't use it to search across multiple specific namespaces simultaneously; use `cross_search` instead.")]
-    public object Recall(
+    public async Task<object> RecallAsync(
         [Description("What to search for.")] string query,
         [Description("Namespace to search (omit to auto-route via expert dispatcher).")] string? ns = null,
         [Description("Maximum results (default: 5).")] int k = 5,
@@ -225,7 +231,7 @@ public sealed class CompositeTools
         if (ns is not null)
         {
             var (candidates, deep) = RecallNamespace(query, vector, ns, options);
-            return CompleteRecall(deep ? "deep_recall" : "direct", ns, candidates, options);
+            return await CompleteRecallAsync(deep ? "deep_recall" : "direct", ns, candidates, options).ConfigureAwait(false);
         }
 
         // Strategy 2: No namespace — auto-route via expert dispatcher
@@ -245,8 +251,8 @@ public sealed class CompositeTools
                 _dispatcher.RecordDispatch(bestExpert.ExpertId);
 
                 var (candidates, _) = RecallNamespace(query, vector, bestExpert.TargetNamespace, options);
-                return CompleteRecall("expert_routed", bestExpert.TargetNamespace, candidates, options,
-                    $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})");
+                return await CompleteRecallAsync("expert_routed", bestExpert.TargetNamespace, candidates, options,
+                    $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})").ConfigureAwait(false);
             }
         }
 
@@ -262,8 +268,8 @@ public sealed class CompositeTools
             allResults.AddRange(candidates);
         }
 
-        return CompleteRecall("broadcast", null, allResults, options,
-            $"Searched {namespaces.Count} namespace(s), no expert match");
+        return await CompleteRecallAsync("broadcast", null, allResults, options,
+            $"Searched {namespaces.Count} namespace(s), no expert match").ConfigureAwait(false);
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }
@@ -602,13 +608,13 @@ public sealed class CompositeTools
         return output;
     }
 
-    private RecallResult CompleteRecall(string strategy, string? ns, IEnumerable<RecallCandidate> candidates,
+    private async Task<RecallResult> CompleteRecallAsync(string strategy, string? ns, IEnumerable<RecallCandidate> candidates,
         RecallOptions options, string? routingInfo = null)
     {
         var selected = SelectRecallCandidates(candidates, options);
         var conflicts = FindRecallConflicts(selected, options);
         if (_knowledgeStore is not null && conflicts.Count is > 0 and < 8)
-            conflicts = new RecallEvidenceResolution(_index, _access, _knowledgeStore).Resolve(conflicts);
+            conflicts = await new RecallEvidenceResolution(_index, _access, _knowledgeStore).ResolveAsync(conflicts).ConfigureAwait(false);
         var disputed = conflicts.SelectMany(c => c.Evidence).Select(e => (e.Namespace, e.Id)).ToHashSet();
         var results = new List<CognitiveSearchResult>();
         foreach (var candidate in selected)

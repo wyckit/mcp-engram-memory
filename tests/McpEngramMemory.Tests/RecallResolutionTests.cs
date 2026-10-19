@@ -34,8 +34,8 @@ public class RecallResolutionTests
         using var store = Create();
         await Support(store, "b", B, "source", "Atlas gateway times out after 45000 ms.");
         if (restart) store.Restart();
-        var without = Recall(store, broadcast, knowledge: new EmptyKnowledgeStore());
-        var result = Recall(store, broadcast);
+        var without = await Recall(store, broadcast, knowledge: new EmptyKnowledgeStore());
+        var result = await Recall(store, broadcast);
         Assert.Equal(without.Results.Select(r => (r.Id, r.Score)), result.Results.Select(r => (r.Id, r.Score)));
         var conflict = Pair(result);
         Assert.Equal("resolved", conflict.Status);
@@ -88,7 +88,7 @@ public class RecallResolutionTests
         }
         if (failure == "private-knowledge")
             Assert.Equal("shared", store.Registry.Share(Ns, Agent, "bob", "read", Tenant).Status);
-        var result = Recall(store, agent: failure == "private-knowledge" ? "bob" : Agent,
+        var result = await Recall(store, agent: failure == "private-knowledge" ? "bob" : Agent,
             knowledge: failure == "unavailable-store" ? new UnavailableKnowledgeStore() : null);
         Assert.Equal("unresolved", Pair(result).Status);
         Assert.DoesNotContain("knowledge-b", JsonSerializer.Serialize(result));
@@ -101,7 +101,7 @@ public class RecallResolutionTests
         store.Add("a", Ns, A + " Atlas retry limit is 2.", .99f, tenant: Tenant);
         store.Add("b", Ns, B + " Atlas retry limit is 5.", .8f, tenant: Tenant);
         await Support(store, "b", B, "source", B);
-        Assert.Equal("unresolved", Pair(Recall(store)).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store)).Status);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class RecallResolutionTests
         using var store = Create();
         store.Add("b", Ns, B + " " + A, .8f, tenant: Tenant);
         await Support(store, "b", B, "source", B);
-        Assert.Equal("unresolved", Pair(Recall(store)).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store)).Status);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public class RecallResolutionTests
         await Support(store, "b", B, "source", B);
         foreach (var (query, rerank) in new[] { ("What was the Atlas gateway timeout?", true), (Query, false) })
         {
-            var result = Assert.IsType<RecallResult>(store.Tools(Agent, Tenant).Recall(query, Ns,
+            var result = Assert.IsType<RecallResult>(await store.Tools(Agent, Tenant).RecallAsync(query, Ns,
                 hybrid: false, rerank: rerank, expandGraph: false, spectralMode: "none"));
             Assert.Null(result.Conflicts);
         }
@@ -133,7 +133,7 @@ public class RecallResolutionTests
         store.Add("c", Ns, "Atlas gateway timeout is 60 seconds.", .9f, tenant: Tenant);
         await Support(store, "b", B, "source-b", B);
         await Support(store, "c", "Atlas gateway timeout is 60 seconds.", "source-c", "Atlas gateway timeout is 60 seconds.");
-        var result = Assert.IsType<RecallResult>(store.Tools(Agent, Tenant).Recall(Query, Ns, k: 3,
+        var result = Assert.IsType<RecallResult>(await store.Tools(Agent, Tenant).RecallAsync(Query, Ns, k: 3,
             hybrid: false, expandGraph: false, spectralMode: "none"));
         Assert.Equal(3, result.Conflicts!.Count);
         Assert.All(result.Conflicts, c => Assert.Equal("unresolved", c.Status));
@@ -180,7 +180,7 @@ public class RecallResolutionTests
             failure == "no-provenance" ? [] : snapshot.Provenance, failure == "no-audit" ? [] : snapshot.Audit);
         store.Index.Get("b", Ns, Tenant)!.Metadata["recallKnowledge"] = JsonSerializer.Serialize(new
             { id = "knowledge-b", contentHash = version.ContentHash });
-        Assert.Equal("unresolved", Pair(Recall(store, knowledge: new SnapshotKnowledgeStore(transformed))).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store, knowledge: new SnapshotKnowledgeStore(transformed))).Status);
     }
 
     [Theory]
@@ -193,7 +193,7 @@ public class RecallResolutionTests
         store.Index.Delete("source", Ns, Tenant);
         var twin = store.Add("source", foreign ? Ns : "private", B, tenant: foreign ? "other-team" : Tenant);
         if (!foreign) store.Registry.EnsureOwnership("private", "bob", Tenant);
-        Assert.Equal("unresolved", Pair(Recall(store)).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store)).Status);
         Assert.Equal(1, twin.AccessCount);
     }
 
@@ -202,11 +202,11 @@ public class RecallResolutionTests
     [InlineData("[]")]
     [InlineData("{\"id\":\"x\",\"contentHash\":\"abc\"}")]
     [InlineData("{\"id\":\"x\",\"id\":\"y\",\"contentHash\":\"abc\"}")]
-    public void InvalidReferenceShapesAreOptionalEvidenceFailures(string json)
+    public async Task InvalidReferenceShapesAreOptionalEvidenceFailures(string json)
     {
         using var store = Create();
         store.Index.Get("b", Ns, Tenant)!.Metadata["recallKnowledge"] = json;
-        Assert.Equal("unresolved", Pair(Recall(store)).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store)).Status);
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public class RecallResolutionTests
     {
         using var store = Create();
         await Support(store, "b", B, "source", B);
-        Assert.Equal("unresolved", Pair(Recall(store, knowledge: new SlowKnowledgeStore())).Status);
+        Assert.Equal("unresolved", Pair(await Recall(store, knowledge: new SlowKnowledgeStore())).Status);
     }
 
     [Fact]
@@ -230,7 +230,21 @@ public class RecallResolutionTests
         var conflicts = new[] { Conflict("a", "b"), Conflict("c", "d") };
         var resolver = new RecallEvidenceResolution(store.Index,
             new NamespaceAccess(store.Registry, new PrincipalContext(Tenant, Agent)), new FirstThenSlowStore(store.Knowledge));
-        Assert.All(resolver.Resolve(conflicts), c => Assert.Equal("unresolved", c.Status));
+        Assert.All(await resolver.ResolveAsync(conflicts), c => Assert.Equal("unresolved", c.Status));
+    }
+
+    [Fact]
+    public async Task HostedRecallYieldsWhileEvidenceStorageIsPending()
+    {
+        using var store = Create();
+        await Support(store, "b", B, "source", B);
+        var snapshot = await store.Knowledge.ReadAsync(Tenant, Ns, "knowledge-b");
+        var pending = new PendingKnowledgeStore();
+        var call = store.Tools(Agent, Tenant, pending).RecallAsync(Query, Ns, k: 1,
+            hybrid: false, expandGraph: false, spectralMode: "none");
+        Assert.False(call.IsCompleted);
+        pending.Complete(snapshot);
+        Assert.Equal("resolved", Pair(Assert.IsType<RecallResult>(await call)).Status);
     }
 
     [Fact]
@@ -245,7 +259,7 @@ public class RecallResolutionTests
         var snapshot = await Promote(store, "knowledge-b", claim, ["timeout-source", "retry-source"]);
         store.Index.Get("b", Ns, Tenant)!.Metadata["recallKnowledge"] = JsonSerializer.Serialize(new
             { id = "knowledge-b", contentHash = snapshot.ActiveVersion!.ContentHash });
-        var pair = Pair(Recall(store));
+        var pair = Pair(await Recall(store));
         Assert.Equal("resolved", pair.Status);
         Assert.Equal(2, pair.Resolution!.Sources.Count);
     }
@@ -256,7 +270,7 @@ public class RecallResolutionTests
         using var store = Create();
         for (int i = 0; i < 7; i++) store.Add("copy-" + i, Ns, A, .95f, tenant: Tenant);
         await Support(store, "b", B, "source", B);
-        var result = Assert.IsType<RecallResult>(store.Tools(Agent, Tenant).Recall(Query, Ns, k: 9,
+        var result = Assert.IsType<RecallResult>(await store.Tools(Agent, Tenant).RecallAsync(Query, Ns, k: 9,
             hybrid: false, expandGraph: false, spectralMode: "none"));
         Assert.Equal(8, result.Conflicts!.Count);
         Assert.All(result.Conflicts, c => Assert.Equal("unresolved", c.Status));
@@ -269,7 +283,7 @@ public class RecallResolutionTests
         await Support(store, "b", B, "source", B);
         store.Index.SetLifecycleState("a", "archived", Ns, Tenant);
         store.Index.SetLifecycleState("b", "archived", Ns, Tenant);
-        var result = Recall(store);
+        var result = await Recall(store);
         Assert.Equal("resolved", Pair(result).Status);
         Assert.All(new[] { "a", "b" }, id => Assert.Equal("archived", store.Index.Get(id, Ns, Tenant)!.LifecycleState));
         Assert.Equal(1, store.Index.Get("b", Ns, Tenant)!.AccessCount);
@@ -295,7 +309,7 @@ public class RecallResolutionTests
         if (withStore) services.AddSingleton(store.Knowledge);
         using var provider = services.BuildServiceProvider();
         var tools = ActivatorUtilities.CreateInstance<CompositeTools>(provider);
-        var result = Assert.IsType<RecallResult>(tools.Recall(Query, Ns, k: 1, hybrid: false,
+        var result = Assert.IsType<RecallResult>(await tools.RecallAsync(Query, Ns, k: 1, hybrid: false,
             expandGraph: false, spectralMode: "none"));
         Assert.Equal(withStore ? "resolved" : "unresolved", Pair(result).Status);
     }
@@ -315,9 +329,9 @@ public class RecallResolutionTests
         return store;
     }
 
-    internal static RecallResult Recall(RecallTestStore store, bool broadcast = false,
+    internal static async Task<RecallResult> Recall(RecallTestStore store, bool broadcast = false,
         string agent = Agent, IGovernedKnowledgeStore? knowledge = null) =>
-        Assert.IsType<RecallResult>(store.Tools(agent, Tenant, knowledge).Recall(Query, broadcast ? null : Ns,
+        Assert.IsType<RecallResult>(await store.Tools(agent, Tenant, knowledge).RecallAsync(Query, broadcast ? null : Ns,
             k: 1, hybrid: false, expandGraph: false, spectralMode: "none"));
 
     internal static RecallConflict Pair(RecallResult result) => Assert.Single(result.Conflicts!, c =>
@@ -388,5 +402,13 @@ public class RecallResolutionTests
             await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException("unreachable");
         }
+    }
+
+    private sealed class PendingKnowledgeStore : EmptyKnowledgeStore
+    {
+        private readonly TaskCompletionSource<GovernedKnowledgeSnapshot> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Complete(GovernedKnowledgeSnapshot snapshot) => _completion.SetResult(snapshot);
+        public override ValueTask<GovernedKnowledgeSnapshot> ReadAsync(string tenantId, string ns, string artifactId,
+            CancellationToken cancellationToken = default) => new(_completion.Task.WaitAsync(cancellationToken));
     }
 }

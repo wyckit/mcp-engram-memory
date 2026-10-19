@@ -428,6 +428,9 @@ ID/version/hash, provenance ID, and original source text with IDs/namespaces/has
 The existing detection `basis`, `subject`, and both conflicting texts remain intact.
 Unresolved pairs omit `resolution`. Existing positional result constructors and MCP
 input schemas are preserved, including in-process hosts without a governed store.
+The MCP handler awaits evidence storage through `RecallAsync`; the existing synchronous
+`Recall` method remains as an in-process compatibility wrapper. Concurrent in-process
+servers should also use `RecallAsync` so pending file I/O does not occupy serving threads.
 
 Evidence reads do not increment access counts, change facts/status, or resurrect archives.
 All reported conflicting archives remain archived, even when a choice has support.

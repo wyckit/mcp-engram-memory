@@ -21,7 +21,7 @@ internal sealed class RecallEvidenceResolution(CognitiveIndex index, NamespaceAc
     private readonly Dictionary<(string Ns, string Id), GovernedKnowledgeSnapshot> _snapshots = new();
     private readonly HashSet<(string Ns, string Id)> _linked = new();
 
-    public IReadOnlyList<RecallConflict> Resolve(IReadOnlyList<RecallConflict> conflicts)
+    public async Task<IReadOnlyList<RecallConflict>> ResolveAsync(IReadOnlyList<RecallConflict> conflicts)
     {
         // Governed promotion does not admit legacy/default identities. Never manufacture
         // authority for that compatibility mode from ordinary memory metadata.
@@ -34,7 +34,7 @@ internal sealed class RecallEvidenceResolution(CognitiveIndex index, NamespaceAc
         {
             try
             {
-                var resolution = ResolvePair(conflicts[i], budget.Token);
+                var resolution = await ResolvePairAsync(conflicts[i], budget.Token).ConfigureAwait(false);
                 if (resolution is not null)
                     output[i] = conflicts[i] with { Status = "resolved", Resolution = resolution };
             }
@@ -71,7 +71,7 @@ internal sealed class RecallEvidenceResolution(CognitiveIndex index, NamespaceAc
         return output;
     }
 
-    private RecallConflictResolution? ResolvePair(RecallConflict conflict, CancellationToken cancellation)
+    private async Task<RecallConflictResolution?> ResolvePairAsync(RecallConflict conflict, CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
         var entries = conflict.Evidence.Select(e => access.CanRead(e.Namespace)
@@ -88,10 +88,10 @@ internal sealed class RecallEvidenceResolution(CognitiveIndex index, NamespaceAc
         var key = (preferred.Ns, id);
         if (!_snapshots.TryGetValue(key, out var snapshot))
         {
-            // Recall's public synchronous API is retained. Both built-in stores use
-            // ConfigureAwait(false); the total optional lookup budget is shared per call.
-            snapshot = store.ReadAsync(access.TenantId, preferred.Ns, id, cancellation).AsTask()
-                .WaitAsync(cancellation).GetAwaiter().GetResult();
+            // Await storage without occupying a serving thread. Blocking here can starve
+            // the very I/O continuations needed to complete under concurrent recall load.
+            snapshot = await store.ReadAsync(access.TenantId, preferred.Ns, id, cancellation).AsTask()
+                .WaitAsync(cancellation).ConfigureAwait(false);
             _snapshots[key] = snapshot;
         }
         var version = snapshot.ActiveVersion;
