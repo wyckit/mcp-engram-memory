@@ -195,6 +195,8 @@ public sealed class HybridSearchEngine
             }
         }
 
+        // Eligibility is mandatory even when the semantic gate is inactive. Rejected
+        // keyword hits must not occupy fusion ranks or return through late resolution.
         // Semantic gate: filter BM25-only results by cosine similarity to query vector.
         // Prevents low-relevance keyword matches from polluting RRF fusion.
         // Only apply when vector results show reasonable confidence (real embeddings).
@@ -220,16 +222,13 @@ public sealed class HybridSearchEngine
                     if (cosine >= Bm25SemanticGate)
                         bm25Gated.Add((id, bm25Score));
                 }
-                else
-                {
-                    bm25Gated.Add((id, bm25Score));
-                }
             }
         }
         else
         {
             foreach (var item in bm25Unfiltered)
-                bm25Gated.Add(item);
+                if (eligibleIds.Contains(item.Id))
+                    bm25Gated.Add(item);
         }
 
         // Reciprocal Rank Fusion
@@ -276,19 +275,14 @@ public sealed class HybridSearchEngine
                     vr.Category, vr.Metadata,
                     vr.IsSummaryNode, vr.SourceClusterId, vr.AccessCount));
             }
-            else
+            else if (resolvedEntries.TryGetValue(id, out var entry))
             {
-                // Use cached entry from filter loop, or resolve if needed
-                if (!resolvedEntries.TryGetValue(id, out var entry))
-                    entry = getEntry(id, ns);
-                if (entry is not null)
-                {
-                    results.Add(new CognitiveSearchResult(
-                        entry.Id, entry.Text, rrfScore,
-                        entry.LifecycleState, entry.ActivationEnergy,
-                        entry.Category, entry.Metadata,
-                        entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
-                }
+                // Only materialize BM25-only entries admitted by the filter loop.
+                results.Add(new CognitiveSearchResult(
+                    entry.Id, entry.Text, rrfScore,
+                    entry.LifecycleState, entry.ActivationEnergy,
+                    entry.Category, entry.Metadata,
+                    entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
             }
         }
 
