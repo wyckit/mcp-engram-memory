@@ -81,13 +81,11 @@ public class RecallConflictTests
     [InlineData("Atlas gateway timeout is 30 seconds as of 2025.")]
     [InlineData("Atlas gateway timeout is 30 seconds after the migration.")]
     [InlineData("Atlas gateway timeout is 30 or 45 seconds.")]
-    [InlineData("Atlas gateway timeout is not 30 seconds.")]
     [InlineData("Atlas gateway timeout is about 30 seconds.")]
     [InlineData("Atlas gateway timeout might be 30 seconds.")]
     [InlineData("Superseded: Atlas gateway timeout is 30 seconds.")]
     [InlineData("Atlas gateway timeout is 9999999999999999999999999999999 days.")]
     [InlineData("Atlas is a service.")]
-    [InlineData("Atlas supports Python.")]
     [InlineData("")]
     public void UnsupportedOrQualifiedClaimsAreNotFlattenedIntoConflicts(string text)
     {

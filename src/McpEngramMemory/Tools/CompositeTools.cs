@@ -622,23 +622,36 @@ public sealed class CompositeTools
         var conflicts = new List<RecallConflict>();
         if (!options.PreferCurrent) return conflicts;
         var seen = new HashSet<(string Namespace, string First, string Second)>();
+        var parsed = new Dictionary<(string Namespace, string Id), IReadOnlyList<RecallConflictDetection.Claim>>();
+        IReadOnlyList<RecallConflictDetection.Claim> Claims(string sourceNs, CognitiveSearchResult result)
+        {
+            var key = (sourceNs, result.Id);
+            if (!parsed.TryGetValue(key, out var claims))
+                parsed[key] = claims = RecallConflictDetection.ParseAll(result.Text);
+            return claims;
+        }
         // Evidence was retrieved within the same authorized namespace/tenant, with
         // the original minScore and lifecycle scope. Never consult bare graph IDs,
         // hidden namespaces, timestamps, or user-supplied metadata for authority.
         foreach (var candidate in selected.Take(32))
         {
-            if (candidate.Result.IsSummaryNode || candidate.ConflictEvidence is null ||
-                RecallConflictDetection.Parse(candidate.Result.Text) is not { } claim) continue;
+            if (candidate.Result.IsSummaryNode || candidate.ConflictEvidence is null) continue;
+            var claims = Claims(candidate.Namespace, candidate.Result);
+            if (claims.Count == 0) continue;
             foreach (var alternative in candidate.ConflictEvidence)
             {
-                if (alternative.Id == candidate.Result.Id || alternative.IsSummaryNode ||
-                    RecallConflictDetection.Parse(alternative.Text) is not { } other ||
-                    !claim.ConflictsWith(other)) continue;
+                if (alternative.Id == candidate.Result.Id || alternative.IsSummaryNode) continue;
+                var others = Claims(candidate.Namespace, alternative);
+                var disagreement = (from claim in claims from other in others
+                    where claim.ConflictsWith(other) select (Claim: claim, Other: other)).FirstOrDefault();
+                if (disagreement.Claim is not { } match) continue;
                 var first = candidate.Result.Id;
                 var second = alternative.Id;
                 if (StringComparer.Ordinal.Compare(first, second) > 0) (first, second) = (second, first);
                 if (!seen.Add((candidate.Namespace, first, second))) continue;
-                conflicts.Add(new RecallConflict("unresolved", "same_subject_different_value", claim.Subject,
+                string basis = match.Negated != disagreement.Other.Negated || match.Kind == "proposition"
+                    ? "explicit_negation" : "same_subject_different_value";
+                conflicts.Add(new RecallConflict("unresolved", basis, match.Subject,
                     [new(candidate.Result.Id, candidate.Namespace, candidate.Result.Text!),
                      new(alternative.Id, candidate.Namespace, alternative.Text!)]));
                 if (conflicts.Count == 8) return conflicts;
