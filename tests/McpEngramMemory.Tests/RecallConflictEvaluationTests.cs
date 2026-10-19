@@ -11,16 +11,18 @@ public class RecallConflictEvaluationTests(ITestOutputHelper output)
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
 
-    [Fact]
-    public void EvaluateUnmarkedConflictsAlongsideTheOriginalRecallCorpus()
+    [Theory]
+    [InlineData("recall-conflicts-v1.json", "conflicts", 16, 8)]
+    [InlineData("recall-conflicts-broad-v1.json", "broader-conflicts", 32, 16)]
+    public void EvaluateUnmarkedConflictsAlongsideTheOriginalRecallCorpus(string fixture, string reportName, int cases, int positives)
     {
         string fixtures = Path.Combine(AppContext.BaseDirectory, "Fixtures");
         var corpus = JsonSerializer.Deserialize<Corpus>(File.ReadAllText(Path.Combine(fixtures, "recall-realistic-v1.json")), Json)!;
-        var supplement = JsonSerializer.Deserialize<Supplement>(File.ReadAllText(Path.Combine(fixtures, "recall-conflicts-v1.json")), Json)!;
+        var supplement = JsonSerializer.Deserialize<Supplement>(File.ReadAllText(Path.Combine(fixtures, fixture)), Json)!;
         Assert.Equal(1, supplement.Version);
-        Assert.Equal(16, supplement.Cases.Count);
-        Assert.Equal(8, supplement.Cases.Count(c => c.Conflict));
-        Assert.Equal(16, supplement.Cases.Select(c => c.Id).Distinct().Count());
+        Assert.Equal(cases, supplement.Cases.Count);
+        Assert.Equal(positives, supplement.Cases.Count(c => c.Conflict));
+        Assert.Equal(cases, supplement.Cases.Select(c => c.Id).Distinct().Count());
         using var embedding = new OnnxEmbeddingService();
         var vectors = corpus.Entries.ToDictionary(e => e.Id, e => embedding.Embed(e.Text));
         var rows = new List<Observation>();
@@ -75,7 +77,7 @@ public class RecallConflictEvaluationTests(ITestOutputHelper output)
         };
         string directory = Environment.GetEnvironmentVariable("ENGRAM_RECALL_EVAL_OUTPUT") ?? Path.Combine(AppContext.BaseDirectory, "TestResults");
         Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, $"recall-realistic-conflicts-net{Environment.Version.Major}.json");
+        string path = Path.Combine(directory, $"recall-realistic-{reportName}-net{Environment.Version.Major}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(report, Json));
         output.WriteLine($"Conflict evaluation: {path}; TP={report.TruePositives}, FN={report.FalseNegatives}, FP={report.FalsePositives}");
         Assert.Empty(parityFailures);

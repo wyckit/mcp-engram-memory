@@ -74,11 +74,14 @@ and `rerank: false` opts out of that selection policy. Superseded archived recor
 archived when recalled. See [status cues and limitations](recall-evaluation.md#superseded-answers-and-historical-queries).
 
 Default current-intent recall also reports possible unmarked disagreements in an optional
-`conflicts` array. Each item has `status: "unresolved"`, a detection `basis`, the `subject`,
+`conflicts` array. Each item has `status: "unresolved"`, a detection `basis`
+(`same_subject_different_value` or `explicit_negation`), the `subject`,
 and two evidence records containing `id`, `ns`, and original `text`. These are candidates
 for verification, not a decision about which claim is correct. Ranked results and scores
 stay unchanged; evidence can include a hit just outside `k`. The array is omitted when
-no supported disagreement is found. See [scope and limits](recall-evaluation.md#unmarked-disagreements).
+no supported disagreement is found. Supported paraphrases, explicit denials, and multiple
+claims in a memory are compared without choosing a factual winner. See
+[scope and limits](recall-evaluation.md#unmarked-disagreements).
 
 ### Knowledge Graph (4 tools)
 

@@ -251,14 +251,49 @@ unchanged. The new output property is omitted when empty. `search_memory`, `cros
 and the separate `find_contradictions` tool are unchanged.
 
 The local grammar compares the same subject within the same namespace. It recognizes
-leading English `subject is value` sentences for duration settings (timeout, TTL,
+English `subject is value` sentences for duration settings (timeout, TTL,
 retention), integer settings (retry limit, replica count, batch size, port), owner, region,
 endpoint path, version, and enabled/disabled state. Whitespace/case, duration units, numeric
 formatting, and explicit boolean negation are normalized. Duration and enabled state are
 different claim types. Subjects must match after normalization; project/environment words
 are retained. Summary nodes, superseded records, quoted examples, and supported conditional,
-historical, or proposed wording are excluded. Arbitrary negation and paraphrases are not
-generalized into contradictions.
+historical, or proposed wording are excluded.
+
+Supported paraphrases map to these same typed properties:
+
+| Form | Comparable claim |
+|---|---|
+| `Atlas gateway times out after 30 seconds` | `Atlas gateway timeout is 30 seconds` |
+| `The timeout for the Atlas gateway is 30 seconds` | Same timeout property |
+| `Atlas's gateway timeout: 30 seconds` | Same timeout property |
+| `Atlas uses a gateway timeout of 30 seconds` | Same timeout property |
+| `Atlas gateway timeout is configured to 30 seconds` | Same timeout property |
+| `Maya owns Atlas deployments` / `Atlas deployments are owned by Maya` / `Maya is responsible for Atlas deployments` | `Atlas deployment owner is Maya` |
+| `Atlas primary database is hosted in us-east-1` | `Atlas primary database region is us-east-1` |
+| `Audit logging is enabled for Atlas` | `Atlas audit logging is enabled` |
+
+Location aliases also accept `is located in` and `runs in`, but only with region-shaped
+identifiers such as `us-east-1`; `runs in Docker` is not inferred to be a region. Settings
+also accept `is set to`, `is configured as`, `equals`, and `=`. Boolean `on`/`off` map to
+enabled/disabled. Singular possessives and supported `isn't`/`doesn't` contractions normalize;
+other quotation remains excluded. Ownership aliases still assume one owner for the matched
+scope and report a *possible* disagreement, not verified exclusivity.
+
+An explicit value exclusion conflicts only with the matching positive value:
+`timeout is not 30 seconds` conflicts with `timeout is 30 seconds`, while `45 seconds`
+and another exclusion remain compatible. The supported predicates `supports`, `requires`,
+`allows`/`permits`, and `uses` can be compared with explicit `does not` denials. Predicate
+and object are part of that claim's key: supporting Linux and supporting Windows can both
+be true; supporting authentication does not imply requiring it. Such denials use
+`basis: "explicit_negation"`. The existing value-disagreement basis is unchanged.
+
+Extraction now reads up to eight sentences or semicolon/newline clauses and keeps up to
+four distinct claims per memory (2,048-character record and 256-character statement limits).
+All extracted claims participate, so an agreeing first fact cannot hide a later conflict.
+The same evidence pair is reported once. Record-wide qualification is checked even outside
+that extraction window: an `If approved` or `Proposed settings` heading must not turn its
+following sentences into unconditional facts. Supported conditional, historical, example,
+modal, and ambiguous wording conservatively excludes the whole record.
 
 When the initial retrieval includes a supported claim, recall inspects a bounded relevance
 window in that same authorized namespace: requested `k + min(k, 32)` candidates, reusing
@@ -276,7 +311,7 @@ as if they belonged to the original namespace. No timestamp, insertion order, ID
 metadata, graph direction, or vector similarity is treated as proof of truth.
 
 This is conservative conflict surfacing, not general contradiction detection or automatic
-resolution. It can miss different phrasings, unsupported languages/values, distant candidates,
+resolution. It can miss unlisted phrasings, unsupported languages/values, distant candidates,
 cross-namespace conflicts, or qualified claims. A missing diagnostic does not certify
 consistency. It also does not change ingest-time duplicate blocking or connect raw memories
 to the separate governed-knowledge authority model.
@@ -301,6 +336,31 @@ Controlled tests additionally cover thresholds, tenant/namespace isolation, dupl
 summary/explicit-status exclusions, opt-out behavior, metadata, archive mutation, output bounds,
 and preservation of primary ranking. Conflict reports are named
 `recall-realistic-conflicts-net*.json`, so CI uploads them with the existing evaluation reports.
+
+### Broader detection comparison
+
+`recall-conflicts-broad-v1.json` adds 32 cases without changing the original 36 questions,
+the earlier 16 conflict cases, or their labels. Each new case again seeds the original 52
+memories plus two opaque-ID assertions and runs all three routes with the real ONNX model.
+Sixteen positive cases cover paraphrased settings/ownership/location, explicit denial,
+later sentences, `k: 1`, and persisted restarts. Sixteen negative controls cover equivalent
+phrasing, compatible exclusions, multiple supported platforms, different predicates,
+project/environment/region roles, qualifications, and historical queries.
+
+Against merged PR #35 (`733f5ab`), the 48 positive query/route observations had zero reported
+conflicts. With broader detection all 48 are reported; all 48 negative observations remain
+free of conflict warnings. The earlier supplement retains its 24/24 positives and zero
+false alarms in 24 controls. Direct/expert results, scores, and diagnostics agree. Primary
+result lists and quality metrics for the original 108 observations are unchanged.
+
+Additional controlled tests compare later claims when the first claim agrees, deduplicate
+multiple disagreements between the same evidence pair, preserve paragraph qualification,
+and check private/foreign evidence and extraction bounds. Two old grammar-rejection cases
+(`is not 30 seconds`, `supports Python`) are now supported and are covered by explicit
+denial and compatibility tests. The fixtures remain inspected, authored regression cases;
+these numbers do not establish open-domain semantic accuracy. No model/dependency, inference
+call, result schema, retrieval limit, or authority-resolution behavior was added. New reports
+are named `recall-realistic-broader-conflicts-net*.json` and are included in the CI artifact.
 
 ## Run and review
 
