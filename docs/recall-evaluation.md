@@ -12,13 +12,15 @@ fixture, not production telemetry or an agent answer-generation benchmark.
 Direct, expert-routed, and broadcast recall now use the same namespace retrieval pipeline:
 
 1. Apply `hybrid`, `rerank`, `minScore`, and `summaryFirst` to retrieval.
-2. If the live results are empty or low-scoring, search archived memories with those same options.
+2. For eligible broad topic queries, probe a bounded live-and-archived candidate pool as described
+   below. Otherwise, search archives only if the live results are empty or low-scoring.
 3. Honor `expandGraph` and apply `spectralMode` within each searched namespace. With reranking
    enabled, prefer unmarked candidates over explicitly superseded records for current-answer
    queries, both before namespace truncation and during final selection.
-4. Select at most `k` results, keeping linked sources alongside retained summaries when
-   possible; broadcast considers up to `k` from each readable namespace and applies the
-   same selection policy to the combined candidates.
+4. Select at most `k` results. Broad topic selection favors complementary evidence; other
+   queries keep linked sources alongside retained summaries when possible. Broadcast combines
+   the retained candidates from readable namespaces, including the wider broad topic pools,
+   before applying the final selection policy.
 5. Diagnose supported unmarked disagreements against a bounded relevance window (see below).
 6. Record access only for primary returned memories, using their actual source namespaces. Recover
    returned archived search hits with cosine similarity at least 0.7 only when the caller
@@ -35,7 +37,8 @@ memories that happen to share an ID.
 Explicit `summaryFirst: true` is honored after hybrid/token/spectral ranking and before
 the final limit. When Core `SearchRequest.Diversity` is also requested, MMR still selects
 the result set and summary priority orders that selection.
-The default remains false; the summary/source policy below applies with graph expansion on.
+The default remains false; the summary/source pairing below applies with graph expansion on
+when broad topic coverage does not activate.
 MCP names, argument defaults, primary result schemas, and route strategy labels are unchanged.
 Recall adds an optional top-level `conflicts` diagnostic for supported unmarked disagreements.
 
@@ -49,7 +52,7 @@ excluded records, even as its sole top result. Namespace, tenant and minimum-cos
 continue to apply through the index's scoped entry resolver.
 
 Explicit archive searches still return matching archives, and `recall` can deliberately
-widen to archived memories through its existing low-confidence fallback. Raw search does
+widen to archived memories through its low-confidence fallback or broad topic coverage. Raw search does
 not resurrect returned archives. Empty lifecycle sets return no results.
 
 `HybridSearchFilterTests` covers these contracts, keyword-only rescue, the semantic gate
@@ -70,7 +73,7 @@ pools; queries with no lexical terms use cosine alone. Previously, a namespace t
 scores while another taking rank fusion returned much smaller RRF-based scores. Comparing
 those values directly could exclude the correct project's memories from the final budget.
 
-Calibration occurs after each namespace's retrieval, archive fallback, graph expansion and
+For queries outside the broad topic policy below, calibration occurs after each namespace's retrieval, archive fallback, graph expansion and
 spectral selection. Those stages still determine the candidates; their local score boosts
 are not carried into the cross-namespace relevance comparison. Final status ordering and
 summary/source pairing still apply. The merge keeps namespace-qualified identities and the
@@ -96,6 +99,74 @@ Hit@5 remains 1.0 and stale-top-answer rate remains zero. No baseline or labels 
 
 These are inspected regression cases, not a claim about unseen query quality.
 
+## Broad topic coverage
+
+Short topic queries can lose supporting facts when the initial five candidates contain an
+overview and several similar general notes. With the public defaults, recall now probes
+`k + min(max(k, 15), 32)` live-and-archived candidates per searched namespace (20 for `k: 5`).
+This is a search result budget; the index's existing internal retrieval and graph expansion
+still apply. The final public limit stays `k`, and no extra embedding or model call is made.
+
+The policy requires hybrid search, reranking, `summaryFirst: false`, current intent, and
+`spectralMode: auto` or `broad`. The existing broad heuristic must identify a short conceptual
+query (fewer than five words, without numbers or a quoted phrase). Question prefixes such as
+`who`, `what`, and `how` keep the prior selection policy. A distinct, non-summary,
+non-superseded source must contain a query term that occurs in at most half of the distinct
+source texts. Environment/overview terms (`production`, `staging`, `development`, `testing`,
+`overview`, `summary`) cannot activate coverage alone. If no distinguishing topic evidence
+exists, recall uses the prior pipeline, including confidence-triggered archive fallback.
+This keeps generic project overviews from overemphasizing an incidental matching word.
+
+Eligible candidates use 60% actual query cosine and 40% weighted query-term coverage.
+Terms common throughout the candidate pool receive less weight than distinguishing topics;
+exact text copies do not count as independent documents. Local normalization bridges common
+forms such as cache/caching, retry/retries, and retrieval/retrieved without changing the
+index tokenizer or raw search. Graph expansion and broad cluster ranking then apply as before.
+Broadcast recalibrates authorized candidates together and applies a soft 25% discount to
+other namespaces when a namespace name matches a query term. This is a ranking hint, not a
+filter or a permission rule; namespace-qualified IDs and search evidence are retained.
+
+Final selection preserves explicit status priority and the strongest first hit. Subsequent
+choices balance relevance (80%) against the maximum cosine similarity to an already selected
+candidate (20%). Sources are compared with sources, and summaries with summaries: a useful
+overview must not suppress its own evidence. This replaces the fixed two-source pairing
+only for an activated broad topic pool. Diversity can change order without changing returned
+scores. `expandGraph: false` still prevents graph additions, while topic selection can use
+independently retrieved sources. Archives can complement a confident live overview, but only
+returned, eligible primary hits receive the existing access/resurrection updates.
+
+### Coverage evaluation
+
+Against merged PR #39 (`69dcfe5`), the original six broad questions improve from **8/18 to
+12/18 labeled sources** within five results on each route. Caching improves from 1/3 to 3/3,
+retries from 2/3 to 3/3, and retrieval from 1/3 to 2/3. The other three broad cases retain
+their measured source coverage. The original 30 non-broad questions keep their result IDs
+and quality metrics; no original per-query quality metric regresses. Existing conflict and
+resolution gates still pass. One broad timeout case changes which unresolved claim is the
+primary result, while retaining both claims in its warning.
+
+`recall-broad-v1.json` supplements the unchanged original corpus with 12 graded questions:
+the six broad topics and six short paraphrases. It credits alternative useful sources and
+groups them into answer facets. Grades are 2 for direct evidence, 1 for useful context, and
+0 for unlisted records. Labels were authored before implementation, and
+`recall-broad-v1.baseline.json` freezes the pre-change measurements. Every query/route must
+cover at least two facets and retain its baseline facet count and graded nDCG@5.
+
+| Measure | Before | After |
+|---------|--------|-------|
+| Mean facet coverage, all routes | 58.3% | 80.6% |
+| Graded nDCG@5, direct/expert | 0.6075 | 0.7583 |
+| Graded nDCG@5, broadcast | 0.5982 | 0.7500 |
+
+Reports are `recall-realistic-broad-coverage-net*.json` and join the existing CI artifacts.
+Controlled cases cover sources outside the initial five without graph links, archived
+context and final-only mutations, score thresholds, opt-outs, short questions, namespace
+and tenant isolation, duplicate IDs, morphology and candidate bounds. These are inspected,
+authored regression cases, not a blind holdout or a production accuracy/latency guarantee.
+Coverage remains incomplete: the original source metric is 12/18, and the graded supplement
+still returns some unlisted context. The bounded candidate pool, English lexical heuristics,
+and namespace hint cannot guarantee coverage for arbitrary queries or larger corpora.
+
 ## Summary and source selection
 
 An overview can link many unrelated facts. Its links do not establish that those facts form
@@ -108,7 +179,7 @@ by their query cosine, clamped to `[0, 1]`. This ranks the drilldown by query re
 comparing raw cosine to hybrid/RRF scores or giving every linked fact the same score.
 Already-retrieved candidates keep their scores.
 
-With default selection, each retained summary can bring up to two of its highest-scored
+Outside activated broad topic coverage, each retained summary can bring up to two of its highest-scored
 linked non-summary candidates into the result budget. This allows an overview, two supporting
 details, and independent hits within the default five slots. The highest-ranked hit after status ordering is
 protected; small budgets and earlier pairings can leave fewer source slots. Supporting
@@ -137,7 +208,7 @@ is obsolete after the handover.` Mentions in other records, negations (`is not o
 conditional wording (`is obsolete only if ...`) are not enough. It does not inspect memory IDs,
 creation/access dates, fixture labels, or graph direction to infer which fact is correct.
 
-If the initial retrieval contains a superseded candidate and fewer than `k` unmarked alternatives,
+Outside the already widened broad topic pool, if the initial retrieval contains a superseded candidate and fewer than `k` unmarked alternatives,
 recall retries that search once with a requested pool of `2k`. Existing vector/token oversampling
 still applies, and `minScore`, lifecycle filters, tenant, and namespace permissions stay fixed.
 This prevents a stale first hit from hiding a replacement just outside a small result limit.
@@ -357,7 +428,7 @@ window in that same authorized namespace: requested `k + min(max(k, 8), 32)` can
 existing vector/status overfetch when sufficient. Vector reranking retains its existing
 internal 2x overfetch. At most 64 evidence candidates per namespace, 32 selected primary
 hits, and 8 distinct conflict pairs are examined/reported. The original `minScore`, tenant,
-and chosen lifecycle scope apply. Archives enter only through existing fallback; candidates
+and chosen lifecycle scope apply. Archives enter through fallback or activated broad topic coverage; candidates
 named in a reported conflict remain archived. Evidence-only hits receive no access or
 lifecycle update, and no text, metadata, or graph links are written by diagnosis.
 
@@ -552,7 +623,7 @@ possible retrieval failure.
 From the repository root:
 
 ```sh
-dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release --filter "FullyQualifiedName~RealisticRecallEvaluationTests|FullyQualifiedName~BroadRecall|FullyQualifiedName~RecallRouteConsistencyTests|FullyQualifiedName~RecallSummarySelectionTests|FullyQualifiedName~RecallFreshnessTests|FullyQualifiedName~RecallConflict|FullyQualifiedName~RecallResolution"
 ```
 
 This runs on .NET 8, 9, and 10. Reports are written under each framework's output directory

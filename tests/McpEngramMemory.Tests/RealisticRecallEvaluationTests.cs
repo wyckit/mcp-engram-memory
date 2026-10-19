@@ -153,6 +153,11 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
         // Gate every route so aggregate gains cannot hide a stale top answer returning.
         Assert.All(rows, r => Assert.Equal(0.0, r.StaleTop1));
         Assert.All(rows.Where(r => r.Id is "c03" or "c05"), r => Assert.Equal(1.0, r.Mrr));
+
+        // Wider broad-query candidates must retain complementary source evidence
+        // within the original five-result budget and unchanged relevance labels.
+        Assert.All(rows.Where(r => r.Id is "b03" or "b04"), r => Assert.Equal(1.0, r.SourceRecallAt5));
+        Assert.All(rows.Where(r => r.Id == "b05"), r => Assert.True(r.SourceRecallAt5 >= 2.0 / 3));
     }
 
     private static Observation Measure(Question q, string route, RecallResult result, Corpus corpus,

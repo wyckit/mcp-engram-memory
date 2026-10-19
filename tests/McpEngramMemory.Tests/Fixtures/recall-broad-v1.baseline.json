@@ -1,0 +1,223 @@
+{
+  "Version": 1,
+  "ReferenceCommit": "69dcfe5c2d44d4cd7629eb434eb410e5b6901f54",
+  "Description": "Pre-change graded baseline from the unchanged corpus. Keep per-question facet coverage and graded ranking while adding source coverage; do not regenerate automatically.",
+  "Observations": [
+    {
+      "Id": "operations",
+      "Route": "direct",
+      "Facets": 4,
+      "GradedNdcg": 0.7738931964842558
+    },
+    {
+      "Id": "operations",
+      "Route": "expert",
+      "Facets": 4,
+      "GradedNdcg": 0.7738931964842558
+    },
+    {
+      "Id": "operations",
+      "Route": "broadcast",
+      "Facets": 4,
+      "GradedNdcg": 0.7738931964842558
+    },
+    {
+      "Id": "operations-paraphrase",
+      "Route": "direct",
+      "Facets": 2,
+      "GradedNdcg": 0.6278248466415494
+    },
+    {
+      "Id": "operations-paraphrase",
+      "Route": "expert",
+      "Facets": 2,
+      "GradedNdcg": 0.6278248466415494
+    },
+    {
+      "Id": "operations-paraphrase",
+      "Route": "broadcast",
+      "Facets": 2,
+      "GradedNdcg": 0.4966197691292076
+    },
+    {
+      "Id": "recovery",
+      "Route": "direct",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "recovery",
+      "Route": "expert",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "recovery",
+      "Route": "broadcast",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "recovery-paraphrase",
+      "Route": "direct",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "recovery-paraphrase",
+      "Route": "expert",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "recovery-paraphrase",
+      "Route": "broadcast",
+      "Facets": 2,
+      "GradedNdcg": 0.6356712608573731
+    },
+    {
+      "Id": "caching",
+      "Route": "direct",
+      "Facets": 1,
+      "GradedNdcg": 0.42394720476936393
+    },
+    {
+      "Id": "caching",
+      "Route": "expert",
+      "Facets": 1,
+      "GradedNdcg": 0.42394720476936393
+    },
+    {
+      "Id": "caching",
+      "Route": "broadcast",
+      "Facets": 1,
+      "GradedNdcg": 0.42394720476936393
+    },
+    {
+      "Id": "caching-paraphrase",
+      "Route": "direct",
+      "Facets": 1,
+      "GradedNdcg": 0.31663651274616667
+    },
+    {
+      "Id": "caching-paraphrase",
+      "Route": "expert",
+      "Facets": 1,
+      "GradedNdcg": 0.31663651274616667
+    },
+    {
+      "Id": "caching-paraphrase",
+      "Route": "broadcast",
+      "Facets": 1,
+      "GradedNdcg": 0.31663651274616667
+    },
+    {
+      "Id": "retries",
+      "Route": "direct",
+      "Facets": 2,
+      "GradedNdcg": 0.6097426926720908
+    },
+    {
+      "Id": "retries",
+      "Route": "expert",
+      "Facets": 2,
+      "GradedNdcg": 0.6097426926720908
+    },
+    {
+      "Id": "retries",
+      "Route": "broadcast",
+      "Facets": 2,
+      "GradedNdcg": 0.6290102109696928
+    },
+    {
+      "Id": "retries-paraphrase",
+      "Route": "direct",
+      "Facets": 2,
+      "GradedNdcg": 0.7170533846952881
+    },
+    {
+      "Id": "retries-paraphrase",
+      "Route": "expert",
+      "Facets": 2,
+      "GradedNdcg": 0.7170533846952881
+    },
+    {
+      "Id": "retries-paraphrase",
+      "Route": "broadcast",
+      "Facets": 2,
+      "GradedNdcg": 0.7170533846952881
+    },
+    {
+      "Id": "retrieval",
+      "Route": "direct",
+      "Facets": 1,
+      "GradedNdcg": 0.4342290425657219
+    },
+    {
+      "Id": "retrieval",
+      "Route": "expert",
+      "Facets": 1,
+      "GradedNdcg": 0.4342290425657219
+    },
+    {
+      "Id": "retrieval",
+      "Route": "broadcast",
+      "Facets": 1,
+      "GradedNdcg": 0.4342290425657219
+    },
+    {
+      "Id": "retrieval-paraphrase",
+      "Route": "direct",
+      "Facets": 1,
+      "GradedNdcg": 0.45485397221040474
+    },
+    {
+      "Id": "retrieval-paraphrase",
+      "Route": "expert",
+      "Facets": 1,
+      "GradedNdcg": 0.45485397221040474
+    },
+    {
+      "Id": "retrieval-paraphrase",
+      "Route": "broadcast",
+      "Facets": 1,
+      "GradedNdcg": 0.45485397221040474
+    },
+    {
+      "Id": "production",
+      "Route": "direct",
+      "Facets": 3,
+      "GradedNdcg": 0.8869465982421278
+    },
+    {
+      "Id": "production",
+      "Route": "expert",
+      "Facets": 3,
+      "GradedNdcg": 0.8869465982421278
+    },
+    {
+      "Id": "production",
+      "Route": "broadcast",
+      "Facets": 3,
+      "GradedNdcg": 0.8869465982421278
+    },
+    {
+      "Id": "production-paraphrase",
+      "Route": "direct",
+      "Facets": 3,
+      "GradedNdcg": 0.7738931964842558
+    },
+    {
+      "Id": "production-paraphrase",
+      "Route": "expert",
+      "Facets": 3,
+      "GradedNdcg": 0.7738931964842558
+    },
+    {
+      "Id": "production-paraphrase",
+      "Route": "broadcast",
+      "Facets": 3,
+      "GradedNdcg": 0.7738931964842558
+    }
+  ]
+}
