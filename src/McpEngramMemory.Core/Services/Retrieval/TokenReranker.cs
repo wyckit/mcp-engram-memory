@@ -9,6 +9,17 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 /// </summary>
 public sealed class TokenReranker : IReranker
 {
+    private readonly Func<CognitiveSearchResult, float>? _cosineScore;
+
+    public TokenReranker() { }
+
+    /// <summary>
+    /// Use an explicit cosine score when candidates have incomparable upstream
+    /// scores. Also scores singleton pools so relevance is independent of pool size.
+    /// </summary>
+    public TokenReranker(Func<CognitiveSearchResult, float> cosineScore) =>
+        _cosineScore = cosineScore ?? throw new ArgumentNullException(nameof(cosineScore));
+
     // Weight for blending cosine score with reranker score
     private const float CosineWeight = 0.6f;
     private const float RerankWeight = 0.4f;
@@ -20,7 +31,7 @@ public sealed class TokenReranker : IReranker
         string queryText,
         IReadOnlyList<CognitiveSearchResult> results)
     {
-        if (results.Count <= 1 || string.IsNullOrWhiteSpace(queryText))
+        if (results.Count == 0 || (_cosineScore is null && results.Count == 1) || string.IsNullOrWhiteSpace(queryText))
             return results;
 
         var queryTokens = BM25Index.Tokenize(queryText);
@@ -34,7 +45,7 @@ public sealed class TokenReranker : IReranker
         foreach (var r in results)
         {
             float rerankScore = ComputeRerankScore(r.Text, queryTokens, querySet, queryBigrams);
-            float finalScore = CosineWeight * r.Score + RerankWeight * rerankScore;
+            float finalScore = CosineWeight * (_cosineScore?.Invoke(r) ?? r.Score) + RerankWeight * rerankScore;
             scored.Add((r, finalScore));
         }
 

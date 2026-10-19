@@ -268,7 +268,11 @@ public sealed class CompositeTools
             allResults.AddRange(candidates);
         }
 
-        return await CompleteRecallAsync("broadcast", null, allResults, options,
+        var merged = options.Hybrid && options.PreferCurrent &&
+            allResults.Select(c => c.Namespace).Distinct().Skip(1).Any()
+            ? CalibrateBroadcastScores(query, vector, allResults)
+            : allResults;
+        return await CompleteRecallAsync("broadcast", null, merged, options,
             $"Searched {namespaces.Count} namespace(s), no expert match").ConfigureAwait(false);
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
@@ -482,7 +486,6 @@ public sealed class CompositeTools
             }
             var results = Retrieve(options.K);
             var evidence = results;
-            bool widened = false;
             // A superseded top hit must not hide its replacement just outside k.
             // Retry once only if status demotion would leave fewer than k unmarked
             // hits. Vector reranking may already have retrieved enough alternatives.
@@ -492,13 +495,13 @@ public sealed class CompositeTools
                 if (superseded > 0 && results.Count - superseded < options.K)
                 {
                     results = evidence = Retrieve(options.K * 2);
-                    widened = true;
                 }
                 // A conflicting value can sit just outside k even without graph links.
+                // Leave a small evidence floor for repeated copies even when k=1.
                 // Probe only for supported factual claims, with at most 32 extra hits.
                 // Diagnostic evidence never changes the primary relevance selection.
-                int evidenceCount = options.K + Math.Min(options.K, Math.Min(32, int.MaxValue - options.K));
-                if (!widened && results.Count < evidenceCount &&
+                int evidenceCount = options.K + Math.Min(Math.Max(options.K, 8), Math.Min(32, int.MaxValue - options.K));
+                if (evidence.Count < evidenceCount &&
                     results.Any(r => !r.IsSummaryNode && RecallConflictDetection.Parse(r.Text) is not null))
                     evidence = Retrieve(evidenceCount);
             }
@@ -545,6 +548,35 @@ public sealed class CompositeTools
         results.OrderByDescending(r => options.SummaryFirst && r.IsSummaryNode)
             .ThenBy(r => options.PreferCurrent && RecallFreshness.IsSuperseded(r.Text))
             .ThenByDescending(r => r.Score);
+
+    private IReadOnlyList<RecallCandidate> CalibrateBroadcastScores(
+        string query, float[] vector, IReadOnlyList<RecallCandidate> candidates)
+    {
+        var output = new List<RecallCandidate>();
+        float queryNorm = VectorMath.Norm(vector);
+        // Namespace-local hybrid paths return cosine, boosted cosine, or RRF.
+        // Compare final authorized candidates on the same relevance scale. Local
+        // retrieval, archive fallback and raw search retain their existing scores.
+        foreach (var group in candidates.GroupBy(c => c.Namespace))
+        {
+            // The same memory may also arrive as another namespace's graph neighbor.
+            // Retain its own search provenance for diagnosis and recovery eligibility.
+            var byId = group.GroupBy(c => c.Result.Id).Select(g => g
+                .OrderByDescending(c => c.ConflictEvidence is not null)
+                .ThenByDescending(c => c.Result.Score).First()).ToDictionary(c => c.Result.Id);
+            var cosines = new Dictionary<string, float>();
+            foreach (var candidate in byId.Values)
+                if (_index.Get(candidate.Result.Id, group.Key, _access.TenantId) is { } entry &&
+                    entry.Vector.Length == vector.Length)
+                    cosines[candidate.Result.Id] = VectorMath.Dot(vector, entry.Vector) /
+                        (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
+            var reranker = new TokenReranker(r => cosines[r.Id]);
+            foreach (var result in reranker.Rerank(query,
+                byId.Values.Where(c => cosines.ContainsKey(c.Result.Id)).Select(c => c.Result).ToList()))
+                output.Add(byId[result.Id] with { Result = result });
+        }
+        return output;
+    }
 
     private IReadOnlyList<RecallCandidate> SelectRecallCandidates(
         IEnumerable<RecallCandidate> candidates, RecallOptions options)
@@ -656,21 +688,29 @@ public sealed class CompositeTools
             if (candidate.Result.IsSummaryNode || candidate.ConflictEvidence is null) continue;
             var claims = Claims(candidate.Namespace, candidate.Result);
             if (claims.Count == 0) continue;
+            // A selected copy can hide the original cited record. Include records
+            // expressing the same normalized claim as diagnostic anchors, preserving
+            // their actual IDs. Copies are not votes and receive no access updates.
+            var anchors = candidate.ConflictEvidence.Where(r => !r.IsSummaryNode &&
+                    Claims(candidate.Namespace, r).Any(claims.Contains))
+                .Prepend(candidate.Result).DistinctBy(r => r.Id);
+            foreach (var anchor in anchors)
             foreach (var alternative in candidate.ConflictEvidence)
             {
-                if (alternative.Id == candidate.Result.Id || alternative.IsSummaryNode) continue;
+                if (alternative.Id == anchor.Id || alternative.IsSummaryNode) continue;
+                var anchorClaims = Claims(candidate.Namespace, anchor).Where(claims.Contains);
                 var others = Claims(candidate.Namespace, alternative);
-                var disagreement = (from claim in claims from other in others
+                var disagreement = (from claim in anchorClaims from other in others
                     where claim.ConflictsWith(other) select (Claim: claim, Other: other)).FirstOrDefault();
                 if (disagreement.Claim is not { } match) continue;
-                var first = candidate.Result.Id;
+                var first = anchor.Id;
                 var second = alternative.Id;
                 if (StringComparer.Ordinal.Compare(first, second) > 0) (first, second) = (second, first);
                 if (!seen.Add((candidate.Namespace, first, second))) continue;
                 string basis = match.Negated != disagreement.Other.Negated || match.Kind == "proposition"
                     ? "explicit_negation" : "same_subject_different_value";
                 conflicts.Add(new RecallConflict("unresolved", basis, match.Subject,
-                    [new(candidate.Result.Id, candidate.Namespace, candidate.Result.Text!),
+                    [new(anchor.Id, candidate.Namespace, anchor.Text!),
                      new(alternative.Id, candidate.Namespace, alternative.Text!)]));
                 if (conflicts.Count == 8) return conflicts;
             }

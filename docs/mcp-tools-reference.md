@@ -73,12 +73,19 @@ current-answer queries. Recognized historical/comparison queries retain relevanc
 and `rerank: false` opts out of that selection policy. Superseded archived records remain
 archived when recalled. See [status cues and limitations](recall-evaluation.md#superseded-answers-and-historical-queries).
 
+When multiple namespaces contribute to default current-intent hybrid recall, broadcast
+compares candidates using a shared cosine/token relevance scale. This prevents incompatible
+namespace-local hybrid scores from crowding out the matching project. Namespace retrieval
+and fallback remain unchanged; final broadcast scores/order can change. See
+[merge scoring and measured coverage](recall-evaluation.md#comparable-broadcast-scores).
+
 Default current-intent recall also reports possible unmarked disagreements in an optional
 `conflicts` array. Each item defaults to `status: "unresolved"`, a detection `basis`
 (`same_subject_different_value` or `explicit_negation`), the `subject`,
 and two evidence records containing `id`, `ns`, and original `text`. These are candidates
 for verification, not a decision about which claim is correct. Ranked results and scores
-stay unchanged; evidence can include a hit just outside `k`. The array is omitted when
+are not changed by diagnosis; evidence can include hits outside `k`, including the original
+record behind a selected equivalent copy. The array is omitted when
 no supported disagreement is found. Supported paraphrases, explicit denials, and multiple
 claims in a memory are compared without choosing a factual winner. See
 [scope and limits](recall-evaluation.md#unmarked-disagreements).
