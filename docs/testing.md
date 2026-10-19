@@ -74,6 +74,8 @@ Scale CI now requires that strict gate. See [scoped candidate recovery](recall-c
 for the fix, regression contract and remaining limitations.
 The [natural-question evidence correction](recall-natural-questions.md) adds
 regression assertions for six existing cases without changing the frozen labels.
+The [historical selection correction](recall-historical-selection.md) additionally
+requires the existing historical timeout source at rank one across every route.
 
 ## Tool profile count regression check
 

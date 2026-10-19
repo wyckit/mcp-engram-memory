@@ -18,12 +18,12 @@ public class NoisyRecallEvaluationTests(ITestOutputHelper output)
         var vectors = memories.Select(m => m.Text).Concat(corpus.Profiles.Select(p => p.Description)).Distinct()
             .ToDictionary(text => text, embedding.Embed);
         timer.Stop();
-        AssertNaturalQuestionEvidence(await Run(corpus, memories, embedding, vectors, timer.Elapsed.TotalMilliseconds, output));
+        AssertResolvedRecallCases(await Run(corpus, memories, embedding, vectors, timer.Elapsed.TotalMilliseconds, output));
     }
 
     // Preserve the frozen questions/labels and original blocker contract. These
     // formerly measured misses are now additional regression requirements.
-    internal static void AssertNaturalQuestionEvidence(string reportPath)
+    internal static void AssertResolvedRecallCases(string reportPath)
     {
         HashSet<string> fixedCases = ["owner-paraphrase", "endpoint-incident", "recovery-duration",
             "rollback-command", "underspecified-environment", "missing-secret"];
@@ -34,6 +34,11 @@ public class NoisyRecallEvaluationTests(ITestOutputHelper output)
         Assert.All(observations, o => Assert.True(
             o.GetProperty(o.GetProperty("Expected").GetArrayLength() == 0 ? "CorrectAbstention" : "AnswerHit").GetBoolean(),
             $"{o.GetProperty("Id")}/{o.GetProperty("Mode")}/{o.GetProperty("Phase")} lost its expected evidence outcome."));
+        var historical = report.RootElement.GetProperty("Observations").EnumerateArray()
+            .Where(o => o.GetProperty("Id").GetString() == "timeout-history").ToArray();
+        Assert.Equal(3 * 2, historical.Length);
+        Assert.All(historical, o => Assert.Equal(o.GetProperty("Expected")[0].GetString(),
+            o.GetProperty("ReturnedIds")[0].GetString()));
     }
 
     [Fact]
@@ -95,7 +100,7 @@ public class NoisyRecallScaleTests(ITestOutputHelper output)
         timer.Stop();
         foreach (int size in new[] { 1000, 5000 })
             foreach (int namespaces in new[] { 8, 32 })
-                NoisyRecallEvaluationTests.AssertNaturalQuestionEvidence(
+                NoisyRecallEvaluationTests.AssertResolvedRecallCases(
                     await Run(corpus, Generate(corpus, size, namespaces), embedding, vectors, timer.Elapsed.TotalMilliseconds, output));
     }
 }

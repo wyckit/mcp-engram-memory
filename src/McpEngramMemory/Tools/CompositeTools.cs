@@ -234,6 +234,8 @@ public sealed class CompositeTools
         if (rerank && !summaryFirst && queryEvidence is null &&
             (BroadRecallRanking.IsTopicQuery(query) || !options.PreferCurrent))
             options = options with { Scope = RecallQueryEvidence.ParseScope(query) };
+        if (rerank && !summaryFirst && !options.PreferCurrent)
+            options = options with { History = RecallHistorySelection.Parse(query) };
         if (ns is not null && !_access.CanRead(ns))
             return await CompleteRecallAsync("direct", ns, [], options,
                 $"No accessible memories in namespace '{ns}'.").ConfigureAwait(false);
@@ -480,7 +482,7 @@ public sealed class CompositeTools
 
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
         bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent, bool BroadCoverage,
-        RecallQueryEvidence? QueryEvidence, RecallQueryEvidence? Scope = null);
+        RecallQueryEvidence? QueryEvidence, RecallQueryEvidence? Scope = null, RecallHistorySelection? History = null);
 
     // Keep namespace provenance for selection and conflict evidence. Graph neighbors
     // may belong to another readable namespace; bare IDs are not storage keys.
@@ -531,7 +533,7 @@ public sealed class CompositeTools
                     results.Any(r => !r.IsSummaryNode && RecallConflictDetection.Parse(r.Text) is not null))
                     evidence = Retrieve(evidenceCount);
             }
-            return (OrderRecall(results, options).Take(take).ToList(), evidence.Take(64).ToList());
+            return (OrderRecall(results, options, ns).Take(take).ToList(), evidence.Take(64).ToList());
         }
 
         IReadOnlyList<CognitiveSearchResult> results = [], evidence = [];
@@ -558,7 +560,30 @@ public sealed class CompositeTools
             }
         }
 
-        if (!useBroad)
+        if (options.History is not null)
+        {
+            // A confident current hit says nothing about archive relevance to the
+            // requested period. Search all states, retaining the public result budget.
+            states = ["stm", "ltm", "archived"];
+            int historyCount = BroadRecallRanking.CandidateLimit(options.K);
+            (results, evidence) = Search(states, historyCount);
+            bool HistoricalSource(string? text) =>
+                (options.Scope is null || options.Scope.Matches(text, ns)) && options.History.Prefers(text, ns);
+            if (!results.Any(r => !r.IsSummaryNode && HistoricalSource(r.Text)))
+            {
+                // Noise can occupy the entire ranked window. The existing exact
+                // recovery path filters this authorized partition before truncation.
+                var recovered = _index.Rerank(query, _index.SearchEligible(new SearchRequest
+                {
+                    Query = vector, Namespace = ns, TenantId = _access.TenantId,
+                    K = historyCount, MinScore = options.MinScore, IncludeStates = states
+                }, e => !e.IsSummaryNode && HistoricalSource(e.Text)));
+                results = results.Concat(recovered).DistinctBy(r => r.Id).ToList();
+                evidence = results.Take(64).ToList();
+            }
+            deep = results.Any(r => r.LifecycleState == "archived");
+        }
+        else if (!useBroad)
         {
             // Preserve the existing confidence-triggered fallback for specific
             // queries, opt-outs, and overviews with no discriminating source topic.
@@ -624,7 +649,7 @@ public sealed class CompositeTools
 
         var sources = results.ToDictionary(r => r.Id, _ => ns);
         // Recovery eligibility uses semantic similarity, not RRF or graph-boosted scores.
-        var recoverable = results.Where(r => deep && r.LifecycleState == "archived")
+        var recoverable = results.Where(r => options.History is null && deep && r.LifecycleState == "archived")
             .Where(r => _index.Get(r.Id, ns, _access.TenantId) is { } entry &&
                 VectorMath.Dot(vector, entry.Vector) /
                     (VectorMath.Norm(vector) * VectorMath.Norm(entry.Vector) + 1e-9f) >= 0.7f)
@@ -650,9 +675,10 @@ public sealed class CompositeTools
     }
 
     private static IOrderedEnumerable<CognitiveSearchResult> OrderRecall(
-        IEnumerable<CognitiveSearchResult> results, RecallOptions options) =>
+        IEnumerable<CognitiveSearchResult> results, RecallOptions options, string ns) =>
         results.OrderByDescending(r => options.SummaryFirst && r.IsSummaryNode)
             .ThenBy(r => options.PreferCurrent && RecallFreshness.IsSuperseded(r.Text))
+            .ThenByDescending(r => !r.IsSummaryNode && options.History?.Prefers(r.Text, ns) == true)
             .ThenByDescending(r => r.Score);
 
     private IReadOnlyList<RecallCandidate> CalibrateBroadcastScores(
@@ -705,6 +731,7 @@ public sealed class CompositeTools
                 (options.Scope is null || options.Scope.Matches(c.Result.Text, c.Namespace)))
             .OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
             .ThenBy(c => options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))
+            .ThenByDescending(c => !c.Result.IsSummaryNode && options.History?.Prefers(c.Result.Text, c.Namespace) == true)
             .ThenByDescending(c => c.Result.Score)
             .ThenBy(c => c.Namespace, StringComparer.Ordinal).ThenBy(c => c.Result.Id, StringComparer.Ordinal)
             .DistinctBy(c => (c.Namespace, c.Result.Id)).ToList();
