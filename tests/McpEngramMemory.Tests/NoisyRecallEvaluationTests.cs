@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Tools;
 using static McpEngramMemory.Tests.NoisyRecallEvaluation;
@@ -17,7 +18,22 @@ public class NoisyRecallEvaluationTests(ITestOutputHelper output)
         var vectors = memories.Select(m => m.Text).Concat(corpus.Profiles.Select(p => p.Description)).Distinct()
             .ToDictionary(text => text, embedding.Embed);
         timer.Stop();
-        await Run(corpus, memories, embedding, vectors, timer.Elapsed.TotalMilliseconds, output);
+        AssertNaturalQuestionEvidence(await Run(corpus, memories, embedding, vectors, timer.Elapsed.TotalMilliseconds, output));
+    }
+
+    // Preserve the frozen questions/labels and original blocker contract. These
+    // formerly measured misses are now additional regression requirements.
+    internal static void AssertNaturalQuestionEvidence(string reportPath)
+    {
+        HashSet<string> fixedCases = ["owner-paraphrase", "endpoint-incident", "recovery-duration",
+            "rollback-command", "underspecified-environment", "missing-secret"];
+        using var report = JsonDocument.Parse(File.ReadAllText(reportPath));
+        var observations = report.RootElement.GetProperty("Observations").EnumerateArray()
+            .Where(o => fixedCases.Contains(o.GetProperty("Id").GetString()!)).ToArray();
+        Assert.Equal(fixedCases.Count * 3 * 2, observations.Length);
+        Assert.All(observations, o => Assert.True(
+            o.GetProperty(o.GetProperty("Expected").GetArrayLength() == 0 ? "CorrectAbstention" : "AnswerHit").GetBoolean(),
+            $"{o.GetProperty("Id")}/{o.GetProperty("Mode")}/{o.GetProperty("Phase")} lost its expected evidence outcome."));
     }
 
     [Fact]
@@ -79,6 +95,7 @@ public class NoisyRecallScaleTests(ITestOutputHelper output)
         timer.Stop();
         foreach (int size in new[] { 1000, 5000 })
             foreach (int namespaces in new[] { 8, 32 })
-                await Run(corpus, Generate(corpus, size, namespaces), embedding, vectors, timer.Elapsed.TotalMilliseconds, output);
+                NoisyRecallEvaluationTests.AssertNaturalQuestionEvidence(
+                    await Run(corpus, Generate(corpus, size, namespaces), embedding, vectors, timer.Elapsed.TotalMilliseconds, output));
     }
 }
