@@ -1,0 +1,350 @@
+{
+  "version": 1,
+  "description": "Supplement to unchanged recall-realistic-v1: graded relevance (2 direct evidence, 1 useful context, 0 unlisted), alternative sources grouped into facets. Authored before implementation, not blind validation. Broad operational queries credit several reasonable answers instead of requiring one arbitrary subset.",
+  "queries": [
+    {
+      "id": "operations",
+      "ns": "expert_atlas",
+      "query": "Atlas operations",
+      "grades": {
+        "atlas-summary": 1,
+        "atlas-timeout": 2,
+        "atlas-owner": 2,
+        "atlas-region": 2,
+        "atlas-endpoint": 2,
+        "atlas-rollback": 2,
+        "atlas-backup": 2,
+        "atlas-queue": 2,
+        "atlas-secrets": 2,
+        "atlas-retry": 2,
+        "atlas-drill": 2,
+        "atlas-error": 1,
+        "atlas-docs": 1
+      },
+      "facets": {
+        "deployment": [
+          "atlas-owner",
+          "atlas-rollback",
+          "atlas-secrets"
+        ],
+        "data": [
+          "atlas-region",
+          "atlas-backup"
+        ],
+        "availability": [
+          "atlas-endpoint",
+          "atlas-drill"
+        ],
+        "payments": [
+          "atlas-timeout",
+          "atlas-queue",
+          "atlas-retry"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "operations-paraphrase",
+      "ns": "expert_atlas",
+      "query": "Atlas operational overview",
+      "grades": {
+        "atlas-summary": 1,
+        "atlas-timeout": 2,
+        "atlas-owner": 2,
+        "atlas-region": 2,
+        "atlas-endpoint": 2,
+        "atlas-rollback": 2,
+        "atlas-backup": 2,
+        "atlas-queue": 2,
+        "atlas-secrets": 2,
+        "atlas-retry": 2,
+        "atlas-drill": 2,
+        "atlas-error": 1,
+        "atlas-docs": 1
+      },
+      "facets": {
+        "deployment": [
+          "atlas-owner",
+          "atlas-rollback",
+          "atlas-secrets"
+        ],
+        "data": [
+          "atlas-region",
+          "atlas-backup"
+        ],
+        "availability": [
+          "atlas-endpoint",
+          "atlas-drill"
+        ],
+        "payments": [
+          "atlas-timeout",
+          "atlas-queue",
+          "atlas-retry"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "recovery",
+      "ns": "expert_boreal",
+      "query": "Boreal recovery",
+      "grades": {
+        "boreal-summary": 1,
+        "boreal-drill": 2,
+        "boreal-restore": 2,
+        "boreal-region": 2,
+        "boreal-backup": 2
+      },
+      "facets": {
+        "rehearsal": [
+          "boreal-drill",
+          "boreal-restore"
+        ],
+        "geography": [
+          "boreal-region"
+        ],
+        "backups": [
+          "boreal-backup"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "recovery-paraphrase",
+      "ns": "expert_boreal",
+      "query": "Boreal recovery planning",
+      "grades": {
+        "boreal-summary": 1,
+        "boreal-drill": 2,
+        "boreal-restore": 2,
+        "boreal-region": 2,
+        "boreal-backup": 2
+      },
+      "facets": {
+        "rehearsal": [
+          "boreal-drill",
+          "boreal-restore"
+        ],
+        "geography": [
+          "boreal-region"
+        ],
+        "backups": [
+          "boreal-backup"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "caching",
+      "ns": "expert_engram",
+      "query": "Engram caching",
+      "grades": {
+        "engram-summary": 1,
+        "engram-cache": 2,
+        "engram-cache-header": 2,
+        "engram-incident": 2
+      },
+      "facets": {
+        "fingerprint": [
+          "engram-cache"
+        ],
+        "header-control": [
+          "engram-cache-header"
+        ],
+        "incident-lesson": [
+          "engram-incident"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "caching-paraphrase",
+      "ns": "expert_engram",
+      "query": "Engram cache behavior",
+      "grades": {
+        "engram-summary": 1,
+        "engram-cache": 2,
+        "engram-cache-header": 2,
+        "engram-incident": 2
+      },
+      "facets": {
+        "fingerprint": [
+          "engram-cache"
+        ],
+        "header-control": [
+          "engram-cache-header"
+        ],
+        "incident-lesson": [
+          "engram-incident"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "retries",
+      "ns": "expert_atlas",
+      "query": "Atlas retries",
+      "grades": {
+        "atlas-retry": 2,
+        "atlas-queue": 2,
+        "atlas-incident": 2,
+        "atlas-error": 1
+      },
+      "facets": {
+        "client-policy": [
+          "atlas-retry"
+        ],
+        "queue-policy": [
+          "atlas-queue"
+        ],
+        "idempotency": [
+          "atlas-incident",
+          "atlas-error"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "retries-paraphrase",
+      "ns": "expert_atlas",
+      "query": "Atlas retry handling",
+      "grades": {
+        "atlas-retry": 2,
+        "atlas-queue": 2,
+        "atlas-incident": 2,
+        "atlas-error": 1
+      },
+      "facets": {
+        "client-policy": [
+          "atlas-retry"
+        ],
+        "queue-policy": [
+          "atlas-queue"
+        ],
+        "idempotency": [
+          "atlas-incident",
+          "atlas-error"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "retrieval",
+      "ns": "expert_engram",
+      "query": "Engram retrieval",
+      "grades": {
+        "engram-summary": 1,
+        "engram-routing": 2,
+        "engram-specific": 2,
+        "engram-broad": 2,
+        "engram-model": 1,
+        "engram-metrics": 1,
+        "engram-duplicates": 1
+      },
+      "facets": {
+        "routing": [
+          "engram-routing"
+        ],
+        "specific-ranking": [
+          "engram-specific"
+        ],
+        "broad-ranking": [
+          "engram-broad"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "retrieval-paraphrase",
+      "ns": "expert_engram",
+      "query": "Engram retrieval overview",
+      "grades": {
+        "engram-summary": 1,
+        "engram-routing": 2,
+        "engram-specific": 2,
+        "engram-broad": 2,
+        "engram-model": 1,
+        "engram-metrics": 1,
+        "engram-duplicates": 1
+      },
+      "facets": {
+        "routing": [
+          "engram-routing"
+        ],
+        "specific-ranking": [
+          "engram-specific"
+        ],
+        "broad-ranking": [
+          "engram-broad"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "production",
+      "ns": "expert_boreal",
+      "query": "Boreal production",
+      "grades": {
+        "boreal-summary": 1,
+        "boreal-owner": 2,
+        "boreal-endpoint": 2,
+        "boreal-region": 2,
+        "boreal-backup": 2,
+        "boreal-queue": 2,
+        "boreal-retry": 2,
+        "boreal-drill": 2
+      },
+      "facets": {
+        "deployment": [
+          "boreal-owner"
+        ],
+        "availability": [
+          "boreal-endpoint",
+          "boreal-drill"
+        ],
+        "data": [
+          "boreal-region",
+          "boreal-backup"
+        ],
+        "payments": [
+          "boreal-queue",
+          "boreal-retry"
+        ]
+      },
+      "minFacets": 2
+    },
+    {
+      "id": "production-paraphrase",
+      "ns": "expert_boreal",
+      "query": "Boreal production overview",
+      "grades": {
+        "boreal-summary": 1,
+        "boreal-owner": 2,
+        "boreal-endpoint": 2,
+        "boreal-region": 2,
+        "boreal-backup": 2,
+        "boreal-queue": 2,
+        "boreal-retry": 2,
+        "boreal-drill": 2
+      },
+      "facets": {
+        "deployment": [
+          "boreal-owner"
+        ],
+        "availability": [
+          "boreal-endpoint",
+          "boreal-drill"
+        ],
+        "data": [
+          "boreal-region",
+          "boreal-backup"
+        ],
+        "payments": [
+          "boreal-queue",
+          "boreal-retry"
+        ]
+      },
+      "minFacets": 2
+    }
+  ]
+}
