@@ -11,6 +11,8 @@ tools with `ConstitutionMcpFilter`; embedded hosts compose the same Core service
 [Cognitive Constitution and Governed Core](cognitive-constitution.md) for the execution contract.
 
 The composite `recall` tool uses one retrieval pipeline for direct, expert, and broadcast routes.
+When automatic expert routing yields no eligible evidence, it tries the remaining candidates
+in its three-profile window, then falls back to authorized broadcast using the same query embedding.
 See [recall route semantics and evaluation](recall-evaluation.md) for option behavior and quality checks.
 
 ### Governance, Knowledge, Planning, and Assets

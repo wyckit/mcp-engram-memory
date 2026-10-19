@@ -244,24 +244,27 @@ public sealed class CompositeTools
             ? _dispatcher.Route(vector, topK: 3, threshold: 0.7f)
             : ("needs_expert", (IReadOnlyList<ExpertMatch>)Array.Empty<ExpertMatch>());
 
+        var attemptedExpertNamespaces = new HashSet<string>(StringComparer.Ordinal);
         if (status == "routed" && experts.Count > 0)
         {
-            // Routing metadata is global, but expert evidence is not. Select the best
-            // candidate the current principal may read; if none is accessible, fall
-            // through to the already-filtered broadcast path without revealing that a
-            // private expert namespace exists.
-            var bestExpert = experts.FirstOrDefault(e => _access.CanRead(e.TargetNamespace));
-            if (bestExpert is not null)
+            // A matching persona is not evidence. Try the existing (at most three)
+            // routing candidates in order, once per readable target namespace. The
+            // namespace pipeline applies scope, source and score requirements before
+            // deciding whether any eligible evidence remains, without recording access.
+            foreach (var expert in experts)
             {
-                _dispatcher.RecordDispatch(bestExpert.ExpertId);
+                if (!_access.CanRead(expert.TargetNamespace) || !attemptedExpertNamespaces.Add(expert.TargetNamespace))
+                    continue;
+                var (candidates, _, broad) = RecallNamespace(query, vector, expert.TargetNamespace, options);
+                if (candidates.Count == 0) continue;
 
-                var (candidates, _, broad) = RecallNamespace(query, vector, bestExpert.TargetNamespace, options);
-                return await CompleteRecallAsync("expert_routed", bestExpert.TargetNamespace, candidates, options with { BroadCoverage = broad },
-                    $"Routed to expert '{bestExpert.ExpertId}' ({bestExpert.TargetNamespace})").ConfigureAwait(false);
+                _dispatcher.RecordDispatch(expert.ExpertId);
+                return await CompleteRecallAsync("expert_routed", expert.TargetNamespace, candidates, options with { BroadCoverage = broad },
+                    $"Routed to expert '{expert.ExpertId}' ({expert.TargetNamespace})").ConfigureAwait(false);
             }
         }
 
-        // Strategy 3: No expert match — search all known namespaces
+        // Strategy 3: No expert with eligible evidence — authorized broadcast.
         var allResults = new List<RecallCandidate>();
         bool broadMerge = false;
         var namespaces = _index.GetNamespaces(_access.TenantId)
@@ -270,6 +273,9 @@ public sealed class CompositeTools
                         !n.StartsWith("active-debate", StringComparison.Ordinal)).ToList();
         foreach (var searchNs in namespaces)
         {
+            // Failed expert probes already searched this namespace with the same
+            // options/vector. Reuse that empty outcome for this call only.
+            if (attemptedExpertNamespaces.Contains(searchNs)) continue;
             var (candidates, _, broad) = RecallNamespace(query, vector, searchNs, options);
             broadMerge |= broad;
             allResults.AddRange(candidates);
@@ -283,7 +289,9 @@ public sealed class CompositeTools
             ? CalibrateBroadcastScores(query, vector, allResults)
             : allResults;
         return await CompleteRecallAsync("broadcast", null, merged, options,
-            $"Searched {namespaces.Count} namespace(s), no expert match").ConfigureAwait(false);
+            attemptedExpertNamespaces.Count == 0 ? $"Searched {namespaces.Count} namespace(s), no expert match" :
+                $"No eligible evidence in routed experts; searched {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s).")
+            .ConfigureAwait(false);
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
         catch (InvalidOperationException ex) { return $"Error: {ex.Message}"; }

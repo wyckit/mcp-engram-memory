@@ -1,0 +1,35 @@
+{
+  "description": "Fixed personas from the post-PR #41 assessment, frozen before routing implementation. The three overlapping specialists deliberately have no memories. Authored fault-injection cases, not production routing accuracy.",
+  "profiles": [
+    {
+      "id": "atlas",
+      "description": "Atlas service operations: production deployments, release approvals, gateway configuration, PostgreSQL backups, incident response and disaster recovery.",
+      "overlap": false
+    },
+    {
+      "id": "boreal",
+      "description": "Boreal service operations: production releases, readiness health checks, database hosting and backups, client retry policy and operational incidents.",
+      "overlap": false
+    },
+    {
+      "id": "engram",
+      "description": "Engram memory architecture: context caching and fingerprints, retrieval ranking, graph expansion, namespace security, tool profiles and persistence.",
+      "overlap": false
+    },
+    {
+      "id": "release_ops",
+      "description": "Deployment owners and rollback approvals for Atlas production releases. Maintains operational handover and deployment responsibility records.",
+      "overlap": true
+    },
+    {
+      "id": "database_ops",
+      "description": "Database backup schedules, retention policies and primary hosting regions for Atlas and Boreal services.",
+      "overlap": true
+    },
+    {
+      "id": "readiness_ops",
+      "description": "Production readiness endpoint paths, ports and health probe protocols for Atlas and Boreal services.",
+      "overlap": true
+    }
+  ]
+}
