@@ -44,7 +44,7 @@ Recall adds an optional top-level `conflicts` diagnostic for supported unmarked 
 For current-answer queries with hybrid search and reranking enabled, broadcast recalculates
 scores when more than one namespace contributes candidates. Each candidate uses the same
 blend of actual query cosine (60%) and token relevance (40%), including singleton namespace
-pools. Previously, a namespace taking the hybrid high-confidence shortcut returned cosine-based
+pools; queries with no lexical terms use cosine alone. Previously, a namespace taking the hybrid high-confidence shortcut returned cosine-based
 scores while another taking rank fusion returned much smaller RRF-based scores. Comparing
 those values directly could exclude the correct project's memories from the final budget.
 

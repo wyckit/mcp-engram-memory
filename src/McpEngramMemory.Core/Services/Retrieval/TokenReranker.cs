@@ -31,11 +31,13 @@ public sealed class TokenReranker : IReranker
         string queryText,
         IReadOnlyList<CognitiveSearchResult> results)
     {
-        if (results.Count == 0 || (_cosineScore is null && results.Count == 1) || string.IsNullOrWhiteSpace(queryText))
+        if (results.Count == 0 || (_cosineScore is null && results.Count == 1))
             return results;
 
+        if (string.IsNullOrWhiteSpace(queryText)) return WithoutLexicalTerms(results);
+
         var queryTokens = BM25Index.Tokenize(queryText);
-        if (queryTokens.Length == 0) return results;
+        if (queryTokens.Length == 0) return WithoutLexicalTerms(results);
 
         var querySet = queryTokens.ToHashSet();
         var queryBigrams = BuildBigrams(queryTokens);
@@ -58,6 +60,10 @@ public sealed class TokenReranker : IReranker
             s.Result.IsSummaryNode, s.Result.SourceClusterId,
             s.Result.AccessCount)).ToList();
     }
+
+    private IReadOnlyList<CognitiveSearchResult> WithoutLexicalTerms(IReadOnlyList<CognitiveSearchResult> results) =>
+        _cosineScore is null ? results : results.Select(r => r with { Score = _cosineScore(r) })
+            .OrderByDescending(r => r.Score).ToList();
 
     private static float ComputeRerankScore(
         string? docText,

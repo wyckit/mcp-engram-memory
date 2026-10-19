@@ -30,6 +30,19 @@ public class RecallCandidateCoverageTests
         Assert.True(result.Results[0].Score > result.Results[1].Score);
     }
 
+    [Fact]
+    public void BroadcastWithoutLexicalTermsStillUsesComparableScores()
+    {
+        using var store = new RecallTestStore();
+        store.Add("first", "atlas", Claim, cosine: .84f);
+        store.Add("second", "boreal", Other, cosine: .86f);
+        var result = Assert.IsType<RecallResult>(store.Tools().Recall("???", k: 2,
+            expandGraph: false, spectralMode: "none"));
+        Assert.Equal(new[] { "second", "first" }, result.Results.Select(r => r.Id));
+        Assert.Equal(.86f, result.Results[0].Score, precision: 5);
+        Assert.Equal(.84f, result.Results[1].Score, precision: 5);
+    }
+
     [Theory]
     [InlineData(Query, false)]
     [InlineData("What was the Atlas gateway timeout?", true)]
