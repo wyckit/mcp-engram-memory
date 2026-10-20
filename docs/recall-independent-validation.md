@@ -79,6 +79,16 @@ Inaccessible and read-only archived source records must not change access or
 lifecycle state. Recheck after restart. Any scope disclosure, unintended access
 mutation, lost acknowledged write, resurrected delete or hang fails execution.
 
+**Protocol correction after initial harness execution:** the access-count clause
+above was too strong for authorized reads. Existing `CompleteRecallAsync`
+intentionally records access for selected readable entries; only resurrection
+requires write access. The first load attempt stopped before concurrency on the
+public archived guard's count increasing from 1 to 2. Correct acceptance:
+inaccessible records retain both access count and lifecycle state; the readable
+archived guard retains its archived state and may accumulate authorized access.
+This corrects a harness assumption, preserves the existing API behavior and
+does not change any frozen question, expected answer or quality criterion.
+
 ### Limits and remaining release work
 
 Bounded single-process closed-loop load; no saturation/QPS capacity estimate,
