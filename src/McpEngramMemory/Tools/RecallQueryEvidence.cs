@@ -40,6 +40,7 @@ internal sealed partial class RecallQueryEvidence
     private readonly bool _recoveryDuration;
     private readonly bool _observedRecovery;
     private readonly bool _explicitValue;
+    private readonly bool _proposalQuestion;
     private readonly bool _rejectNonAnswers;
     private readonly bool _referenceQuestion;
     private readonly bool _scopeOnly;
@@ -54,8 +55,9 @@ internal sealed partial class RecallQueryEvidence
         _scopeOnly = scopeOnly;
         _observedRecovery = observedRecovery;
         _explicitValue = focus.Contains("value") && !referenceQuestion;
+        _proposalQuestion = focus.Overlaps(Terms("proposal propose proposed suggestion suggest suggested recommendation recommend"));
         // Shared project/resource words cannot substitute for a requested attribute.
-        _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency"))
+        _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency date rollback"))
             .ToHashSet(StringComparer.Ordinal);
     }
 
@@ -122,6 +124,9 @@ internal sealed partial class RecallQueryEvidence
         query = LooksAfter().Replace(query, "owns");
         query = RollBack().Replace(query, "rollback");
         query = AtWhatTime().Replace(query, "When ");
+        // A date request is still a factual question, including when the decision
+        // happened in the past. Do not turn it into a general history request.
+        query = OnWhatDate().Replace(query, "What date ");
         if (request.Success && !Question().IsMatch(query)) query = "What is " + query;
         // Preserve the requested timeout before stripping a contextual before/after tail.
         return TimingOut().Replace(query, " timeout");
@@ -176,9 +181,12 @@ internal sealed partial class RecallQueryEvidence
             // Scope is checked against the ORIGINAL statement above. Removing an
             // unrelated non-answer clause must never remove a contrary project or
             // environment and turn its remaining value into an in-scope answer.
-            string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement, _referenceQuestion) : statement;
+            string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement, _referenceQuestion, _proposalQuestion) : statement;
             var terms = Terms(answerText);
             precedingTerms = terms;
+            // Explicit date fields may use any representation. Recognize common
+            // calendar literals too when the source omits the word "date".
+            if (_attributes.Contains("date") && CalendarDate().IsMatch(answerText)) terms.Add("date");
             if (_explicitValue)
             {
                 // A rotation/activity note is not a value. A generic continuation
@@ -205,14 +213,18 @@ internal sealed partial class RecallQueryEvidence
         return scopeMatched;
     }
 
-    internal static string WithoutNonAnswerClauses(string statement, bool referenceQuestion = false) => string.Join(" ",
+    internal static string WithoutNonAnswerClauses(string statement, bool referenceQuestion = false,
+        bool allowProposals = false) => string.Join(" ",
         EvidenceClauses(statement).Where(clause =>
         {
             // Predicate-bound exclusions, not a blacklist of words such as
             // "unknown" anywhere in an otherwise useful explanation or value.
             if (MissingValue().IsMatch(clause) || DeliberatelyMissingValue().IsMatch(clause) ||
-                DeferredValue().IsMatch(clause) || OmittedValue().IsMatch(clause)) return false;
+                DeferredValue().IsMatch(clause) || PendingRecording().IsMatch(clause) ||
+                OmittedValue().IsMatch(clause) || OmissionContinuation().IsMatch(clause) || NoRecordedValue().IsMatch(clause) ||
+                EmbeddedQuestion().IsMatch(clause)) return false;
             if (referenceQuestion) return true;
+            if (QuestionAbout().IsMatch(clause) || (!allowProposals && ProposalPredicate().IsMatch(clause))) return false;
             if (ReferenceInstruction().IsMatch(clause)) return false;
             var reference = ReferencePredicate().Match(clause);
             // "is documented in the handbook as /ready" supplies a value;
@@ -228,7 +240,8 @@ internal sealed partial class RecallQueryEvidence
         {
             // Scan each fragment once, even for a long subject list with no verb.
             string fragment = statement[scanned..boundary.Index];
-            hasPredicate |= ClausePredicate().IsMatch(fragment) || MissingValue().IsMatch(fragment);
+            hasPredicate |= ClausePredicate().IsMatch(fragment) || MissingValue().IsMatch(fragment) ||
+                OmissionContinuation().IsMatch(fragment);
             scanned = boundary.Index + boundary.Length;
             // Do not split a subject list ("endpoint path and port are documented")
             // into a dangling topic-only prefix that would pass the lexical guard.
@@ -272,16 +285,30 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ReferenceQuestion();
     [GeneratedRegex(@",\s+|\s+(?:and|but|however|whereas)\s+", Options)]
     private static partial Regex Clauses();
-    [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must)\s+\S+", Options)]
+    [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must|asks?|lists?|proposes?|proposed|suggests?|suggested|recommends?|recommended)\s+\S+", Options)]
     private static partial Regex ClausePredicate();
     [GeneratedRegex(@"(?:\b(?:is|are|was|were|remains?|as)\s+(?:(?:currently|still)\s+)?|[:=]\s*)[<\[]?(?:TBD|TBC|unknown|undecided|unspecified|pending|not\s+(?:yet\s+)?(?:known|determined|decided|specified|documented|recorded|provided|available)|to\s+be\s+(?:determined|decided|confirmed|assigned))\b", Options)]
     private static partial Regex MissingValue();
+    // Keep additional predicates separate: growing MissingValue exceeds the
+    // non-backtracking engine's automaton limit on supported runtimes.
+    [GeneratedRegex(@"(?:\b(?:is|are|was|were|remains?)\s+(?:(?:still|currently)\s+)?|[:=]\s*)[<\[]?(?:to\s+be\s+(?:specified|documented|recorded|provided|selected|named)|not\s+(?:yet\s+)?(?:selected|named))\b", Options)]
+    private static partial Regex PendingRecording();
     [GeneratedRegex(@"\b(?:is|are|was|were)\s+(?:intentionally|deliberately)\s+not\s+(?:recorded|documented|provided|specified|available)\b", Options)]
     private static partial Regex DeliberatelyMissingValue();
     [GeneratedRegex(@"\b(?:does?|did)\s+not\s+(?:identify|name|specify|provide|record|state|include)\b", Options)]
     private static partial Regex OmittedValue();
-    [GeneratedRegex(@"\b(?:(?:will|must|needs?\s+to|has\s+to|have\s+to)\s+be|(?:has|have)\s+not\s+(?:yet\s+)?been)\s+(?:determined|decided|confirmed|assigned|specified|documented|recorded|provided)\b", Options)]
+    [GeneratedRegex(@"^\s*without\s+(?:naming|identifying|specifying|providing|recording)\b", Options)]
+    private static partial Regex OmissionContinuation();
+    [GeneratedRegex(@"\b(?:(?:will|must|needs?\s+to|has\s+to|have\s+to)\s+be|(?:has|have)\s+not\s+(?:yet\s+)?been)\s+(?:determined|decided|confirmed|assigned|specified|documented|recorded|provided|selected|named)\b", Options)]
     private static partial Regex DeferredValue();
+    [GeneratedRegex(@"\bno\s+(?:[\p{L}]+\s+){1,5}(?:(?:has|have)\s+been|is|are|was|were)\s+(?:recorded|provided|selected|named|assigned|specified|decided)\b", Options)]
+    private static partial Regex NoRecordedValue();
+    [GeneratedRegex(@":\s*(?:what|which|who|where|when|why|how)\b", Options)]
+    private static partial Regex EmbeddedQuestion();
+    [GeneratedRegex(@"\b(?:asks?|asking|questions?)\s+(?:about|whether|what|which|who|where|when|why|how)\b", Options)]
+    private static partial Regex QuestionAbout();
+    [GeneratedRegex(@"\b(?:proposes?|proposed|suggests?|suggested|recommends?|recommended)\s+\S+|\b(?:proposal|suggestion|recommendation)\s*(?:\b(?:is|are|was|were)\b|[:=])", Options)]
+    private static partial Regex ProposalPredicate();
     [GeneratedRegex(@"(?:^\s*|[:=]\s*)(?:see|consult|check|refer\s+to)\s+", Options)]
     private static partial Regex ReferenceInstruction();
     [GeneratedRegex(@"\b(?:is|are|was|were|remains?)\s+(?:only\s+)?(?:documented|recorded|listed|specified|described|detailed)\s+(?:in|at|under)\b", Options)]
@@ -312,6 +339,10 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ScopeStatusPrefix();
     [GeneratedRegex(@"^\s*at\s+what\s+time\s+", Options)]
     private static partial Regex AtWhatTime();
+    [GeneratedRegex(@"^\s*on\s+what\s+date\s+", Options)]
+    private static partial Regex OnWhatDate();
+    [GeneratedRegex(@"\b(?:\d{4}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2})\b", Options)]
+    private static partial Regex CalendarDate();
     [GeneratedRegex(@"\s+before\s+timing\s+out\b", Options)]
     private static partial Regex TimingOut();
     [GeneratedRegex(@"\bbacks?\s+up\b", Options)]
@@ -334,7 +365,7 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex CurrencyValue();
     [GeneratedRegex(@"[\p{L}\p{N}]+", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
     private static partial Regex Words();
-    [GeneratedRegex(@"(?:^\s*(?:who\s+owns?|(?:what|where)\s+(?:is|are)|(?:which|what)\s+command\s+rollback|when\s+(?:do|does)|how\s+long\s+(?:is|are))\s+(?:the\s+)?|\b(?:for|of)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)", Options)]
+    [GeneratedRegex(@"(?:^\s*(?:who\s+owns?|(?:what|where)\s+(?:is|are)|what\s+date\s+(?:is|are|was|were)|(?:which|what)\s+command\s+rollback|when\s+(?:do|does)|how\s+long\s+(?:is|are))\s+(?:the\s+)?|\b(?:for|of)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)", Options)]
     private static partial Regex SubjectSlots();
     [GeneratedRegex(@"\b(?:was|were)\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\s+([\p{L}]+)\b", Options)]
     private static partial Regex HistoricalSubject();
