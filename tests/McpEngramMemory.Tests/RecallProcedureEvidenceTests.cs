@@ -59,6 +59,7 @@ public sealed class RecallProcedureEvidenceTests
     [Theory]
     [InlineData("Nectar production restore procedure: first pause consumers, next restore the snapshot, finally resume consumers.", true)]
     [InlineData("Nectar production restore: 1) pause consumers, 2) restore the snapshot, 3) resume consumers.", true)]
+    [InlineData("Nectar production restore has one step: run restore-and-verify.", true)]
     [InlineData("Nectar production restore: pause consumers, restore the snapshot, then resume consumers. The operator name is unknown.", true)]
     [InlineData("Nectar production restore rehearsal took twelve minutes.", false)]
     [InlineData("Nectar production restore procedure is documented in the handbook.", false)]
@@ -80,6 +81,8 @@ public sealed class RecallProcedureEvidenceTests
     [InlineData("When is Nectar production restore procedure reviewed?", "Nectar production restore procedure is reviewed weekly.")]
     [InlineData("Which document contains Nectar production restore procedure?", "Nectar production restore procedure is documented in the handbook.")]
     [InlineData("Why does Nectar production restore procedure pause consumers?", "Nectar production restore procedure pauses consumers to prevent duplicate deliveries.")]
+    [InlineData("Which restore procedure was proposed for Nectar production?", "Nectar production proposes a restore procedure: pause consumers, restore the snapshot, then resume consumers.")]
+    [InlineData("What is Nectar production restore procedure?", "Nectar production restore procedure: run restore-latest.")]
     public void OtherQuestionsAboutAProcedureKeepTheirMeaning(string query, string text) =>
         Assert.True(RecallQueryEvidence.Parse(query)!.Matches(text, Ns));
 

@@ -10,7 +10,8 @@ namespace McpEngramMemory.Tools;
 internal sealed partial class RecallQueryEvidence
 {
     private static readonly HashSet<string> Noise = Terms("what which who where when why how is are do does did must should can could would will may I we you our their the a an current currently previous old now after before since during work works avoid avoids protect protects cause caused causes mean means use uses used each many often long stored memories memory relevant losing contain contains several first primary setting settings please tell show me about example fields included period quickly wait take keep nightly night January February March April May June July August September October November December");
-    private static readonly HashSet<string> ProcedureWords = Terms("step steps procedure sequence order");
+    private static readonly HashSet<string> ProcedureWords = Terms("step steps sequence order");
+    private static readonly HashSet<string> ProposalWords = Terms("proposal propose proposed suggestion suggest suggested recommendation recommend");
     private static readonly HashSet<string> ProcedureSyntax = new(
         "restore step steps procedure sequence order and".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> ScopeNoise = new((
@@ -60,7 +61,7 @@ internal sealed partial class RecallQueryEvidence
         _observedRecovery = observedRecovery;
         _restoreProcedure = restoreProcedure;
         _explicitValue = focus.Contains("value") && !referenceQuestion;
-        _proposalQuestion = focus.Overlaps(Terms("proposal propose proposed suggestion suggest suggested recommendation recommend"));
+        _proposalQuestion = focus.Overlaps(ProposalWords);
         // Shared project/resource words cannot substitute for a requested attribute.
         _attributes = focus.Intersect(Terms("budget password encryption lifetime retention timeout region endpoint jitter currency date rollback"))
             .ToHashSet(StringComparer.Ordinal);
@@ -83,7 +84,7 @@ internal sealed partial class RecallQueryEvidence
         if (!question && !scopeOnly) return null;
         bool referenceQuestion = ReferenceQuestion().IsMatch(query);
         var queryTerms = Terms(query);
-        bool procedureRequest = !referenceQuestion && ProcedureQuestion().IsMatch(query) &&
+        bool procedureRequest = !referenceQuestion && !queryTerms.Overlaps(ProposalWords) && ProcedureQuestion().IsMatch(query) &&
             queryTerms.Contains("restore") && queryTerms.Overlaps(ProcedureWords);
         var words = Words().Matches(query).Select(m => m.Value).ToArray();
         var names = words.Where(w => question && char.IsUpper(w[0]) && w.Any(char.IsLower) && !ScopeNoise.Contains(w) &&
@@ -122,7 +123,11 @@ internal sealed partial class RecallQueryEvidence
         // "Steps" and "order" request a procedure, not two additional facts.
         // Retain the operation and any resource qualifiers; evidence must also
         // contain ordered actions rather than just a duration or procedure label.
-        if (restoreProcedure) focus.ExceptWith(ProcedureWords);
+        if (restoreProcedure)
+        {
+            focus.ExceptWith(ProcedureWords);
+            focus.ExceptWith(Terms("procedure"));
+        }
         return focus.Count == 0 ? null : new(names, environments, focus,
             query.TrimStart().StartsWith("who ", StringComparison.OrdinalIgnoreCase) && focus.Contains("own"),
             query.TrimStart().StartsWith("when ", StringComparison.OrdinalIgnoreCase) && focus.Contains("backup"),
@@ -306,7 +311,7 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ProcedureQuestion();
     [GeneratedRegex(@"^\s*(?:what|which)\s+steps?\s+restore\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\b", Options)]
     private static partial Regex RestoreSubject();
-    [GeneratedRegex(@",\s*then\s+\p{L}|\bfirst\s+\p{L}[^.!?;\r\n]*\b(?:then|next|finally)\s+\p{L}|\b1\)\s+\p{L}[^.!?;\r\n]*\b2\)\s+\p{L}", Options)]
+    [GeneratedRegex(@",\s*then\s+\p{L}|\bfirst\s+\p{L}[^.!?;\r\n]*\b(?:then|next|finally)\s+\p{L}|\b1\)\s+\p{L}[^.!?;\r\n]*\b2\)\s+\p{L}|\b(?:only|single|one)\s+step\s*(?::|\bis\b)\s*\p{L}", Options)]
     private static partial Regex OrderedProcedure();
     [GeneratedRegex(@",\s+|\s+(?:and|but|however|whereas)\s+", Options)]
     private static partial Regex Clauses();
