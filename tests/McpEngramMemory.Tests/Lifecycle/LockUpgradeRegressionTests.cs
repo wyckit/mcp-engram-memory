@@ -48,9 +48,11 @@ public class LockUpgradeRegressionTests : IDisposable
     private readonly KnowledgeGraph _graph;
     private readonly MemoryDiffusionKernel _diffusion;
     private readonly LifecycleEngine _lifecycle;
+    private readonly ITestOutputHelper _output;
 
-    public LockUpgradeRegressionTests()
+    public LockUpgradeRegressionTests(ITestOutputHelper output)
     {
+        _output = output;
         _dataPath = Path.Combine(Path.GetTempPath(), $"lockupgrade_{Guid.NewGuid():N}");
         _persistence = new PersistenceManager(_dataPath);
         _index = new CognitiveIndex(_persistence);
@@ -117,27 +119,35 @@ public class LockUpgradeRegressionTests : IDisposable
     // One dedicated worker per lane, not one blocking ThreadPool work item per write.
     // Rejoin at every batch so maintenance and writers each make measured progress before
     // another batch starts. Work counts, seed sizes and latency limits stay explicit.
-    private void RunBatches(int batches, params Action<int, CancellationToken>[] lanes)
+    private void RunBatches(int batches, params (string Name, Action<int, CancellationToken> Work)[] lanes)
     {
         var phase = new Barrier(lanes.Length);
         var completed = new int[lanes.Length];
+        var progress = lanes.Select(lane => $"{lane.Name}: starting").ToArray();
+        string DescribeProgress() => string.Join("; ", Enumerable.Range(0, lanes.Length)
+            .Select(i => Volatile.Read(ref progress[i])));
         try
         {
-            _workers.Run(TimeSpan.FromSeconds(60), lanes.Select((lane, i) =>
+            _workers.RunWithDiagnostics(TimeSpan.FromSeconds(60), DescribeProgress, lanes.Select((lane, i) =>
                 (Action<CancellationToken>)(token =>
                 {
+                    var elapsed = Stopwatch.StartNew();
                     for (int batch = 0; batch < batches; batch++)
                     {
+                        Volatile.Write(ref progress[i], $"{lane.Name}: waiting, {completed[i]}/{batches} batches, {elapsed.ElapsedMilliseconds} ms");
                         phase.SignalAndWait(token);
                         token.ThrowIfCancellationRequested();
-                        lane(batch, token);
+                        Volatile.Write(ref progress[i], $"{lane.Name}: running batch {batch + 1}/{batches}, {elapsed.ElapsedMilliseconds} ms");
+                        lane.Work(batch, token);
                         completed[i]++;
                     }
+                    Volatile.Write(ref progress[i], $"{lane.Name}: completed {completed[i]}/{batches} batches, {elapsed.ElapsedMilliseconds} ms");
                 })).ToArray());
             Assert.All(completed, count => Assert.Equal(batches, count));
         }
         finally
         {
+            _output.WriteLine(DescribeProgress());
             if (_workers.IsQuiescent) phase.Dispose();
         }
     }
@@ -184,8 +194,8 @@ public class LockUpgradeRegressionTests : IDisposable
     {
         SeedNamespace("ns-a", 500);
         SeedNamespace("ns-b", 500);
-        RunBatches(3, (_, _) => Consolidate("ns-a"),
-            Writer("ns-b", 100, 3, 500), Writer("ns-a", 100, 3, 500));
+        RunBatches(3, ("consolidate ns-a", (_, _) => Consolidate("ns-a")),
+            ("write ns-b", Writer("ns-b", 100, 3, 500)), ("write ns-a", Writer("ns-a", 100, 3, 500)));
     }
 
     [Fact]
@@ -193,7 +203,8 @@ public class LockUpgradeRegressionTests : IDisposable
     {
         SeedNamespace("ns-decay-a", 500);
         SeedNamespace("ns-decay-b", 500);
-        RunBatches(4, (_, _) => Decay("ns-decay-a"), Writer("ns-decay-b", 100, 4, 500));
+        RunBatches(4, ("decay ns-a", (_, _) => Decay("ns-decay-a")),
+            ("write ns-b", Writer("ns-decay-b", 100, 4, 500)));
     }
 
     [Fact]
@@ -202,8 +213,8 @@ public class LockUpgradeRegressionTests : IDisposable
         SeedNamespace("ns-autolink", 200);
         var scanner = new AutoLinkScanner(_index, _graph,
             new McpEngramMemory.Core.Services.Intelligence.DuplicateDetector());
-        RunBatches(3, (_, _) => Assert.True(scanner.Scan("ns-autolink", threshold: null,
-            maxNewEdges: null, tenantId: "").ScannedEntries > 0), Writer("ns-autolink", 50, 3, 200));
+        RunBatches(3, ("auto-link", (_, _) => Assert.True(scanner.Scan("ns-autolink", threshold: null,
+            maxNewEdges: null, tenantId: "").ScannedEntries > 0)), ("write", Writer("ns-autolink", 50, 3, 200)));
     }
 
     [Fact]
@@ -214,8 +225,8 @@ public class LockUpgradeRegressionTests : IDisposable
                 $"ltm seed {i}", lifecycleState: "ltm"));
         SeedNamespace("ns-accretion-b", 300);
         var scanner = new McpEngramMemory.Core.Services.Intelligence.AccretionScanner(_index);
-        RunBatches(2, (_, _) => Assert.True(scanner.ScanNamespace("ns-accretion", tenantId: "",
-            epsilon: 0.15f, minPoints: 3).ScannedCount > 0), Writer("ns-accretion-b", 100, 2, 300));
+        RunBatches(2, ("accretion", (_, _) => Assert.True(scanner.ScanNamespace("ns-accretion", tenantId: "",
+            epsilon: 0.15f, minPoints: 3).ScannedCount > 0)), ("write", Writer("ns-accretion-b", 100, 2, 300)));
     }
 
     [Fact]
@@ -232,12 +243,12 @@ public class LockUpgradeRegressionTests : IDisposable
         // Every maintenance lane completes two passes, instead of running an unbounded loop
         // until 200 queued writer tasks happen to get scheduled. Both namespaces get 100 writes.
         RunBatches(2,
-            (_, _) => Decay("stress-a"),
-            (_, _) => Consolidate("stress-a"),
-            (_, _) => Assert.True(autoLink.Scan("stress-b", threshold: null,
-                maxNewEdges: null, tenantId: "").ScannedEntries > 0),
-            (_, _) => Assert.True(accretion.ScanNamespace("stress-b", tenantId: "").ScannedCount > 0),
-            Writer("stress-a", 100, 2, 200),
-            Writer("stress-b", 100, 2, 200));
+            ("decay", (_, _) => Decay("stress-a")),
+            ("consolidate", (_, _) => Consolidate("stress-a")),
+            ("auto-link", (_, _) => Assert.True(autoLink.Scan("stress-b", threshold: null,
+                maxNewEdges: null, tenantId: "").ScannedEntries > 0)),
+            ("accretion", (_, _) => Assert.True(accretion.ScanNamespace("stress-b", tenantId: "").ScannedCount > 0)),
+            ("write ns-a", Writer("stress-a", 100, 2, 200)),
+            ("write ns-b", Writer("stress-b", 100, 2, 200)));
     }
 }
