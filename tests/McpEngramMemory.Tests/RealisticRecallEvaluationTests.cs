@@ -16,7 +16,7 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
     [InlineData("atlas-timeout-old", "atlas-timeout", "What was the Atlas gateway timeout before the May incident review?")]
     [InlineData("atlas-owner-old", "atlas-owner", "Who was the Atlas deployment owner before the platform handover?")]
     [InlineData("atlas-region-old", "atlas-region", "Where was the Atlas primary database before the June migration?")]
-    public void HistoricalQuestionsPreserveBothVersionsAndRelevanceOrder(string historicalId, string currentId, string query)
+    public void HistoricalQuestionsPreferTheRequestedVersionAndPreserveBothSources(string historicalId, string currentId, string query)
     {
         var corpus = JsonSerializer.Deserialize<Corpus>(File.ReadAllText(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", "recall-realistic-v1.json")), Json)!;
@@ -29,8 +29,7 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
             foreach (var memory in pair)
                 store.Index.Upsert(new CognitiveEntry(memory.Id, embedding.Embed(memory.Text), memory.Ns,
                     memory.Text, lifecycleState: memory.State));
-            // History bypasses currentness selection; do not assume a local relevance
-            // model always puts the historical value first. Both versions must survive.
+            // Temporal selection changes order, not source text or relevance scores.
             var baseline = store.Index.Search(new SearchRequest
             {
                 Query = embedding.Embed(query), QueryText = query, Namespace = "expert_atlas", TenantId = "",
@@ -40,7 +39,9 @@ public class RealisticRecallEvaluationTests(ITestOutputHelper output)
             var result = Assert.IsType<RecallResult>(store.Tools().Recall(query, route == "direct" ? "expert_atlas" : null));
             Assert.Contains(result.Results, r => r.Id == historicalId);
             Assert.Contains(result.Results, r => r.Id == currentId);
-            Assert.Equal(baseline.Select(r => (r.Id, r.Score)), result.Results.Select(r => (r.Id, r.Score)));
+            Assert.Equal(historicalId, result.Results[0].Id);
+            Assert.Equal(baseline.OrderBy(r => r.Id).Select(r => (r.Id, r.Score)),
+                result.Results.OrderBy(r => r.Id).Select(r => (r.Id, r.Score)));
         }
     }
 

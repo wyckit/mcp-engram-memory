@@ -111,7 +111,7 @@ internal sealed partial class RecallQueryEvidence
             observedRecovery: observedRecovery);
     }
 
-    private static string NormalizeQuestion(string query)
+    internal static string NormalizeQuestion(string query)
     {
         var request = RequestPrefix().Match(query);
         if (request.Success) query = query[request.Length..];
@@ -220,7 +220,7 @@ internal sealed partial class RecallQueryEvidence
             return !reference.Success || ReferenceValue().IsMatch(clause[(reference.Index + reference.Length)..]);
         }));
 
-    private static IEnumerable<string> EvidenceClauses(string statement)
+    internal static IEnumerable<string> EvidenceClauses(string statement)
     {
         int start = 0, scanned = 0;
         bool hasPredicate = false;
@@ -306,7 +306,9 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ValueContinuation();
     [GeneratedRegex(@"^\s*(?:(?:previous|historical|old|compare)\s+|(?:history|overview|summary|comparison)\s+(?:of|for)\s+)", Options)]
     private static partial Regex ScopePrefix();
-    [GeneratedRegex(@"^\s*(?:\[(?:superseded|obsolete|archived)\]|(?:superseded|obsolete|archived)\s*:?)\s*", Options)]
+    // Historical labels describe the record, not its subject. Inspect the subject
+    // after stacked labels too, so archive retrieval cannot conceal a contrary scope.
+    [GeneratedRegex(@"^\s*(?:\[?(?:superseded|obsolete|archived|historical|previous|former|old|original)\b\]?\s*:?\s*)+", Options)]
     private static partial Regex ScopeStatusPrefix();
     [GeneratedRegex(@"^\s*at\s+what\s+time\s+", Options)]
     private static partial Regex AtWhatTime();
