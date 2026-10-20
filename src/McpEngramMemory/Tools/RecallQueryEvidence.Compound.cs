@@ -20,6 +20,9 @@ internal sealed partial class RecallQueryEvidence
         if (joins.Count != 1) return null;
         var join = joins[0];
         string[] clauses = [query[..join.Index], query[join.Groups[1].Index..]];
+        // Resolving "it"/"they" requires discourse binding, not just shared scope.
+        // Keep those existing single-resource questions on their original path.
+        if (clauses.Any(c => AnaphoricClause().IsMatch(c))) return null;
         var facets = clauses.Select(c => Parse(CadenceQuestion().Replace(c.Trim(), "When do "))).ToArray();
         if (facets.Any(f => f is null || !f._rejectNonAnswers || f._referenceQuestion || f._proposalQuestion))
             return null;
@@ -47,6 +50,8 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex CompoundQuestion();
     [GeneratedRegex(@"^\s*how\s+often\s+(?:are|is|do|does)\s+", Options)]
     private static partial Regex CadenceQuestion();
+    [GeneratedRegex(@"\b(?:it|its|they|them|their)\b", Options)]
+    private static partial Regex AnaphoricClause();
     [GeneratedRegex(@"\bevery\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:minutes?|hours?|days?|weeks?|months?)\b", Options)]
     private static partial Regex CadenceInterval();
 }

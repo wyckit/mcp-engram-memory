@@ -89,6 +89,9 @@ public class CompoundQuestionRecallTests
     [InlineData("Who owns Citrine production deployment, and how often are backups taken, and where is the database?")]
     [InlineData("Who owns Citrine release 27, and how often are backups taken?")]
     [InlineData("Who owns \"Citrine production deployment\", and how often are backups taken?")]
+    [InlineData("Where is the Atlas production deploy-token stored and when is it rotated?")]
+    [InlineData("When do Boreal database backups run and how long are they retained?")]
+    [InlineData("When do Atlas database backups run and how long are they retained?")]
     public void UnsupportedShapesKeepExistingInterpretation(string query) =>
         Assert.Null(RecallQueryEvidence.ParseCompound(query));
 
@@ -194,5 +197,20 @@ public class CompoundQuestionRecallTests
         Assert.True(evidence.Matches(text, "citrine"));
         Assert.True(evidence.Facets[0].Matches(text, "citrine"));
         Assert.False(evidence.Facets[1].Matches(text, "citrine"));
+    }
+
+    [Fact]
+    public void CompleteExpertAnswerKeepsItsRouteAndDoesNotAccessOtherNamespaces()
+    {
+        using var store = new RecallTestStore();
+        const string ns = "expert_citrine_ops";
+        store.Add("owner", ns, "Citrine production deployment owner is Harbor.");
+        store.Add("backup", ns, "Citrine production backups run every 6 hours.");
+        store.Add("other", "other", "Citrine production backups run hourly.");
+        store.Dispatcher.CreateExpert("citrine_ops", Query);
+        var result = Assert.IsType<RecallResult>(store.Tools().Recall(Query, k: 2, expandGraph: false));
+        Assert.Equal("expert_routed", result.Strategy);
+        Assert.Equal(new[] { "backup", "owner" }, result.Results.Select(r => r.Id).Order().ToArray());
+        Assert.Equal(1, store.Index.Get("other", "other", "")!.AccessCount);
     }
 }

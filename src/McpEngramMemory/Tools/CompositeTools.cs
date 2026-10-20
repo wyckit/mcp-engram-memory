@@ -276,7 +276,10 @@ public sealed class CompositeTools
                 // One populated expert can answer only one part of a compound
                 // request. Retain its candidates and complete the authorized sweep;
                 // do not record access until the final combined selection.
-                if (options.BroadIntent?.Compound == true || options.QueryEvidence?.IsCompound == true)
+                bool missingFacet = options.QueryEvidence is { IsCompound: true } compound &&
+                    compound.Facets.Any(f => !candidates.Any(c => !c.Result.IsSummaryNode &&
+                        !RecallFreshness.IsSuperseded(c.Result.Text) && f.Matches(c.Result.Text, c.Namespace)));
+                if (options.BroadIntent?.Compound == true || missingFacet)
                 {
                     allResults.AddRange(candidates);
                     broadMerge |= broad;
