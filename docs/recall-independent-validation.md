@@ -29,9 +29,11 @@ expected in-scope source, every requested top-one label is first, all reachable
 facets are covered, all missing-answer questions abstain, no wrong-project or
 wrong-environment evidence, and no unsupported conflict resolution.
 Report each failed condition. A successful execution with quality misses is
-**not** release readiness. CI validates complete evidence and safety; a separate
-strict release check rejects any quality miss. Existing regression gates stay
-strict and unchanged.
+**not** release readiness. Initially CI validated complete evidence and safety
+while the separate strict release check exposed the new quality gaps. After
+the [compound-recovery correction](recall-compound-recovery.md), CI also runs
+that strict `--release` check and the measured tests require zero quality misses.
+The frozen acceptance criteria and existing regression gates remain unchanged.
 
 ### Concurrent workload
 
