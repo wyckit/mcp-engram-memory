@@ -60,6 +60,14 @@ overlap, and serial-versus-concurrent ratios. Timing is diagnostic; the worker
 deadline is a liveness bound, **not a product latency SLA**. No percentile
 threshold or regression claim is invented after seeing measurements.
 
+Harness detail recorded before measurement: the broadcast control uses a real
+empty expert catalogue while sharing the contended data index and authorization
+with the other lanes. Automatic routing uses the fixed profiles and may choose
+broadcast itself. Load writes exercise index/storage entry operations rather
+than `remember`'s duplicate-detection pipeline. Background seed texts have real
+embeddings; mutation vectors reuse the positive witness embedding intentionally
+to create hard retrieval distractors, not to simulate semantic write ingestion.
+
 ### Scope and safety acceptance
 
 Use an identified reader with read-only grants and a distinct tenant. Include
