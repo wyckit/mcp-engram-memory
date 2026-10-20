@@ -10,6 +10,9 @@ namespace McpEngramMemory.Tools;
 internal sealed partial class RecallQueryEvidence
 {
     private static readonly HashSet<string> Noise = Terms("what which who where when why how is are do does did must should can could would will may I we you our their the a an current currently previous old now after before since during work works avoid avoids protect protects cause caused causes mean means use uses used each many often long stored memories memory relevant losing contain contains several first primary setting settings please tell show me about example fields included period quickly wait take keep nightly night January February March April May June July August September October November December");
+    private static readonly HashSet<string> ProcedureWords = Terms("step steps procedure sequence order");
+    private static readonly HashSet<string> ProcedureSyntax = new(
+        "restore step steps procedure sequence order and".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> ScopeNoise = new((
         "the a an current primary previous old production prod staging stage development dev testing test " +
         "database gateway payment timeout endpoint path port queue backup backups token lifetime cloud budget " +
@@ -41,19 +44,21 @@ internal sealed partial class RecallQueryEvidence
     private readonly bool _observedRecovery;
     private readonly bool _explicitValue;
     private readonly bool _proposalQuestion;
+    private readonly bool _restoreProcedure;
     private readonly bool _rejectNonAnswers;
     private readonly bool _referenceQuestion;
     private readonly bool _scopeOnly;
 
     private RecallQueryEvidence(HashSet<string> names, HashSet<string> environments, HashSet<string> focus,
         bool owner, bool backupSchedule, bool recoveryDuration, bool rejectNonAnswers, bool referenceQuestion,
-        bool scopeOnly = false, bool observedRecovery = false)
+        bool scopeOnly = false, bool observedRecovery = false, bool restoreProcedure = false)
     {
         (_names, _environments, _focus, _owner) = (names, environments, focus, owner);
         (_backupSchedule, _recoveryDuration) = (backupSchedule, recoveryDuration);
         (_rejectNonAnswers, _referenceQuestion) = (rejectNonAnswers, referenceQuestion);
         _scopeOnly = scopeOnly;
         _observedRecovery = observedRecovery;
+        _restoreProcedure = restoreProcedure;
         _explicitValue = focus.Contains("value") && !referenceQuestion;
         _proposalQuestion = focus.Overlaps(Terms("proposal propose proposed suggestion suggest suggested recommendation recommend"));
         // Shared project/resource words cannot substitute for a requested attribute.
@@ -76,12 +81,18 @@ internal sealed partial class RecallQueryEvidence
         if (scopeOnly) query = ScopePrefix().Replace(query, "");
         bool question = Question().IsMatch(query);
         if (!question && !scopeOnly) return null;
+        bool referenceQuestion = ReferenceQuestion().IsMatch(query);
+        var queryTerms = Terms(query);
+        bool procedureRequest = !referenceQuestion && ProcedureQuestion().IsMatch(query) &&
+            queryTerms.Contains("restore") && queryTerms.Overlaps(ProcedureWords);
         var words = Words().Matches(query).Select(m => m.Value).ToArray();
-        var names = words.Where(w => question && char.IsUpper(w[0]) && w.Any(char.IsLower) && !ScopeNoise.Contains(w))
+        var names = words.Where(w => question && char.IsUpper(w[0]) && w.Any(char.IsLower) && !ScopeNoise.Contains(w) &&
+                !(procedureRequest && ProcedureSyntax.Contains(w)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Also recognize lower-case subjects in common question forms.
         foreach (Match match in SubjectSlots().Matches(query).Concat(AuxiliarySubject().Matches(query)
             .Where(m => SubjectPredicates.Contains(m.Groups[2].Value)))
+            .Concat(RestoreSubject().Matches(query).Cast<Match>())
             .Concat(scopeOnly ? HistoricalSubject().Matches(query).Where(m => SubjectPredicates.Contains(m.Groups[2].Value)) : [])
             .Concat(!question ? CandidateSubjects().Matches(query).Cast<Match>() : []))
         {
@@ -106,11 +117,17 @@ internal sealed partial class RecallQueryEvidence
         bool observedRecovery = recoveryDuration && !RecoveryObjective().IsMatch(query) &&
             ObservedRecoveryQuestion().IsMatch(query);
         if (recoveryDuration) focus.ExceptWith(Terms("time objective"));
+        bool restoreProcedure = procedureRequest &&
+            focus.Contains("restore") && focus.Overlaps(ProcedureWords);
+        // "Steps" and "order" request a procedure, not two additional facts.
+        // Retain the operation and any resource qualifiers; evidence must also
+        // contain ordered actions rather than just a duration or procedure label.
+        if (restoreProcedure) focus.ExceptWith(ProcedureWords);
         return focus.Count == 0 ? null : new(names, environments, focus,
             query.TrimStart().StartsWith("who ", StringComparison.OrdinalIgnoreCase) && focus.Contains("own"),
             query.TrimStart().StartsWith("when ", StringComparison.OrdinalIgnoreCase) && focus.Contains("backup"),
-            recoveryDuration, FactualQuestion().IsMatch(query), ReferenceQuestion().IsMatch(query),
-            observedRecovery: observedRecovery);
+            recoveryDuration, FactualQuestion().IsMatch(query), referenceQuestion,
+            observedRecovery: observedRecovery, restoreProcedure: restoreProcedure);
     }
 
     internal static string NormalizeQuestion(string query)
@@ -184,6 +201,8 @@ internal sealed partial class RecallQueryEvidence
             string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement, _referenceQuestion, _proposalQuestion) : statement;
             var terms = Terms(answerText);
             precedingTerms = terms;
+            if (_restoreProcedure && (!OrderedProcedure().IsMatch(answerText) ||
+                !BroadRecallIntent.HasSourceEvidence(answerText) || !_focus.IsSubsetOf(terms))) continue;
             // Explicit date fields may use any representation. Recognize common
             // calendar literals too when the source omits the word "date".
             if (_attributes.Contains("date") && CalendarDate().IsMatch(answerText)) terms.Add("date");
@@ -283,6 +302,12 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex FactualQuestion();
     [GeneratedRegex(@"^\s*(?:where\b.*\b(?:documented|recorded|listed|specified)\s*[?.!]*\s*$|(?:which|what)\s+(?:document|handbook|runbook|checklist|reference)\b)", Options)]
     private static partial Regex ReferenceQuestion();
+    [GeneratedRegex(@"^\s*(?:what|which)\b", Options)]
+    private static partial Regex ProcedureQuestion();
+    [GeneratedRegex(@"^\s*(?:what|which)\s+steps?\s+restore\s+(?:the\s+)?([\p{L}][\p{L}\p{N}_-]*)\b", Options)]
+    private static partial Regex RestoreSubject();
+    [GeneratedRegex(@",\s*then\s+\p{L}|\bfirst\s+\p{L}[^.!?;\r\n]*\b(?:then|next|finally)\s+\p{L}|\b1\)\s+\p{L}[^.!?;\r\n]*\b2\)\s+\p{L}", Options)]
+    private static partial Regex OrderedProcedure();
     [GeneratedRegex(@",\s+|\s+(?:and|but|however|whereas)\s+", Options)]
     private static partial Regex Clauses();
     [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must)\s+\S+", Options)]
@@ -381,7 +406,7 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ImplicitSubject();
     [GeneratedRegex(@"^\s*(?:the|this|it|its|before|after|namespace|context)\b", Options)]
     private static partial Regex Continuation();
-    [GeneratedRegex(@"(?:^\s*(?:the\s+)?|\b(?:for|of|to|about|from|with|set|use|get|and|but|however|whereas)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)\s+(?:production|prod|staging|stage|development|dev|testing|test|qa|uat|gateway|database|backups?|deployments?|endpoint|readiness|rollback|recovery|security|payment)\b", Options)]
+    [GeneratedRegex(@"(?:^\s*(?:the\s+)?|\b(?:for|of|to|about|from|with|set|use|get|restore|and|but|however|whereas)\s+(?:the\s+)?)([\p{L}][\p{L}\p{N}_-]*)\s+(?:production|prod|staging|stage|development|dev|testing|test|qa|uat|gateway|database|backups?|deployments?|endpoint|readiness|rollback|recovery|security|payment)\b", Options)]
     private static partial Regex CandidateSubjects();
     [GeneratedRegex(@"\b(?:production|staging|development|testing|prod|stage|dev|test|qa|uat)\b", Options)]
     private static partial Regex EnvironmentWords();
