@@ -285,7 +285,7 @@ internal sealed partial class RecallQueryEvidence
     private static partial Regex ReferenceQuestion();
     [GeneratedRegex(@",\s+|\s+(?:and|but|however|whereas)\s+", Options)]
     private static partial Regex Clauses();
-    [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must|asks?|lists?|proposes?|proposed|suggests?|suggested|recommends?|recommended)\s+\S+", Options)]
+    [GeneratedRegex(@"\b(?:is|are|was|were|remains?|owns?|uses?|returns?|runs?|covers?|has|have|needs?|will|must)\s+\S+", Options)]
     private static partial Regex ClausePredicate();
     [GeneratedRegex(@"(?:\b(?:is|are|was|were|remains?|as)\s+(?:(?:currently|still)\s+)?|[:=]\s*)[<\[]?(?:TBD|TBC|unknown|undecided|unspecified|pending|not\s+(?:yet\s+)?(?:known|determined|decided|specified|documented|recorded|provided|available)|to\s+be\s+(?:determined|decided|confirmed|assigned))\b", Options)]
     private static partial Regex MissingValue();

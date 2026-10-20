@@ -84,6 +84,14 @@ public sealed class RecallPendingEvidenceTests
     }
 
     [Theory]
+    [InlineData("Nectar production index lists deployment, readiness, backups and payments as topics for a future workshop.", false)]
+    [InlineData("Nectar production owner is Harbor. Its index lists deployment, readiness, backups and payments as topics for a future workshop.", true)]
+    [InlineData("Nectar production recovery planning note asks the team to review backup diagrams and label the screenshots.", false)]
+    [InlineData("Nectar production proposes Quartz, Hangfire and other schedulers for review.", false)]
+    public void ListsQuestionsAndProposalsDoNotBecomeSourceEvidence(string text, bool expected) =>
+        Assert.Equal(expected, BroadRecallIntent.HasSourceEvidence(text));
+
+    [Theory]
     [MemberData(nameof(FrozenAnswers))]
     public void RecoveredFactsRespectPermissionsTenantsThresholdsAndArchiveState(string id, string answer)
     {
