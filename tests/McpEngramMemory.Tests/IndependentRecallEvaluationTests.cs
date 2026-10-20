@@ -63,6 +63,9 @@ public sealed class IndependentRecallEvaluationTests(ITestOutputHelper output)
         Assert.Equal(6, restoreRows.Length);
         Assert.All(restoreRows, r => Assert.True(r.AnswerHit && r.TopOneCorrect && r.Failures.Length == 0,
             $"{r.Id}/{r.Mode}/{r.Phase}: {string.Join(", ", r.Failures)}"));
+        // All original quality gaps are now fixed. Keep every frozen criterion mandatory.
+        Assert.All(rows, r => Assert.True(r.Failures.Length == 0,
+            $"{r.Id}/{r.Mode}/{r.Phase}: {string.Join(", ", r.Failures)}"));
     }
 }
 

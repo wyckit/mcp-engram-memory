@@ -104,11 +104,10 @@ jobs:
         run: python -m unittest discover -s scripts/tests -p test_independent_recall_gate.py
       - name: Measure frozen questions and concurrent JSON/SQLite workloads
         run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter "Category=IndependentRecall" --logger "trx;LogFileName=independent-recall.trx" --blame-hang-timeout 5m --blame-hang-dump-type mini
-      # Execution/safety gate. The summary explicitly reports quality blockers;
-      # --release is a separate strict acceptance command until those are fixed.
-      # Do not weaken the existing strict noisy-recall gate above.
-      - name: Validate complete evidence and publish release-blocker summary
-        run: python scripts/check-independent-recall.py artifacts/independent-recall
+      # The original independent quality gaps are fixed. Enforce every frozen
+      # criterion alongside the scope/load checks and the strict scale gate above.
+      - name: Require complete independent evidence and zero recall blockers
+        run: python scripts/check-independent-recall.py artifacts/independent-recall --release
       - name: Upload independent validation evidence
         if: always()
         uses: actions/upload-artifact@v4

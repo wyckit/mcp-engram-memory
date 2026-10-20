@@ -157,6 +157,8 @@ internal sealed partial class RecallQueryEvidence
     public bool Matches(string? text, string ns)
     {
         if (string.IsNullOrWhiteSpace(text) || text.Length > 16_384) return false;
+        if (IsCompound && (!BroadRecallIntent.HasSourceEvidence(text) || !Facets.Any(f => f.Matches(text, ns))))
+            return false;
         var namespaceWords = Words().Matches(ns.Replace('_', ' ')).Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var precedingNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var precedingEnvironments = new HashSet<string>();
@@ -204,6 +206,8 @@ internal sealed partial class RecallQueryEvidence
             // unrelated non-answer clause must never remove a contrary project or
             // environment and turn its remaining value into an in-scope answer.
             string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement, _referenceQuestion, _proposalQuestion) : statement;
+            if (CompoundFacet)
+                answerText = string.Join(" ", EvidenceClauses(answerText).Where(BroadRecallIntent.HasSourceEvidence));
             var terms = Terms(answerText);
             precedingTerms = terms;
             if (_restoreProcedure && (!OrderedProcedure().IsMatch(answerText) ||
@@ -228,7 +232,8 @@ internal sealed partial class RecallQueryEvidence
             if (_owner && !terms.Contains("own")) continue;
             // A restore rehearsal is not a backup schedule; a drill's frequency is
             // not a recovery duration. Shared resource words alone cannot answer either.
-            if (_backupSchedule && (!terms.Contains("backup") || !Schedule().IsMatch(answerText))) continue;
+            if (_backupSchedule && (!terms.Contains("backup") ||
+                (!Schedule().IsMatch(answerText) && !CadenceInterval().IsMatch(answerText)))) continue;
             if (_recoveryDuration && (!terms.Contains("recover") || !Duration().IsMatch(answerText) ||
                 (_observedRecovery ? !ElapsedRecovery().IsMatch(answerText) :
                     !terms.Contains("objective") && !RecoverWithin().IsMatch(answerText)))) continue;

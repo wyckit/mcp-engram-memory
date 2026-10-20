@@ -223,6 +223,9 @@ public sealed class CompositeTools
         try
         {
         var queryEvidence = rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) ? RecallQueryEvidence.Parse(query) : null;
+        if (hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
+            (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad"))
+            queryEvidence = RecallQueryEvidence.ParseCompound(query) ?? queryEvidence;
         var broadIntent = queryEvidence is null && hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
             (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") ? BroadRecallIntent.Parse(query) : null;
         var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode!,
@@ -273,7 +276,7 @@ public sealed class CompositeTools
                 // One populated expert can answer only one part of a compound
                 // request. Retain its candidates and complete the authorized sweep;
                 // do not record access until the final combined selection.
-                if (options.BroadIntent?.Compound == true)
+                if (options.BroadIntent?.Compound == true || options.QueryEvidence?.IsCompound == true)
                 {
                     allResults.AddRange(candidates);
                     broadMerge |= broad;
@@ -311,7 +314,7 @@ public sealed class CompositeTools
             : allResults;
         return await CompleteRecallAsync("broadcast", null, merged, options,
             attemptedExpertNamespaces.Count == 0 ? $"Searched {namespaces.Count} namespace(s), no expert match" :
-                options.BroadIntent?.Compound == true ?
+                options.BroadIntent?.Compound == true || options.QueryEvidence?.IsCompound == true ?
                     $"Combined compound recall across {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s)." :
                     $"No eligible evidence in routed experts; searched {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s).")
             .ConfigureAwait(false);
@@ -640,6 +643,28 @@ public sealed class CompositeTools
             }
         }
 
+        if (options.QueryEvidence is { IsCompound: true } compound)
+        {
+            // A partial source must not prevent recovery of the other answer.
+            // At most two bounded exact probes, filtered before truncation within
+            // this authorized partition and the ORIGINAL query's cosine floor.
+            states = ["stm", "ltm", "archived"];
+            foreach (var facet in compound.Facets)
+            {
+                bool Source(string? text) => !RecallFreshness.IsSuperseded(text) &&
+                    compound.Matches(text, ns) && facet.Matches(text, ns);
+                if (results.Any(r => !r.IsSummaryNode && Source(r.Text))) continue;
+                var recovered = _index.Rerank(query, _index.SearchEligible(new SearchRequest
+                {
+                    Query = vector, Namespace = ns, TenantId = _access.TenantId,
+                    K = BroadRecallRanking.CandidateLimit(options.K), MinScore = options.MinScore, IncludeStates = states
+                }, e => !e.IsSummaryNode && Source(e.Text)));
+                results = results.Concat(recovered).DistinctBy(r => r.Id).ToList();
+                evidence = evidence.Concat(recovered).DistinctBy(r => r.Id).Take(64).ToList();
+            }
+            deep |= results.Any(r => r.LifecycleState == "archived");
+        }
+
         // Broad scores depend on the retrieved pool's topic frequencies. Keep that
         // pool intact through calibration, then enforce scope at final selection.
         // Otherwise removing unrelated contexts can demote an already-found source.
@@ -800,6 +825,8 @@ public sealed class CompositeTools
             // Overviews remain useful alongside sources but cannot establish that a
             // factual answer was retrieved. Small budgets keep actual source evidence.
             if (!ranked.Any(c => !c.Result.IsSummaryNode)) return [];
+            if (options.QueryEvidence.IsCompound)
+                return SelectCompoundCandidates(ranked, options.K, options.QueryEvidence);
             if (options.K == 1) return ranked.Where(c => !c.Result.IsSummaryNode).Take(1).ToList();
         }
         if (options.BroadCoverage) return SelectBroadCandidates(ranked, options.K,
@@ -858,6 +885,27 @@ public sealed class CompositeTools
                         output.Add(source);
         }
         return output;
+    }
+
+    private static IReadOnlyList<RecallCandidate> SelectCompoundCandidates(
+        IReadOnlyList<RecallCandidate> ranked, int k, RecallQueryEvidence compound)
+    {
+        var selected = new List<RecallCandidate>();
+        var uncovered = compound.Facets.ToHashSet();
+        // Reserve source slots for distinct requested facts before filling with
+        // repeated evidence or summaries. Ranking breaks ties; scores are unchanged.
+        while (selected.Count < k && uncovered.Count > 0)
+        {
+            var next = ranked.Where(c => !c.Result.IsSummaryNode && !selected.Contains(c) &&
+                    !RecallFreshness.IsSuperseded(c.Result.Text))
+                .Select(c => (Candidate: c, Covered: uncovered.Where(f => f.Matches(c.Result.Text, c.Namespace)).ToArray()))
+                .Where(c => c.Covered.Length > 0).OrderByDescending(c => c.Covered.Length).FirstOrDefault();
+            if (next.Candidate is null) break;
+            selected.Add(next.Candidate);
+            uncovered.ExceptWith(next.Covered);
+        }
+        selected.AddRange(ranked.Where(c => !selected.Contains(c)).Take(k - selected.Count));
+        return selected;
     }
 
     private static bool IsBroadSource(RecallCandidate candidate) =>
