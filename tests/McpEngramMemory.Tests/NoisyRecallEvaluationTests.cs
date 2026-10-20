@@ -39,6 +39,27 @@ public class NoisyRecallEvaluationTests(ITestOutputHelper output)
         Assert.Equal(3 * 2, historical.Length);
         Assert.All(historical, o => Assert.Equal(o.GetProperty("Expected")[0].GetString(),
             o.GetProperty("ReturnedIds")[0].GetString()));
+
+        var corpus = Load();
+        var memories = corpus.Entries.ToDictionary(m => m.Id);
+        var coverageCases = corpus.Queries.Where(q => q.Facets.Count > 0).ToDictionary(q => q.Id);
+        var coverage = report.RootElement.GetProperty("Observations").EnumerateArray()
+            .Where(o => coverageCases.ContainsKey(o.GetProperty("Id").GetString()!)).ToArray();
+        Assert.Equal(coverageCases.Count * 3 * 2, coverage.Length);
+        Assert.All(coverage, o =>
+        {
+            var question = coverageCases[o.GetProperty("Id").GetString()!];
+            bool direct = o.GetProperty("Mode").GetString() == "direct";
+            // The compound fixture deliberately splits its sources across experts.
+            // A direct namespace request must not widen access to chase global gold.
+            int reachable = direct ? question.Facets.Count(f => f.Value.Any(id => memories[id].Ns == question.Ns)) : question.Facets.Count;
+            double required = (double)reachable / question.Facets.Count;
+            Assert.True(o.GetProperty("FacetCoverage").GetDouble() >= required,
+                $"{question.Id}/{o.GetProperty("Mode")}/{o.GetProperty("Phase")} lost required facet coverage ({required}).");
+            if (direct)
+                Assert.DoesNotContain(o.GetProperty("ReturnedIds").EnumerateArray().Select(id => id.GetString()),
+                    id => question.Expected.Contains(id) && memories[id!].Ns != question.Ns);
+        });
     }
 
     [Fact]
