@@ -96,3 +96,90 @@ multi-process writers, SQL Server, 48-hour soak, or end-to-end stdio client test
 No semantic clusters or generated summaries. These need separate evidence.
 The older unexplained .NET 8 CI hang remains unlocalized; PR51's watchdog
 improves diagnosis and does not establish its cause.
+
+## First complete measurements
+
+Code revision `92dcab1`, Windows x64, .NET 8, bundled bge-micro-v2 model SHA256
+`ED65E36025AA94CB74207DAB863C85452919EC0AB7DF3512092932AA22C9A33A`.
+Fixture SHA256
+`11D86B86DF1629FC9931DE7DC846E4A7B317A9C31F15FB6363D73323CC4F6553`.
+The measured test collection runs without other test collections in parallel.
+Raw reports include timestamps, full source revision, actual routing strategies,
+operation intervals, percentiles and contention ratios.
+
+Both backends produced identical quality outcomes: **40/144 failed observations
+per backend, 80/288 overall, across seven distinct questions**. No project or
+environment mismatch and no unsupported conflict resolution was observed.
+Source presence was 15/16 answerable questions per route/phase/backend; only
+3/8 missing-answer questions correctly abstained. These are small synthetic
+sample results, not a production accuracy estimate.
+
+| Frozen question | Finding | Affected routes |
+|---|---|---|
+| `restore-order` | Empty result despite an explicit ordered restore procedure | All |
+| `compound-recovery` | Deployment owner returned; backup cadence facet missing | Automatic, broadcast |
+| `absent-date` | An unrecorded date note and unrelated facts returned as evidence | All |
+| `absent-approval-owner` | An unanswered approval-owner question and deployment owner returned | All |
+| `proposal-not-decision` | An explicitly unselected scheduler proposal returned | All |
+| `question-not-number` | A request to measure queue depth returned as the answer | All |
+| `topic-not-answer` | DNS planning notes without a provider returned | All |
+
+Direct compound recall correctly requires only its namespace-local owner facet.
+No question, answer label or quality acceptance condition was changed after
+these results. **The strict release gate fails intentionally on these findings.**
+Recommended next fixes: non-answer evidence first, then procedural question
+interpretation and the missing compound facet, using these unchanged labels.
+
+All four load cells passed safety, operation counts, version checks and verified
+restart durability. Totals: 576 concurrent recalls, 1,536 index mutations and
+192 maintenance passes; 432 appended records and 12 final version records
+survived restart, and 432 ephemeral records remained deleted.
+
+| Backend / base memories | Concurrent phase (s) | Direct p95 (ms) | Automatic p95 (ms) | Broadcast p95 (ms) | Slower writer batch p95 (ms) | Reads overlapping writes |
+|---|---:|---:|---:|---:|---:|---:|
+| JSON / 1,000 | 2.65 | 61.5 | 79.6 | 83.1 | 41.4 | 142/144 |
+| JSON / 5,000 | 5.37 | 77.2 | 153.2 | 142.8 | 49.2 | 144/144 |
+| SQLite / 1,000 | 2.25 | 11.2 | 53.5 | 53.4 | 3.2 | 144/144 |
+| SQLite / 5,000 | 4.68 | 26.7 | 108.7 | 108.9 | 6.3 | 144/144 |
+
+Each reader distribution has 48 mixed positive/negative samples and each writer
+distribution 48 four-operation batches. Serial controls have only 12 samples
+per lane; p95/p99 there are the maximum, and p99 for concurrent lanes is also
+the maximum. These are exploratory measurements, not statistically established
+performance regressions or backend capacity comparisons. JSON writer cost and
+broadcast cost warrant profiling if real workloads show latency problems.
+
+## Reproduce and interpret CI
+
+Use a fresh output directory per run. In PowerShell:
+
+```powershell
+$env:ENGRAM_INDEPENDENT_OUTPUT = Join-Path $PWD 'artifacts/independent-fresh'
+$env:ENGRAM_EVAL_REVISION = git rev-parse HEAD
+dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter 'Category=IndependentRecall' --blame-hang-timeout 5m --blame-hang-dump-type mini
+python scripts/check-independent-recall.py $env:ENGRAM_INDEPENDENT_OUTPUT
+python scripts/check-independent-recall.py $env:ENGRAM_INDEPENDENT_OUTPUT --release
+python -m unittest discover -s scripts/tests -p test_independent_recall_gate.py
+```
+
+The execution gate returns 0 only with both quality reports and all four load
+reports, correct metrics and complete operation evidence. Missing or malformed
+evidence returns 2. `--release` additionally returns 1 for any frozen quality
+failure. CI uploads the raw reports and explicitly prints **NOT RELEASE READY**
+in its summary while the execution/safety check can be green. Existing strict
+noisy-recall CI remains unchanged.
+
+The report validator recomputes answer/facet/scope metrics from the frozen
+fixture, verifies complete route/phase matrices and source identities, and
+recomputes load overlap, percentiles and ratios from raw samples. Its adversarial
+tests reject missing/duplicate observations, altered gold, hidden failures,
+namespace escapes, incomplete acknowledgements, false safety flags, disjoint
+requests, invalid timings and false release claims.
+
+Local regression validation: 2,479 ordinary tests passed on each of .NET 8, 9
+and 10; the six new measured backend/load cases plus the quality-oracle test
+passed on .NET 8; all 24 existing/new Python report-gate tests passed. The 27
+earlier recall reports (2,976 observations) and 624 scale observations match
+PR51 after excluding timings and validating generated provenance identities.
+All earlier small/scale strict release gates passed. Production source, MCP
+interfaces and existing evaluation fixtures are unchanged.
