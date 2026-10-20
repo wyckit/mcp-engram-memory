@@ -31,10 +31,16 @@ internal static class BroadRecallRanking
     }
 
     public static IReadOnlyList<(T Candidate, float Score)> Rank<T>(string query, float[] vector,
-        IReadOnlyList<T> candidates, Func<T, CognitiveSearchResult> getResult, Func<T, float[]?> getVector)
+        IReadOnlyList<T> candidates, Func<T, CognitiveSearchResult> getResult, Func<T, float[]?> getVector,
+        Func<T, string>? getContext = null)
     {
         var terms = Tokens(query);
         var tokens = candidates.Select(c => Tokens(getResult(c).Text ?? "")).ToArray();
+        // For compound recall, a namespace supplies topic context for terse sources
+        // (a backup procedure in a recovery expert). This affects ranking only;
+        // original text, tenant, ACL and minimum-score eligibility are unchanged.
+        if (getContext is not null)
+            for (int i = 0; i < candidates.Count; i++) tokens[i].UnionWith(Tokens(getContext(candidates[i])));
         // Repeated copies are not independent evidence that a query term is common.
         var documents = candidates.Select((c, i) => (Text: getResult(c).Text, Tokens: tokens[i]))
             .DistinctBy(c => c.Text, StringComparer.Ordinal).Select(c => c.Tokens).ToList();

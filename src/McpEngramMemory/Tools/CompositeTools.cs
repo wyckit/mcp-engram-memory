@@ -223,12 +223,14 @@ public sealed class CompositeTools
         try
         {
         var queryEvidence = rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) ? RecallQueryEvidence.Parse(query) : null;
-        var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode,
+        var broadIntent = queryEvidence is null && hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
+            (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") ? BroadRecallIntent.Parse(query) : null;
+        var options = new RecallOptions(k, minScore, hybrid, rerank, summaryFirst, expandGraph, spectralMode!,
             rerank && RecallFreshness.PrefersCurrent(query),
             queryEvidence is null && hybrid && rerank && !summaryFirst && RecallFreshness.PrefersCurrent(query) &&
                 (spectralMode?.Trim().ToLowerInvariant() is "auto" or "broad") &&
-                InferSpectralMode(query) == SpectralRetrievalMode.Broad && BroadRecallRanking.IsTopicQuery(query),
-            queryEvidence);
+                (broadIntent is not null || InferSpectralMode(query) == SpectralRetrievalMode.Broad) && BroadRecallRanking.IsTopicQuery(query),
+            queryEvidence, BroadIntent: broadIntent);
         // Scope is independent of the short-query heuristic used for broad ranking.
         // A longer deployment/recovery topic still names the same project/environment.
         if (rerank && !summaryFirst && queryEvidence is null &&
@@ -252,6 +254,8 @@ public sealed class CompositeTools
             : ("needs_expert", (IReadOnlyList<ExpertMatch>)Array.Empty<ExpertMatch>());
 
         var attemptedExpertNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        var allResults = new List<RecallCandidate>();
+        bool broadMerge = false;
         if (status == "routed" && experts.Count > 0)
         {
             // A matching persona is not evidence. Try the existing (at most three)
@@ -266,23 +270,32 @@ public sealed class CompositeTools
                 if (candidates.Count == 0 || (options.Scope is not null &&
                     !candidates.Any(c => options.Scope.Matches(c.Result.Text, c.Namespace)))) continue;
 
+                // One populated expert can answer only one part of a compound
+                // request. Retain its candidates and complete the authorized sweep;
+                // do not record access until the final combined selection.
+                if (options.BroadIntent?.Compound == true)
+                {
+                    allResults.AddRange(candidates);
+                    broadMerge |= broad;
+                    continue;
+                }
+
                 _dispatcher.RecordDispatch(expert.ExpertId);
                 return await CompleteRecallAsync("expert_routed", expert.TargetNamespace, candidates, options with { BroadCoverage = broad },
                     $"Routed to expert '{expert.ExpertId}' ({expert.TargetNamespace})").ConfigureAwait(false);
             }
         }
 
-        // Strategy 3: No expert with eligible evidence — authorized broadcast.
-        var allResults = new List<RecallCandidate>();
-        bool broadMerge = false;
+        // Strategy 3: No expert with eligible evidence, or complementary compound
+        // coverage is required — authorized broadcast with expert probes reused.
         var namespaces = _index.GetNamespaces(_access.TenantId)
             .Where(_access.CanRead)
             .Where(n => !n.StartsWith("_system", StringComparison.Ordinal) &&
                         !n.StartsWith("active-debate", StringComparison.Ordinal)).ToList();
         foreach (var searchNs in namespaces)
         {
-            // Failed expert probes already searched this namespace with the same
-            // options/vector. Reuse that empty outcome for this call only.
+            // Expert probes already searched this namespace with these options.
+            // Reuse retained compound candidates or the empty outcome for this call.
             if (attemptedExpertNamespaces.Contains(searchNs)) continue;
             var (candidates, _, broad) = RecallNamespace(query, vector, searchNs, options);
             broadMerge |= broad;
@@ -291,14 +304,16 @@ public sealed class CompositeTools
 
         options = options with { BroadCoverage = broadMerge };
         var merged = broadMerge
-            ? CalibrateBroadScores(query, vector, allResults)
+            ? CalibrateBroadScores(query, vector, allResults, options.BroadIntent?.Compound == true)
             : options.Hybrid && options.PreferCurrent &&
             allResults.Select(c => c.Namespace).Distinct().Skip(1).Any()
             ? CalibrateBroadcastScores(query, vector, allResults)
             : allResults;
         return await CompleteRecallAsync("broadcast", null, merged, options,
             attemptedExpertNamespaces.Count == 0 ? $"Searched {namespaces.Count} namespace(s), no expert match" :
-                $"No eligible evidence in routed experts; searched {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s).")
+                options.BroadIntent?.Compound == true ?
+                    $"Combined compound recall across {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s)." :
+                    $"No eligible evidence in routed experts; searched {attemptedExpertNamespaces.Union(namespaces).Count()} namespace(s).")
             .ConfigureAwait(false);
         }
         catch (ArgumentException ex) { return $"Error: {ex.Message}"; }
@@ -482,12 +497,13 @@ public sealed class CompositeTools
 
     private sealed record RecallOptions(int K, float MinScore, bool Hybrid, bool Rerank,
         bool SummaryFirst, bool ExpandGraph, string SpectralMode, bool PreferCurrent, bool BroadCoverage,
-        RecallQueryEvidence? QueryEvidence, RecallQueryEvidence? Scope = null, RecallHistorySelection? History = null);
+        RecallQueryEvidence? QueryEvidence, RecallQueryEvidence? Scope = null, RecallHistorySelection? History = null,
+        BroadRecallIntent? BroadIntent = null);
 
     // Keep namespace provenance for selection and conflict evidence. Graph neighbors
     // may belong to another readable namespace; bare IDs are not storage keys.
     private sealed record RecallCandidate(string Namespace, CognitiveSearchResult Result, bool Resurrect,
-        IReadOnlyList<CognitiveSearchResult>? ConflictEvidence = null);
+        IReadOnlyList<CognitiveSearchResult>? ConflictEvidence = null, bool CoverageRecovery = false);
 
     // With the default five-result budget, leave room for an overview, two sources,
     // and other independent hits. Smaller budgets retain the strongest hit first.
@@ -540,6 +556,7 @@ public sealed class CompositeTools
         bool deep = false;
         int candidateCount = options.K;
         bool useBroad = false;
+        bool recoverCoverage = false;
         if (options.BroadCoverage)
         {
             // A broad answer needs room to choose complementary evidence. Keep the
@@ -548,14 +565,34 @@ public sealed class CompositeTools
             candidateCount = BroadRecallRanking.CandidateLimit(options.K);
             HashSet<string> broadStates = ["stm", "ltm", "archived"];
             var (broader, broaderEvidence) = Search(broadStates, candidateCount);
-            useBroad = BroadRecallRanking.HasTopicEvidence(query, broader);
+            recoverCoverage = options.BroadIntent is not null && (options.BroadIntent.Compound ||
+                broader.Any(r => !r.IsSummaryNode && !BroadRecallIntent.HasSourceEvidence(r.Text)) ||
+                (options.Scope is not null && !broader.Any(r => !r.IsSummaryNode && options.Scope.Matches(r.Text, ns))));
+            useBroad = recoverCoverage || BroadRecallRanking.HasTopicEvidence(query, broader);
             if (useBroad)
             {
                 states = broadStates;
+                if (recoverCoverage)
+                {
+                    // An overview can have a partial answer yet still lose whole
+                    // topics behind repeated index/planning notes. Recover source
+                    // evidence before truncation, within this authorized partition
+                    // and the original cosine threshold. No new embedding or scope.
+                    var recovered = _index.SearchEligible(new SearchRequest
+                    {
+                        Query = vector, Namespace = ns, TenantId = _access.TenantId,
+                        K = candidateCount, MinScore = options.MinScore, IncludeStates = states
+                    }, e => !e.IsSummaryNode && !RecallFreshness.IsSuperseded(e.Text) &&
+                        (options.Scope is null || options.Scope.Matches(e.Text, ns)) &&
+                        BroadRecallIntent.HasSourceEvidence(e.Text));
+                    broader = broader.Concat(recovered).DistinctBy(r => r.Id).ToList();
+                    broaderEvidence = broader.Take(64).ToList();
+                }
                 evidence = broaderEvidence;
                 deep = broader.Any(r => r.LifecycleState == "archived");
                 results = BroadRecallRanking.Rank(query, vector, broader, r => r,
-                    r => _index.Get(r.Id, ns, _access.TenantId)?.Vector)
+                    r => _index.Get(r.Id, ns, _access.TenantId)?.Vector,
+                    options.BroadIntent?.Compound == true ? _ => ns : null)
                     .Select(r => r.Candidate with { Score = r.Score }).ToList();
             }
         }
@@ -665,12 +702,28 @@ public sealed class CompositeTools
         }
         expanded = ApplySpectralRerankRestricted(ns, expanded, options.SpectralMode, query, options.K,
             options.ExpandGraph, states);
+        if (recoverCoverage)
+        {
+            // Calibrate against the original pool first, but do not let rejected
+            // scopes consume the recovered budget. Graph context must satisfy the
+            // same original cosine floor before it can supply coverage or support.
+            float queryNorm = VectorMath.Norm(vector);
+            expanded = expanded.Where(r =>
+            {
+                string source = sources.GetValueOrDefault(r.Id, ns);
+                if (options.Scope is not null && !options.Scope.Matches(r.Text, source)) return false;
+                var entry = _index.Get(r.Id, source, _access.TenantId);
+                return entry is not null && entry.Vector.Length == vector.Length &&
+                    VectorMath.Dot(vector, entry.Vector) / (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f) >= options.MinScore;
+            }).ToList();
+        }
         var candidates = expanded.Select(r =>
             new RecallCandidate(sources.GetValueOrDefault(r.Id, ns), r, recoverable.Contains(r.Id),
-                sources.GetValueOrDefault(r.Id, ns) == ns ? evidence : null));
+                sources.GetValueOrDefault(r.Id, ns) == ns ? evidence : null, recoverCoverage));
         return (useBroad
-            ? candidates.OrderBy(c => RecallFreshness.IsSuperseded(c.Result.Text)).ThenByDescending(c => c.Result.Score)
-                .Take(candidateCount).ToList()
+            ? candidates.OrderBy(c => RecallFreshness.IsSuperseded(c.Result.Text))
+                .ThenByDescending(c => options.BroadIntent is not null && IsBroadSource(c))
+                .ThenByDescending(c => c.Result.Score).Take(candidateCount).ToList()
             : SelectRecallCandidates(candidates, options with { BroadCoverage = false }), deep, useBroad);
     }
 
@@ -711,15 +764,22 @@ public sealed class CompositeTools
     }
 
     private IReadOnlyList<RecallCandidate> CalibrateBroadScores(string query, float[] vector,
-        IReadOnlyList<RecallCandidate> candidates)
+        IReadOnlyList<RecallCandidate> candidates, bool compound)
     {
         var unique = candidates.GroupBy(c => (c.Namespace, c.Result.Id)).Select(g => g
             .OrderByDescending(c => c.ConflictEvidence is not null).ThenByDescending(c => c.Result.Score).First()).ToList();
         var terms = BroadRecallRanking.Tokens(query);
-        var named = unique.Select(c => c.Namespace).Distinct()
-            .Where(ns => BroadRecallRanking.Tokens(ns).Overlaps(terms)).ToHashSet(StringComparer.Ordinal);
+        var matches = unique.Select(c => c.Namespace).Distinct()
+            .ToDictionary(ns => ns, ns => BroadRecallRanking.Tokens(ns).Count(terms.Contains));
+        int strongest = matches.Values.DefaultIfEmpty().Max();
+        // A named topic can distinguish expert_project_recovery from project_ops.
+        // Compound requests must not favor one named component over the others.
+        bool preferTopicNamespace = !compound && unique.Any(c => c.CoverageRecovery);
+        var named = matches.Where(p => p.Value > 0 && (!preferTopicNamespace || p.Value == strongest))
+            .Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         return BroadRecallRanking.Rank(query, vector, unique, c => c.Result,
-            c => _index.Get(c.Result.Id, c.Namespace, _access.TenantId)?.Vector)
+            c => _index.Get(c.Result.Id, c.Namespace, _access.TenantId)?.Vector,
+            compound ? c => c.Namespace : null)
             .Select(c => c.Candidate with { Result = c.Candidate.Result with
                 { Score = c.Score * (named.Count > 0 && !named.Contains(c.Candidate.Namespace) ? .75f : 1f) } }).ToList();
     }
@@ -742,7 +802,8 @@ public sealed class CompositeTools
             if (!ranked.Any(c => !c.Result.IsSummaryNode)) return [];
             if (options.K == 1) return ranked.Where(c => !c.Result.IsSummaryNode).Take(1).ToList();
         }
-        if (options.BroadCoverage) return SelectBroadCandidates(ranked, options.K);
+        if (options.BroadCoverage) return SelectBroadCandidates(ranked, options.K,
+            options.BroadIntent is not null, options.ExpandGraph && options.BroadIntent?.Compound == true);
         var selected = ranked.Take(options.K).ToList();
         if (options.QueryEvidence is not null && selected.All(c => c.Result.IsSummaryNode))
             selected[^1] = ranked.First(c => !c.Result.IsSummaryNode);
@@ -799,7 +860,11 @@ public sealed class CompositeTools
         return output;
     }
 
-    private IReadOnlyList<RecallCandidate> SelectBroadCandidates(IReadOnlyList<RecallCandidate> ranked, int k)
+    private static bool IsBroadSource(RecallCandidate candidate) =>
+        BroadRecallIntent.HasSourceEvidence(candidate.Result.Text);
+
+    private IReadOnlyList<RecallCandidate> SelectBroadCandidates(IReadOnlyList<RecallCandidate> ranked, int k,
+        bool preferSources, bool expandGraph)
     {
         if (ranked.Count <= 1) return ranked;
         var remaining = ranked.ToList();
@@ -811,12 +876,40 @@ public sealed class CompositeTools
                 return (Vector: vector, Norm: vector is null ? 0 : VectorMath.Norm(vector));
             });
         var redundancy = ranked.ToDictionary(c => (c.Namespace, c.Result.Id), _ => 0f);
+        var substantive = ranked.ToDictionary(c => (c.Namespace, c.Result.Id), c => !preferSources || IsBroadSource(c));
+        bool recovered = ranked.Any(c => c.CoverageRecovery);
+        float diversityWeight = recovered ? .4f : .2f;
+        var supported = new HashSet<(string Namespace, string Id)>();
+        if (recovered && expandGraph)
+        {
+            // Linked evidence can be complementary even when its vectors are very
+            // similar (for example a procedure and its observed result). Give one
+            // bounded support bonus, never a degree/count bonus. Both endpoints
+            // must already be eligible, unambiguous, current source candidates.
+            var topology = BareIdTopology.ForSweep(_index, tenantId: _access.TenantId);
+            var sources = ranked.Where(c => !c.Result.IsSummaryNode && !RecallFreshness.IsSuperseded(c.Result.Text) &&
+                substantive[(c.Namespace, c.Result.Id)] && topology.IsTopologySafe(c.Result.Id))
+                .ToDictionary(c => (c.Namespace, c.Result.Id));
+            foreach (var candidate in sources.Values)
+                foreach (var neighbor in _graph.GetNeighbors(candidate.Result.Id, relation: null,
+                    direction: "both", tenantId: _access.TenantId).Neighbors)
+                    if (neighbor.Edge.Relation is "related_to" or "elaborates" &&
+                        sources.TryGetValue((neighbor.Entry.Namespace, neighbor.Entry.Id), out var other) &&
+                        other.Result.Text != candidate.Result.Text)
+                    {
+                        supported.Add((candidate.Namespace, candidate.Result.Id));
+                        supported.Add((other.Namespace, other.Result.Id));
+                    }
+        }
         while (selected.Count < k && remaining.Count > 0)
         {
-            // Preserve the strongest hit and status priority. Subsequent sources
-            // trade a bounded amount of relevance for complementary evidence.
+            // Preserve status priority; explicit coverage recovery prefers evidence
+            // and bounded graph support. Later hits trade relevance for diversity.
             var next = remaining.OrderBy(c => RecallFreshness.IsSuperseded(c.Result.Text))
-                .ThenByDescending(c => .8f * c.Result.Score - .2f * redundancy[(c.Namespace, c.Result.Id)]).First();
+                .ThenByDescending(c => preferSources && substantive[(c.Namespace, c.Result.Id)])
+                .ThenByDescending(c => (1 - diversityWeight) *
+                    (c.Result.Score + (supported.Contains((c.Namespace, c.Result.Id)) ? .1f : 0)) -
+                    diversityWeight * redundancy[(c.Namespace, c.Result.Id)]).First();
             selected.Add(next);
             remaining.Remove(next);
             var chosen = vectors[(next.Namespace, next.Result.Id)];

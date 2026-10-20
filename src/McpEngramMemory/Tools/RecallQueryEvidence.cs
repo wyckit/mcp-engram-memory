@@ -176,7 +176,7 @@ internal sealed partial class RecallQueryEvidence
             // Scope is checked against the ORIGINAL statement above. Removing an
             // unrelated non-answer clause must never remove a contrary project or
             // environment and turn its remaining value into an in-scope answer.
-            string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement) : statement;
+            string answerText = _rejectNonAnswers ? WithoutNonAnswerClauses(statement, _referenceQuestion) : statement;
             var terms = Terms(answerText);
             precedingTerms = terms;
             if (_explicitValue)
@@ -205,14 +205,14 @@ internal sealed partial class RecallQueryEvidence
         return scopeMatched;
     }
 
-    private string WithoutNonAnswerClauses(string statement) => string.Join(" ",
+    internal static string WithoutNonAnswerClauses(string statement, bool referenceQuestion = false) => string.Join(" ",
         EvidenceClauses(statement).Where(clause =>
         {
             // Predicate-bound exclusions, not a blacklist of words such as
             // "unknown" anywhere in an otherwise useful explanation or value.
             if (MissingValue().IsMatch(clause) || DeliberatelyMissingValue().IsMatch(clause) ||
                 DeferredValue().IsMatch(clause) || OmittedValue().IsMatch(clause)) return false;
-            if (_referenceQuestion) return true;
+            if (referenceQuestion) return true;
             if (ReferenceInstruction().IsMatch(clause)) return false;
             var reference = ReferencePredicate().Match(clause);
             // "is documented in the handbook as /ready" supplies a value;
