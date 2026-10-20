@@ -30,7 +30,7 @@ jobs:
       - name: Test (excluding separate benchmark lanes)
         # Capture the active test sequence and a mini dump before terminating a hung
         # host. This is outside the tests' existing 60s/180s worker deadlines.
-        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale" --blame-hang-timeout 5m --blame-hang-dump-type mini
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale&Category!=IndependentRecall" --blame-hang-timeout 5m --blame-hang-dump-type mini
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -85,6 +85,40 @@ jobs:
           path: |
             artifacts/recall-scale/
             **/TestResults/recall-scale.trx
+
+  independent-recall-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ENGRAM_INDEPENDENT_OUTPUT: ${{ github.workspace }}/artifacts/independent-recall
+      ENGRAM_EVAL_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - name: Test evidence validator
+        run: python -m unittest discover -s scripts/tests -p test_independent_recall_gate.py
+      - name: Measure frozen questions and concurrent JSON/SQLite workloads
+        run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter "Category=IndependentRecall" --logger "trx;LogFileName=independent-recall.trx" --blame-hang-timeout 5m --blame-hang-dump-type mini
+      # Execution/safety gate. The summary explicitly reports quality blockers;
+      # --release is a separate strict acceptance command until those are fixed.
+      # Do not weaken the existing strict noisy-recall gate above.
+      - name: Validate complete evidence and publish release-blocker summary
+        run: python scripts/check-independent-recall.py artifacts/independent-recall
+      - name: Upload independent validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: independent-recall-results
+          path: |
+            artifacts/independent-recall/
+            **/TestResults/independent-recall.trx
+            **/TestResults/**/Sequence*.xml
+            **/TestResults/**/*.dmp
 
   pack:
     needs: build-and-test

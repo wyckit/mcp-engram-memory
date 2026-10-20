@@ -37,6 +37,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Fixtures/recall-independent-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-noisy-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-realistic-v1.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Fixtures/recall-broad-v1.json" CopyToOutputDirectory="PreserveNewest" />
