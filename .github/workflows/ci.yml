@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +28,9 @@ jobs:
         run: dotnet build McpEngramMemory.slnx --no-restore -c Release
 
       - name: Test (excluding separate benchmark lanes)
-        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale"
+        # Capture the active test sequence and a mini dump before terminating a hung
+        # host. This is outside the tests' existing 60s/180s worker deadlines.
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale" --blame-hang-timeout 5m --blame-hang-dump-type mini
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -39,6 +42,8 @@ jobs:
             **/TestResults/recall-realistic-*.json
             **/TestResults/recall-noisy-*.json
             **/TestResults/restart-*.json
+            **/TestResults/**/Sequence*.xml
+            **/TestResults/**/*.dmp
 
       # Benchmark regression gate (T7): now STATISTICAL. The script delegates to
       # the C# gate (built Release above): absolute floors (Recall>=0.20,

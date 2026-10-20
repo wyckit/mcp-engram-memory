@@ -64,6 +64,21 @@ regression verifies that workers are drained and the pre-cancellation phase is
 reported. Any further CI timeout should be investigated using these details,
 not dismissed because a rerun passes.
 
+During this investigation, post-merge #50 CI run `39391883137` was found stuck
+for over four hours: .NET 9/10 had completed, but .NET 8 produced no final TRX.
+The run was cancelled and its available logs/artifacts retained. They do not
+identify the active test or provide a stack trace, so this separate hang remains
+unlocalized; the decay optimization must not be presented as proof of its cause.
+
+Ordinary CI now has a five-minute per-test hang watchdog that captures the test
+sequence and a mini dump before terminating the host, plus a 20-minute job cap.
+The existing artifact step uploads those diagnostics even on test failure.
+These outer bounds leave the tests' shorter progress deadlines unchanged.
+An isolated intentional-hang probe using the same test SDK and xUnit versions
+verified termination and both sequence and mini-dump creation with a five-second
+probe timeout. The probe is retained with local evidence, not included in the
+normal test suite.
+
 ## Validation
 
 Local validation passes **2,478 tests on each of .NET 8, 9 and 10**, including
