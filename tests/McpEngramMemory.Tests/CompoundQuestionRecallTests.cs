@@ -213,4 +213,17 @@ public class CompoundQuestionRecallTests
         Assert.Equal(new[] { "backup", "owner" }, result.Results.Select(r => r.Id).Order().ToArray());
         Assert.Equal(1, store.Index.Get("other", "other", "")!.AccessCount);
     }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void SummaryCannotReplaceTheOnlySourceEvenWhenThatSourceIsSuperseded(int k)
+    {
+        using var store = new RecallTestStore();
+        store.Add("owner", "citrine", "[superseded] Citrine production deployment owner is Harbor.", .7f);
+        store.Add("summary", "citrine", "Citrine production backups run every 6 hours.", summary: true);
+        var result = Assert.IsType<RecallResult>(store.Tools().Recall(Query, "citrine", k: k, expandGraph: false));
+        Assert.Contains(result.Results, r => r.Id == "owner" && !r.IsSummaryNode);
+        Assert.InRange(result.Results.Count, 1, k);
+    }
 }

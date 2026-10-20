@@ -907,6 +907,9 @@ public sealed class CompositeTools
             selected.Add(next.Candidate);
             uncovered.ExceptWith(next.Covered);
         }
+        // Preserve the factual-source invariant even when only superseded
+        // sources remain and a current summary ranks ahead of all of them.
+        if (selected.Count == 0) selected.Add(ranked.First(c => !c.Result.IsSummaryNode));
         selected.AddRange(ranked.Where(c => !selected.Contains(c)).Take(k - selected.Count));
         return selected;
     }
