@@ -51,6 +51,14 @@ public sealed class IndependentRecallEvaluationTests(ITestOutputHelper output)
             FailedObservations = rows.Count(r => r.Failures.Length > 0)
         });
         output.WriteLine($"{path}: {rows.Count(r => r.Failures.Length > 0)}/144 observations fail frozen release criteria.");
+        // Keep the frozen corpus and oracle unchanged. These previously failing
+        // negative cases are now required to abstain on every route and restart.
+        string[] fixedNonAnswers = ["absent-date", "absent-approval-owner", "proposal-not-decision",
+            "question-not-number", "topic-not-answer"];
+        var fixedRows = rows.Where(r => fixedNonAnswers.Contains(r.Id)).ToArray();
+        Assert.Equal(30, fixedRows.Length);
+        Assert.All(fixedRows, r => Assert.True(r.CorrectAbstention && r.Failures.Length == 0,
+            $"{r.Id}/{r.Mode}/{r.Phase}: {string.Join(", ", r.Failures)}"));
     }
 }
 
