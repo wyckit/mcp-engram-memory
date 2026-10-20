@@ -17,7 +17,7 @@ schedule, including numeric intervals such as “every 6 hours”; an owner, res
 drill, documentation task or missing-value note cannot supply that facet.
 
 Automatic recall retains eligible expert probes and completes the authorized
-broadcast when the experts leave a facet unanswered. An expert that already
+broadcast when a routed expert supplies only part of the answer. An expert that already
 supplies both facets keeps the existing expert route. Direct recall
 keeps its requested namespace and existing opted-in graph behavior. Namespace,
 tenant, read permission, original-query cosine floor and archive write permission
@@ -57,6 +57,31 @@ unchanged. All independent observations are now mandatory in the measured test,
 and CI invokes the existing validator with `--release`. This closes the previous
 gap between green execution CI and the independent recall quality gate.
 
+## Validation
+
+Final source revision `1e64c7e` passes **2,619 ordinary tests per framework** on
+.NET 8, 9 and 10, including 52 new focused cases, with no failures or skips.
+All 24 Python report-validator tests pass.
+
+The unchanged real-ONNX independent corpus now passes **288/288 observations**.
+The eight compound-recovery failures are corrected: automatic and broadcast
+recall return both `c-owner` and `c-backup` on JSON/SQLite, warm and restarted.
+The other 280 observations, including direct compound recall's local owner
+facet and all eight negative questions, are unchanged.
+
+All 27 earlier recall reports (2,976 observations) and all 624 scale observations
+match PR54 after excluding timing and validating generated provenance identities
+before normalization. Fixture, model and scale-manifest hashes are unchanged.
+The three small-corpus strict gates, four 1,000/5,000-memory scale cells and the
+independent strict `--release` gate all pass with zero declared blockers.
+
+Four concurrent load cells pass scope, version and restart-durability checks:
+576 reads, 1,536 mutations and 192 maintenance passes overall. All 144 reads per
+cell overlap writes locally. These are repeated synthetic observations, not a
+production accuracy or throughput estimate. Raw evidence, comparisons and
+earlier failed runs are retained under `artifacts/compound-recovery/`; the final
+source's reports are in `verified/`.
+
 ## Reproduce
 
 Use fresh output directories and record the tested source revision:
@@ -65,6 +90,9 @@ Use fresh output directories and record the tested source revision:
 $env:ENGRAM_EVAL_REVISION = git rev-parse HEAD
 $env:ENGRAM_RECALL_EVAL_OUTPUT = Join-Path $PWD 'artifacts/compound-fresh/full'
 dotnet test McpEngramMemory.slnx -c Release --filter 'Category!=MSA&Category!=RecallScale&Category!=IndependentRecall' --blame-hang-timeout 5m --blame-hang-dump-type mini
+foreach ($framework in 8, 9, 10) {
+    python scripts/check-noisy-recall.py $env:ENGRAM_RECALL_EVAL_OUTPUT --small --framework $framework --release
+}
 
 $env:ENGRAM_RECALL_EVAL_OUTPUT = Join-Path $PWD 'artifacts/compound-fresh/scale'
 dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --no-build --filter 'Category=RecallScale'
