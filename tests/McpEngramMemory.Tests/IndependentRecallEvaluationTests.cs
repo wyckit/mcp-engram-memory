@@ -5,6 +5,10 @@ using static McpEngramMemory.Tests.IndependentRecallValidation;
 
 namespace McpEngramMemory.Tests;
 
+[CollectionDefinition("Independent recall validation", DisableParallelization = true)]
+public sealed class IndependentRecallValidationCollection;
+
+[Collection("Independent recall validation")]
 [Trait("Category", "IndependentRecall")]
 public sealed class IndependentRecallEvaluationTests(ITestOutputHelper output)
 {

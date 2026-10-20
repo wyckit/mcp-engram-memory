@@ -9,6 +9,7 @@ using static McpEngramMemory.Tests.IndependentRecallValidation;
 
 namespace McpEngramMemory.Tests;
 
+[Collection("Independent recall validation")]
 [Trait("Category", "IndependentRecall")]
 public sealed class RecallConcurrentLoadTests(ITestOutputHelper output)
 {
