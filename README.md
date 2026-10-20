@@ -116,6 +116,10 @@ The snapshot file is not committed (it's personal memory data). Generate a fresh
 
 ## Quickstart
 
+**Existing 2.0.0 installation?** Follow the [safe upgrade procedure](docs/installation-and-upgrades.md)
+before updating: default data in the old version directory must be backed up and migrated first.
+The unreleased server uses a durable user data directory; existing explicit paths are preserved.
+
 ```powershell
 # Windows — clones, builds, and wires up your AI assistant automatically
 irm https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup.ps1 | iex
@@ -137,7 +141,8 @@ curl -fsSL https://raw.githubusercontent.com/wyckit/mcp-engram-memory/main/setup
 
 ```bash
 git clone https://github.com/wyckit/mcp-engram-memory.git
-cd mcp-engram-memory && dotnet restore
+cd mcp-engram-memory
+dotnet publish src/McpEngramMemory/McpEngramMemory.csproj -c Release -f net8.0 -p:TargetFrameworks=net8.0 -o .engram/server
 ```
 
 Add to your MCP client config:
@@ -147,7 +152,7 @@ Add to your MCP client config:
   "mcpServers": {
     "engram-memory": {
       "command": "dotnet",
-      "args": ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"],
+      "args": ["/path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll"],
       "env": { "MEMORY_TOOL_PROFILE": "minimal" }
     }
   }
@@ -296,7 +301,8 @@ Opus thinks, Sonnet remembers, Haiku explores.
 | `AGENT_ID` | `default` | Host-supplied agent identity for namespace sharing. The default is explicit legacy-unisolated compatibility mode, not authentication. |
 | `MEMORY_TENANT_ID` | empty | Host-supplied tenant partition. Do not accept this value from model/tool arguments. Empty selects the legacy partition. |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
-| `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`) |
+| `MEMORY_DATA_PATH` | User-local app data / `engram-memory` | Durable server data root; see [migration instructions](docs/installation-and-upgrades.md) |
+| `MEMORY_SQLITE_PATH` | `<data-root>/memory.db` | SQLite database path (when `MEMORY_STORAGE=sqlite`); explicit overrides are preserved |
 | `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_SQLSERVER_SCHEMA` | `dbo` | SQL Server schema name (when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Max entries per namespace |

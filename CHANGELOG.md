@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- The MCP executable uses a durable user data root outside package/build directories. A stopped-server
+  migration command and pre-update helper preserve 2.0.0 stores, sharing metadata and governance files
+  before the package manager removes the old version. Existing SQLite/governance overrides remain valid.
+- Source installers preserve unrelated JSON/TOML configuration, back up replacements and refuse
+  malformed files. They publish only the server target, supporting SDK 8+ and Windows PowerShell 5.1.
+- Windows server startup explicitly loads packaged ONNX/SQLite libraries using extended paths,
+  preventing long installation paths from selecting an incompatible system runtime.
+- Publisher dry runs retain existing artifacts and use unique package staging directories.
+
+### Validation
+
+- Added real installed-package 2.0.0 upgrade/restart checks and source setup/configuration checks on
+  Windows, Linux and Apple Silicon macOS. Existing frozen recall cases and strict gates are unchanged.
+- Next-version numbering, release notes and final soak qualification remain separate release work.
+
 ## [2.0.0] - 2026-09-01
 
 _Major release. Tenant scope stops being a defaulted argument and becomes a required one: 55 Core

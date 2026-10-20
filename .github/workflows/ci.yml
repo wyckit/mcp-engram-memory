@@ -7,6 +7,78 @@ on:
     branches: [main]
 
 jobs:
+  source-installation:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, sdk: '8', shell: powershell }
+          - { os: windows-latest, sdk: '10', shell: pwsh }
+          - { os: ubuntu-latest, sdk: '9', shell: bash }
+          - { os: macos-15, sdk: '8', shell: bash }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            ${{ matrix.sdk }}.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fresh, repeated and malformed configuration with real installed command
+        run: python scripts/validate-source-installation.py --sdk ${{ matrix.sdk }} --shell ${{ matrix.shell }} --output artifacts/source-installation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-installation-${{ matrix.os }}-${{ matrix.sdk }}
+          path: |
+            artifacts/source-installation/*.log
+            artifacts/source-installation/*.json
+
+  installed-package-upgrade:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pack unpublished candidate
+        run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -p:Version=2.1.0-validation.${{ github.run_id }}.${{ github.run_attempt }} -o artifacts/feed
+      - name: Upgrade published 2.0.0 with JSON, SQLite and external SQLite
+        run: python scripts/validate-installation.py --package-source artifacts/feed --version 2.1.0-validation.${{ github.run_id }}.${{ github.run_attempt }} --output artifacts/installed-upgrade
+      - name: Build and restart the Docker image with a durable volume
+        if: runner.os == 'Linux'
+        run: |
+          docker build -t engram-validation .
+          python scripts/validate-container.py --image engram-validation --output artifacts/container-validation
+      - name: Publisher dry run preserves existing validation evidence
+        if: runner.os == 'Windows'
+        run: python scripts/validate-publisher.py --repo .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-upgrade-${{ matrix.os }}
+          path: |
+            artifacts/installed-upgrade/*.log
+            artifacts/installed-upgrade/*.json
+            artifacts/container-validation/*.log
+            artifacts/container-validation/*.json
+            artifacts/publisher-check/
+
   build-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -146,11 +218,15 @@ jobs:
         run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o ./artifacts
 
       - name: Verify package versions
-        shell: bash
+        shell: python
         run: |
-          test -f ./artifacts/McpEngramMemory.Core.2.0.0.nupkg
-          test -f ./artifacts/McpEngramMemory.Synthesis.Onnx.2.0.0.nupkg
-          test -f ./artifacts/McpEngramMemory.2.0.0.nupkg
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          names = ('McpEngramMemory.Core', 'McpEngramMemory.Synthesis.Onnx', 'McpEngramMemory')
+          versions = {name: ET.parse(f'src/{name}/{name}.csproj').findtext('.//Version') for name in names}
+          assert len(set(versions.values())) == 1, versions
+          for name, version in versions.items():
+              assert Path(f'artifacts/{name}.{version}.nupkg').is_file(), (name, version)
 
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v4

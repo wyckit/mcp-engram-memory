@@ -32,6 +32,8 @@ param(
     [string]$Configuration = "Release",
     [string]$Source = "https://api.nuget.org/v3/index.json",
     [string]$GitHubSource = "https://nuget.pkg.github.com/wyckit/index.json",
+    # Preserve validation evidence, including in dry-run mode.
+    [string]$PackageOutputRoot = "",
     [switch]$SkipNuGetOrg,
     [switch]$SkipTests,
     [switch]$WhatIf
@@ -66,8 +68,10 @@ if (Test-Path $lockTarget) {
     } catch {
         Write-Host "Build output is locked by a running process:" -ForegroundColor Red
         Write-Host "  $lockTarget" -ForegroundColor Red
-        $holders = Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" |
-            Where-Object { $_.CommandLine -like '*McpEngramMemory*' }
+        $holders = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" |
+                Where-Object { $_.CommandLine -like '*McpEngramMemory*' }
+        } else { $null }
         if ($holders) {
             Write-Host "Likely an MCP Engram Memory server (PID $($holders.ProcessId -join ', '))." -ForegroundColor Yellow
             Write-Host "Disconnect the engram MCP server (or stop those PIDs) and re-run." -ForegroundColor Yellow
@@ -113,7 +117,7 @@ Write-Host "Publishing MCP Engram Memory v$version ($($Packages.Count) packages)
 
 if (-not $SkipTests) {
     Write-Host "`nRunning tests..." -ForegroundColor Yellow
-    dotnet test "$PSScriptRoot\tests\McpEngramMemory.Tests" --configuration $Configuration --filter "Category!=MSA&Category!=LiveBenchmark&Category!=T2Benchmark"
+    dotnet test "$PSScriptRoot\tests\McpEngramMemory.Tests" --configuration $Configuration --filter "Category!=MSA&Category!=RecallScale&Category!=IndependentRecall" --blame-hang-timeout 5m --blame-hang-dump-type mini
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Tests failed. Aborting publish." -ForegroundColor Red
         exit 1
@@ -121,8 +125,11 @@ if (-not $SkipTests) {
 }
 
 # Pack everything and validate sizes BEFORE pushing anything.
-$artifacts = "$PSScriptRoot\artifacts"
-Remove-Item $artifacts -Recurse -Force -ErrorAction SilentlyContinue
+if (-not $PackageOutputRoot) { $PackageOutputRoot = Join-Path $PSScriptRoot 'artifacts/packages' }
+$packageRun = "$version-" + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmss') + '-' + [Guid]::NewGuid().ToString('N')
+$artifacts = Join-Path ([IO.Path]::GetFullPath($PackageOutputRoot)) $packageRun
+New-Item -ItemType Directory -Path $artifacts -ErrorAction Stop | Out-Null
+Write-Host "Package staging: $artifacts"
 Write-Host "`nPacking..." -ForegroundColor Yellow
 foreach ($pkg in $Packages) {
     dotnet pack $pkg.Path --configuration $Configuration --output $artifacts

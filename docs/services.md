@@ -198,7 +198,8 @@ Three legacy memory storage backends are available, selectable via environment v
 | `AGENT_ID` | `default` | Process-wide cooperative identity label. It is not authentication; default + empty tenant is explicit legacy-unisolated mode |
 | `MEMORY_TENANT_ID` | empty | Process-wide host tenant partition. Empty selects legacy storage; never accept it from model/tool arguments |
 | `MEMORY_STORAGE` | `json` | Storage backend: `json`, `sqlite`, or `sqlserver` |
-| `MEMORY_SQLITE_PATH` | `data/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`) |
+| `MEMORY_DATA_PATH` | User-local app data / `engram-memory` | Durable MCP server data root; [migration procedure](installation-and-upgrades.md). Core constructor defaults are unchanged. |
+| `MEMORY_SQLITE_PATH` | `<data-root>/memory.db` | SQLite database file path (only when `MEMORY_STORAGE=sqlite`); explicit overrides take precedence |
 | `MEMORY_SQLSERVER_CONNECTION` | _required_ | SQL Server connection string (only when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_SQLSERVER_SCHEMA` | `dbo` | SQL Server schema name (only when `MEMORY_STORAGE=sqlserver`) |
 | `MEMORY_MAX_NAMESPACE_SIZE` | unlimited | Maximum entries per namespace |

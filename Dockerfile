@@ -4,21 +4,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copy solution and project files first for layer caching
-COPY McpEngramMemory.slnx ./
+# Copy project files first for layer caching
 COPY src/McpEngramMemory/McpEngramMemory.csproj src/McpEngramMemory/
 COPY src/McpEngramMemory.Core/McpEngramMemory.Core.csproj src/McpEngramMemory.Core/
 COPY src/McpEngramMemory.Core/build/ src/McpEngramMemory.Core/build/
 
 # Restore dependencies (downloads ONNX model via .targets during restore/build)
-RUN dotnet restore McpEngramMemory.slnx
+RUN dotnet restore src/McpEngramMemory/McpEngramMemory.csproj -p:TargetFrameworks=net8.0
 
 # Copy remaining source code
 COPY src/ src/
 
 # Build and publish in Release mode
 RUN dotnet publish src/McpEngramMemory/McpEngramMemory.csproj \
-    -c Release \
+    -c Release -f net8.0 -p:TargetFrameworks=net8.0 \
     -o /app/publish \
     --no-restore
 
@@ -38,6 +37,7 @@ ENV DOTNET_EnableDiagnostics=0
 
 # Default storage backend
 ENV MEMORY_STORAGE=json
+ENV MEMORY_DATA_PATH=/app/data
 
 WORKDIR /app
 

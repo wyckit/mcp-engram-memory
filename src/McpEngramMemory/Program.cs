@@ -20,6 +20,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+ServerNativeRuntime.Configure();
+
 // Subcommand: `dotnet run -- mrcr-pilot ...` runs the MRCR benchmark without starting the MCP server.
 if (args.Length > 0 && args[0] == "mrcr-pilot")
 {
@@ -38,6 +40,17 @@ if (args.Length > 0 && args[0] == "regression-gate")
     return RegressionGateCommand.Run(args.Skip(1).ToArray());
 }
 
+if (args.Length > 0 && args[0] is "data-path" or "migrate-data" or "prepare-data")
+    return DataCommands.Run(args);
+if (args.Length > 0 && args[0] == "configure-client")
+    return ClientConfiguration.Run(args);
+
+var configuredDataPath = Environment.GetEnvironmentVariable("MEMORY_DATA_PATH");
+var dataPath = ServerDataPaths.Resolve(configuredDataPath);
+if (configuredDataPath is null)
+    ServerDataPaths.CheckLegacyData(dataPath, Path.Combine(AppContext.BaseDirectory, "data"));
+ServerDataPaths.CreatePrivateDirectory(dataPath);
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
@@ -46,7 +59,7 @@ builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 var storageMode = Environment.GetEnvironmentVariable("MEMORY_STORAGE");
 if (string.Equals(storageMode, "sqlite", StringComparison.OrdinalIgnoreCase))
 {
-    var dbPath = Environment.GetEnvironmentVariable("MEMORY_SQLITE_PATH");
+    var dbPath = Environment.GetEnvironmentVariable("MEMORY_SQLITE_PATH") ?? Path.Combine(dataPath, "memory.db");
     builder.Services.AddSingleton(sp => new SqliteStorageProvider(
         dbPath: dbPath, logger: sp.GetService<ILogger<SqliteStorageProvider>>()));
     builder.Services.AddSingleton<IStorageProvider>(sp => sp.GetRequiredService<SqliteStorageProvider>());
@@ -65,7 +78,7 @@ else if (string.Equals(storageMode, "sqlserver", StringComparison.OrdinalIgnoreC
 }
 else
 {
-    builder.Services.AddSingleton(sp => new PersistenceManager(
+    builder.Services.AddSingleton(sp => new PersistenceManager(basePath: dataPath,
         logger: sp.GetService<ILogger<PersistenceManager>>()));
     builder.Services.AddSingleton<IStorageProvider>(sp => sp.GetRequiredService<PersistenceManager>());
 }
@@ -156,7 +169,7 @@ if (!string.IsNullOrWhiteSpace(tenantId) && agentId == AgentIdentity.DefaultAgen
 }
 var principalContext = new PrincipalContext(tenantId, agentId);
 var governancePath = Environment.GetEnvironmentVariable("MEMORY_GOVERNANCE_PATH")
-    ?? Path.Combine(AppContext.BaseDirectory, "data", "governance");
+    ?? Path.Combine(dataPath, "governance");
 builder.Services.AddSingleton<IPrincipalContext>(principalContext);
 builder.Services.AddSingleton(new AgentIdentity(agentId));
 builder.Services.AddSingleton<NamespaceRegistry>();
