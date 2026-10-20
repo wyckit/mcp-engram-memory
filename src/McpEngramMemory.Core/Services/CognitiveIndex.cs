@@ -2030,7 +2030,7 @@ public sealed class CognitiveIndex : IDisposable
                     StampLifecycleTransition(tuple.Entry, previousState);
                     UpdateQuantization(nsEntries, id, tuple, previousState, newState);
                 }
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
                 return true;
             }
             return false;
@@ -2063,7 +2063,7 @@ public sealed class CognitiveIndex : IDisposable
                 StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, newState);
             }
-            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             return true;
         }
         finally { nsLock.ExitWriteLock(); }

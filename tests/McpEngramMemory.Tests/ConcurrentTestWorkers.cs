@@ -10,6 +10,10 @@ internal sealed class ConcurrentTestWorkers
     public bool IsQuiescent => _threads.All(t => !t.IsAlive);
 
     public void Run(TimeSpan timeout, params Action<CancellationToken>[] actions)
+        => RunWithDiagnostics(timeout, () => "", actions);
+
+    public void RunWithDiagnostics(TimeSpan timeout, Func<string> describeProgress,
+        params Action<CancellationToken>[] actions)
     {
         var stop = new CancellationTokenSource();
         var ready = new Barrier(actions.Length + 1);
@@ -27,11 +31,14 @@ internal sealed class ConcurrentTestWorkers
 
         var elapsed = Stopwatch.StartNew();
         bool completed = false;
+        string progress = "";
         try
         {
             foreach (var thread in _threads) thread.Start();
             if (ready.SignalAndWait(timeout))
                 completed = JoinWithin(timeout - elapsed.Elapsed);
+            // Capture before cancellation/draining changes the last observed work phase.
+            if (!completed || !failures.IsEmpty) progress = describeProgress();
         }
         finally
         {
@@ -43,9 +50,9 @@ internal sealed class ConcurrentTestWorkers
             if (IsQuiescent) { ready.Dispose(); stop.Dispose(); }
         }
 
-        Assert.True(IsQuiescent, "Workers did not stop after cancellation; fixture resources were retained to avoid disposal under live work.");
+        Assert.True(IsQuiescent, "Workers did not stop after cancellation; fixture resources were retained to avoid disposal under live work. " + progress);
         Assert.Empty(failures);
-        Assert.True(completed, $"Workers exceeded {timeout.TotalSeconds}s; all workers were cancelled and joined. A timeout alone does not establish a deadlock.");
+        Assert.True(completed, $"Workers exceeded {timeout.TotalSeconds}s; all workers were cancelled and joined. A timeout alone does not establish a deadlock. {progress}");
     }
 
     private bool JoinWithin(TimeSpan budget)

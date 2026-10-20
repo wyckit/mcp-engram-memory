@@ -652,7 +652,7 @@ internal sealed class NamespaceStore
     /// debounced write to disk. The full snapshot spans every tenant because the persistence unit
     /// is the namespace; each entry carries its own <see cref="CognitiveEntry.TenantId"/>.
     /// </summary>
-    public void ScheduleSave(string ns)
+    public void ScheduleSave(string ns, bool persistHnsw = true)
     {
         // The provider MATERIALIZES AT INVOKE TIME, never at schedule time. A full save is a
         // delete-all-rows-and-re-insert of the namespace, so a snapshot frozen at schedule
@@ -663,8 +663,10 @@ internal sealed class NamespaceStore
         // it, which is the invariant the providers' commit ordering relies on.
         _persistence.ScheduleSave(ns, () => BuildNamespaceSnapshot(ns));
 
-        // Persist HNSW snapshots alongside namespace data (one per tenant partition)
-        ScheduleHnswSave(ns);
+        // Lifecycle energy/state changes leave HNSW's vectors and topology untouched.
+        // Rewriting its derived snapshot for every such update turns a decay pass into
+        // N synchronous full-index writes while holding the partition's write lock.
+        if (persistHnsw) ScheduleHnswSave(ns);
     }
 
     private NamespaceData BuildNamespaceSnapshot(string ns)
@@ -681,12 +683,12 @@ internal sealed class NamespaceStore
     }
 
     /// <summary>Schedule an incremental upsert (SQLite/SQL Server) or full snapshot (JSON) for a single entry.</summary>
-    public void ScheduleEntryUpsert(string ns, CognitiveEntry entry)
+    public void ScheduleEntryUpsert(string ns, CognitiveEntry entry, bool persistHnsw = true)
     {
         if (_persistence.SupportsIncrementalWrites)
             _persistence.ScheduleUpsertEntry(ns, entry);
         else
-            ScheduleSave(ns);
+            ScheduleSave(ns, persistHnsw);
     }
 
     /// <summary>

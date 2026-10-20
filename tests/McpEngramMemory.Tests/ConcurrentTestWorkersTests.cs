@@ -32,4 +32,24 @@ public sealed class ConcurrentTestWorkersTests
         Assert.NotNull(error);
         Assert.True(workers.IsQuiescent);
     }
+
+    [Fact]
+    public void Deadline_ReportsProgressBeforeCancellation()
+    {
+        var workers = new ConcurrentTestWorkers();
+        string phase = "waiting";
+        var error = Record.Exception(() => workers.RunWithDiagnostics(TimeSpan.FromSeconds(1),
+            () => Volatile.Read(ref phase),
+            token =>
+            {
+                token.WaitHandle.WaitOne();
+                Volatile.Write(ref phase, "worker-stopped");
+            }));
+
+        Assert.NotNull(error);
+        Assert.Contains("waiting", error.ToString());
+        Assert.DoesNotContain("worker-stopped", error.ToString());
+        Assert.Equal("worker-stopped", phase);
+        Assert.True(workers.IsQuiescent);
+    }
 }

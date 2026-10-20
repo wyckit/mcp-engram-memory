@@ -149,6 +149,45 @@ public class CandidateIndexConcurrencyTests : IDisposable
             $"while both entries were live. First few: {string.Join(", ", underCounted.Take(5))}");
     }
 
+    [Fact]
+    public void NextRoundCutoff_DoesNotSkipAnAdderFromThePreviousRound()
+    {
+        using var cutoffPublished = new ManualResetEventSlim();
+        int completed = RunRetirementStorm(2, 3,
+            shouldStop: r => r == 1,
+            afterCutoff: _ => cutoffPublished.Set(),
+            beforeWork: (worker, r) =>
+            {
+                // Hold one adder after round 0 opens until the remover publishes round 1's
+                // cutoff. No sleep or wall-clock expiry is needed to force the old race.
+                if (worker == 1 && r == 0)
+                    Assert.True(cutoffPublished.Wait(TimeSpan.FromSeconds(10)));
+            });
+
+        Assert.Equal(1, completed);
+        AssertSameSet([AdderNs(1, 0), AdderNs(2, 0)],
+            _index.GetNamespacesContaining(StormId(0), Tenant));
+        Assert.Equal(2, _index.GetNamespaces(Tenant)
+            .Sum(ns => _index.CountInNamespace(ns, Tenant)));
+        Assert.Empty(_index.GetNamespacesContaining(StormId(1), Tenant));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(4)]
+    public void ForcedCutoff_CountsOnlyFullyExecutedRounds(int cutoff)
+    {
+        int completed = RunRetirementStorm(2, 4, shouldStop: r => r == cutoff);
+        Assert.Equal(cutoff, completed);
+        Assert.Equal(cutoff * 2, _index.GetNamespaces(Tenant)
+            .Sum(ns => _index.CountInNamespace(ns, Tenant)));
+        for (int r = 0; r < cutoff; r++)
+            AssertSameSet([AdderNs(1, r), AdderNs(2, r)],
+                _index.GetNamespacesContaining(StormId(r), Tenant));
+        Assert.Empty(_index.GetAllInNamespace(RemoverNs, Tenant));
+    }
+
     /// <summary>
     /// One remover and <paramref name="adders"/> adders, re-synchronized on every round so the
     /// delete that empties a bucket and the upserts that repopulate it are always contending for the
@@ -169,20 +208,22 @@ public class CandidateIndexConcurrencyTests : IDisposable
     /// over themselves. Callers assert a floor instead, so a genuinely stalled machine still fails
     /// loudly rather than passing on a storm that did nothing.
     ///
-    /// The cutoff is taken at a round boundary and published before the barrier, so every worker
-    /// makes the same decision for the same round. Deciding per worker would tear a round in half —
+    /// The cutoff names the first skipped round. Workers compare it with their own round so a
+    /// fast remover cannot cancel a slow adder's previous round. Deciding per worker would tear a round in half —
     /// the remover seeding while the adders skip — and leave the returned count describing rounds
     /// that only partly happened.
     /// </summary>
-    private int RunRetirementStorm(int adders, int rounds)
+    private int RunRetirementStorm(int adders, int rounds,
+        Func<int, bool>? shouldStop = null, Action<int>? afterCutoff = null,
+        Action<int, int>? beforeWork = null)
     {
         int workerCount = adders + 1;
         using var start = new ManualResetEventSlim(false);
         using var round = new Barrier(workerCount);
         using var deadline = new CancellationTokenSource(StormBudget);
 
-        // -1 while the storm is running; otherwise the first round that did NOT run. Written only by
-        // worker 0 and only before the barrier, so the read after the barrier is consistent for all.
+        // -1 while running; otherwise the first skipped round. A slow worker may observe
+        // a cutoff published for the NEXT round after leaving the current round's barrier.
         int stopFromRound = -1;
 
         Exception? failure = null;
@@ -212,12 +253,15 @@ public class CandidateIndexConcurrencyTests : IDisposable
                             // guaranteed to empty it and attempt a retirement.
                             //
                             // Worker 0 also owns the stop decision, taken here so it is published
-                            // before the barrier and therefore visible identically to every worker
-                            // after it. Once set it is never cleared: later rounds stay skipped.
+                            // before that round's barrier. Once set it is never cleared.
                             if (worker == 0)
                             {
-                                if (Volatile.Read(ref stopFromRound) < 0 && deadline.IsCancellationRequested)
+                                if (Volatile.Read(ref stopFromRound) < 0 &&
+                                    (shouldStop?.Invoke(r) ?? deadline.IsCancellationRequested))
+                                {
                                     Volatile.Write(ref stopFromRound, r);
+                                    afterCutoff?.Invoke(r);
+                                }
 
                                 if (Volatile.Read(ref stopFromRound) < 0)
                                     _index.Upsert(Entry(id, RemoverNs, Tenant));
@@ -229,10 +273,11 @@ public class CandidateIndexConcurrencyTests : IDisposable
 
                         try
                         {
-                            // Out of budget: skip the work but keep signalling, so the barrier stays
-                            // balanced and no worker is left parked forever. Every worker reads the
-                            // same value here because it was written before the barrier.
-                            if (Volatile.Read(ref stopFromRound) >= 0)
+                            beforeWork?.Invoke(worker, r);
+                            // A next-round cutoff must not suppress this round's pending writes.
+                            // Keep signalling skipped rounds so the barrier remains balanced.
+                            int cutoff = Volatile.Read(ref stopFromRound);
+                            if (cutoff >= 0 && r >= cutoff)
                                 continue;
 
                             if (worker == 0)
