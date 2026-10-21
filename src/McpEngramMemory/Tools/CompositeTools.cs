@@ -671,9 +671,10 @@ public sealed class CompositeTools
         // Broad scores depend on the retrieved pool's topic frequencies. Keep that
         // pool intact through calibration, then enforce scope at final selection.
         // Otherwise removing unrelated contexts can demote an already-found source.
-        if (options.QueryEvidence is not null || (options.Scope is not null && !useBroad))
+        if (options.QueryEvidence is not null || options.History is not null || (options.Scope is not null && !useBroad))
         {
             bool EligibleText(string? text) => (options.QueryEvidence is null || options.QueryEvidence.Matches(text, ns)) &&
+                (options.History is null || options.History.MatchesTopic(text, ns)) &&
                 (options.Scope is null || options.Scope.Matches(text, ns));
             bool Eligible(CognitiveSearchResult r) => EligibleText(r.Text);
             // Apply evidence requirements after the established confidence fallback:
@@ -691,12 +692,15 @@ public sealed class CompositeTools
                 states = allStates;
                 deep = recovered.Any(r => r.LifecycleState == "archived" && Eligible(r));
             }
-            if (options.QueryEvidence is not null && !results.Any(r => !r.IsSummaryNode && Eligible(r)))
+            if ((options.QueryEvidence is not null || options.History is not null) &&
+                !results.Any(r => !r.IsSummaryNode && Eligible(r)))
             {
                 // Both ranked windows can be full of reference-only notes or wrong
                 // scopes. Filter within this authorized partition BEFORE truncation.
                 // Reuse the query embedding, exact cosine threshold, and public k.
                 // Probe sources only: summaries cannot manufacture a factual answer.
+                // Historical context must match the topic even if no source can
+                // establish the requested period; unrelated noise must not fill k.
                 int recoveryCount = BroadRecallRanking.CandidateLimit(options.K);
                 var recovered = _index.Rerank(query, _index.SearchEligible(new SearchRequest
                 {
@@ -816,6 +820,7 @@ public sealed class CompositeTools
         IEnumerable<RecallCandidate> candidates, RecallOptions options)
     {
         var ranked = candidates.Where(c => (options.QueryEvidence is null || options.QueryEvidence.Matches(c.Result.Text, c.Namespace)) &&
+                (options.History is null || options.History.MatchesTopic(c.Result.Text, c.Namespace)) &&
                 (options.Scope is null || options.Scope.Matches(c.Result.Text, c.Namespace)))
             .OrderByDescending(c => options.SummaryFirst && c.Result.IsSummaryNode)
             .ThenBy(c => options.PreferCurrent && RecallFreshness.IsSuperseded(c.Result.Text))
