@@ -27,12 +27,13 @@ git clone https://github.com/wyckit/mcp-engram-memory.git
 cd mcp-engram-memory
 dotnet restore
 dotnet build
-dotnet test --filter "Category!=MSA&Category!=LiveBenchmark&Category!=T2Benchmark"
+dotnet test --filter "Category!=MSA&Category!=RecallScale&Category!=IndependentRecall" --blame-hang-timeout 5m
 ```
 
-The excluded trait categories (`MSA`, `LiveBenchmark`, `T2Benchmark`) are
-long-running benchmarks that hit local Ollama and/or CLI tools. CI runs them
-on a nightly schedule, not on every PR.
+CI runs `RecallScale` and `IndependentRecall` separately on every PR, including their strict report
+validators. MSA runs on a nightly schedule or manual dispatch. Its historical live-agent artifact
+checks are not fresh LLM executions. See [installation validation](docs/installation-and-upgrades.md)
+for the additional source/package lanes.
 
 ## Project layout
 
@@ -77,15 +78,18 @@ Start with `docs/core-10.md` and `docs/first-5-minutes.md` to get oriented.
 
 ## Releasing (maintainer notes)
 
-1. Bump `<Version>` in both csprojs.
-2. Add a `CHANGELOG.md` entry under a new version header, matching the style
+1. Complete both strict recall gates, the fresh MSA gate, installed-package/source validation and the
+   release candidate's planned soak. Investigate remaining failures and state unqualified platforms/backends.
+2. Bump `<Version>` together in all three package projects: Core, Synthesis.Onnx and the MCP tool.
+3. Add a `CHANGELOG.md` entry under a new version header, matching the style
    of prior entries.
-3. Merge the release PR.
-4. Tag `vX.Y.Z` on `main` and push the tag.
-5. `gh release create vX.Y.Z --notes-file <excerpt from CHANGELOG>`.
-6. Publish packages: `dotnet pack` both projects, `dotnet nuget push` to
-   nuget.org (Core only — the MCP server is a dotnet tool) and to GitHub
-   Packages (both).
+4. Merge the release PR.
+5. Tag `vX.Y.Z` on `main` and push the tag.
+6. `gh release create vX.Y.Z --notes-file <excerpt from CHANGELOG>`.
+7. Run `./publish-nuget.ps1 -WhatIf` and retain its unique package staging directory and validation evidence.
+   After release approval, publish all three packages in dependency order (Core, Synthesis.Onnx, tool),
+   using the publisher's configured feeds. Never update a 2.0.0 tool with default data until completing
+   the [pre-update migration](docs/installation-and-upgrades.md).
 
 ## Reporting security issues
 
