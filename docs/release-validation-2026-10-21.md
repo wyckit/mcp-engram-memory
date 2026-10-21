@@ -1,9 +1,26 @@
 # Release validation — October 21, 2026
 
-**Not release ready.** Telemetry PR [#57](https://github.com/wyckit/mcp-engram-memory/pull/57)
+## Current disposition
+
+The two defects documented below were subsequently fixed and merged: persistence
+lock ordering in [#59](https://github.com/wyckit/mcp-engram-memory/pull/59), and
+historical evidence filtering in [#60](https://github.com/wyckit/mcp-engram-memory/pull/60).
+Both PRs passed all 14 CI checks. The original diagnostic soak was stopped at the
+user's request on October 21 at 12:22:08 UTC (08:22:08 EDT), and its monitor paused.
+Its roughly 84.5 minutes and 86 retained quality failures are preserved as incomplete
+historical evidence, not a release pass. Final restart qualification was not run.
+
+The release strategy now uses simulated maintenance time, controlled concurrency
+and a single 30-minute real-process stress run. See [the revised protocol](release-soak.md).
+The updated PR #58 description records the fixed candidate's results separately;
+local evidence is retained under `artifacts/accelerated-validation/`.
+
+## Original investigation at c7c44ce
+
+**The following findings describe the pre-fix revision.** Telemetry PR [#57](https://github.com/wyckit/mcp-engram-memory/pull/57)
 was merged after all 14 checks passed at head `4e3ace01af35ad72959283cd5d9e860a54950ad2`.
 The merge is `c7c44ce91718d35f3cd7ba26de79606a7831b083`. The subsequent validation
-found two concrete blockers. A 48-hour diagnostic soak is still in progress.
+found two concrete blockers. A 48-hour diagnostic soak was started during that investigation.
 
 ## Blocker 1: merge and persistence can deadlock
 
@@ -77,27 +94,27 @@ beyond the existing Core fixture runs without changing the frozen questions or
 expected answers. It must be fixed without loosening scope or negative-evidence
 checks.
 
-## Active 48-hour run
+## Preserved, stopped 48-hour diagnostic
 
 - Revision: `c7c44ce91718d35f3cd7ba26de79606a7831b083`, Windows x64, .NET 8.
 - Started: **2026-10-21 10:57:38 UTC** (6:57:38 a.m. Eastern).
-- Continuous interval ends: **2026-10-23 10:57:38 UTC**, followed by restart checks.
+- Originally planned interval end: **2026-10-23 10:57:38 UTC**, followed by restart checks.
 - Output: `artifacts/release-soak/soak-48h-20261021-v2/` on the initiating host.
 - Separate JSON/SQLite processes, 1,000/5,000 memories, direct/broadcast recalls,
   concurrent writes, original background timers and scope canaries.
-- Hourly monitoring reports actionable changes or completion. No automatic
-  restart, merge or release is permitted.
+- Stopped by the user on October 21 at 12:22:08 UTC; hourly monitoring is paused.
+  The original artifacts and user-stop annotation are retained.
 
 An earlier launch stopped immediately on a Windows status-file sharing error.
 Its evidence is retained under `soak-48h-20261021/`; none of that time counts.
 The harness now retries that transient reporting error with a bounded deadline,
 and the active `-v2` run starts a fresh full interval.
 
-The active run deliberately continues reliability measurements after recording
+The diagnostic run continued reliability measurements after recording
 the known recall quality failure. Scope, protocol and reliability failures still
 stop immediately. **Any recorded quality failure makes the final release verdict
-fail**, even if all 48 hours and restart checks complete. A clean qualification
-will require a fresh run after fixes.
+fail**, even if all 48 hours and restart checks complete. The revised accelerated protocol requires fresh fixed-candidate evidence; these
+failed diagnostic observations cannot become a pass.
 
 See [the soak protocol](release-soak.md) for workload, thresholds and limits.
 This run does not qualify registered-expert routing, live SQL Server, shared-file
@@ -122,7 +139,7 @@ multi-process writers, Windows ARM64, Intel macOS or fresh live-LLM outcomes.
 - Recall evidence: `artifacts/release-soak/preflight-full/historical-recall-failure.json`,
   `preflight-diagnostic/quality-failures.jsonl`, and the active run's retained logs.
 
-Before release: fix the deadlock and historical noise, pass their focused
-regressions and existing scope gates, complete a clean sustained qualification,
-then align the three package versions and finish release/migration notes.
+Before release: complete the revised fixed-candidate validation, retain passing
+focused and unchanged scope/recall gates, then align the three package versions
+and finish release/migration notes.
 No release has been published by this validation work.

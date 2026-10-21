@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Continuous real MCP soak; isolated data, frozen recall oracle, no production changes.
+"""Bounded real MCP stress; isolated data and an unchanged frozen recall oracle.
 
 Requires Python 3.11+ and psutil. Duration excludes seeding and final restart checks.
 Any failure fails qualification and preserves data and diagnostics. Explicit diagnostic
@@ -83,7 +83,7 @@ def main():
     parser.add_argument('--fixture', required=True, type=Path)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--hours', type=float, default=48)
+    parser.add_argument('--hours', type=float, default=0.5)
     parser.add_argument('--interval', type=float, default=5)
     parser.add_argument('--json-size', type=int, default=1000)
     parser.add_argument('--sqlite-size', type=int, default=5000)
@@ -117,7 +117,8 @@ def main():
                'fixtureSha256': FROZEN, 'durationHours': args.hours, 'pid': os.getpid(),
                'platform': os.name, 'intervalSeconds': args.interval, 'backends': {},
                'continueAfterQualityFailure': args.collect_after_quality_failure, 'qualityFailures': 0,
-               'qualification': '48-hour continuous soak' if args.hours >= 48 else 'short harness validation'}
+               'qualification': 'continuous soak' if args.hours >= 48 else 'bounded real-process stress',
+               'simulatedTime': False}
     write_json(output / 'status.json', summary)
     clients, baselines, versions = {}, {}, defaultdict(int)
     slow_windows = defaultdict(int)
@@ -266,11 +267,15 @@ def main():
                 last_sample = elapsed
             round_number += 1
             time.sleep(max(0, args.interval - (time.monotonic() - tick)))
+        # Keep load duration separate from seeding and restart validation. A short
+        # run must never be reported as simulated days or continuous 48-hour uptime.
+        summary['workloadSeconds'] = time.monotonic() - start_time
         for backend, client in list(clients.items()):
             summary['backends'][backend].update(requests=client.count, writerVersion=versions[backend])
             assert summary['backends'][backend]['overlappingReads'] > 0, 'No read/write overlap observed'
             full_check(backend)
             health = client.call('engram_status')
+            summary['backends'][backend]['finalWorkerStatus'] = health
             if args.hours >= 48:
                 assert all(worker['cyclesCompleted'] > 0 for worker in health.values()), health
             client.close()
@@ -280,6 +285,7 @@ def main():
             full_check(backend)
             clients[backend].close()
             del clients[backend]
+            summary['backends'][backend]['restartVerified'] = True
             for label, marker, agent, tenant in (
                 ('private', CANARIES[0], 'other-owner', 'soak-a'),
                 ('foreign', CANARIES[1], 'soak-owner', 'soak-b'),
@@ -288,6 +294,7 @@ def main():
                     entry = sentinel.call('get_memory', id='c-owner')
                     assert entry['text'] == f'Citrine production deployment owner is {marker}.'
                     assert entry['lifecycleState'] == 'archived' and entry['accessCount'] == 1, entry
+            summary['backends'][backend]['canariesVerified'] = True
         summary.update(state='failed' if summary['qualityFailures'] else 'passed', reliabilityCompleted=True,
                        completedUtc=now(), elapsedSeconds=time.monotonic() - start_time)
         if summary['qualityFailures']:

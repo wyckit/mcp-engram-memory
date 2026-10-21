@@ -92,6 +92,9 @@ internal sealed record MergeEntrySnapshot(
 /// </summary>
 public sealed class CognitiveIndex : IDisposable
 {
+    // Tests advance maintenance and access timestamps together; production uses real time.
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
     private static readonly HashSet<string> AllStates = new() { "stm", "ltm", "archived" };
 
     private readonly NamespaceStore _store;
@@ -1779,7 +1782,7 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
                 tuple.Entry.AccessCount++;
-                tuple.Entry.LastAccessedAt = DateTimeOffset.UtcNow;
+                tuple.Entry.LastAccessedAt = Clock.GetUtcNow();
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
             }
         }
@@ -1803,7 +1806,7 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
                 tuple.Entry.AccessCount++;
-                tuple.Entry.LastAccessedAt = DateTimeOffset.UtcNow;
+                tuple.Entry.LastAccessedAt = Clock.GetUtcNow();
                 _store.ScheduleEntryUpsert(ns, tuple.Entry);
             }
         }

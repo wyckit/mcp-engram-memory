@@ -44,7 +44,7 @@ public sealed class AutoLinkBackgroundService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try { await Task.Delay(StartupDelay, stoppingToken); }
+        try { await Task.Delay(StartupDelay, _lifecycle.Clock, stoppingToken); }
         catch (OperationCanceledException) { return; }
 
         while (!stoppingToken.IsCancellationRequested)
@@ -60,9 +60,9 @@ public sealed class AutoLinkBackgroundService : BackgroundService
                 _logger?.LogError(ex, "Auto-link background pass failed; will retry on next interval.");
             }
             swTotal.Stop();
-            _statusTracker?.RecordCycle("auto_link", DateTime.UtcNow, swTotal.ElapsedMilliseconds, totalEntriesProcessed, errorMessage);
+            _statusTracker?.RecordCycle("auto_link", _lifecycle.Clock.GetUtcNow().UtcDateTime, swTotal.ElapsedMilliseconds, totalEntriesProcessed, errorMessage);
 
-            try { await Task.Delay(Interval, stoppingToken); }
+            try { await Task.Delay(Interval, _lifecycle.Clock, stoppingToken); }
             catch (OperationCanceledException) { return; }
         }
     }

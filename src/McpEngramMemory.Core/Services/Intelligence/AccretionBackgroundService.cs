@@ -17,6 +17,8 @@ public sealed class AccretionBackgroundService : BackgroundService
     private readonly IBackgroundWorkerStatusTracker? _statusTracker;
     private readonly ILogger<AccretionBackgroundService> _logger;
 
+    private TimeProvider Clock => _index.Clock;
+
     /// <summary>Default interval between accretion scans.</summary>
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromMinutes(30);
 
@@ -44,7 +46,7 @@ public sealed class AccretionBackgroundService : BackgroundService
         {
             try
             {
-                await Task.Delay(Interval, stoppingToken);
+                await Task.Delay(Interval, Clock, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -132,7 +134,7 @@ public sealed class AccretionBackgroundService : BackgroundService
             if (partial is not null)
                 errorMessage = errorMessage is null ? partial : $"{errorMessage}; {partial}";
 
-            _statusTracker?.RecordCycle("accretion", DateTime.UtcNow, swTotal.ElapsedMilliseconds, totalEntriesProcessed, errorMessage);
+            _statusTracker?.RecordCycle("accretion", Clock.GetUtcNow().UtcDateTime, swTotal.ElapsedMilliseconds, totalEntriesProcessed, errorMessage);
         }
 
         _logger.LogInformation("Accretion background service stopped");

@@ -41,7 +41,7 @@ public sealed class ConsolidationBackgroundService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try { await Task.Delay(StartupDelay, stoppingToken); }
+        try { await Task.Delay(StartupDelay, _lifecycle.Clock, stoppingToken); }
         catch (OperationCanceledException) { return; }
 
         while (!stoppingToken.IsCancellationRequested)
@@ -77,9 +77,9 @@ public sealed class ConsolidationBackgroundService : BackgroundService
                 errorMessage = ex.Message;
                 _logger?.LogError(ex, "Consolidation pass failed; will retry on next interval.");
             }
-            _statusTracker?.RecordCycle("consolidation", DateTime.UtcNow, sw.ElapsedMilliseconds, entriesProcessed, errorMessage);
+            _statusTracker?.RecordCycle("consolidation", _lifecycle.Clock.GetUtcNow().UtcDateTime, sw.ElapsedMilliseconds, entriesProcessed, errorMessage);
 
-            try { await Task.Delay(Interval, stoppingToken); }
+            try { await Task.Delay(Interval, _lifecycle.Clock, stoppingToken); }
             catch (OperationCanceledException) { return; }
         }
     }
