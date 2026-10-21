@@ -1,7 +1,7 @@
 # McpEngramMemory 2.1.0 — Recall quality and reliable upgrades
 
-Release preparation for the `McpEngramMemory.Core`, `McpEngramMemory.Synthesis.Onnx`
-and `McpEngramMemory` package set. This PR does not publish a package or tag.
+Version 2.1.0 updates the `McpEngramMemory.Core`, `McpEngramMemory.Synthesis.Onnx`
+and `McpEngramMemory` package set together.
 
 ## What changes
 
@@ -98,7 +98,8 @@ failures. Both restart durability and private/foreign/legacy canaries passed. Th
 of observed runtime**, not a simulated claim of 48-hour uptime. The earlier stopped diagnostic
 and its failures remain preserved separately.
 
-The release PR records validation of the **final 2.1.0 packages**, including their hashes and
+The [release PR](https://github.com/wyckit/mcp-engram-memory/pull/61) records validation of the
+**final 2.1.0 packages**, including their hashes and
 actual published-2.0.0 upgrade/restart checks on Windows x64, Linux x64 and Apple Silicon macOS.
 Package structure checks enforce aligned versions/dependencies and supported framework assets;
 the installed tool must match the candidate archive. See the

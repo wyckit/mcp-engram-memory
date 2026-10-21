@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [2.1.0] - Release candidate
+## [2.1.0] - 2026-10-21
 
 _Recall quality, persistence reliability and safe upgrades. The three packages advance together;
 Core/Synthesis APIs and MCP tool names/arguments remain compatible with 2.0.0. Existing 2.0.0

@@ -1,6 +1,6 @@
 # Installation and upgrades
 
-These instructions apply to the **2.1.0 release candidate** and later versions containing the migration
+These instructions apply to **2.1.0** and later versions containing the migration
 commands. The published 2.0.0 executable does not provide them. Package commands using 2.1.0 require
 that version to be published, or an unpublished local feed supplied with `--source`.
 

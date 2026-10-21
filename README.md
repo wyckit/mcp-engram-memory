@@ -34,7 +34,7 @@
 | **Safer installation and upgrades** | The server uses a durable user data directory; the pre-update helper preserves old package-local data before replacement. Client configuration is preserved. |
 | **Early telemetry suppression** | The MCP executable suppresses ONNX telemetry before native initialization on the validated Windows, Linux and macOS platforms. |
 
-This branch prepares **2.1.0**; package commands below apply once that version is published.
+This documentation targets **2.1.0**; package commands require that version in the selected feed.
 The three packages ship together. MCP profiles remain **17 / 39 / 63 tools**, and the Core/Synthesis
 public APIs remain compatible with 2.0.0. New optional recall conflict diagnostics are additive.
 
@@ -174,7 +174,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 
 | Metric | Value |
 |--------|-------|
-| Version | 2.1.0 (release preparation; compatible with 2.0 APIs) |
+| Version | 2.1.0 (compatible with 2.0 APIs) |
 | MCP tools | 63 (profiles: 17 / 39 / 63) |
 | Isolation | Tenant-partitioned across storage, graph, clusters, lifecycle, diffusion, synthesis, and snapshots |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |

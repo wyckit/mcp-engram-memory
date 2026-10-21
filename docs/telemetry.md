@@ -1,6 +1,6 @@
 # ONNX telemetry policy
 
-This policy applies to the 2.1.0 release candidate's **MCP executable**,
+This policy applies to the **2.1.0 MCP executable**,
 including source installs, the packaged tool, Docker and benchmark subcommands. It does not
 retroactively change published 2.0.0 or install process-wide hooks into Core library consumers.
 
