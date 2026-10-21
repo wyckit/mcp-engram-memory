@@ -1,8 +1,8 @@
 # Installation and upgrades
 
-These instructions describe the unreleased source changes following 2.0.0.
-Package examples require an exact candidate or published version containing the migration commands;
-the published 2.0.0 executable does not provide them. No release is implied by this document.
+These instructions apply to **2.1.0** and later versions containing the migration
+commands. The published 2.0.0 executable does not provide them. Package commands using 2.1.0 require
+that version to be published, or an unpublished local feed supplied with `--source`.
 
 ## Durable data
 
@@ -30,9 +30,9 @@ already deleted directory. If that happened, restore a pre-update backup.
 From a checkout containing the new helper, with Python 3.9+ and a .NET SDK installed:
 
 ```sh
-python scripts/upgrade-tool.py --global --version <target-version> --server-stopped
+python scripts/upgrade-tool.py --global --version 2.1.0 --server-stopped
 # Or for an existing --tool-path installation:
-python scripts/upgrade-tool.py --tool-path /path/to/tools --version <target-version> --server-stopped
+python scripts/upgrade-tool.py --tool-path /path/to/tools --version 2.1.0 --server-stopped
 ```
 
 For an unpublished validation package, also supply `--source /path/to/local-feed`.
@@ -93,13 +93,19 @@ Use only generated data and new output directories. Python 3.11+ is required for
 the upgrade helper itself requires 3.9+.
 
 ```sh
-dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -p:Version=2.1.0-validation.1 -o artifacts/feed
-python scripts/validate-installation.py --package-source artifacts/feed --version 2.1.0-validation.1 --output artifacts/install-run-1
+dotnet pack src/McpEngramMemory.Core/McpEngramMemory.Core.csproj -c Release -o artifacts/feed
+dotnet pack src/McpEngramMemory.Synthesis.Onnx/McpEngramMemory.Synthesis.Onnx.csproj -c Release -o artifacts/feed
+dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o artifacts/feed
+python scripts/validate-packages.py --package-source artifacts/feed --output artifacts/package-check.json
+python scripts/validate-installation.py --package-source artifacts/feed --output artifacts/install-run-1
 python scripts/validate-source-installation.py --sdk 8 --shell powershell --output artifacts/source-run-1
 # Use --shell bash on Linux/macOS, or --shell pwsh for PowerShell 7.
 ```
 
-Package validation installs the actual published 2.0.0, seeds JSON/default SQLite/external SQLite,
+Package checks verify matching versions, release-note links, framework assets, dependency pins and
+the bundled Core assembly. Installation validation derives the candidate version from the project
+(unless `--version` is supplied), verifies the installed package hash against the local feed, and
+installs the actual published 2.0.0, seeds JSON/default SQLite/external SQLite,
 upgrades through the helper, then verifies restart durability, metadata, tenant boundaries, sharing,
 read-only access, compound recall and all three profiles. Windows also exercises a deeply nested
 installation path to catch native-library loading failures. Source validation pins an installed SDK,

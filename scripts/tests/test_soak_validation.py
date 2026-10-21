@@ -44,7 +44,9 @@ class ClientTests(unittest.TestCase):
 
     def test_missing_response_has_a_deadline(self):
         with tempfile.TemporaryDirectory() as root:
-            with LoadClient([sys.executable, '-u', '-c', SERVER], {}, root, 'timeout', timeout=.2) as client:
+            with LoadClient([sys.executable, '-u', '-c', SERVER], {}, root, 'timeout', timeout=5) as client:
+                # Bound interpreter startup separately from the deliberately missing reply.
+                client.timeout = .2
                 with self.assertRaises(TimeoutError): client.request('echo', {'value': 1})
 
     def test_non_protocol_stdout_fails_request(self):
@@ -55,8 +57,9 @@ class ClientTests(unittest.TestCase):
     def test_blocked_stdin_cannot_bypass_request_deadline(self):
         server = "import json,sys,time; r=json.loads(sys.stdin.readline()); print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{}}),flush=True); time.sleep(30)"
         with tempfile.TemporaryDirectory() as root:
-            client = LoadClient([sys.executable, '-u', '-c', server], {}, root, 'blocked-input', timeout=.2)
+            client = LoadClient([sys.executable, '-u', '-c', server], {}, root, 'blocked-input', timeout=5)
             try:
+                client.timeout = .2
                 started = time.monotonic()
                 with self.assertRaises(TimeoutError): client.request('echo', {'value': 'x' * 1024 * 1024})
                 self.assertLess(time.monotonic() - started, 3)
