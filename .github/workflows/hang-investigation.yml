@@ -1,0 +1,46 @@
+name: Bounded CI hang investigation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/hang-investigation.yml'
+      - 'scripts/investigate-ci-hang.py'
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [d553b69785d1e8b0cb28a0c9bbac4ec5080c93eb, c7c44ce91718d35f3cd7ba26de79606a7831b083]
+        mode: [parallel-frameworks, net8-only]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision }}
+          path: target
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the unchanged target
+        working-directory: target
+        run: dotnet build McpEngramMemory.slnx -c Release
+      - name: Repeat with sequence, dump and diagnostic capture
+        run: python harness/scripts/investigate-ci-hang.py --repo target --mode ${{ matrix.mode }} --iterations 3 --output evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hang-${{ matrix.revision }}-${{ matrix.mode }}
+          path: evidence/
+          retention-days: 14
