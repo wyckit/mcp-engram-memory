@@ -4,7 +4,7 @@ namespace McpEngramMemory.Tools;
 
 /// <summary>
 /// A bounded preference for explicit historical evidence, not a timeline or date inference.
-/// Other in-scope context stays eligible when the requested period cannot be established.
+/// Other topic-matching evidence stays eligible when the requested period cannot be established.
 /// </summary>
 internal sealed partial class RecallHistorySelection(RecallQueryEvidence topic, HashSet<string> anchor)
 {
@@ -20,12 +20,20 @@ internal sealed partial class RecallHistorySelection(RecallQueryEvidence topic, 
         var anchor = before.Success ? Tokens(before.Groups[1].Value) : [];
         if (before.Success && (anchor.Count == 0 || anchor.Count > 8)) return null;
         string subject = before.Success ? query[..before.Index] : query;
+        // "Show the historical timeout" names a topic, not a project called Show.
+        // Require the historical qualifier so actual subjects named Show survive.
+        subject = TopicRequest().Replace(subject, "$1");
         subject = PastAuxiliary().Replace(subject, "is");
         subject = PastQualifier().Replace(subject, "");
         if (!Question().IsMatch(subject)) subject = "What is " + subject;
         var topic = RecallQueryEvidence.Parse(subject);
         return topic is null ? null : new(topic, anchor);
     }
+
+    // Temporal preference does not establish topical relevance. Keep current or
+    // other-period evidence on the requested subject, but reject unrelated records
+    // even when their vector score or an event-number keyword happens to match.
+    public bool MatchesTopic(string? text, string ns) => topic.Matches(text, ns);
 
     public bool Prefers(string? text, string ns)
     {
@@ -75,6 +83,8 @@ internal sealed partial class RecallHistorySelection(RecallQueryEvidence topic, 
     private static partial Regex Before();
     [GeneratedRegex(@"\b(?:was|were)\b", Options)]
     private static partial Regex PastAuxiliary();
+    [GeneratedRegex(@"^\s*(?:show|list|find|retrieve)\s+(?:me\s+)?(?:the\s+)?((?:historical|old|previous|former)\s+)", Options)]
+    private static partial Regex TopicRequest();
     [GeneratedRegex(@"\b(?:old|previous|previously|former|formerly|historical)\s+", Options)]
     private static partial Regex PastQualifier();
     [GeneratedRegex(@"^\s*(?:what|which|who|where|when|why|how)\b", Options)]
