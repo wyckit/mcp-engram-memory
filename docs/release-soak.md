@@ -114,3 +114,8 @@ exist at the historical revision.
 
 A successful repetition is evidence that the hang did not recur under that
 configuration. It is not a root-cause finding or a fix for the original hang.
+
+The first investigation did reproduce a .NET 8 stall on the historical revision
+and captured a merge/persistence lock-order cycle. See the
+[October 21 release report](release-validation-2026-10-21.md) for the stacks,
+current-code impact, active soak and remaining blockers.
