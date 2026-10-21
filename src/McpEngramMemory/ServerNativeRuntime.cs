@@ -11,6 +11,7 @@ internal static class ServerNativeRuntime
     internal static void Configure()
     {
         if (!OperatingSystem.IsWindows()) return;
+        RequireReviewedTelemetryVersion(typeof(InferenceSession).Assembly.GetName().Version);
         var path = ResolveWindowsLibrary(AppContext.BaseDirectory, RuntimeInformation.ProcessArchitecture);
         var handle = new Lazy<IntPtr>(() => NativeLibrary.Load(ExtendedWindowsPath(path)));
         NativeLibrary.SetDllImportResolver(typeof(InferenceSession).Assembly, (name, _, _) =>
@@ -19,6 +20,14 @@ internal static class ServerNativeRuntime
         var sqliteHandle = new Lazy<IntPtr>(() => NativeLibrary.Load(ExtendedWindowsPath(sqlite)));
         NativeLibrary.SetDllImportResolver(typeof(SQLitePCL.SQLite3Provider_e_sqlite3).Assembly, (name, _, _) =>
             name == "e_sqlite3" ? sqliteHandle.Value : IntPtr.Zero);
+    }
+
+    internal static void RequireReviewedTelemetryVersion(Version? version)
+    {
+        // A dependency upgrade must requalify the private Windows suppression signal
+        // before shipping. Reading assembly metadata does not initialize native ORT.
+        if (version != new Version(1, 29, 0, 0))
+            throw new NotSupportedException("ONNX telemetry suppression requires the reviewed 1.29.0 runtime. Requalify the telemetry policy before upgrading ONNX.");
     }
 
     internal static string ResolveWindowsLibrary(string directory, Architecture architecture, string library = "onnxruntime.dll")

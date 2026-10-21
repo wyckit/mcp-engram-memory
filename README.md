@@ -20,7 +20,7 @@
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
 - **Contradiction Detection** — `find_contradictions` surfaces conflicting goals or architecture decisions on demand, so you can review and retire logic you've already reversed instead of letting the agent keep acting on it.
 - **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
-- **100% Privacy-First** — local ONNX embeddings + local SQLite. Your memory never leaves your machine. No telemetry, no analytics, no phone-home: the server makes no outbound network call at all in its default configuration. (The optional synthesis backend talks to a local Ollama daemon, and `OLLAMA_URL` can be pointed elsewhere if you choose to.)
+- **Privacy by default** — local ONNX embeddings and local storage. The MCP executable enforces ONNX telemetry suppression before loading the native runtime on Windows, Linux and macOS; see [the telemetry policy and validation](docs/telemetry.md). Optional remote storage, synthesis and live benchmark services make network calls only when configured. Hosts embedding the Core library must establish their own process policy.
 
 → [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md) · [What's new in 2.0](#whats-new-in-20)
 

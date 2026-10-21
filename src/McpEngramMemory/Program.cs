@@ -20,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+ServerTelemetry.Configure();
 ServerNativeRuntime.Configure();
 
 // Subcommand: `dotnet run -- mrcr-pilot ...` runs the MRCR benchmark without starting the MCP server.
