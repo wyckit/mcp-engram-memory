@@ -4,28 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.0] - Release candidate
+
+_Recall quality, persistence reliability and safe upgrades. The three packages advance together;
+Core/Synthesis APIs and MCP tool names/arguments remain compatible with 2.0.0. Existing 2.0.0
+installations must preserve version-local data **before** package replacement. See the
+[2.1.0 release notes](docs/release-notes-2.1.0.md)._
+
 ### Fixed
 
-- The MCP executable disables ONNX telemetry before native library initialization, including
-  Linux/macOS native environment propagation and Windows 1.29 ETW registration suppression.
-  Dependency upgrades must requalify the version-guarded Windows workaround.
-- The MCP executable uses a durable user data root outside package/build directories. A stopped-server
-  migration command and pre-update helper preserve 2.0.0 stores, sharing metadata and governance files
-  before the package manager removes the old version. Existing SQLite/governance overrides remain valid.
-- Source installers preserve unrelated JSON/TOML configuration, back up replacements and refuse
-  malformed files. They publish only the server target, supporting SDK 8+ and Windows PowerShell 5.1.
-- Windows server startup explicitly loads packaged ONNX/SQLite libraries using extended paths,
-  preventing long installation paths from selecting an incompatible system runtime.
-- Publisher dry runs retain existing artifacts and use unique package staging directories.
+- Unified direct, broadcast and expert-routed recall evidence selection. Natural questions,
+  paraphrases, missing answers and non-answer text now share the same scope-preserving rules.
+- Improved noisy candidate recovery, broad/compound and backup/recovery coverage, restore-order
+  interpretation, historical answer selection and source retention alongside summaries.
+- Demoted explicitly superseded answers; exposed unmarked/paraphrased contradictions and explicit
+  denials. Contradiction resolution requires supporting governed evidence.
+- Enforced hybrid lifecycle/category filters and project/environment scope through fallback and
+  candidate recovery. Context-block cache invalidation follows content changes.
+- Removed merge/persistence snapshot lock inversion; guarded stale timer callbacks and save retries.
+  Lifecycle updates avoid redundant index writes while preserving data durability.
+- The MCP executable disables ONNX telemetry before native initialization on validated platforms,
+  including a version-guarded Windows 1.29 ETW workaround.
+- Updated vulnerable transitive PKCS dependencies and explicitly pinned the serviced SQLite bundle.
+- Added durable executable data paths and verified pre-update migration for 2.0.0 package-local
+  stores. Existing explicit SQLite/governance paths remain supported.
+- Source installers preserve unrelated configuration, back up replacements and reject malformed
+  files; support SDK 8+ and PowerShell 5.1. Windows loads packaged native libraries on long paths.
+- Publisher dry runs retain existing artifacts in unique staging directories. Installer tool
+  counts now agree with measured profiles: 17 / 39 / 63.
 
 ### Validation
 
-- Added native-load probes on Windows x64, Linux x64 and Apple Silicon macOS, with inherited
-  opt-outs and CI suppression cleared. Windows captures ETW with positive/negative controls;
-  all platforms exercise real inference and restart across the unchanged 17/39/63 MCP profiles.
-- Added real installed-package 2.0.0 upgrade/restart checks and source setup/configuration checks on
-  Windows, Linux and Apple Silicon macOS. Existing frozen recall cases and strict gates are unchanged.
-- Next-version numbering, release notes and final soak qualification remain separate release work.
+- Added frozen realistic, independent, noisy-corpus and 1,000/5,000-memory recall evaluations,
+  strict release gates, concurrent read/write tests and deterministic persistence regressions.
+- Added simulated maintenance with a shared internal clock and real worker effects, plus a single
+  bounded real MCP stress run with unchanged scope checks. No mandatory 48-hour release wait.
+- Added native telemetry probes and actual published-2.0.0 installation/upgrade/restart checks on
+  Windows x64, Linux x64 and Apple Silicon macOS. Final package validation uses project versions
+  without a prerelease override and verifies installed archive identity.
 
 ## [2.0.0] - 2026-09-01
 

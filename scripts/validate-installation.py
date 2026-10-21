@@ -8,20 +8,29 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from validation.mcp_client import Client
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--package-source", required=True, type=Path)
-    p.add_argument("--version", required=True)
+    p.add_argument("--version", help="Defaults to the tool project's exact package version")
     p.add_argument("--output", required=True, type=Path, help="New directory; existing results are never reused")
     a = p.parse_args()
     output = a.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     repo = Path(__file__).resolve().parent.parent
+    if not a.version:
+        a.version = ET.parse(repo / "src/McpEngramMemory/McpEngramMemory.csproj").findtext(".//Version")
     source = a.package_source.resolve()
+    package = source / f"McpEngramMemory.{a.version}.nupkg"
+    package_hash = hashlib.sha256(package.read_bytes()).hexdigest()
     result = {"platform": platform.platform(), "version": a.version, "backends": []}
+
+    def verify_installed_package(install):
+        installed = install / ".store/mcpengrammemory" / a.version / "mcpengrammemory" / a.version / f"mcpengrammemory.{a.version}.nupkg"
+        assert hashlib.sha256(installed.read_bytes()).hexdigest() == package_hash, "Installed package differs from candidate feed"
 
     def command(args, name):
         with (output / f"{name}.log").open("w", encoding="utf-8") as log:
@@ -60,6 +69,7 @@ def main():
         command([sys.executable, repo / "scripts/upgrade-tool.py", "--tool-path", install,
                  "--version", a.version, "--source", source, "--data-directory", durable,
                  "--backup-directory", backup, "--server-stopped"], "upgrade-" + backend)
+        verify_installed_package(install)
         assert not (install / ".store/mcpengrammemory/2.0.0").exists()
         if backend != "sqlite-external":
             assert (durable / "_engram-migration.json").is_file()
@@ -103,6 +113,7 @@ def main():
         fresh = fresh / ("long-installation-path-" * 5)
     command(["dotnet", "tool", "install", "McpEngramMemory", "--version", a.version, "--tool-path", fresh,
              "--add-source", source], "install-fresh")
+    verify_installed_package(fresh)
     executable = fresh / ("engram-memory.exe" if os.name == "nt" else "engram-memory")
     with Client([str(executable)], output, "fresh-start", {"MEMORY_DATA_PATH": str(output / "fresh-data")}) as c:
         assert len(c.request("tools/list")["tools"]) == 17
@@ -110,8 +121,8 @@ def main():
     with Client([str(executable)], output, "fresh-restart", {"MEMORY_DATA_PATH": str(output / "fresh-data")}) as c:
         assert c.call("get_memory", id="fresh")["text"] == "Fresh installation retains this fact."
     result["freshInstallation"] = "passed"
-    package = source / f"McpEngramMemory.{a.version}.nupkg"
-    result["packageSha256"] = hashlib.sha256(package.read_bytes()).hexdigest()
+    result["packageSha256"] = package_hash
+    result["installedArchiveIdentity"] = "passed (three upgrades and fresh install)"
     (output / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
 

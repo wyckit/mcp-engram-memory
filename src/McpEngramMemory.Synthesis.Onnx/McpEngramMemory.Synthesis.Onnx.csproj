@@ -11,7 +11,7 @@
 
     <!-- NuGet Package -->
     <PackageId>McpEngramMemory.Synthesis.Onnx</PackageId>
-    <Version>2.0.0</Version>
+    <Version>2.1.0</Version>
     <Authors>wyckit</Authors>
     <Company>wyckit</Company>
     <Copyright>Copyright (c) 2026 WyckIt</Copyright>
@@ -23,7 +23,7 @@
     <PackageProjectUrl>https://github.com/wyckit/mcp-engram-memory</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReleaseNotes>2.0.0 is a breaking release for hosts embedding McpEngramMemory.Core: tenantId is now a required argument on 55 Core retrieval and scoping APIs. The MCP tool surface and on-disk data are unchanged. Release notes: https://github.com/wyckit/mcp-engram-memory/blob/main/docs/release-notes-2.0.0.md</PackageReleaseNotes>
+    <PackageReleaseNotes>2.1.0 improves scoped recall, contradiction handling and persistence reliability; adds safe pre-update data migration and early ONNX telemetry suppression. MCP tool names and arguments remain compatible. Back up and migrate version-local 2.0.0 data before updating. Release notes: https://github.com/wyckit/mcp-engram-memory/blob/main/docs/release-notes-2.1.0.md</PackageReleaseNotes>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>

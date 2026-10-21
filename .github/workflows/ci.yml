@@ -116,9 +116,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Pack unpublished candidate
-        run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -p:Version=2.1.0-validation.${{ github.run_id }}.${{ github.run_attempt }} -o artifacts/feed
+        run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o artifacts/feed
       - name: Upgrade published 2.0.0 with JSON, SQLite and external SQLite
-        run: python scripts/validate-installation.py --package-source artifacts/feed --version 2.1.0-validation.${{ github.run_id }}.${{ github.run_attempt }} --output artifacts/installed-upgrade
+        run: python scripts/validate-installation.py --package-source artifacts/feed --output artifacts/installed-upgrade
       - name: Build and restart the Docker image with a durable volume
         if: runner.os == 'Linux'
         run: |
@@ -276,16 +276,17 @@ jobs:
       - name: Pack global tool
         run: dotnet pack src/McpEngramMemory/McpEngramMemory.csproj -c Release -o ./artifacts
 
-      - name: Verify package versions
-        shell: python
-        run: |
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          names = ('McpEngramMemory.Core', 'McpEngramMemory.Synthesis.Onnx', 'McpEngramMemory')
-          versions = {name: ET.parse(f'src/{name}/{name}.csproj').findtext('.//Version') for name in names}
-          assert len(set(versions.values())) == 1, versions
-          for name, version in versions.items():
-              assert Path(f'artifacts/{name}.{version}.nupkg').is_file(), (name, version)
+      - name: Test package validation failures
+        run: python -m unittest discover -s scripts/tests -p test_package_validation.py
+
+      - name: Verify final package set
+        run: python scripts/validate-packages.py --package-source artifacts --output artifacts/package-validation.json
+
+      - name: Upload package validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-validation
+          path: artifacts/package-validation.json
 
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v4

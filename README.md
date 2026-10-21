@@ -7,14 +7,14 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"/></a>
   <a href="https://www.nuget.org/packages/McpEngramMemory.Core"><img src="https://img.shields.io/nuget/v/McpEngramMemory.Core" alt="NuGet"/></a>
   <img src="https://img.shields.io/badge/tests-multi--target-brightgreen" alt="Tests: .NET 8, 9, and 10"/>
-  <img src="https://img.shields.io/badge/release-2.0-blueviolet" alt="Release: 2.0"/>
+  <img src="https://img.shields.io/badge/release-2.1-blueviolet" alt="Release: 2.1"/>
 </p>
 
 # The governed, local-first cognitive memory kernel for AI agents
 
 **Memory physics, not just storage.** Most agent memory systems store context. **Engram evolves context** — topology-driven decay, consolidation, and contradiction detection, all running locally with zero external API.
 
-**2.0 makes the boundary explicit.** Tenant scope stops being a defaulted argument: 55 Core retrieval and scoping APIs now require `tenantId` with no default, positioned so that pre-2.0 positional calls fail to compile rather than silently rebinding. The compiler makes you *state* the scope — it does not choose one for you, and `tenantId: ""` still selects the legacy partition.
+**2.1 improves recall and release reliability.** Questions recover relevant sources under noise, historical and compound answers retain the requested evidence, and routing preserves project, environment, tenant and namespace boundaries. Persistence, timers and installation upgrades are hardened without changing MCP tool names or arguments.
 
 - **Tenant-Partitioned Throughout** — partitioning runs through storage, graph, clusters, lifecycle, diffusion, synthesis, and visualization. Edges never cross tenants; cross-namespace association *within* a tenant is preserved.
 - **Context Control** — graph-Laplacian diffusion decays trivial chats so your context window doesn't choke on noise. Important, well-connected knowledge stays sharp; transient chatter fades.
@@ -22,34 +22,28 @@
 - **Governed Core** — a deterministic Root Constitution, versioned knowledge and provenance, Teacher/Verifier promotion, authorization-first retrieval planning, and citation-aware context manifests are available to embedding hosts.
 - **Privacy by default** — local ONNX embeddings and local storage. The MCP executable enforces ONNX telemetry suppression before loading the native runtime on Windows, Linux and macOS; see [the telemetry policy and validation](docs/telemetry.md). Optional remote storage, synthesis and live benchmark services make network calls only when configured. Hosts embedding the Core library must establish their own process policy.
 
-→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md) · [What's new in 2.0](#whats-new-in-20)
+→ [See the cold-start scorecard](docs/why-engram.md#the-proof) · [Get started in 5 minutes](docs/first-5-minutes.md) · [What's new in 2.1](#whats-new-in-21)
 
-## What's New in 2.0
-
-2.0 is a **breaking release for hosts embedding `McpEngramMemory.Core`**. MCP clients and stdio
-deployments are unaffected — tool names, arguments, and on-disk data are unchanged, and legacy
-empty-tenant deployments still behave byte-for-byte as before.
+## What's New in 2.1
 
 | Change | What it means |
 |--------|---------------|
-| **`tenantId` is required** on 55 Core retrieval/scoping APIs | The old `tenantId = ""` default wasn't a sentinel — `""` is the legacy partition, a real readable dataset, so a forgotten argument compiled clean and silently degraded to cross-tenant scope. It did, twice. The compiler now finds every omission. |
-| **Parameter placement is anti-rebinding** | `tenantId` only moved into slots previously held by an `int`/`float`/`bool`, so pre-2.0 positional calls fail to compile rather than binding a relation or query string into the tenant slot. |
-| **Topology reads are revision-consistent** | Graph and cluster projections publish only if the tenant's attribution revision held through the whole projection; continuous churn fails closed. |
-| **Auto-link accounting is exact** | Pair walks report completed comparison slots once per anchor, so cancellation no longer over- or under-states progress. |
-| **`AutoLinkResult` reshaped** | Four new trailing members; `PairsExamined` is now `long` and reports completed comparison slots. Use `PairSlotsPlanned` for the window budget, `PairsAboveThreshold` for the find count. |
+| **More complete recall** | Direct and routed searches recover missing answers under noise, retain sources alongside summaries, and cover broad, compound and historical questions. |
+| **Evidence-based answers** | Non-answer text and mismatched project/environment evidence are rejected; superseded claims rank appropriately and unresolved contradictions remain visible. |
+| **Reliable persistence and maintenance** | Merge/snapshot deadlocks and stale timer callbacks are fixed. Deterministic concurrency and simulated maintenance tests supplement bounded real MCP stress. |
+| **Safer installation and upgrades** | The server uses a durable user data directory; the pre-update helper preserves old package-local data before replacement. Client configuration is preserved. |
+| **Early telemetry suppression** | The MCP executable suppresses ONNX telemetry before native initialization on the validated Windows, Linux and macOS platforms. |
 
-2.0 supersedes 1.6.0, which is where the underlying features landed: **full multi-tenant graph,
-clusters, lifecycle, diffusion, intelligence, synthesis and snapshots** (with no storage migration —
-tenant travels inside the existing JSON blobs), and the **governed cognitive constitution**
-(deterministic Root Constitution, audited pre/post MCP filter, versioned Knowledge, append-only
-Provenance, `promote_knowledge` on the full profile). 2.0 is what makes that boundary mandatory
-instead of optional.
+This branch prepares **2.1.0**; package commands below apply once that version is published.
+The three packages ship together. MCP profiles remain **17 / 39 / 63 tools**, and the Core/Synthesis
+public APIs remain compatible with 2.0.0. New optional recall conflict diagnostics are additive.
 
-**Upgrading:** recompile, and at each error pass the tenant the call site already holds —
-`tenantId: myTenant`, or `tenantId: ""` where legacy scope is the deliberate meaning. Treat every
-`tenantId: ""` you add as a claim, not a fix. Full detail in the
-[2.0.0 release notes](docs/release-notes-2.0.0.md) and
-[Tenant Isolation Design](docs/tenant-isolation-design.md).
+**Upgrading an existing 2.0.0 tool:** stop its servers and follow the
+[pre-update migration procedure](docs/installation-and-upgrades.md) **before** running a package
+update or uninstall. The old package manager removes version-local default data during replacement.
+Existing explicit data paths remain supported. Read the [2.1.0 release notes](docs/release-notes-2.1.0.md)
+for compatibility, validation and limits. Hosts upgrading from pre-2.0 Core must still follow the
+[2.0 API migration](docs/release-notes-2.0.0.md).
 
 ## How It Works
 
@@ -118,7 +112,7 @@ The snapshot file is not committed (it's personal memory data). Generate a fresh
 
 **Existing 2.0.0 installation?** Follow the [safe upgrade procedure](docs/installation-and-upgrades.md)
 before updating: default data in the old version directory must be backed up and migrated first.
-The unreleased server uses a durable user data directory; existing explicit paths are preserved.
+The 2.1 server uses a durable user data directory; existing explicit paths are preserved.
 
 ```powershell
 # Windows — clones, builds, and wires up your AI assistant automatically
@@ -169,7 +163,7 @@ docker run -i -v memory-data:/app/data mcp-engram-memory
 **NuGet library** (embed the engine in your own .NET app)
 
 ```bash
-dotnet add package McpEngramMemory.Core --version 2.0.0
+dotnet add package McpEngramMemory.Core --version 2.1.0
 ```
 
 See [`examples/`](examples/) for ready-to-use config files.
@@ -180,7 +174,7 @@ See [`examples/`](examples/) for ready-to-use config files.
 
 | Metric | Value |
 |--------|-------|
-| Version | 2.0.0 (breaking for Core library hosts; MCP surface unchanged) |
+| Version | 2.1.0 (release preparation; compatible with 2.0 APIs) |
 | MCP tools | 63 (profiles: 17 / 39 / 63) |
 | Isolation | Tenant-partitioned across storage, graph, clusters, lifecycle, diffusion, synthesis, and snapshots |
 | Retrieval | Hybrid BM25 + vector with synonym expansion, cascade retrieval, MMR diversity, auto-PRF |
@@ -316,7 +310,7 @@ own .NET applications.
 **Server (global tool)**
 
 ```bash
-dotnet tool install --global McpEngramMemory --version 2.0.0
+dotnet tool install --global McpEngramMemory --version 2.1.0
 engram-memory
 ```
 
@@ -324,10 +318,10 @@ engram-memory
 
 ```bash
 # nuget.org
-dotnet add package McpEngramMemory.Core --version 2.0.0
+dotnet add package McpEngramMemory.Core --version 2.1.0
 
 # GitHub Packages
-dotnet add package McpEngramMemory.Core --version 2.0.0 \
+dotnet add package McpEngramMemory.Core --version 2.1.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```
 
@@ -338,7 +332,7 @@ dotnet add package McpEngramMemory.Core --version 2.0.0 \
 daemon, add the optional ONNX backend when embedding the library:
 
 ```bash
-dotnet add package McpEngramMemory.Synthesis.Onnx --version 2.0.0
+dotnet add package McpEngramMemory.Synthesis.Onnx --version 2.1.0
 ```
 
 ```csharp
@@ -394,6 +388,7 @@ var results = index.Search(embedding.Embed("French capital"), "default", tenant,
 | [Benchmarks](docs/benchmarks.md) | IR quality results and mode selection guide |
 | [MRCR v2 Benchmark](docs/benchmarks-mrcr.md) | Long-context A/B (full context vs. hybrid retrieval) via Claude CLI subscription |
 | [Testing](docs/testing.md) | Test coverage breakdown and current CI coverage |
+| [2.1.0 Release Notes](docs/release-notes-2.1.0.md) | Recall, reliability, safe upgrades and validation limits |
 | [2.0.0 Release Notes](docs/release-notes-2.0.0.md) | What changed in 2.0, why it is major, and how to migrate an embedding host |
 | [Tenant Isolation Design](docs/tenant-isolation-design.md) | Partitioning model, guarantees, and the 2.0 required-`tenantId` boundary |
 | [Changelog](CHANGELOG.md) | Full release history |
