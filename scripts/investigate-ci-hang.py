@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Bounded reproduction of CI run 39391883137, without changing tests or deadlines."""
+"""Bounded reproduction of CI run 39391883137, without changing target code or tests."""
 import argparse
 import datetime
 import json
+import os
 from pathlib import Path
+import signal
 import subprocess
 import time
 import xml.etree.ElementTree as ET
@@ -36,9 +38,13 @@ def main():
         with (destination / 'console.log').open('w', encoding='utf-8') as log:
             # Ten minutes leaves the five-minute inactivity dump enough time to finish.
             try:
-                completed = subprocess.run(command, cwd=repo, stdout=log, stderr=subprocess.STDOUT, timeout=600)
-                row['exitCode'] = completed.returncode
+                process = subprocess.Popen(command, cwd=repo, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                row['exitCode'] = process.wait(timeout=600)
             except subprocess.TimeoutExpired:
+                # The investigator runs on Linux. Stop the whole test process group,
+                # including a wedged child testhost, after the dump grace period.
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=15)
                 row['outerTimeout'] = True
                 row['exitCode'] = -1
         row['seconds'] = time.monotonic() - started
