@@ -8,6 +8,39 @@ on:
       - 'scripts/investigate-ci-hang.py'
 
 jobs:
+  analyze-captured-hang:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 39586427556
+          name: hang-d553b69785d1e8b0cb28a0c9bbac4ec5080c93eb-parallel-frameworks
+          path: evidence
+      - name: Analyze the preserved historical reproduction on Linux
+        run: |
+          dotnet tool install dotnet-dump --tool-path .diagnostics --version 10.0.750501
+          mkdir stacks
+          for dump in evidence/3/ffad*/*.dmp; do
+            timeout 120 .diagnostics/dotnet-dump analyze "$dump" -c "setsymbolserver -ms" -c "clrthreads" -c "clrstack -all" -c "syncblk" -c "dumpasync" -c "exit" > "stacks/$(basename "$dump").txt" 2>&1
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: historical-hang-stacks
+          path: stacks/
+          retention-days: 30
+
   reproduce:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
