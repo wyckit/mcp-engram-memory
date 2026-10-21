@@ -332,7 +332,7 @@ public sealed class PersistenceManager : IStorageProvider
 
     /// <summary>
     /// Schedule a debounced save of global edges.
-    /// Data provider should return a pre-captured snapshot (no lock re-entry).
+    /// The provider runs outside the scheduling lock and should return a detached snapshot.
     /// </summary>
     public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
     {
@@ -378,25 +378,22 @@ public sealed class PersistenceManager : IStorageProvider
                     if (provider is not null)
                         RunWriteAndRelease(() =>
                         {
-                            // THE CHECK AND THE COMMIT ARE ONE ATOM, under the lock that
-                            // guards the namespace queue. Checking and then releasing before
-                            // writing — which is what this used to do — left exactly the
-                            // window it was meant to close: ScheduleSave queues a namespace
-                            // save under _timerLock ALONE, not the flush gate this callback
-                            // holds, so one landing between the check and the commit was
-                            // still overtaken. A narrower race is not a closed one.
-                            //
-                            // The lock is therefore held ACROSS the write, deliberately. It
-                            // stalls namespace scheduling for the duration of one graph-level
-                            // file write, and that is the cheaper cost: a graph save that
-                            // beats its entries to disk reloads, after a crash, as durable
-                            // topology naming entries that never became durable. Deferred,
-                            // not dropped, exactly as above.
+                            // Capturing may wait for a merge's graph/cluster lock. Never
+                            // hold _timerLock there: that merge must schedule its entries.
+                            bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
                             lock (_timerLock)
                             {
-                                if (_pendingNsSaves.Count > 0 || !WriteGlobalEdges(provider))
+                                // A newer schedule wins even if it arrived during capture.
+                                if (_pendingEdgeProvider is not null) return;
+                                // Recheck after capture. Only the detached payload is written
+                                // under this lock, preserving entry-before-topology durability.
+                                if (_pendingNsSaves.Count > 0 || !captured || !WriteGlobalEdges(() => snapshot!))
                                 {
-                                    if (!_disposed && _pendingEdgeProvider is null)
+                                    // Dispose waits on _flushGate; keep this save for its
+                                    // final drain instead of dropping it or arming a timer.
+                                    if (_disposed)
+                                        _pendingEdgeProvider = provider;
+                                    else
                                         ScheduleSaveGlobalEdges(provider);
                                 }
                             }
@@ -409,7 +406,7 @@ public sealed class PersistenceManager : IStorageProvider
 
     /// <summary>
     /// Schedule a debounced save of clusters.
-    /// Data provider should return a pre-captured snapshot (no lock re-entry).
+    /// The provider runs outside the scheduling lock and should return a detached snapshot.
     /// </summary>
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider)
     {
@@ -455,25 +452,22 @@ public sealed class PersistenceManager : IStorageProvider
                     if (provider is not null)
                         RunWriteAndRelease(() =>
                         {
-                            // THE CHECK AND THE COMMIT ARE ONE ATOM, under the lock that
-                            // guards the namespace queue. Checking and then releasing before
-                            // writing — which is what this used to do — left exactly the
-                            // window it was meant to close: ScheduleSave queues a namespace
-                            // save under _timerLock ALONE, not the flush gate this callback
-                            // holds, so one landing between the check and the commit was
-                            // still overtaken. A narrower race is not a closed one.
-                            //
-                            // The lock is therefore held ACROSS the write, deliberately. It
-                            // stalls namespace scheduling for the duration of one graph-level
-                            // file write, and that is the cheaper cost: a graph save that
-                            // beats its entries to disk reloads, after a crash, as durable
-                            // topology naming entries that never became durable. Deferred,
-                            // not dropped, exactly as above.
+                            // Capturing may wait for a merge's graph/cluster lock. Never
+                            // hold _timerLock there: that merge must schedule its entries.
+                            bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
                             lock (_timerLock)
                             {
-                                if (_pendingNsSaves.Count > 0 || !WriteClusters(provider))
+                                // A newer schedule wins even if it arrived during capture.
+                                if (_pendingClusterProvider is not null) return;
+                                // Recheck after capture. Only the detached payload is written
+                                // under this lock, preserving entry-before-topology durability.
+                                if (_pendingNsSaves.Count > 0 || !captured || !WriteClusters(() => snapshot!))
                                 {
-                                    if (!_disposed && _pendingClusterProvider is null)
+                                    // Dispose waits on _flushGate; keep this save for its
+                                    // final drain instead of dropping it or arming a timer.
+                                    if (_disposed)
+                                        _pendingClusterProvider = provider;
+                                    else
                                         ScheduleSaveClusters(provider);
                                 }
                             }
@@ -900,25 +894,22 @@ public sealed class PersistenceManager : IStorageProvider
                     if (provider is not null)
                         RunWriteAndRelease(() =>
                         {
-                            // THE CHECK AND THE COMMIT ARE ONE ATOM, under the lock that
-                            // guards the namespace queue. Checking and then releasing before
-                            // writing — which is what this used to do — left exactly the
-                            // window it was meant to close: ScheduleSave queues a namespace
-                            // save under _timerLock ALONE, not the flush gate this callback
-                            // holds, so one landing between the check and the commit was
-                            // still overtaken. A narrower race is not a closed one.
-                            //
-                            // The lock is therefore held ACROSS the write, deliberately. It
-                            // stalls namespace scheduling for the duration of one graph-level
-                            // file write, and that is the cheaper cost: a graph save that
-                            // beats its entries to disk reloads, after a crash, as durable
-                            // topology naming entries that never became durable. Deferred,
-                            // not dropped, exactly as above.
+                            // Capturing may wait for a merge's graph/cluster lock. Never
+                            // hold _timerLock there: that merge must schedule its entries.
+                            bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
                             lock (_timerLock)
                             {
-                                if (_pendingNsSaves.Count > 0 || !WriteDecayConfigs(provider))
+                                // A newer schedule wins even if it arrived during capture.
+                                if (_pendingDecayConfigProvider is not null) return;
+                                // Recheck after capture. Only the detached payload is written
+                                // under this lock, preserving entry-before-topology durability.
+                                if (_pendingNsSaves.Count > 0 || !captured || !WriteDecayConfigs(() => snapshot!))
                                 {
-                                    if (!_disposed && _pendingDecayConfigProvider is null)
+                                    // Dispose waits on _flushGate; keep this save for its
+                                    // final drain instead of dropping it or arming a timer.
+                                    if (_disposed)
+                                        _pendingDecayConfigProvider = provider;
+                                    else
                                         ScheduleSaveDecayConfigs(provider);
                                 }
                             }

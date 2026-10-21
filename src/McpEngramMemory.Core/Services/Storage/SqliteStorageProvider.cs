@@ -688,10 +688,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     Func<List<GraphEdge>>? provider;
                     lock (_timerLock)
                     {
-                        // A disposed timer may already have a callback queued. Only the
-                        // current timer owns this slot (including any deferral/rearm).
+                        // Only the current timer can consume or rearm this slot.
                         if (!ReferenceEquals(_pendingEdgeTimer, timer)) return;
-
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingEdgeTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -701,20 +699,23 @@ public sealed class SqliteStorageProvider : IStorageProvider
                         _pendingEdgeProvider = null;
                         _pendingEdgeTimer?.Dispose();
                         _pendingEdgeTimer = null;
+                    }
+                    if (provider is null) return;
 
-                        // THE CHECK AND THE COMMIT ARE ONE ATOM. Deciding under this lock and
-                        // then releasing it to write left a window in which entry-level work
-                        // could be queued and then overtaken by this graph-level commit —
-                        // after a crash, durable topology naming rows that never became
-                        // durable. The lock is held across the write deliberately: a brief
-                        // stall on scheduling is cheaper than a durability inversion. Mirrors
-                        // the JSON provider's timer paths.
-
-                        if (provider is not null && !WriteGlobalData("edges", provider))
+                    // Snapshot providers may acquire graph/cluster/index locks. Let
+                    // their holders schedule entries while capture waits for them.
+                    bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
+                    lock (_timerLock)
+                    {
+                        if (_pendingEdgeProvider is not null) return;
+                        // Entry scheduling may have happened during capture. Check and
+                        // write only the detached snapshot atomically with that queue.
+                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("edges", () => snapshot!))
                         {
+                            // Dispose waits on _flushGate and will drain this provider.
                             if (_disposed)
-                                _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed timer write");
-                            else if (_pendingEdgeProvider is null)
+                                _pendingEdgeProvider = provider;
+                            else
                                 ScheduleSaveGlobalEdges(provider);
                         }
                     }
@@ -739,10 +740,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     Func<List<SemanticCluster>>? provider;
                     lock (_timerLock)
                     {
-                        // A disposed timer may already have a callback queued. Only the
-                        // current timer owns this slot (including any deferral/rearm).
+                        // Only the current timer can consume or rearm this slot.
                         if (!ReferenceEquals(_pendingClusterTimer, timer)) return;
-
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingClusterTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -752,20 +751,23 @@ public sealed class SqliteStorageProvider : IStorageProvider
                         _pendingClusterProvider = null;
                         _pendingClusterTimer?.Dispose();
                         _pendingClusterTimer = null;
+                    }
+                    if (provider is null) return;
 
-                        // THE CHECK AND THE COMMIT ARE ONE ATOM. Deciding under this lock and
-                        // then releasing it to write left a window in which entry-level work
-                        // could be queued and then overtaken by this graph-level commit —
-                        // after a crash, durable topology naming rows that never became
-                        // durable. The lock is held across the write deliberately: a brief
-                        // stall on scheduling is cheaper than a durability inversion. Mirrors
-                        // the JSON provider's timer paths.
-
-                        if (provider is not null && !WriteGlobalData("clusters", provider))
+                    // Snapshot providers may acquire graph/cluster/index locks. Let
+                    // their holders schedule entries while capture waits for them.
+                    bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
+                    lock (_timerLock)
+                    {
+                        if (_pendingClusterProvider is not null) return;
+                        // Entry scheduling may have happened during capture. Check and
+                        // write only the detached snapshot atomically with that queue.
+                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("clusters", () => snapshot!))
                         {
+                            // Dispose waits on _flushGate and will drain this provider.
                             if (_disposed)
-                                _logger?.LogError("Pending clusters write dropped: provider disposed during a failed timer write");
-                            else if (_pendingClusterProvider is null)
+                                _pendingClusterProvider = provider;
+                            else
                                 ScheduleSaveClusters(provider);
                         }
                     }
@@ -1033,10 +1035,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     Func<Dictionary<string, DecayConfig>>? provider;
                     lock (_timerLock)
                     {
-                        // A disposed timer may already have a callback queued. Only the
-                        // current timer owns this slot (including any deferral/rearm).
+                        // Only the current timer can consume or rearm this slot.
                         if (!ReferenceEquals(_pendingDecayConfigTimer, timer)) return;
-
                         if (HasPendingEntryLevelWork())
                         {
                             _pendingDecayConfigTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
@@ -1046,27 +1046,24 @@ public sealed class SqliteStorageProvider : IStorageProvider
                         _pendingDecayConfigProvider = null;
                         _pendingDecayConfigTimer?.Dispose();
                         _pendingDecayConfigTimer = null;
+                    }
+                    if (provider is null) return;
 
-                        // THE CHECK AND THE COMMIT ARE ONE ATOM. Deciding under this lock and
-                        // then releasing it to write left a window in which entry-level work
-                        // could be queued and then overtaken by this graph-level commit —
-                        // after a crash, durable topology naming rows that never became
-                        // durable. The lock is held across the write deliberately: a brief
-                        // stall on scheduling is cheaper than a durability inversion. Mirrors
-                        // the JSON provider's timer paths.
-
-                        if (provider is not null)
+                    // Snapshot providers may acquire graph/cluster/index locks. Let
+                    // their holders schedule entries while capture waits for them.
+                    bool captured = StorageSnapshot.TryCapture(() => provider().Values.ToList(), _logger, out var snapshot);
+                    lock (_timerLock)
+                    {
+                        if (_pendingDecayConfigProvider is not null) return;
+                        // Entry scheduling may have happened during capture. Check and
+                        // write only the detached snapshot atomically with that queue.
+                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("decay_configs", () => snapshot!))
                         {
-                            // The provider runs INSIDE WriteGlobalData's try: hoisted out, a
-                            // throwing provider was an unhandled exception on a Timer thread —
-                            // a process crash — and the pending save was gone either way.
-                            if (!WriteGlobalData("decay_configs", () => provider().Values.ToList()))
-                            {
-                                if (_disposed)
-                                    _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed timer write");
-                                else if (_pendingDecayConfigProvider is null)
-                                    ScheduleSaveDecayConfigs(provider);
-                            }
+                            // Dispose waits on _flushGate and will drain this provider.
+                            if (_disposed)
+                                _pendingDecayConfigProvider = provider;
+                            else
+                                ScheduleSaveDecayConfigs(provider);
                         }
                     }
                 }

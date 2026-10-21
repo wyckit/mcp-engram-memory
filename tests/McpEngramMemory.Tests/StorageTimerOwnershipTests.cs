@@ -33,6 +33,133 @@ public sealed class StorageTimerOwnershipTests : IDisposable
             yield return new object[] { sqlite, kind };
     }
 
+    public static IEnumerable<object[]> GlobalSaveKinds()
+        => SaveKinds().Where(row => (string)row[1] != "namespace");
+
+    public static IEnumerable<object[]> ShutdownSaveKinds()
+        => GlobalSaveKinds().SelectMany(row => new[] { false, true }
+            .Select(failCapture => new object[] { row[0], row[1], failCapture }));
+
+    private static Task RunDedicated(Action action) => Task.Factory.StartNew(
+        action, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private static string[] DurableGlobalIds(IStorageProvider store, string kind) => kind switch
+    {
+        "edges" => store.LoadGlobalEdges().Select(e => e.SourceId).ToArray(),
+        "clusters" => store.LoadClusters().Select(c => c.ClusterId).ToArray(),
+        "decay" => store.LoadDecayConfigs().Keys.ToArray(),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    [Theory]
+    [MemberData(nameof(ShutdownSaveKinds))]
+    public async Task Snapshot_DeferredDuringShutdown_IsRetainedForFinalFlush(bool sqlite, string kind, bool failCapture)
+    {
+        var store = Create(sqlite);
+        using var snapshotEntered = new ManualResetEventSlim();
+        using var releaseSnapshot = new ManualResetEventSlim();
+        int calls = 0;
+        Schedule(store, kind, "final", () =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            snapshotEntered.Set();
+            if (!releaseSnapshot.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("Shutdown did not release snapshot capture");
+            if (failCapture) throw new IOException("injected capture failure during shutdown");
+        });
+        var callback = RunDedicated(_clock.Latest.DeliverQueuedCallback);
+        Assert.True(snapshotEntered.Wait(TimeSpan.FromSeconds(5)));
+        if (sqlite) store.ScheduleUpsertEntry("ns", Entry("durable"));
+        else store.ScheduleSave("ns", () => new NamespaceData { Entries = new() { Entry("durable") } });
+
+        // Observe shutdown's admission flag only to force this interleaving; the
+        // assertions below check durable data, not private implementation state.
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic;
+        var timerLock = store.GetType().GetField("_timerLock", flags)!.GetValue(store)!;
+        var disposed = store.GetType().GetField("_disposed", flags)!;
+        var shutdown = RunDedicated(store.Dispose);
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() =>
+            {
+                lock (timerLock) return (bool)disposed.GetValue(store)!;
+            }, TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            releaseSnapshot.Set();
+            await Task.WhenAll(callback, shutdown).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+
+        Assert.Equal(2, calls);
+        Assert.Equal("durable", Assert.Single(store.LoadNamespace("ns").Entries).Text);
+        Assert.Equal(new[] { "final" }, DurableGlobalIds(store, kind));
+    }
+
+    [Theory]
+    [MemberData(nameof(GlobalSaveKinds))]
+    public async Task Snapshot_DoesNotBlockEntryScheduling_AndDefersUntilEntriesAreDurable(bool sqlite, string kind)
+    {
+        var store = Create(sqlite);
+        using var snapshotEntered = new ManualResetEventSlim();
+        using var entryScheduled = new ManualResetEventSlim();
+        bool scheduledDuringSnapshot = false;
+        Schedule(store, kind, "dependent", () =>
+        {
+            snapshotEntered.Set();
+            scheduledDuringSnapshot = entryScheduled.Wait(TimeSpan.FromSeconds(5));
+        });
+        var globalTimer = _clock.Latest;
+        var global = RunDedicated(globalTimer.DeliverQueuedCallback);
+        Assert.True(snapshotEntered.Wait(TimeSpan.FromSeconds(5)));
+        var entry = RunDedicated(() =>
+        {
+            if (sqlite) store.ScheduleUpsertEntry("ns", Entry("durable"));
+            else store.ScheduleSave("ns", () => new NamespaceData { Entries = new() { Entry("durable") } });
+            entryScheduled.Set();
+        });
+        await Task.WhenAll(global, entry).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.True(scheduledDuringSnapshot, "Snapshot capture held the persistence scheduling lock");
+        Assert.Empty(DurableGlobalIds(store, kind));
+        Assert.Empty(store.LoadNamespace("ns").Entries);
+        Assert.True(store.TryFlush());
+        Assert.Equal("durable", Assert.Single(store.LoadNamespace("ns").Entries).Text);
+        Assert.Equal(new[] { "dependent" }, DurableGlobalIds(store, kind));
+    }
+
+    [Theory]
+    [MemberData(nameof(GlobalSaveKinds))]
+    public async Task Snapshot_SupersededDuringCapture_CannotPublishOrReplaceNewerSave(bool sqlite, string kind)
+    {
+        var store = Create(sqlite);
+        using var snapshotEntered = new ManualResetEventSlim();
+        using var replacementScheduled = new ManualResetEventSlim();
+        bool replacedDuringSnapshot = false;
+        Schedule(store, kind, "old", () =>
+        {
+            snapshotEntered.Set();
+            replacedDuringSnapshot = replacementScheduled.Wait(TimeSpan.FromSeconds(5));
+        });
+        var oldTimer = _clock.Latest;
+        var old = RunDedicated(oldTimer.DeliverQueuedCallback);
+        Assert.True(snapshotEntered.Wait(TimeSpan.FromSeconds(5)));
+        var replacement = RunDedicated(() =>
+        {
+            Schedule(store, kind, "new", () => { });
+            replacementScheduled.Set();
+        });
+        await Task.WhenAll(old, replacement).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.True(replacedDuringSnapshot, "Snapshot capture held the persistence scheduling lock");
+        Assert.Empty(DurableGlobalIds(store, kind));
+        _clock.Latest.DeliverQueuedCallback();
+        oldTimer.DeliverQueuedCallback();
+        Assert.True(store.TryFlush());
+        Assert.Equal(new[] { "new" }, DurableGlobalIds(store, kind));
+    }
+
     private static CognitiveEntry Entry(string text, string tenant = "")
         => new("e", new[] { 1f, 0f }, "ns", text: text, tenantId: tenant, lifecycleState: "ltm");
 
