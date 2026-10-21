@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/banner.svg?v=2.0.0" alt="MCP Engram Memory" width="900"/>
+  <img src="images/banner.svg?v=2.1.0" alt="MCP Engram Memory" width="900"/>
 </p>
 
 <p align="center">
