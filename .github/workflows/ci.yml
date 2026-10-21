@@ -7,6 +7,36 @@ on:
     branches: [main]
 
 jobs:
+  soak-harness-smoke:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install psutil==7.0.0
+      - name: Test response dispatch and frozen oracle failure detection
+        run: python -m unittest discover -s scripts/tests -p test_soak_validation.py
+      - run: dotnet publish src/McpEngramMemory/McpEngramMemory.csproj -c Release -f net8.0 -p:TargetFrameworks=net8.0 -o artifacts/soak-server
+      - name: Short protocol smoke (not the full-size stress run)
+        run: python scripts/run-release-soak.py --server artifacts/soak-server/McpEngramMemory.dll --fixture tests/McpEngramMemory.Tests/Fixtures/recall-independent-v1.json --revision ${{ github.sha }} --output artifacts/soak-smoke --hours 0.01 --interval 1 --json-size 22 --sqlite-size 22
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-smoke-${{ matrix.os }}
+          path: |
+            artifacts/soak-smoke/*.json
+            artifacts/soak-smoke/*.jsonl
+            artifacts/soak-smoke/*.log
+
   telemetry-validation:
     strategy:
       fail-fast: false

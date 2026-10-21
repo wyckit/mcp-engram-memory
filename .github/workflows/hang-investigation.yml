@@ -1,0 +1,58 @@
+name: Bounded CI hang investigation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/hang-investigation.yml'
+      - 'scripts/investigate-ci-hang.py'
+      - 'tests/McpEngramMemory.Tests/SimulatedMaintenanceTests.cs'
+      - 'tests/McpEngramMemory.Tests/MaintenanceSnapshotConcurrencyTests.cs'
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [parallel-frameworks, net8-only]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: target
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the fixed candidate
+        working-directory: target
+        run: dotnet build McpEngramMemory.slnx -c Release
+      - name: Repeat with sequence, dump and diagnostic capture
+        run: python harness/scripts/investigate-ci-hang.py --repo target --mode ${{ matrix.mode }} --iterations 3 --output evidence
+      - name: Extract available managed stacks from captured mini dumps
+        if: failure()
+        shell: bash
+        run: |
+          dotnet tool install dotnet-dump --tool-path .diagnostics --version 10.0.750501
+          mkdir -p evidence/stacks
+          # Ignore duplicate TRX attachment copies. Mini dumps support stacks;
+          # heap-oriented syncblk/dumpasync commands may lack required pages.
+          while IFS= read -r -d '' dump; do
+            timeout 120 .diagnostics/dotnet-dump analyze "$dump" -c "setsymbolserver -ms" -c "clrthreads" -c "clrstack -all" -c "exit" > "evidence/stacks/$(basename "$dump").txt" 2>&1
+          done < <(find evidence -name '*.dmp' -not -path '*/In/*' -print0)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hang-candidate-${{ matrix.mode }}
+          path: evidence/
+          retention-days: 14

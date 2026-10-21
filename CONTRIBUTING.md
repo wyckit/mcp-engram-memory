@@ -79,7 +79,7 @@ Start with `docs/core-10.md` and `docs/first-5-minutes.md` to get oriented.
 ## Releasing (maintainer notes)
 
 1. Complete both strict recall gates, the fresh MSA gate, installed-package/source validation and the
-   release candidate's planned soak. Investigate remaining failures and state unqualified platforms/backends.
+   release candidate's [simulated-time/concurrency and bounded stress validation](docs/release-soak.md). Investigate remaining failures and state unqualified platforms/backends.
 2. Bump `<Version>` together in all three package projects: Core, Synthesis.Onnx and the MCP tool.
 3. Add a `CHANGELOG.md` entry under a new version header, matching the style
    of prior entries.

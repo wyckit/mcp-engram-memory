@@ -37,7 +37,7 @@ public sealed class DecayBackgroundService : BackgroundService
         {
             try
             {
-                await Task.Delay(Interval, stoppingToken);
+                await Task.Delay(Interval, _lifecycle.Clock, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -75,7 +75,7 @@ public sealed class DecayBackgroundService : BackgroundService
                 errorMessage = ex.Message;
                 _logger.LogError(ex, "Error during decay cycle");
             }
-            _statusTracker?.RecordCycle("decay", DateTime.UtcNow, sw.ElapsedMilliseconds, entriesProcessed, errorMessage);
+            _statusTracker?.RecordCycle("decay", _lifecycle.Clock.GetUtcNow().UtcDateTime, sw.ElapsedMilliseconds, entriesProcessed, errorMessage);
         }
 
         _logger.LogInformation("Decay background service stopped");

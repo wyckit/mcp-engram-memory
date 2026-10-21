@@ -18,6 +18,10 @@ public sealed class LifecycleEngine
     private readonly object _configLock = new();
     private bool _configsLoaded;
 
+    // The worker schedule and decay debt share one clock in deterministic tests.
+    // Internal so the packaged API and production clock remain unchanged.
+    internal TimeProvider Clock => _index.Clock;
+
     public LifecycleEngine(
         CognitiveIndex index,
         IStorageProvider? persistence = null,
@@ -205,7 +209,7 @@ public sealed class LifecycleEngine
                 // is the input/source field, not the dissipative field) when spectral
                 // mode is on.
                 var debt = new Dictionary<string, float>(nonSummary.Count);
-                var now = DateTimeOffset.UtcNow;
+                var now = Clock.GetUtcNow();
                 foreach (var entry in nonSummary)
                 {
                     var hoursSinceAccess = (float)(now - entry.LastAccessedAt).TotalHours;
