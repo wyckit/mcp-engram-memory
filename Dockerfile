@@ -34,6 +34,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 # Disable .NET diagnostics for container performance
 ENV DOTNET_EnableDiagnostics=0
+ENV ORT_DISABLE_TELEMETRY=1
 
 # Default storage backend
 ENV MEMORY_STORAGE=json

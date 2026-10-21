@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The MCP executable disables ONNX telemetry before native library initialization, including
+  Linux/macOS native environment propagation and Windows 1.29 ETW registration suppression.
+  Dependency upgrades must requalify the version-guarded Windows workaround.
 - The MCP executable uses a durable user data root outside package/build directories. A stopped-server
   migration command and pre-update helper preserve 2.0.0 stores, sharing metadata and governance files
   before the package manager removes the old version. Existing SQLite/governance overrides remain valid.
@@ -17,6 +20,9 @@ All notable changes to this project will be documented in this file.
 
 ### Validation
 
+- Added native-load probes on Windows x64, Linux x64 and Apple Silicon macOS, with inherited
+  opt-outs and CI suppression cleared. Windows captures ETW with positive/negative controls;
+  all platforms exercise real inference and restart across the unchanged 17/39/63 MCP profiles.
 - Added real installed-package 2.0.0 upgrade/restart checks and source setup/configuration checks on
   Windows, Linux and Apple Silicon macOS. Existing frozen recall cases and strict gates are unchanged.
 - Next-version numbering, release notes and final soak qualification remain separate release work.

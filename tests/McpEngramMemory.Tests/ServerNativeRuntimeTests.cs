@@ -5,6 +5,14 @@ namespace McpEngramMemory.Tests;
 
 public sealed class ServerNativeRuntimeTests
 {
+    [Fact]
+    public void WindowsTelemetryWorkaround_RequiresTheReviewedDependency()
+    {
+        ServerNativeRuntime.RequireReviewedTelemetryVersion(typeof(Microsoft.ML.OnnxRuntime.InferenceSession).Assembly.GetName().Version);
+        Assert.Throws<NotSupportedException>(() => ServerNativeRuntime.RequireReviewedTelemetryVersion(new Version(1, 30, 0, 0)));
+        Assert.Throws<NotSupportedException>(() => ServerNativeRuntime.RequireReviewedTelemetryVersion(null));
+    }
+
     [Theory]
     [InlineData(@"C:\tools\onnxruntime.dll", @"\\?\C:\tools\onnxruntime.dll")]
     [InlineData(@"\\server\share\onnxruntime.dll", @"\\?\UNC\server\share\onnxruntime.dll")]
