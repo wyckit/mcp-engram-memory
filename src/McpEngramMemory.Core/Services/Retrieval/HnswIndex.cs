@@ -157,7 +157,7 @@ public sealed class HnswIndex
         var candidates = SearchLayer(normalizedQuery, new[] { current }, ef, 0);
 
         return candidates
-            .Where(idx => !_deleted.Contains(idx))
+            .Where(idx => !_deleted.Contains(idx) && _vectors[idx].Length == normalizedQuery.Length)
             .Select(idx => (_ids[idx], VectorMath.Dot(normalizedQuery, _vectors[idx]))) // dot of normalized = cosine
             .OrderByDescending(x => x.Item2)
             .Take(k)
@@ -244,22 +244,38 @@ public sealed class HnswIndex
     /// <summary>
     /// Restore an HNSW index from a persisted snapshot.
     /// Vectors are looked up from entries via the provided callback.
-    /// Returns null if the snapshot is stale (any node ID missing from entries).
+    /// Returns null if the snapshot is empty or structurally invalid.
     /// </summary>
     /// <param name="snapshot">The persisted graph topology.</param>
     /// <param name="vectorLookup">Callback to resolve entry ID → raw vector. Return null if entry no longer exists.</param>
     public static HnswIndex? RestoreFromSnapshot(HnswSnapshot snapshot, Func<string, float[]?> vectorLookup)
     {
-        if (snapshot.NodeIds.Count == 0)
+        if (snapshot is null || snapshot.NodeIds.Count == 0 || snapshot.NodeLevels.Count != snapshot.NodeIds.Count)
             return null;
 
         var index = new HnswIndex(snapshot.M, snapshot.EfConstruction);
         var deletedSet = new HashSet<int>(snapshot.Deleted);
+        int nodeCount = snapshot.NodeIds.Count;
 
-        for (int i = 0; i < snapshot.NodeIds.Count; i++)
+        for (int i = 0; i < nodeCount; i++)
         {
             var id = snapshot.NodeIds[i];
             var rawVector = vectorLookup(id);
+
+            // Preserve valid neighbor indices even for tombstoned nodes so traversal can bridge
+            // across deleted nodes without disconnecting the graph.
+            var nodeConns = new List<HashSet<int>>();
+            if (i < snapshot.Connections.Count)
+            {
+                foreach (var layer in snapshot.Connections[i])
+                {
+                    var validLayer = new HashSet<int>();
+                    foreach (var neighbor in layer)
+                        if (neighbor >= 0 && neighbor < nodeCount)
+                            validLayer.Add(neighbor);
+                    nodeConns.Add(validLayer);
+                }
+            }
 
             if (rawVector == null)
             {
@@ -270,12 +286,7 @@ public sealed class HnswIndex
                 index._ids.Add(id);
                 index._nodeLevels.Add(snapshot.NodeLevels[i]);
                 deletedSet.Add(i);
-
-                var emptyConns = new List<HashSet<int>>();
-                if (i < snapshot.Connections.Count)
-                    foreach (var _ in snapshot.Connections[i])
-                        emptyConns.Add(new HashSet<int>());
-                index._connections.Add(emptyConns);
+                index._connections.Add(nodeConns);
                 continue;
             }
 
@@ -287,7 +298,7 @@ public sealed class HnswIndex
                 index._ids.Add(id);
                 index._nodeLevels.Add(snapshot.NodeLevels[i]);
                 deletedSet.Add(i);
-                index._connections.Add(new List<HashSet<int>>());
+                index._connections.Add(nodeConns);
                 continue;
             }
 
@@ -295,16 +306,9 @@ public sealed class HnswIndex
             index._vectors.Add(normalized);
             index._originalNorms.Add(norm);
             index._ids.Add(id);
-            index._idToIndex[id] = i;
+            if (!deletedSet.Contains(i))
+                index._idToIndex[id] = i;
             index._nodeLevels.Add(snapshot.NodeLevels[i]);
-
-            // Restore connections
-            var nodeConns = new List<HashSet<int>>();
-            if (i < snapshot.Connections.Count)
-            {
-                foreach (var layer in snapshot.Connections[i])
-                    nodeConns.Add(new HashSet<int>(layer));
-            }
             index._connections.Add(nodeConns);
         }
 
@@ -312,18 +316,49 @@ public sealed class HnswIndex
         index._maxLevel = snapshot.MaxLevel;
 
         foreach (var d in deletedSet)
-            index._deleted.Add(d);
+            if (d >= 0 && d < nodeCount)
+                index._deleted.Add(d);
 
         // Validate entry point
-        if (index._entryPoint >= index._vectors.Count)
+        if (index._entryPoint < 0 || index._entryPoint >= index._vectors.Count)
             return null;
 
-        if (index._entryPoint >= 0 && index._deleted.Contains(index._entryPoint))
+        if (index._deleted.Contains(index._entryPoint))
         {
             var newEp = index.FindNonDeletedEntryPoint();
             if (newEp == -1) return null;
             index._entryPoint = newEp;
             index._maxLevel = index._nodeLevels[newEp];
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// Restore an HNSW index from a persisted snapshot, additionally verifying that every live
+    /// non-zero-vector entry in <paramref name="expectedLiveIds"/> is represented in the snapshot.
+    /// Returns null if the snapshot is stale (missing any live entry) so the caller rebuilds cleanly
+    /// instead of permanently hiding newer entries from ANN search.
+    /// </summary>
+    public static HnswIndex? RestoreFromSnapshot(
+        HnswSnapshot snapshot,
+        Func<string, float[]?> vectorLookup,
+        IEnumerable<string> expectedLiveIds)
+    {
+        var index = RestoreFromSnapshot(snapshot, vectorLookup);
+        if (index is null)
+            return null;
+
+        foreach (var liveId in expectedLiveIds)
+        {
+            if (index._idToIndex.ContainsKey(liveId))
+                continue;
+
+            // Zero-vector entries are intentionally skipped by Add(), so only non-zero vectors
+            // missing from the restored index indicate a stale snapshot.
+            var vec = vectorLookup(liveId);
+            if (vec is not null && vec.Length > 0 && VectorMath.Norm(vec) > 0f)
+                return null;
         }
 
         return index;
@@ -348,7 +383,9 @@ public sealed class HnswIndex
     private int GreedyClosest(float[] query, int entryPoint, int layer)
     {
         int current = entryPoint;
-        float currentSim = VectorMath.Dot(query, _vectors[current]); // Higher = closer
+        float currentSim = _vectors[current].Length == query.Length
+            ? VectorMath.Dot(query, _vectors[current]) // Higher = closer
+            : -2f;
 
         bool changed = true;
         while (changed)
@@ -358,8 +395,11 @@ public sealed class HnswIndex
             {
                 foreach (var neighbor in _connections[current][layer])
                 {
-                    if (_deleted.Contains(neighbor)) continue;
-                    float sim = VectorMath.Dot(query, _vectors[neighbor]);
+                    // Traverse through tombstoned bridge nodes so deletions never disconnect
+                    // upper-layer routing paths. Deleted nodes are excluded only from final results.
+                    var neighborVec = _vectors[neighbor];
+                    if (neighborVec.Length != query.Length) continue;
+                    float sim = VectorMath.Dot(query, neighborVec);
                     if (sim > currentSim)
                     {
                         current = neighbor;
@@ -376,20 +416,30 @@ public sealed class HnswIndex
     private List<int> SearchLayer(float[] query, IEnumerable<int> entryPoints, int ef, int layer)
     {
         var visited = new HashSet<int>();
-        // Candidates: closest first (max similarity = min negative similarity)
+        // Candidates: closest first (max similarity = min negative similarity).
+        // Includes tombstoned bridge nodes so their neighbors remain reachable.
         var candidates = new PriorityQueue<int, float>();
-        // Result: farthest first (min similarity at top)
+        // Result: farthest first (min similarity at top) — live (non-deleted) nodes only.
         var result = new PriorityQueue<int, float>();
         float worstResultSim = float.MinValue;
 
         foreach (var ep in entryPoints)
         {
             if (!visited.Add(ep)) continue;
-            if (_deleted.Contains(ep)) continue;
-            float sim = VectorMath.Dot(query, _vectors[ep]);
+            bool isDeleted = _deleted.Contains(ep);
+            var epVec = _vectors[ep];
+            bool hasValidVec = epVec.Length == query.Length;
+            float sim = hasValidVec ? VectorMath.Dot(query, epVec) : -2f;
+
             candidates.Enqueue(ep, -sim); // negate so closest (highest sim) dequeues first
-            result.Enqueue(ep, sim);       // lowest sim dequeues first (farthest)
-            worstResultSim = sim;
+            if (!isDeleted && hasValidVec)
+            {
+                result.Enqueue(ep, sim);       // lowest sim dequeues first (farthest)
+                if (result.Count > ef)
+                    result.Dequeue();
+                if (result.TryPeek(out _, out var worst))
+                    worstResultSim = worst;
+            }
         }
 
         while (candidates.Count > 0)
@@ -405,20 +455,33 @@ public sealed class HnswIndex
             foreach (var neighbor in _connections[closest][layer])
             {
                 if (!visited.Add(neighbor)) continue;
-                if (_deleted.Contains(neighbor)) continue;
 
-                float sim = VectorMath.Dot(query, _vectors[neighbor]);
+                bool isDeleted = _deleted.Contains(neighbor);
+                var neighborVec = _vectors[neighbor];
+                if (neighborVec.Length != query.Length)
+                {
+                    // Restored deleted nodes without vectors still carry topology links; walk
+                    // through them while we have not yet filled ef live candidates.
+                    if (isDeleted && result.Count < ef)
+                        candidates.Enqueue(neighbor, 2f);
+                    continue;
+                }
+
+                float sim = VectorMath.Dot(query, neighborVec);
 
                 if (sim > worstResultSim || result.Count < ef)
                 {
                     candidates.Enqueue(neighbor, -sim);
-                    result.Enqueue(neighbor, sim);
+                    if (!isDeleted)
+                    {
+                        result.Enqueue(neighbor, sim);
 
-                    if (result.Count > ef)
-                        result.Dequeue(); // Remove farthest
+                        if (result.Count > ef)
+                            result.Dequeue(); // Remove farthest
 
-                    if (result.TryPeek(out _, out var worst))
-                        worstResultSim = worst;
+                        if (result.TryPeek(out _, out var worst))
+                            worstResultSim = worst;
+                    }
                 }
             }
         }
@@ -432,7 +495,7 @@ public sealed class HnswIndex
     private List<int> SelectNeighbors(float[] query, IEnumerable<int> candidates, int maxCount)
     {
         return candidates
-            .Where(idx => !_deleted.Contains(idx))
+            .Where(idx => !_deleted.Contains(idx) && _vectors[idx].Length == query.Length)
             .OrderByDescending(idx => VectorMath.Dot(query, _vectors[idx]))
             .Take(maxCount)
             .ToList();

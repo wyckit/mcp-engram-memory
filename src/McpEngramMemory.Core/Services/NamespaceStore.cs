@@ -67,7 +67,7 @@ public sealed class NamespaceEnumerationException : Exception
 internal sealed class NamespaceStore
 {
     /// <summary>Minimum partition size to activate HNSW indexing.</summary>
-    private const int HnswThreshold = 200;
+    internal const int HnswThreshold = 200;
 
     // The separator used to compose a tenant-scoped partition key lives on Tenancy, together with
     // Tenancy.ValidatePartitionComponent — the guard that makes "never appears in a namespace or
@@ -224,16 +224,20 @@ internal sealed class NamespaceStore
     private int _fencesDisposedFlag;
     // BM25/HNSW sub-indexes are keyed by the composed partition-key STRING (see PartitionKey).
     private readonly ConcurrentDictionary<string, HnswIndex> _hnswIndices = new();
+    // Per-partition single-flight locks for lazy in-memory HNSW construction on the read path.
+    // Always acquired ONLY as a leaf under CognitiveIndex's partition read lock; acquires no other lock.
+    private readonly ConcurrentDictionary<string, object> _hnswBuildLocks = new();
     private readonly ConcurrentDictionary<string, object> _loadLocks = new();
     private readonly IStorageProvider _persistence;
     private readonly BM25Index _bm25;
 
     // Atomic total-entry count for the LEGACY tenant across all namespaces — maintained by
-    // TrackEntry / UntrackEntry / RemoveNamespace / LoadEntries so memory-limits checks can run
-    // without a cross-namespace lock. Approximate under concurrent mutations but reliably
-    // incremented once per distinct legacy id insertion. Tenant partitions are excluded by design
-    // (they are unreachable via the global id/count paths).
+    // TrackEntry / UntrackEntry / RemoveNamespace / LoadEntries for CognitiveIndex.Count (legacy).
     private long _totalCountApprox;
+
+    // Atomic total-entry count across ALL tenants (legacy + named tenants) so MemoryLimitsConfig.MaxTotalCount
+    // is enforced consistently without letting non-legacy tenants bypass the global ceiling.
+    private long _allTenantsCountApprox;
 
     public NamespaceStore(IStorageProvider persistence, BM25Index bm25, ILogger? logger = null)
     {
@@ -433,10 +437,13 @@ internal sealed class NamespaceStore
             }
             if (removed > 0)
                 Interlocked.Add(ref _totalCountApprox, -removed);
+            if (entries.Count > 0)
+                Interlocked.Add(ref _allTenantsCountApprox, -entries.Count);
         }
         string pk = PartitionKey(key);
         _bm25.ClearNamespace(pk);
         _hnswIndices.TryRemove(pk, out _);
+        _hnswBuildLocks.TryRemove(pk, out _);
         _persistence.DeleteHnswSnapshot(pk);
     }
 
@@ -446,6 +453,12 @@ internal sealed class NamespaceStore
 
     /// <summary>Total legacy-tenant entries across all namespaces. O(1) atomic read — safe without a lock.</summary>
     public int TotalCount => (int)Interlocked.Read(ref _totalCountApprox);
+
+    /// <summary>Total entries across ALL tenants (legacy + named). Used for MaxTotalCount enforcement.</summary>
+    public int AllTenantsCount => (int)Interlocked.Read(ref _allTenantsCountApprox);
+
+    /// <summary>Adjust the cross-tenant entry count when a partition slot is created (+1) or removed (-1).</summary>
+    public void AdjustAllTenantsCount(int delta) => Interlocked.Add(ref _allTenantsCountApprox, delta);
 
     /// <summary>
     /// Get all known namespace names (loaded + persisted), tenant-independent. A provider that
@@ -652,7 +665,7 @@ internal sealed class NamespaceStore
     /// debounced write to disk. The full snapshot spans every tenant because the persistence unit
     /// is the namespace; each entry carries its own <see cref="CognitiveEntry.TenantId"/>.
     /// </summary>
-    public void ScheduleSave(string ns, bool persistHnsw = true)
+    public void ScheduleSave(string ns, bool persistHnsw = true, NsKey? hnswPartition = null)
     {
         // The provider MATERIALIZES AT INVOKE TIME, never at schedule time. A full save is a
         // delete-all-rows-and-re-insert of the namespace, so a snapshot frozen at schedule
@@ -666,7 +679,13 @@ internal sealed class NamespaceStore
         // Lifecycle energy/state changes leave HNSW's vectors and topology untouched.
         // Rewriting its derived snapshot for every such update turns a decay pass into
         // N synchronous full-index writes while holding the partition's write lock.
-        if (persistHnsw) ScheduleHnswSave(ns);
+        if (persistHnsw)
+        {
+            if (hnswPartition is { } partition)
+                PersistHnswPartition(partition);
+            else
+                ScheduleHnswSave(ns);
+        }
     }
 
     private NamespaceData BuildNamespaceSnapshot(string ns)
@@ -688,7 +707,28 @@ internal sealed class NamespaceStore
         if (_persistence.SupportsIncrementalWrites)
             _persistence.ScheduleUpsertEntry(ns, entry);
         else
-            ScheduleSave(ns, persistHnsw);
+            ScheduleSave(ns, persistHnsw, persistHnsw ? new NsKey(entry.TenantId, ns) : null);
+    }
+
+    /// <summary>
+    /// Schedule persistence for a batch of accepted entries within one (tenant, ns) partition.
+    /// Incremental providers queue per-entry upserts; snapshot providers schedule one debounced
+    /// namespace save and persist that partition's HNSW snapshot once after the batch completes.
+    /// </summary>
+    public void ScheduleBatchUpsert(NsKey key, IReadOnlyList<CognitiveEntry> entries, bool persistHnsw = true)
+    {
+        if (entries.Count == 0)
+            return;
+
+        if (_persistence.SupportsIncrementalWrites)
+        {
+            for (int i = 0; i < entries.Count; i++)
+                _persistence.ScheduleUpsertEntry(key.Ns, entries[i]);
+        }
+        else
+        {
+            ScheduleSave(key.Ns, persistHnsw, persistHnsw ? key : null);
+        }
     }
 
     /// <summary>
@@ -696,12 +736,33 @@ internal sealed class NamespaceStore
     /// single entry. The tenant is threaded to the provider so an incremental delete targets the
     /// full (tenant, ns, id) key and never removes a co-keyed row in another tenant.
     /// </summary>
-    public void ScheduleEntryDelete(string ns, string entryId, string tenantId)
+    public void ScheduleEntryDelete(string ns, string entryId, string tenantId, bool persistHnsw = true)
     {
         if (_persistence.SupportsIncrementalWrites)
             _persistence.ScheduleDeleteEntry(ns, entryId, tenantId);
         else
-            ScheduleSave(ns);
+            ScheduleSave(ns, persistHnsw, persistHnsw ? new NsKey(tenantId, ns) : null);
+    }
+
+    /// <summary>
+    /// Schedule persistence for a bulk partition delete where the partition's own HNSW index has
+    /// already been invalidated. Incremental providers queue per-row deletes; snapshot providers
+    /// schedule a single debounced namespace save without rewriting unrelated tenants' HNSW blobs.
+    /// </summary>
+    public void ScheduleBatchDelete(NsKey key, IReadOnlyList<string> ids)
+    {
+        if (ids.Count == 0)
+            return;
+
+        if (_persistence.SupportsIncrementalWrites)
+        {
+            for (int i = 0; i < ids.Count; i++)
+                _persistence.ScheduleDeleteEntry(key.Ns, ids[i], key.Tenant);
+        }
+        else
+        {
+            ScheduleSave(key.Ns, persistHnsw: false);
+        }
     }
 
     /// <summary>Index an entry in BM25 under its (tenant, ns) partition for keyword search.</summary>
@@ -1124,6 +1185,36 @@ internal sealed class NamespaceStore
     public HnswIndex? GetHnswIndex(string partitionKey)
         => _hnswIndices.TryGetValue(partitionKey, out var idx) ? idx : null;
 
+    /// <summary>
+    /// Lazily build the in-memory HNSW index for a large partition on the read path (e.g. after
+    /// restart on incremental SQL providers or after RebuildEmbeddings invalidation).
+    /// Caller MUST hold the partition's read lock; no writer can mutate <c>nsEntries</c> or
+    /// <c>_hnswIndices[partitionKey]</c> concurrently, and the per-partition build monitor ensures
+    /// concurrent readers build at most once without upgrading the read lock.
+    /// </summary>
+    public HnswIndex? EnsureHnswIndex(NsKey key, string partitionKey)
+    {
+        if (_hnswIndices.TryGetValue(partitionKey, out var existing))
+            return existing;
+
+        lock (_hnswBuildLocks.GetOrAdd(partitionKey, static _ => new object()))
+        {
+            if (_hnswIndices.TryGetValue(partitionKey, out existing))
+                return existing;
+
+            var nsEntries = GetNamespace(key);
+            if (nsEntries is null || nsEntries.Count < HnswThreshold)
+                return null;
+
+            var idx = new HnswIndex();
+            foreach (var (entry, _, _) in nsEntries.Values)
+                idx.Add(entry.Id, entry.Vector);
+
+            _hnswIndices[partitionKey] = idx;
+            return idx;
+        }
+    }
+
     /// <summary>Add an entry to the per-partition HNSW index, building the index if the partition is large enough.</summary>
     public void AddToHnsw(NsKey key, string id, float[] vector)
     {
@@ -1205,16 +1296,28 @@ internal sealed class NamespaceStore
         var nsEntries = GetNamespace(key);
         if (nsEntries == null) return;
 
-        var restored = Retrieval.HnswIndex.RestoreFromSnapshot(snapshot, id =>
-        {
-            if (nsEntries.TryGetValue(id, out var tuple))
-                return tuple.Entry.Vector;
-            return null;
-        });
+        var restored = Retrieval.HnswIndex.RestoreFromSnapshot(
+            snapshot,
+            id => nsEntries.TryGetValue(id, out var tuple) ? tuple.Entry.Vector : null,
+            nsEntries.Keys);
 
         if (restored != null)
             _hnswIndices[partitionKey] = restored;
-        // else: snapshot was stale, HNSW will be lazily rebuilt on first AddToHnsw call
+        // else: snapshot was stale (or missing live entries), HNSW will be lazily rebuilt on first Search or AddToHnsw
+    }
+
+    /// <summary>Persist the current HNSW snapshot for exactly one (tenant, ns) partition.</summary>
+    private void PersistHnswPartition(NsKey key)
+    {
+        if (ContainsPartitionControlChar(key.Tenant) || ContainsPartitionControlChar(key.Ns))
+            return;
+
+        string pk = ComposeKeyUnchecked(key.Tenant, key.Ns);
+        if (_hnswIndices.TryGetValue(pk, out var idx))
+        {
+            var snapshot = idx.CreateSnapshot();
+            _persistence.SaveHnswSnapshotSync(pk, snapshot);
+        }
     }
 
     /// <summary>Persist current HNSW index snapshots for every tenant partition of a namespace.</summary>
@@ -1223,27 +1326,14 @@ internal sealed class NamespaceStore
         foreach (var key in _namespaces.Keys)
         {
             if (key.Ns != ns) continue;
-            // ComposeKeyUnchecked: these keys come from the LOADED map, which can hold a
-            // pre-validation tenant the read path deliberately tolerates — the validating
-            // composer would abort this sweep for every partition ordered after it. A
-            // POISONED key is skipped outright: no index was ever registered for it (see
-            // EnsureLoaded's quarantine), and its unchecked composition can alias a
-            // valid partition's key — saving under the alias would write that partition's
-            // snapshot a second time at best.
-            if (ContainsPartitionControlChar(key.Tenant) || ContainsPartitionControlChar(key.Ns))
-                continue;
-            string pk = ComposeKeyUnchecked(key.Tenant, key.Ns);
-            if (_hnswIndices.TryGetValue(pk, out var idx))
-            {
-                var snapshot = idx.CreateSnapshot();
-                _persistence.SaveHnswSnapshotSync(pk, snapshot);
-            }
+            PersistHnswPartition(key);
         }
     }
 
     private void LoadEntries(string ns, List<CognitiveEntry> entries)
     {
         int added = 0;
+        int allTenantsAdded = 0;
         foreach (var entry in entries)
         {
             var key = new NsKey(entry.TenantId, entry.Ns);
@@ -1252,6 +1342,8 @@ internal sealed class NamespaceStore
             var quantized = entry.LifecycleState is "ltm" or "archived"
                 ? VectorQuantizer.Quantize(entry.Vector)
                 : null;
+            if (!nsDict.ContainsKey(entry.Id))
+                allTenantsAdded++;
             nsDict[entry.Id] = (entry, norm, quantized);
 
             // Track the placement the row actually landed in (entry.Ns, which keyed nsDict above),
@@ -1261,7 +1353,7 @@ internal sealed class NamespaceStore
             // it, an id in a namespace untouched this process would resolve as a miss.
             TrackCandidate(entry.Id, entry.Ns, entry.TenantId);
 
-            // Only legacy-tenant entries populate the global locator + count.
+            // Only legacy-tenant entries populate the global locator + legacy count.
             if (entry.TenantId.Length == 0)
             {
                 if (_idToNamespace.TryAdd(entry.Id, ns))
@@ -1272,5 +1364,7 @@ internal sealed class NamespaceStore
         }
         if (added > 0)
             Interlocked.Add(ref _totalCountApprox, added);
+        if (allTenantsAdded > 0)
+            Interlocked.Add(ref _allTenantsCountApprox, allTenantsAdded);
     }
 }

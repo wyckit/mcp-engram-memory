@@ -65,15 +65,7 @@ public sealed class VectorSearchEngine
         // HNSW fast path: use ANN index for candidate generation when namespace is large
         if (hnswIndex is not null && entries.Count >= HnswCandidateThreshold)
         {
-            int candidateCount = k * HnswCandidateMultiplier;
-            // Scale minimum candidates with namespace size for better recall at scale.
-            // Without this, small fixed multipliers miss relevant results in large namespaces
-            // where matching entries are spread across distant HNSW neighborhoods.
-            if (entries.Count >= AdaptiveScaleThreshold)
-            {
-                int floorCandidates = (int)Math.Min(entries.Count * MinExplorationRatio, MaxHnswCandidates);
-                candidateCount = Math.Max(candidateCount, floorCandidates);
-            }
+            int candidateCount = ComputeHnswCandidateCount(k, entries.Count);
             var hnswCandidates = hnswIndex.Search(query, candidateCount);
             var candidateIds = hnswCandidates.Select(c => c.Id).ToHashSet();
 
@@ -84,6 +76,7 @@ public sealed class VectorSearchEngine
                 if (!candidateIds.Contains(entry.Id)) continue;
                 if (!includeStates.Contains(entry.LifecycleState)) continue;
                 if (category is not null && entry.Category != category) continue;
+                if (entry.Vector.Length != query.Length) continue;
                 if (entryNorm == 0f) continue;
 
                 float dot = VectorMath.Dot(query, entry.Vector);
@@ -95,13 +88,97 @@ public sealed class VectorSearchEngine
             return BuildResults(exactScored, k, summaryFirst);
         }
 
-        bool useTwoStage = entries.Count >= TwoStageThreshold;
-        var scored = new List<(CognitiveEntry entry, float score)>(entries.Count);
+        return SearchLinear(query, queryNorm, entries, entries.Count, k, minScore, category, includeStates, summaryFirst);
+    }
+
+    /// <summary>
+    /// Internal dictionary-backed search fast path used by <see cref="CognitiveIndex"/> while
+    /// holding a partition read lock. Avoids copying all N entries into a snapshot list and, when
+    /// HNSW is active, scores only the O(C) returned candidate IDs via dictionary lookup instead
+    /// of scanning all N entries.
+    /// </summary>
+    internal IReadOnlyList<CognitiveSearchResult> Search(
+        float[] query,
+        IReadOnlyDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> entriesById,
+        int k = 5,
+        float minScore = 0f,
+        string? category = null,
+        HashSet<string>? includeStates = null,
+        bool summaryFirst = false,
+        HnswIndex? hnswIndex = null)
+    {
+        if (query is null || query.Length == 0)
+            throw new ArgumentException("Query vector must not be null or empty.", nameof(query));
+        if (k <= 0)
+            throw new ArgumentOutOfRangeException(nameof(k), "k must be positive.");
+
+        includeStates ??= new HashSet<string> { "stm", "ltm" };
+        float queryNorm = VectorMath.Norm(query);
+        if (queryNorm == 0f)
+            throw new ArgumentException("Query vector must not be zero-magnitude.", nameof(query));
+
+        int entryCount = entriesById.Count;
+
+        // HNSW O(log N + C) fast path: look up ONLY candidateIds in entriesById.
+        if (hnswIndex is not null && entryCount >= HnswCandidateThreshold)
+        {
+            int candidateCount = ComputeHnswCandidateCount(k, entryCount);
+            var hnswCandidates = hnswIndex.Search(query, candidateCount);
+
+            var exactScored = new List<(CognitiveEntry entry, float score)>(hnswCandidates.Count);
+            for (int i = 0; i < hnswCandidates.Count; i++)
+            {
+                if (!entriesById.TryGetValue(hnswCandidates[i].Id, out var tuple)) continue;
+                var (entry, entryNorm, _) = tuple;
+                if (!includeStates.Contains(entry.LifecycleState)) continue;
+                if (category is not null && entry.Category != category) continue;
+                if (entry.Vector.Length != query.Length) continue;
+                if (entryNorm == 0f) continue;
+
+                float dot = VectorMath.Dot(query, entry.Vector);
+                float score = dot / (queryNorm * entryNorm);
+                if (score >= minScore)
+                    exactScored.Add((entry, score));
+            }
+
+            return BuildResults(exactScored, k, summaryFirst);
+        }
+
+        return SearchLinear(query, queryNorm, entriesById.Values, entryCount, k, minScore, category, includeStates, summaryFirst);
+    }
+
+    private static int ComputeHnswCandidateCount(int k, int entryCount)
+    {
+        int candidateCount = k * HnswCandidateMultiplier;
+        // Scale minimum candidates with namespace size for better recall at scale.
+        // Without this, small fixed multipliers miss relevant results in large namespaces
+        // where matching entries are spread across distant HNSW neighborhoods.
+        if (entryCount >= AdaptiveScaleThreshold)
+        {
+            int floorCandidates = (int)Math.Min(entryCount * MinExplorationRatio, MaxHnswCandidates);
+            candidateCount = Math.Max(candidateCount, floorCandidates);
+        }
+        return candidateCount;
+    }
+
+    private static IReadOnlyList<CognitiveSearchResult> SearchLinear(
+        float[] query,
+        float queryNorm,
+        IEnumerable<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> entries,
+        int entryCount,
+        int k,
+        float minScore,
+        string? category,
+        HashSet<string> includeStates,
+        bool summaryFirst)
+    {
+        bool useTwoStage = entryCount >= TwoStageThreshold;
+        var scored = new List<(CognitiveEntry entry, float score)>(entryCount);
         List<(CognitiveEntry entry, float approxScore, float norm)>? quantizedCandidates = null;
         QuantizedVector? queryQuantized = null;
 
         if (useTwoStage)
-            quantizedCandidates = new(entries.Count);
+            quantizedCandidates = new(entryCount);
 
         foreach (var (entry, entryNorm, quantized) in entries)
         {

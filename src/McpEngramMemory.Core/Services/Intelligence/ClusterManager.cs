@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Graph;
 using McpEngramMemory.Core.Services.Storage;
@@ -81,7 +82,9 @@ internal sealed record CommittedMergeMembership(
 ///                                                                      ->  release fence
 ///                                                                      ->  schedule the save
 ///
-/// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
+/// - Read-only methods check a volatile <c>_loaded</c> fast path and use <c>EnterReadLock</c> so
+///   concurrent readers execute in parallel; only the one-shot cold load takes the write lock via
+///   <see cref="EnsureLoadedOutsideFence"/>.
 /// - Mutating methods use EnterWriteLock directly, inside the fence.
 /// - RecomputeCentroid is done outside the cluster lock AND outside the fence, to avoid
 ///   lock-ordering deadlocks with CognitiveIndex (which has its own locks, and whose lazy load asks
@@ -123,7 +126,7 @@ internal sealed record CommittedMergeMembership(
 ///   calls it, <see cref="StoreSummary(string, string, float[], string)"/> included even though that one takes no fence.
 /// - WHAT THAT DOES NOT COVER, stated rather than assumed, exactly as
 ///   <c>KnowledgeGraph.EnsureLoadedOutsideFence</c> states it for its own path: a READER can still
-///   be the thread that triggers the one-shot load. <see cref="EnsureLoaded"/> runs
+///   be the thread that triggers the one-shot load. <see cref="EnsureLoadedOutsideFence"/> runs
 ///   <c>LoadClusters</c> under the cluster WRITE lock, so a provider that wrote entries back into
 ///   <see cref="CognitiveIndex"/> from inside the load would block on the fence's exclusive side
 ///   while holding the structural lock every fence holder waits for — the reverse of the acquisition
@@ -157,6 +160,22 @@ internal sealed record CommittedMergeMembership(
 public sealed class ClusterManager
 {
     private readonly Dictionary<(string Tenant, string Id), SemanticCluster> _clusters = new();
+
+    // Reverse index: (tenant, entryId) -> cluster IDs currently containing entryId within that tenant.
+    // Maintained strictly under _lock (in Publish and RemoveClusterIfEmpty) so membership queries,
+    // cascade evictions, and membership transfers are O(clusters holding the entry) rather than
+    // scanning every cluster across all tenants.
+    private readonly Dictionary<(string Tenant, string EntryId), HashSet<string>> _entryToClusters = new();
+
+    // Per-(tenant, ns) monotonic cluster mutation counter so background maintenance (e.g., accretion)
+    // can skip idle partitions without being invalidated by unrelated partitions' cluster mutations.
+    private readonly ConcurrentDictionary<(string Tenant, string Ns), long> _partitionClusterVersions = new();
+
+    internal long PartitionClusterVersionFor(string ns, string tenantId)
+        => _partitionClusterVersions.TryGetValue((Tenancy.Normalize(tenantId), ns), out var v) ? v : 0;
+
+    private void BumpPartitionClusterVersion(string tenant, string ns)
+        => _partitionClusterVersions.AddOrUpdate((tenant, ns), 1L, static (_, v) => v + 1);
 
     /// <summary>
     /// Bumped by <see cref="Publish"/> on every change to <see cref="_clusters"/>, under the write
@@ -237,9 +256,12 @@ public sealed class ClusterManager
     /// </summary>
     private void EnsureLoadedOutsideFence()
     {
-        _lock.EnterUpgradeableReadLock();
-        try { EnsureLoaded(); }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        if (Volatile.Read(ref _loaded))
+            return;
+
+        _lock.EnterWriteLock();
+        try { EnsureLoadedUnderWrite(); }
+        finally { _lock.ExitWriteLock(); }
     }
 
     /// <summary>
@@ -288,13 +310,13 @@ public sealed class ClusterManager
     {
         get
         {
-            _lock.EnterUpgradeableReadLock();
+            EnsureLoadedOutsideFence();
+            _lock.EnterReadLock();
             try
             {
-                EnsureLoaded();
                 return _clusters.Count;
             }
-            finally { _lock.ExitUpgradeableReadLock(); }
+            finally { _lock.ExitReadLock(); }
         }
     }
 
@@ -817,10 +839,10 @@ public sealed class ClusterManager
             string? clusterStamp;
             string? clusterInstance;
 
-            _lock.EnterUpgradeableReadLock();
+            EnsureLoadedOutsideFence();
+            _lock.EnterReadLock();
             try
             {
-                EnsureLoaded();
                 if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
                     return null;
 
@@ -831,7 +853,7 @@ public sealed class ClusterManager
                 clusterStamp = cluster.CreationStamp;
                 clusterInstance = cluster.InstanceId;
             }
-            finally { _lock.ExitUpgradeableReadLock(); }
+            finally { _lock.ExitReadLock(); }
 
             // One sweep for the whole projection, built after the cluster lock is released: the
             // guard resolves through CognitiveIndex, and a per-member test would re-list the
@@ -937,10 +959,10 @@ public sealed class ClusterManager
             // resolves through CognitiveIndex, and this class never holds the cluster lock across
             // index work.
             List<(string ClusterId, string? Label, List<string> MemberIds, string ClusterNs, string? SummaryEntryId, string? CreationStamp, string? InstanceId)> snapshot;
-            _lock.EnterUpgradeableReadLock();
+            EnsureLoadedOutsideFence();
+            _lock.EnterReadLock();
             try
             {
-                EnsureLoaded();
                 snapshot = _clusters.Values
                     .Where(c => c.Ns == ns && c.TenantId == tenant)
                     .Select(c => (
@@ -953,7 +975,7 @@ public sealed class ClusterManager
                         InstanceId: c.InstanceId))
                     .ToList();
             }
-            finally { _lock.ExitUpgradeableReadLock(); }
+            finally { _lock.ExitReadLock(); }
 
             if (snapshot.Count == 0)
                 return Array.Empty<ClusterSummaryInfo>();
@@ -1021,16 +1043,22 @@ public sealed class ClusterManager
     {
         var tenant = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
-            return _clusters.Values
-                .Where(c => c.TenantId == tenant && c.MemberIds.Contains(entryId))
-                .Select(c => new ClusterMembershipInfo(c.ClusterId, c.Ns))
-                .ToList();
+            if (!_entryToClusters.TryGetValue((tenant, entryId), out var clusterIds) || clusterIds.Count == 0)
+                return Array.Empty<ClusterMembershipInfo>();
+
+            var result = new List<ClusterMembershipInfo>(clusterIds.Count);
+            foreach (var clusterId in clusterIds)
+            {
+                if (_clusters.TryGetValue((tenant, clusterId), out var cluster))
+                    result.Add(new ClusterMembershipInfo(cluster.ClusterId, cluster.Ns));
+            }
+            return result;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1044,13 +1072,13 @@ public sealed class ClusterManager
     {
         var tenant = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             return _clusters.TryGetValue((tenant, clusterId), out var cluster) ? cluster.Ns : null;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1489,9 +1517,11 @@ public sealed class ClusterManager
                 return EmptyClusterRemoval.StampMismatch;
             if (cluster.MemberIds.Count > 0)
                 return EmptyClusterRemoval.NotEmpty;
+            RemoveFromReverseIndex(tenant, clusterId, cluster.MemberIds);
             _clusters.Remove((tenant, clusterId));
             // The version moves whenever the map does — see Publish. Removal is a map move too.
             _clusterVersion++;
+            BumpPartitionClusterVersion(tenant, cluster.Ns);
         }
         finally { _lock.ExitWriteLock(); }
 
@@ -1520,10 +1550,10 @@ public sealed class ClusterManager
     {
         var tenant = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             if (_clusters.TryGetValue((tenant, clusterId), out var cluster))
             {
                 stamp = cluster.CreationStamp;
@@ -1534,7 +1564,7 @@ public sealed class ClusterManager
             instance = null;
             return false;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1549,50 +1579,17 @@ public sealed class ClusterManager
         return currentSet.SetEquals(expected);
     }
 
-    private void EnsureLoaded()
-    {
-        if (_loaded) return;
-
-        _lock.EnterWriteLock();
-        try
-        {
-            if (_loaded) return; // Double-check
-            var clusters = _persistence.LoadClusters();
-            // Through Publish like every other write to the map: _clusterVersion has to move
-            // whenever _clusters does, or a walk collected before a lazy load would look current.
-            // NULL-SHAPED rows are quarantined, not published: a hand-poisoned or truncated
-            // store can deserialize a null list element or a row whose id/ns bound JSON null,
-            // and either would throw out of the keying below — bricking every cluster
-            // operation for every tenant off one bad row.
-            foreach (var c in clusters)
-            {
-                // BLANK identities are quarantined with the null ones. A whitespace ClusterId
-                // or Ns keys the map and addresses a partition just as a real one would, so
-                // the row loads, publishes, and then matches nothing any caller can name — an
-                // unreachable cluster sitting on a real key.
-                if (c is null || string.IsNullOrWhiteSpace(c.ClusterId)
-                    || string.IsNullOrWhiteSpace(c.Ns) || c.MemberIds is null) continue;
-                // Null, empty or WHITESPACE-ONLY member ids inside an otherwise well-formed
-                // row are stripped in place: they would throw out of every membership walk
-                // and containment test downstream, bricking operations that merely touch the
-                // cluster. Whitespace counts because no id is ever stored blank — a " " that
-                // survived the strip matched no entry while still occupying a membership
-                // slot, so the cluster claimed a member that could never be resolved.
-                c.MemberIds.RemoveAll(string.IsNullOrWhiteSpace);
-                Publish((c.TenantId, c.ClusterId), c);
-            }
-            _loaded = true;
-        }
-        finally { _lock.ExitWriteLock(); }
-    }
-
     // Called when already holding write lock.
     private void EnsureLoadedUnderWrite()
     {
-        if (_loaded) return;
+        if (Volatile.Read(ref _loaded)) return;
         var clusters = _persistence.LoadClusters();
-        // See EnsureLoaded: the version moves with the map, always — and null-shaped rows
-        // are quarantined for the same reason.
+        // Through Publish like every other write to the map: _clusterVersion and the reverse
+        // index have to move whenever _clusters does, or a walk collected before a lazy load
+        // would look current. NULL-SHAPED rows are quarantined, not published: a hand-poisoned
+        // or truncated store can deserialize a null list element or a row whose id/ns bound JSON
+        // null, and either would throw out of the keying below — bricking every cluster operation
+        // for every tenant off one bad row.
         foreach (var c in clusters)
         {
             // BLANK identities are quarantined with the null ones. A whitespace ClusterId
@@ -1601,11 +1598,16 @@ public sealed class ClusterManager
             // unreachable cluster sitting on a real key.
             if (c is null || string.IsNullOrWhiteSpace(c.ClusterId)
                 || string.IsNullOrWhiteSpace(c.Ns) || c.MemberIds is null) continue;
-            // See EnsureLoaded: null/empty member ids are stripped in place.
+            // Null, empty or WHITESPACE-ONLY member ids inside an otherwise well-formed
+            // row are stripped in place: they would throw out of every membership walk
+            // and containment test downstream, bricking operations that merely touch the
+            // cluster. Whitespace counts because no id is ever stored blank — a " " that
+            // survived the strip matched no entry while still occupying a membership
+            // slot, so the cluster claimed a member that could never be resolved.
             c.MemberIds.RemoveAll(string.IsNullOrWhiteSpace);
             Publish((c.TenantId, c.ClusterId), c);
         }
-        _loaded = true;
+        Volatile.Write(ref _loaded, true);
     }
 
     /// <summary>
@@ -1645,8 +1647,50 @@ public sealed class ClusterManager
     /// </summary>
     private void Publish((string Tenant, string Id) key, SemanticCluster cluster)
     {
+        if (_clusters.TryGetValue(key, out var previous))
+        {
+            if (!ReferenceEquals(previous.MemberIds, cluster.MemberIds))
+            {
+                RemoveFromReverseIndex(key.Tenant, key.Id, previous.MemberIds);
+                AddToReverseIndex(key.Tenant, key.Id, cluster.MemberIds);
+            }
+        }
+        else
+        {
+            AddToReverseIndex(key.Tenant, key.Id, cluster.MemberIds);
+        }
+
         _clusters[key] = cluster;
         _clusterVersion++;
+        BumpPartitionClusterVersion(key.Tenant, cluster.Ns);
+    }
+
+    private void AddToReverseIndex(string tenant, string clusterId, List<string> memberIds)
+    {
+        for (int i = 0; i < memberIds.Count; i++)
+        {
+            var revKey = (tenant, memberIds[i]);
+            if (!_entryToClusters.TryGetValue(revKey, out var set))
+            {
+                set = new HashSet<string>(StringComparer.Ordinal);
+                _entryToClusters[revKey] = set;
+            }
+            set.Add(clusterId);
+        }
+    }
+
+    private void RemoveFromReverseIndex(string tenant, string clusterId, List<string> memberIds)
+    {
+        for (int i = 0; i < memberIds.Count; i++)
+        {
+            var revKey = (tenant, memberIds[i]);
+            if (_entryToClusters.TryGetValue(revKey, out var set))
+            {
+                set.Remove(clusterId);
+                if (set.Count == 0)
+                    _entryToClusters.Remove(revKey);
+            }
+        }
     }
 
     /// <summary>
@@ -1662,15 +1706,29 @@ public sealed class ClusterManager
         string entryId, string tenant)
     {
         var affected = new List<(string ClusterId, SemanticCluster Updated)>();
-        foreach (var cluster in _clusters.Values)
-        {
-            if (cluster.TenantId != tenant) continue;
-            // Tested before copying, so the copy is paid for only by clusters that actually hold
-            // the entry — the old in-place Remove()'s bool did the same job.
-            if (!cluster.MemberIds.Contains(entryId)) continue;
+        if (!_entryToClusters.TryGetValue((tenant, entryId), out var clusterIds) || clusterIds.Count == 0)
+            return affected;
 
-            var remaining = new List<string>(cluster.MemberIds);
-            remaining.Remove(entryId);
+        foreach (var clusterId in clusterIds)
+        {
+            if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
+                continue;
+
+            var remaining = new List<string>(cluster.MemberIds.Count);
+            bool removed = false;
+            for (int i = 0; i < cluster.MemberIds.Count; i++)
+            {
+                var id = cluster.MemberIds[i];
+                if (string.Equals(id, entryId, StringComparison.Ordinal))
+                {
+                    removed = true;
+                    continue;
+                }
+                remaining.Add(id);
+            }
+            if (!removed)
+                continue;
+
             affected.Add((cluster.ClusterId,
                 Replace(cluster, remaining, cluster.Label, cluster.Centroid, cluster.SummaryEntryId)));
         }
@@ -1686,20 +1744,38 @@ public sealed class ClusterManager
         string fromId, string toId, string tenant, string? onlyClustersInNs = null)
     {
         var affected = new List<(string ClusterId, SemanticCluster Updated)>();
-        foreach (var cluster in _clusters.Values)
-        {
-            if (cluster.TenantId != tenant) continue;
-            // The namespace bound — see TransferMembership's bound overload.
-            if (onlyClustersInNs is not null && !string.Equals(cluster.Ns, onlyClustersInNs, StringComparison.Ordinal)) continue;
-            // Tested before copying, so only clusters that really hold fromId pay for a list — the
-            // old in-place Remove()'s bool decided the same thing.
-            if (!cluster.MemberIds.Contains(fromId)) continue;
+        if (!_entryToClusters.TryGetValue((tenant, fromId), out var clusterIds) || clusterIds.Count == 0)
+            return affected;
 
-            var members = new List<string>(cluster.MemberIds);
-            members.Remove(fromId);
+        foreach (var clusterId in clusterIds)
+        {
+            if (!_clusters.TryGetValue((tenant, clusterId), out var cluster))
+                continue;
+            // The namespace bound — see TransferMembership's bound overload.
+            if (onlyClustersInNs is not null && !string.Equals(cluster.Ns, onlyClustersInNs, StringComparison.Ordinal))
+                continue;
+
+            var members = new List<string>(cluster.MemberIds.Count);
+            bool removed = false;
+            bool hasTo = false;
+            for (int i = 0; i < cluster.MemberIds.Count; i++)
+            {
+                var id = cluster.MemberIds[i];
+                if (string.Equals(id, fromId, StringComparison.Ordinal))
+                {
+                    removed = true;
+                    continue;
+                }
+                if (string.Equals(id, toId, StringComparison.Ordinal))
+                    hasTo = true;
+                members.Add(id);
+            }
+            if (!removed)
+                continue;
+
             // Checked AFTER the removal, as before: a cluster holding both endpoints collapses to
             // one membership rather than keeping a stale duplicate.
-            if (!members.Contains(toId))
+            if (!hasTo)
                 members.Add(toId);
 
             affected.Add((cluster.ClusterId,

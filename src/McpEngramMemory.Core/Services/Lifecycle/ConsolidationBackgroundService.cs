@@ -53,23 +53,37 @@ public sealed class ConsolidationBackgroundService : BackgroundService
             {
                 // Consolidate every tenant partition (legacy "" included when present).
                 int promotions = 0, archivals = 0;
+                List<(string Tenant, string Message)>? partialErrors = null;
                 foreach (var tenant in _lifecycle.GetAllTenants())
                 {
-                    var result = _lifecycle.RunConsolidationPass("*", tenantId: tenant);
+                    stoppingToken.ThrowIfCancellationRequested();
+                    var result = _lifecycle.RunConsolidationPassInternal("*", tenantId: tenant, stoppingToken);
                     entriesProcessed += result.ProcessedEntries;
                     promotions += result.StmToLtm;
                     archivals += result.LtmToArchived;
                     var partial = LifecyclePartialFailure.DescribeConsolidation(result);
                     if (partial is not null)
                     {
-                        errorMessage = partial;
+                        partialErrors ??= new List<(string Tenant, string Message)>();
+                        partialErrors.Add((tenant, partial));
                         _logger?.LogWarning("Consolidation pass (tenant='{Tenant}') completed with partial failures: {Message}", tenant, partial);
                     }
+                }
+                if (partialErrors is { Count: > 0 })
+                {
+                    errorMessage = partialErrors.Count == 1
+                        ? partialErrors[0].Message
+                        : string.Join("; ", partialErrors.Select(p =>
+                            $"[{(p.Tenant.Length == 0 ? "legacy" : p.Tenant)}] {p.Message}"));
                 }
                 sw.Stop();
                 _logger?.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} promotionsCount={PromotionsCount} archivalsCount={ArchivalsCount}",
                     "consolidation", "*", sw.ElapsedMilliseconds, entriesProcessed, promotions, archivals);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {

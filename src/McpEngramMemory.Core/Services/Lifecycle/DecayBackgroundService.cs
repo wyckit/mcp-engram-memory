@@ -52,22 +52,36 @@ public sealed class DecayBackgroundService : BackgroundService
                 // Decay every tenant partition (the legacy tenant "" is included when present), so a
                 // multi-tenant store maintains every tenant's memories, not just legacy data.
                 int stateChanges = 0;
+                List<(string Tenant, string Message)>? partialErrors = null;
                 foreach (var tenant in _lifecycle.GetAllTenants())
                 {
-                    var result = _lifecycle.RunDecayCycle("*", useStoredConfig: true, tenantId: tenant);
+                    stoppingToken.ThrowIfCancellationRequested();
+                    var result = _lifecycle.RunDecayCycleInternal("*", tenantId: tenant, stoppingToken, useStoredConfig: true);
                     entriesProcessed += result.ProcessedCount;
                     stateChanges += result.StmToLtm + result.LtmToArchived;
                     var partial = LifecyclePartialFailure.DescribeDecay(result);
                     if (partial is not null)
                     {
-                        errorMessage = partial;
+                        partialErrors ??= new List<(string Tenant, string Message)>();
+                        partialErrors.Add((tenant, partial));
                         _logger.LogWarning("Decay cycle (tenant='{Tenant}') completed with partial failures: {Message}", tenant, partial);
                     }
+                }
+                if (partialErrors is { Count: > 0 })
+                {
+                    errorMessage = partialErrors.Count == 1
+                        ? partialErrors[0].Message
+                        : string.Join("; ", partialErrors.Select(p =>
+                            $"[{(p.Tenant.Length == 0 ? "legacy" : p.Tenant)}] {p.Message}"));
                 }
                 sw.Stop();
                 _logger.LogInformation(
                     "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} statesChanged={StatesChanged}",
                     "decay", "*", sw.ElapsedMilliseconds, entriesProcessed, stateChanges);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
             }
             catch (Exception ex)
             {

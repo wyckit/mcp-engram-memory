@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,8 @@ public sealed class AccretionBackgroundService : BackgroundService
     private readonly IEmbeddingService _embedding;
     private readonly IBackgroundWorkerStatusTracker? _statusTracker;
     private readonly ILogger<AccretionBackgroundService> _logger;
+    private readonly ConcurrentDictionary<(string Tenant, string Ns), (long Occupancy, long Lifecycle, long Cluster)> _lastScannedRevisions = new();
+    private int _disposedFlag;
 
     private TimeProvider Clock => _index.Clock;
 
@@ -36,6 +39,20 @@ public sealed class AccretionBackgroundService : BackgroundService
         _embedding = embedding;
         _logger = logger;
         _statusTracker = statusTracker;
+        _index.NamespaceRemoved += OnNamespaceRemoved;
+    }
+
+    private void OnNamespaceRemoved(NsKey key)
+        => _lastScannedRevisions.TryRemove((key.Tenant, key.Ns), out _);
+
+    public override void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposedFlag, 1) == 0)
+        {
+            _index.NamespaceRemoved -= OnNamespaceRemoved;
+            _lastScannedRevisions.Clear();
+        }
+        base.Dispose();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -74,10 +91,16 @@ public sealed class AccretionBackgroundService : BackgroundService
                 // rather than silently degrading into a sweep that never reaches most of the data.
                 foreach (var tenant in _index.GetAllTenants())
                 {
+                    stoppingToken.ThrowIfCancellationRequested();
+
                     IReadOnlyList<string> namespaces;
                     try
                     {
                         namespaces = _index.GetNamespaces(tenant);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
                     {
@@ -90,19 +113,56 @@ public sealed class AccretionBackgroundService : BackgroundService
 
                     foreach (var ns in namespaces)
                     {
+                        stoppingToken.ThrowIfCancellationRequested();
+
+                        // Skip system namespaces (sharing registry, expert metadata, etc.),
+                        // matching Decay, Consolidation, AutoLink, and DiffusionWarmup.
+                        if (ns.StartsWith('_'))
+                            continue;
+
+                        var partKey = (tenant, ns);
+                        var preRev = (
+                            Occupancy: _index.OccupancyRevisionFor(ns, tenant),
+                            Lifecycle: _index.LifecycleRevisionFor(ns, tenant),
+                            Cluster: _clusters.PartitionClusterVersionFor(ns, tenant));
+
+                        if (_lastScannedRevisions.TryGetValue(partKey, out var lastRev) && lastRev == preRev)
+                            continue;
+
                         attemptedPartitions++;
                         var sw = Stopwatch.StartNew();
                         try
                         {
-                            var result = _scanner.ScanNamespace(ns, tenantId: tenant,
+                            var result = _scanner.ScanNamespace(ns, tenantId: tenant, stoppingToken,
                                 autoSummarize: true, clusters: _clusters, embedding: _embedding);
                             sw.Stop();
                             totalClusters += result.ClustersDetected;
                             totalEntriesProcessed += result.ScannedCount;
 
+                            // Record the scanned revision so unchanged idle partitions skip O(N^2)
+                            // DBSCAN on subsequent 30-minute ticks. When auto-summarization created
+                            // summaries itself and no other occupancy/lifecycle change raced the
+                            // scan, advance to the post-scan revision so tick 2 does not rescan the
+                            // summary we just wrote; otherwise keep preRev so any concurrent entry
+                            // write is guaranteed to be picked up on the next tick.
+                            int autoSummaryCount = result.AutoSummaries?.Count ?? 0;
+                            var postRev = (
+                                Occupancy: _index.OccupancyRevisionFor(ns, tenant),
+                                Lifecycle: _index.LifecycleRevisionFor(ns, tenant),
+                                Cluster: _clusters.PartitionClusterVersionFor(ns, tenant));
+                            bool onlySelfSummaryMutation =
+                                autoSummaryCount > 0 &&
+                                postRev.Occupancy == preRev.Occupancy + autoSummaryCount &&
+                                postRev.Lifecycle == preRev.Lifecycle;
+                            _lastScannedRevisions[partKey] = onlySelfSummaryMutation ? postRev : preRev;
+
                             _logger.LogInformation(
                                 "Maintenance cycle: worker={Worker} namespace={Namespace} durationMs={DurationMs} entriesProcessed={EntriesProcessed} clustersDetected={ClustersDetected}",
                                 "accretion", ns, sw.ElapsedMilliseconds, result.ScannedCount, result.ClustersDetected);
+                        }
+                        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                        {
+                            throw;
                         }
                         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
                         {
@@ -117,6 +177,10 @@ public sealed class AccretionBackgroundService : BackgroundService
                 swTotal.Stop();
                 _logger.LogDebug("Accretion scan completed across {Count} namespace(s), {Clusters} total clusters",
                     attemptedPartitions, totalClusters);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
             }
             catch (Exception ex)
             {

@@ -62,10 +62,11 @@ public sealed class LifecycleEngine
     {
         string tenant = Tenancy.Normalize(tenantId);
         string pk = NamespaceStore.PartitionKey(tenant, ns);
+        DecayConfig config;
         lock (_configLock)
         {
             EnsureConfigsLoaded();
-            if (!_decayConfigs.TryGetValue(pk, out var config))
+            if (!_decayConfigs.TryGetValue(pk, out config!))
             {
                 config = new DecayConfig(ns, tenantId: tenant);
                 _decayConfigs[pk] = config;
@@ -77,10 +78,14 @@ public sealed class LifecycleEngine
             if (archiveThreshold.HasValue) config.ArchiveThreshold = archiveThreshold.Value;
             if (useSpectralDecay.HasValue) config.UseSpectralDecay = useSpectralDecay.Value;
             if (subdiffusiveExponent.HasValue) config.SubdiffusiveExponent = subdiffusiveExponent.Value;
-
-            ScheduleSaveConfigs();
-            return config;
         }
+
+        // Schedule persistence OUTSIDE _configLock so synchronous providers never re-enter
+        // _configLock or run I/O while holding it, and materialize cloned DecayConfig
+        // instances under _configLock at save time so concurrent mutations cannot race
+        // JSON serialization.
+        ScheduleSaveConfigs();
+        return config;
     }
 
     /// <summary>
@@ -125,12 +130,33 @@ public sealed class LifecycleEngine
         float stmThreshold = 2.0f,
         float archiveThreshold = -5.0f,
         bool useStoredConfig = false)
+        => RunDecayCycleInternal(
+            ns, tenantId, CancellationToken.None,
+            decayRate, reinforcementWeight, stmThreshold, archiveThreshold, useStoredConfig);
+
+    /// <summary>
+    /// Internal cancellation-aware entry point used by <see cref="DecayBackgroundService"/>.
+    /// Skips <c>_</c>-prefixed system namespaces, avoids rewriting unchanged or already-archived
+    /// entries, and batches per-namespace updates in bounded write-lock chunks.
+    /// </summary>
+    internal DecayCycleResult RunDecayCycleInternal(
+        string ns,
+        string tenantId,
+        CancellationToken cancellationToken,
+        float decayRate = 0.1f,
+        float reinforcementWeight = 1.0f,
+        float stmThreshold = 2.0f,
+        float archiveThreshold = -5.0f,
+        bool useStoredConfig = false)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
         var spectralFallbackNamespaces = new List<string>();
         var failedNamespaces = new List<string>();
         int processedCount = 0;
+        int namespacesProcessed = 0;
 
         // Expand "*" inside its own containment: namespace enumeration fails closed, and the
         // background services run every tenant inside one try — a throw here would abort decay
@@ -160,6 +186,17 @@ public sealed class LifecycleEngine
 
         foreach (var currentNs in allNamespaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (currentNs.StartsWith('_'))
+            {
+                // Skip system namespaces (sharing registry, expert metadata, etc.), matching
+                // Consolidation, AutoLink, and DiffusionWarmup.
+                continue;
+            }
+
+            namespacesProcessed++;
+
             try
             {
                 // Resolve effective parameters: stored config if requested, else method params
@@ -241,7 +278,7 @@ public sealed class LifecycleEngine
                         appliedDebt = _diffusion!.ApplySpectralFilter(currentNs, debt,
                             lambda => MathF.Exp(-MathF.Pow(lambda, subdiffusiveExponent)), tenantId: tenantId);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                     {
                         spectralFallbackNamespaces.Add(currentNs);
                         _logger?.LogWarning(ex,
@@ -250,7 +287,10 @@ public sealed class LifecycleEngine
                     }
                 }
 
-                // Pass 2: apply debt and resolve state transitions.
+                // Pass 2: apply debt, resolve state transitions, and persist only entries that
+                // actually changed meaningfully so idle/archived namespaces do not trigger a
+                // full-DB write storm every 15 minutes.
+                var updates = new List<(string Id, float ActivationEnergy, string? NewState)>();
                 foreach (var entry in nonSummary)
                 {
                     processedCount++;
@@ -270,8 +310,19 @@ public sealed class LifecycleEngine
                             break;
                     }
 
-                    _index.SetActivationEnergyAndState(entry.Id, newActivationEnergy, newState, currentNs, tenantId: tenantId);
+                    if (newState is not null ||
+                        (entry.LifecycleState != "archived" && MathF.Abs(newActivationEnergy - entry.ActivationEnergy) >= 0.01f))
+                    {
+                        updates.Add((entry.Id, newActivationEnergy, newState));
+                    }
                 }
+
+                if (updates.Count > 0)
+                    _index.SetActivationEnergyAndStateBatch(currentNs, tenantId, updates, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -288,7 +339,7 @@ public sealed class LifecycleEngine
             ltmToArchivedIds.Count,
             stmToLtmIds,
             ltmToArchivedIds,
-            allNamespaces.Count,
+            namespacesProcessed,
             spectralFallbackNamespaces,
             failedNamespaces);
     }
@@ -322,7 +373,16 @@ public sealed class LifecycleEngine
     /// <param name="ns">Namespace to consolidate, or "*" for every non-system namespace.</param>
     /// <param name="tenantId">Tenant partition to consolidate; pass "" for the legacy partition.</param>
     public ConsolidationResult RunConsolidationPass(string ns, string tenantId)
+        => RunConsolidationPassInternal(ns, tenantId, CancellationToken.None);
+
+    /// <summary>
+    /// Internal cancellation-aware entry point used by <see cref="ConsolidationBackgroundService"/>.
+    /// </summary>
+    internal ConsolidationResult RunConsolidationPassInternal(
+        string ns, string tenantId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var stmToLtmIds = new List<string>();
         var ltmToArchivedIds = new List<string>();
         var failedNamespaces = new List<string>();
@@ -360,6 +420,8 @@ public sealed class LifecycleEngine
 
         foreach (var currentNs in allNamespaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (currentNs.StartsWith('_'))
             {
                 // Skip system namespaces (sharing registry, etc.).
@@ -410,6 +472,7 @@ public sealed class LifecycleEngine
                 // Apply topology-driven transitions.
                 foreach (var entry in nonSummary)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (!smoothed.TryGetValue(entry.Id, out var smoothAE)) continue;
                     processedEntries++;
 
@@ -427,6 +490,10 @@ public sealed class LifecycleEngine
                 }
 
                 processedNamespaces++;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -682,7 +749,38 @@ public sealed class LifecycleEngine
     private void ScheduleSaveConfigs()
     {
         if (_persistence is null) return;
-        var snapshot = _decayConfigs.ToDictionary(kv => kv.Key, kv => kv.Value);
-        _persistence.ScheduleSaveDecayConfigs(() => snapshot);
+        _persistence.ScheduleSaveDecayConfigs(SnapshotConfigsForSave);
     }
+
+    private Dictionary<string, DecayConfig> SnapshotConfigsForSave()
+    {
+        lock (_configLock)
+        {
+            var snapshot = new Dictionary<string, DecayConfig>(_decayConfigs.Count, StringComparer.Ordinal);
+            foreach (var kv in _decayConfigs)
+                snapshot[kv.Key] = CloneConfig(kv.Value);
+            return snapshot;
+        }
+    }
+
+    private static DecayConfig CloneConfig(DecayConfig source)
+        => new(
+            ns: source.Ns,
+            decayRate: source.DecayRate,
+            reinforcementWeight: source.ReinforcementWeight,
+            stmThreshold: source.StmThreshold,
+            archiveThreshold: source.ArchiveThreshold,
+            stmDecayMultiplier: source.StmDecayMultiplier,
+            ltmDecayMultiplier: source.LtmDecayMultiplier,
+            archivedDecayMultiplier: source.ArchivedDecayMultiplier,
+            useSpectralDecay: source.UseSpectralDecay,
+            subdiffusiveExponent: source.SubdiffusiveExponent,
+            enableConsolidation: source.EnableConsolidation,
+            consolidationDiffusionTime: source.ConsolidationDiffusionTime,
+            consolidationPromotionThreshold: source.ConsolidationPromotionThreshold,
+            consolidationArchiveThreshold: source.ConsolidationArchiveThreshold,
+            enableAutoLink: source.EnableAutoLink,
+            autoLinkSimilarityThreshold: source.AutoLinkSimilarityThreshold,
+            autoLinkMaxNewEdgesPerScan: source.AutoLinkMaxNewEdgesPerScan,
+            tenantId: source.TenantId);
 }

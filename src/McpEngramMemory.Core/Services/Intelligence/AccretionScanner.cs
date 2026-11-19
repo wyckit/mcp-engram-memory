@@ -12,7 +12,7 @@ namespace McpEngramMemory.Core.Services.Intelligence;
 /// Manages DBSCAN density scanning of LTM-tier entries and pending collapse state.
 /// Detects dense vector clusters and proposes them for LLM-driven summarization and collapse.
 /// </summary>
-public sealed class AccretionScanner
+public sealed class AccretionScanner : IDisposable
 {
     /// <summary>
     /// Upper bound on LTM entries fed to DBSCAN in one pass.
@@ -32,11 +32,13 @@ public sealed class AccretionScanner
     private readonly IStorageProvider? _persistence;
     // Pending collapses and history are keyed by their globally-unique collapseId (contains a Guid);
     // each object carries its own TenantId, and every query/mutation below is tenant-filtered so a
-    // caller never sees or acts on another tenant's collapse. Dismissed ids are (tenant, id) so the
-    // same id can be dismissed independently per tenant.
+    // caller never sees or acts on another tenant's collapse. Dismissed ids are partitioned by
+    // (tenant, ns) so dismissals stay namespace-scoped and can be reclaimed in O(1) when a
+    // namespace is deleted via CognitiveIndex.NamespaceRemoved.
     private readonly Dictionary<string, PendingCollapse> _pendingCollapses = new();
     private readonly Dictionary<string, CollapseRecord> _collapseHistory = new();
-    private readonly HashSet<(string Tenant, string Id)> _dismissedEntryIds = new();
+    private readonly Dictionary<(string Tenant, string Ns), HashSet<string>> _dismissedEntryIds = new();
+    private int _disposedFlag;
 
     // Collapse ids with an execution, undo or dismissal in flight — keyed by the DURABLE
     // STORE's identity and nothing else. Two actors over the same store share the same durable
@@ -197,6 +199,60 @@ public sealed class AccretionScanner
         // that does not override StoreIdentity reports a per-instance identity, which reduces
         // to "same provider instance"; no provider at all makes this scanner its own domain.
         _inFlightStoreKey = persistence?.StoreIdentity ?? $"scanner:{Guid.NewGuid():N}";
+        _index.NamespaceRemoved += OnNamespaceRemoved;
+    }
+
+    private void OnNamespaceRemoved(NsKey key)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _dismissedEntryIds.Remove((key.Tenant, key.Ns));
+
+            List<string>? toRemove = null;
+            foreach (var kv in _pendingCollapses)
+            {
+                if (kv.Value.TenantId == key.Tenant && kv.Value.Ns == key.Ns)
+                {
+                    toRemove ??= new List<string>();
+                    toRemove.Add(kv.Key);
+                }
+            }
+
+            if (toRemove is not null)
+            {
+                foreach (var collapseId in toRemove)
+                    _pendingCollapses.Remove(collapseId);
+            }
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// Detach the <see cref="CognitiveIndex.NamespaceRemoved"/> subscription so a discarded
+    /// scanner does not stay rooted by a longer-lived index. Safe to call repeatedly.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0) return;
+        _index.NamespaceRemoved -= OnNamespaceRemoved;
+    }
+
+    /// <summary>Total dismissed entry ids currently tracked across all partitions (for tests/diagnostics).</summary>
+    internal int DismissedEntryCount
+    {
+        get
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                int total = 0;
+                foreach (var set in _dismissedEntryIds.Values)
+                    total += set.Count;
+                return total;
+            }
+            finally { _lock.ExitReadLock(); }
+        }
     }
 
     /// <summary>
@@ -209,7 +265,18 @@ public sealed class AccretionScanner
         bool autoSummarize = false, ClusterManager? clusters = null,
         IEmbeddingService? embedding = null,
         int maxScanEntries = DefaultMaxScanEntries)
+        => ScanNamespace(ns, tenantId, CancellationToken.None, epsilon, minPoints,
+            autoSummarize, clusters, embedding, maxScanEntries);
+
+    internal AccretionScanResult ScanNamespace(
+        string ns, string tenantId, CancellationToken cancellationToken,
+        float epsilon = 0.15f, int minPoints = 3,
+        bool autoSummarize = false, ClusterManager? clusters = null,
+        IEmbeddingService? embedding = null,
+        int maxScanEntries = DefaultMaxScanEntries)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // Normalized at the boundary, like every public surface that stores or compares the
         // tenant: stored state is normalized at construction, so a raw comparand (" acme ")
         // would create proposals one spelling can see and another cannot.
@@ -220,12 +287,15 @@ public sealed class AccretionScanner
             .Where(e => e.LifecycleState == "ltm" && !e.IsSummaryNode)
             .ToList();
 
-        // Filter out dismissed entries (dismissal is per-tenant)
+        // Filter out dismissed entries (dismissal is per-tenant and per-namespace)
         List<CognitiveEntry> candidates;
         _lock.EnterReadLock();
         try
         {
-            candidates = ltmEntries.Where(e => !_dismissedEntryIds.Contains((tenantId, e.Id))).ToList();
+            if (_dismissedEntryIds.TryGetValue((tenantId, ns), out var dismissed) && dismissed.Count > 0)
+                candidates = ltmEntries.Where(e => !dismissed.Contains(e.Id)).ToList();
+            else
+                candidates = ltmEntries;
         }
         finally { _lock.ExitReadLock(); }
 
@@ -242,6 +312,8 @@ public sealed class AccretionScanner
             candidates.RemoveRange(maxScanEntries, notScanned);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+
         // Run DBSCAN (pure computation, no locks needed)
         var detectedClusters = Dbscan(candidates, epsilon, minPoints);
 
@@ -256,8 +328,8 @@ public sealed class AccretionScanner
             {
                 var memberIds = cluster.Select(e => e.Id).ToList();
 
-                // Skip if this exact set of members already has a pending collapse (within this tenant)
-                if (IsAlreadyPending(memberIds, tenantId: tenantId))
+                // Skip if this exact set of members already has a pending collapse in this partition
+                if (IsAlreadyPending(memberIds, ns, tenantId: tenantId))
                     continue;
 
                 var centroid = ComputeCentroid(cluster);
@@ -281,6 +353,7 @@ public sealed class AccretionScanner
         {
             foreach (var cluster in detectedClusters)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var memberIds = cluster.Select(e => e.Id).ToList();
 
                 // Identity comes from the member set, not from when the scan ran. A Guid here made
@@ -1192,8 +1265,14 @@ public sealed class AccretionScanner
                     return $"Error: Collapse '{collapseId}' not found.";
 
                 collapse.Dismissed = true;
+                var dismissKey = (tenantId, collapse.Ns);
+                if (!_dismissedEntryIds.TryGetValue(dismissKey, out var dismissedSet))
+                {
+                    dismissedSet = new HashSet<string>(StringComparer.Ordinal);
+                    _dismissedEntryIds[dismissKey] = dismissedSet;
+                }
                 foreach (var memberId in collapse.MemberIds)
-                    _dismissedEntryIds.Add((tenantId, memberId));
+                    dismissedSet.Add(memberId);
 
                 _pendingCollapses.Remove(collapseId);
                 memberCount = collapse.MemberIds.Count;
@@ -1672,6 +1751,12 @@ public sealed class AccretionScanner
         var labels = new int[entries.Count];
         Array.Fill(labels, -1);
 
+        // Guard against O(K^2) queue blowup on dense clusters: every point that enters seedSet
+        // is guaranteed to receive a positive cluster label on dequeue, so no index ever needs
+        // to be enqueued more than once across the entire pass.
+        var inQueue = new bool[entries.Count];
+        var seedSet = new Queue<int>();
+
         int clusterId = 0;
 
         for (int i = 0; i < entries.Count; i++)
@@ -1688,8 +1773,17 @@ public sealed class AccretionScanner
 
             clusterId++;
             labels[i] = clusterId;
+            inQueue[i] = true;
 
-            var seedSet = new Queue<int>(neighbors);
+            foreach (var n in neighbors)
+            {
+                if (!inQueue[n] && labels[n] <= 0)
+                {
+                    inQueue[n] = true;
+                    seedSet.Enqueue(n);
+                }
+            }
+
             while (seedSet.Count > 0)
             {
                 int q = seedSet.Dequeue();
@@ -1704,7 +1798,13 @@ public sealed class AccretionScanner
                 if (qNeighbors.Count >= minPoints)
                 {
                     foreach (var n in qNeighbors)
-                        seedSet.Enqueue(n);
+                    {
+                        if (!inQueue[n] && labels[n] <= 0)
+                        {
+                            inQueue[n] = true;
+                            seedSet.Enqueue(n);
+                        }
+                    }
                 }
             }
         }
@@ -1800,12 +1900,12 @@ public sealed class AccretionScanner
         return false;
     }
 
-    private bool IsAlreadyPending(List<string> memberIds, string tenantId)
+    private bool IsAlreadyPending(List<string> memberIds, string ns, string tenantId)
     {
         var set = new HashSet<string>(memberIds);
         foreach (var collapse in _pendingCollapses.Values)
         {
-            if (collapse.Dismissed || collapse.TenantId != tenantId) continue;
+            if (collapse.Dismissed || collapse.TenantId != tenantId || collapse.Ns != ns) continue;
             if (collapse.MemberIds.Count == set.Count &&
                 collapse.MemberIds.All(id => set.Contains(id)))
                 return true;

@@ -80,15 +80,27 @@ public sealed class GovernedLearningCoordinator
             materialized.Version.ContentHash,
             request.TeacherRequest.RequestedAt,
             new Dictionary<string, string> { ["proposalId"] = proposal.ProposalId });
+        // Evaluate promotion gates under the Precondition phase BEFORE minting a durable
+        // Commit/Allow audit receipt. Proposals denied by verification, evidence freshness,
+        // permission bounds, human-approval requirements, or constitution rules must never
+        // emit a premature Commit/Allow audit record.
+        var preconditionDecision = await _constitution.EvaluateAndAuditAsync(
+            operation, ConstitutionPhase.Precondition, cancellationToken).ConfigureAwait(false);
+        var preAuthority = request.ResolveCurrentAuthority();
+        var prePromotion = _promotion.Evaluate(new PromotionRequest(
+            proposal, verification, preconditionDecision, preAuthority.ResourceVersions));
+        if (prePromotion.Outcome != PromotionOutcome.Promoted)
+            return new GovernedLearningResult(proposal, verification, prePromotion, null);
+
         var receipt = await _constitution.AuthorizeCommitAsync(operation, cancellationToken)
             .ConfigureAwait(false);
-        var provenance = materialized.CreateProvenance(receipt);
-
         var authority = request.ResolveCurrentAuthority();
         var promotion = _promotion.Evaluate(new PromotionRequest(
             proposal, verification, receipt.Decision, authority.ResourceVersions));
         if (promotion.Outcome != PromotionOutcome.Promoted)
             return new GovernedLearningResult(proposal, verification, promotion, null);
+
+        var provenance = materialized.CreateProvenance(receipt);
 
         var commit = new GovernedPromotionCommit(
             materialized.Version,

@@ -389,7 +389,9 @@ internal sealed record CommittedMergeTopology(
 ///                                                                     ->  release fence
 ///                                                                     ->  schedule the save
 ///
-/// - Read-only methods use EnterUpgradeableReadLock, upgrading to write only if EnsureLoaded needs to load.
+/// - Read-only methods check a volatile <c>_loaded</c> fast path and use <c>EnterReadLock</c> so
+///   concurrent readers execute in parallel; only the one-shot cold load takes the write lock via
+///   <see cref="EnsureLoadedOutsideFence"/>.
 /// - Attributable reads do not take the writer attribution fence around index resolution. They
 ///   build a discardable projection, compare the sweep's attribution revision at the end, retry
 ///   once on a mismatch, and fail closed if the retry is stale too. The successful comparison is
@@ -608,9 +610,12 @@ public sealed class KnowledgeGraph
     /// </summary>
     private void EnsureLoadedOutsideFence()
     {
-        _lock.EnterUpgradeableReadLock();
-        try { EnsureLoaded(); }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        if (Volatile.Read(ref _loaded))
+            return;
+
+        _lock.EnterWriteLock();
+        try { EnsureLoadedUnderWrite(); }
+        finally { _lock.ExitWriteLock(); }
     }
 
     public KnowledgeGraph(IStorageProvider persistence, CognitiveIndex index,
@@ -640,13 +645,13 @@ public sealed class KnowledgeGraph
     {
         get
         {
-            _lock.EnterUpgradeableReadLock();
+            EnsureLoadedOutsideFence();
+            _lock.EnterReadLock();
             try
             {
-                EnsureLoaded();
                 return EdgeCountUnderLock();
             }
-            finally { _lock.ExitUpgradeableReadLock(); }
+            finally { _lock.ExitReadLock(); }
         }
     }
 
@@ -1178,14 +1183,14 @@ public sealed class KnowledgeGraph
         // adjacency list is what lets the two phases be separated safely — an edge that appeared in
         // between is simply not in the set, so it survives rather than being deleted unexamined.
         List<GraphEdge> outgoing, incoming;
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             outgoing = _outgoing.TryGetValue((tenantId, id), out var o) ? o.ToList() : new List<GraphEdge>();
             incoming = _incoming.TryGetValue((tenantId, id), out var i) ? i.ToList() : new List<GraphEdge>();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         var removableOut = outgoing.Where(guard.IsEdgeUsable).ToList();
         var removableIn = incoming.Where(guard.IsEdgeUsable).ToList();
@@ -1320,10 +1325,10 @@ public sealed class KnowledgeGraph
         // to avoid lock-ordering issues with CognitiveIndex.
         List<(GraphEdge edge, string resolveId)> edgesToResolve;
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             edgesToResolve = new();
 
             if (direction is "both" or "outgoing")
@@ -1350,7 +1355,7 @@ public sealed class KnowledgeGraph
                 }
             }
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         if (edgesToResolve.Count == 0)
             return new GetNeighborsResult(id, Array.Empty<NeighborResult>());
@@ -1407,16 +1412,16 @@ public sealed class KnowledgeGraph
         // Snapshot this tenant's adjacency under the graph lock (keyed by bare id for BFS),
         // then resolve entries outside the lock to avoid lock-ordering issues.
         Dictionary<string, List<GraphEdge>> outgoingSnapshot;
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             // Shallow copy of this tenant's adjacency lists (edges are immutable)
             outgoingSnapshot = _outgoing
                 .Where(kv => kv.Key.Tenant == tenantId)
                 .ToDictionary(kv => kv.Key.Id, kv => kv.Value.ToList());
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         // BFS on the snapshot, resolving entries via CognitiveIndex (its own lock). The result is
         // discardable, so an in-flight ambiguity crossing retries once and then fails closed rather
@@ -1525,10 +1530,10 @@ public sealed class KnowledgeGraph
         // write used, and the write used GraphEdge.TenantId, which is normalized.
         tenantId = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             var edges = new List<GraphEdge>();
             if (_outgoing.TryGetValue((tenantId, id), out var outEdges))
                 edges.AddRange(outEdges);
@@ -1536,7 +1541,7 @@ public sealed class KnowledgeGraph
                 edges.AddRange(inEdges);
             return edges;
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1551,17 +1556,17 @@ public sealed class KnowledgeGraph
 
         List<GraphEdge> contradictEdges;
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             contradictEdges = _outgoing
                 .Where(kv => kv.Key.Tenant == tenantId)
                 .SelectMany(kv => kv.Value)
                 .Where(e => e.Relation == "contradicts")
                 .ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         if (contradictEdges.Count == 0)
             return Array.Empty<(GraphEdge, CognitiveEntry?, CognitiveEntry?)>();
@@ -1605,13 +1610,13 @@ public sealed class KnowledgeGraph
     /// </summary>
     public IReadOnlyList<GraphEdge> GetAllEdges()
     {
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             return _outgoing.Values.SelectMany(l => l).ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1645,16 +1650,16 @@ public sealed class KnowledgeGraph
         // See GetNeighbors: the Key.Tenant filter below compares against normalized keys.
         tenantId = Tenancy.Normalize(tenantId);
 
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             return _outgoing
                 .Where(kv => kv.Key.Tenant == tenantId)
                 .SelectMany(kv => kv.Value)
                 .ToList();
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
     }
 
     /// <summary>
@@ -1703,17 +1708,17 @@ public sealed class KnowledgeGraph
         bool transferEdges = namedTopologySafe;
 
         List<GraphEdge> incident;
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             incident = new List<GraphEdge>();
             if (namedTopologySafe && _outgoing.TryGetValue((tenantId, fromId), out var outgoing))
                 incident.AddRange(outgoing);
             if (namedTopologySafe && _incoming.TryGetValue((tenantId, fromId), out var incoming))
                 incident.AddRange(incoming);
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         foreach (var edge in incident)
             if (!guard.IsEdgeUsable(edge))
@@ -1886,17 +1891,17 @@ public sealed class KnowledgeGraph
         // makes the re-check below meaningful, because it guarantees the write phase is not the
         // first thing to pull persisted edges into memory.
         List<GraphEdge> incident;
-        _lock.EnterUpgradeableReadLock();
+        EnsureLoadedOutsideFence();
+        _lock.EnterReadLock();
         try
         {
-            EnsureLoaded();
             incident = new List<GraphEdge>();
             if (_outgoing.TryGetValue((tenantId, fromId), out var outSnapshot))
                 incident.AddRange(outSnapshot);
             if (_incoming.TryGetValue((tenantId, fromId), out var inSnapshot))
                 incident.AddRange(inSnapshot);
         }
-        finally { _lock.ExitUpgradeableReadLock(); }
+        finally { _lock.ExitReadLock(); }
 
         foreach (var edge in incident)
             if (!guard.IsEdgeUsable(edge))
@@ -2357,42 +2362,21 @@ public sealed class KnowledgeGraph
     private static CognitiveEntryInfo ToEntryInfo(CognitiveEntry e) =>
         new(e.Id, e.Text, e.Ns, e.Category, e.LifecycleState);
 
-    // Called under upgradeable read lock — upgrades to write only if loading needed.
-    private void EnsureLoaded()
-    {
-        if (_loaded) return;
-
-        _lock.EnterWriteLock();
-        try
-        {
-            if (_loaded) return; // Double-check
-            var globalEdges = _persistence.LoadGlobalEdges();
-            // NULL-SHAPED rows are quarantined, not indexed: a hand-poisoned or truncated
-            // store can deserialize a null list element or an edge whose endpoints bound
-            // JSON null, and either would throw out of the keying below — bricking every
-            // graph operation off one bad row.
-            foreach (var edge in globalEdges)
-            {
-                if (edge is null || string.IsNullOrWhiteSpace(edge.SourceId) || string.IsNullOrWhiteSpace(edge.TargetId) || string.IsNullOrWhiteSpace(edge.Relation)) continue;
-                AddEdgeInternal(edge);
-            }
-            _loaded = true;
-        }
-        finally { _lock.ExitWriteLock(); }
-    }
-
     // Called when already holding write lock.
     private void EnsureLoadedUnderWrite()
     {
-        if (_loaded) return;
+        if (Volatile.Read(ref _loaded)) return;
         var globalEdges = _persistence.LoadGlobalEdges();
-        // See EnsureLoaded: null-shaped rows are quarantined, not indexed.
+        // NULL-SHAPED rows are quarantined, not indexed: a hand-poisoned or truncated
+        // store can deserialize a null list element or an edge whose endpoints bound
+        // JSON null, and either would throw out of the keying below — bricking every
+        // graph operation off one bad row.
         foreach (var edge in globalEdges)
         {
             if (edge is null || string.IsNullOrWhiteSpace(edge.SourceId) || string.IsNullOrWhiteSpace(edge.TargetId) || string.IsNullOrWhiteSpace(edge.Relation)) continue;
             AddEdgeInternal(edge);
         }
-        _loaded = true;
+        Volatile.Write(ref _loaded, true);
     }
 
     /// <summary>

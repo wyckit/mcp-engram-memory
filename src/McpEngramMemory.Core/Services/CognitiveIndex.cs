@@ -436,7 +436,10 @@ public sealed class CognitiveIndex : IDisposable
     private void StampLifecycleTransition(CognitiveEntry entry, string previousState)
     {
         if (!string.Equals(previousState, entry.LifecycleState, StringComparison.Ordinal))
+        {
             entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+            BumpLifecycleRevision(entry.TenantId, entry.Ns);
+        }
     }
 
     /// <summary>
@@ -500,8 +503,9 @@ public sealed class CognitiveIndex : IDisposable
 
             tuple.Entry.LifecycleState = toState;
             tuple.Entry.LifecycleRevision = installRevision.Value;
+            BumpLifecycleRevision(key.Tenant, ns);
             UpdateQuantization(nsEntries, id, tuple, fromState, toState);
-            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             return true;
         }
         finally { nsLock.ExitWriteLock(); }
@@ -539,7 +543,7 @@ public sealed class CognitiveIndex : IDisposable
                 return false;
 
             tuple.Entry.LifecycleRevision = install.Value;
-            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             return true;
         }
         finally { nsLock.ExitWriteLock(); }
@@ -616,6 +620,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 // Same cleanup as Delete — see its comments.
                 _store.UntrackEntry(summaryId, ns, key.Tenant);
+                _store.AdjustAllTenantsCount(-1);
                 _store.RemoveBM25(summaryId, pk);
                 _store.RemoveFromHnsw(pk, summaryId);
                 _store.ScheduleEntryDelete(ns, summaryId, key.Tenant);
@@ -641,8 +646,16 @@ public sealed class CognitiveIndex : IDisposable
     // examined. Bumped inside the partition write lock; read lock-free.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Tenant, string Ns), long> _occupancyRevisions = new();
 
+    // Per-partition LIFECYCLE transition revision: moves whenever an entry transitions between
+    // lifecycle states (e.g. stm -> ltm -> archived), allowing background scanners such as
+    // accretion to skip idle partitions without missing newly promoted LTM entries.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string Tenant, string Ns), long> _lifecycleRevisions = new();
+
     private void BumpOccupancy(string tenant, string ns)
         => _occupancyRevisions.AddOrUpdate((tenant, ns), 1L, static (_, v) => v + 1);
+
+    private void BumpLifecycleRevision(string tenant, string ns)
+        => _lifecycleRevisions.AddOrUpdate((tenant, ns), 1L, static (_, v) => v + 1);
 
     /// <summary>
     /// The partition's occupancy revision — see the field remarks. Compared, never interpreted:
@@ -652,9 +665,20 @@ public sealed class CognitiveIndex : IDisposable
     public long OccupancyRevisionFor(string ns, string tenantId)
         => _occupancyRevisions.TryGetValue((Tenancy.Normalize(tenantId), ns), out var v) ? v : 0;
 
+    internal long LifecycleRevisionFor(string ns, string tenantId)
+        => _lifecycleRevisions.TryGetValue((Tenancy.Normalize(tenantId), ns), out var v) ? v : 0;
+
+    internal bool HasHnswIndex(string ns, string tenantId)
+        => _store.GetHnswIndex(NamespaceStore.PartitionKey(Tenancy.Normalize(tenantId), ns)) is not null;
+
     public void Upsert(CognitiveEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        // When a global MaxTotalCount ceiling is configured, materialize persisted partitions
+        // outside the partition lock so post-restart counts include all tenants accurately.
+        if (_limits.MaxTotalCount < int.MaxValue)
+            _store.LoadAll();
 
         // Every occupation of a slot gets a fresh revision — see CognitiveEntry.Revision.
         entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
@@ -680,18 +704,21 @@ public sealed class CognitiveIndex : IDisposable
             _store.EnsureLoaded(entry.Ns);
             var nsEntries = _store.GetOrCreateNamespace(nskey);
 
-            // Enforce memory limits (skip for updates to existing entries)
-            if (!nsEntries.ContainsKey(entry.Id))
+            // Enforce memory limits across ALL tenants (skip for updates to existing entries)
+            bool isNew = !nsEntries.ContainsKey(entry.Id);
+            if (isNew)
             {
                 if (nsEntries.Count >= _limits.MaxNamespaceSize)
                     throw new InvalidOperationException(
                         $"Namespace '{entry.Ns}' has reached the maximum size of {_limits.MaxNamespaceSize} entries.");
-                if (_store.TotalCount >= _limits.MaxTotalCount)
+                if (_store.AllTenantsCount >= _limits.MaxTotalCount)
                     throw new InvalidOperationException(
                         $"Total memory count has reached the maximum of {_limits.MaxTotalCount} entries.");
             }
 
             nsEntries[entry.Id] = (entry, norm, quantized);
+            if (isNew)
+                _store.AdjustAllTenantsCount(1);
             _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
             _store.IndexBM25(entry);
             _store.AddToHnsw(nskey, entry.Id, entry.Vector);
@@ -732,6 +759,9 @@ public sealed class CognitiveIndex : IDisposable
     internal bool UpsertSummaryIfIncarnation(CognitiveEntry entry, bool replaceStale = false, long? staleRevision = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        if (_limits.MaxTotalCount < int.MaxValue)
+            _store.LoadAll();
 
         entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
         entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
@@ -776,17 +806,20 @@ public sealed class CognitiveIndex : IDisposable
                 if (!ownSlot || !(sameIncarnation || takeover)) return false;
             }
 
-            if (!nsEntries.ContainsKey(entry.Id))
+            bool isNew = !nsEntries.ContainsKey(entry.Id);
+            if (isNew)
             {
                 if (nsEntries.Count >= _limits.MaxNamespaceSize)
                     throw new InvalidOperationException(
                         $"Namespace '{entry.Ns}' has reached the maximum size of {_limits.MaxNamespaceSize} entries.");
-                if (_store.TotalCount >= _limits.MaxTotalCount)
+                if (_store.AllTenantsCount >= _limits.MaxTotalCount)
                     throw new InvalidOperationException(
                         $"Total memory count has reached the maximum of {_limits.MaxTotalCount} entries.");
             }
 
             nsEntries[entry.Id] = (entry, norm, quantized);
+            if (isNew)
+                _store.AdjustAllTenantsCount(1);
             _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
             _store.IndexBM25(entry);
             _store.AddToHnsw(nskey, entry.Id, entry.Vector);
@@ -957,10 +990,11 @@ public sealed class CognitiveIndex : IDisposable
                     residentArchive.Entry.LifecycleState = "archived";
                     residentArchive.Entry.LifecycleRevision =
                         Interlocked.Increment(ref _lifecycleRevisionCounter);
+                    BumpLifecycleRevision(key.Tenant, key.Ns);
                     UpdateQuantization(
                         entries, archive.Entry.Id, residentArchive,
                         priorArchiveState, residentArchive.Entry.LifecycleState);
-                    _store.ScheduleEntryUpsert(key.Ns, residentArchive.Entry);
+                    _store.ScheduleEntryUpsert(key.Ns, residentArchive.Entry, persistHnsw: false);
                     installed = true;
                     return true;
                 },
@@ -1071,13 +1105,16 @@ public sealed class CognitiveIndex : IDisposable
     {
         if (entries.Count == 0) return 0;
 
+        if (_limits.MaxTotalCount < int.MaxValue)
+            _store.LoadAll();
+
         // Pre-compute enrichment, norms, and quantization outside the lock
         var prepared = new List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>(entries.Count);
         foreach (var entry in entries)
         {
             // Every occupation of a slot gets a fresh revision — see CognitiveEntry.Revision.
             entry.Revision = Interlocked.Increment(ref _entryRevisionCounter);
-        entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
+            entry.LifecycleRevision = Interlocked.Increment(ref _lifecycleRevisionCounter);
             if (entry.Keywords is null && !string.IsNullOrWhiteSpace(entry.Text))
                 entry.Keywords = _documentEnricher.Enrich(entry.Text);
             float norm = VectorMath.Norm(entry.Vector);
@@ -1106,14 +1143,16 @@ public sealed class CognitiveIndex : IDisposable
             {
                 _store.EnsureLoaded(nskey.Ns);
                 var nsEntries = _store.GetOrCreateNamespace(nskey);
+                var groupAccepted = new List<CognitiveEntry>();
 
                 foreach (var (entry, norm, quantized) in nsGroup)
                 {
-                    if (!nsEntries.ContainsKey(entry.Id))
+                    bool isNew = !nsEntries.ContainsKey(entry.Id);
+                    if (isNew)
                     {
                         if (nsEntries.Count >= _limits.MaxNamespaceSize)
                             continue; // skip entries that would exceed namespace limit
-                        if (_store.TotalCount >= _limits.MaxTotalCount)
+                        if (_store.AllTenantsCount >= _limits.MaxTotalCount)
                         {
                             totalLimitHit = true;
                             break; // stop if total limit reached
@@ -1121,13 +1160,20 @@ public sealed class CognitiveIndex : IDisposable
                     }
 
                     nsEntries[entry.Id] = (entry, norm, quantized);
+                    if (isNew)
+                        _store.AdjustAllTenantsCount(1);
                     _store.TrackEntry(entry.Id, entry.Ns, entry.TenantId);
                     _store.IndexBM25(entry);
                     _store.AddToHnsw(nskey, entry.Id, entry.Vector);
-                    _store.ScheduleEntryUpsert(entry.Ns, entry);
                     BumpOccupancy(nskey.Tenant, entry.Ns);
+                    groupAccepted.Add(entry);
                     accepted.Add(entry);
                 }
+
+                // Persist once per partition batch (saves HNSW once after batch completes,
+                // instead of N synchronous full-HNSW writes inside the write lock).
+                if (groupAccepted.Count > 0)
+                    _store.ScheduleBatchUpsert(nskey, groupAccepted, persistHnsw: true);
             }
             finally { nsLock.ExitWriteLock(); }
         }
@@ -1288,6 +1334,7 @@ public sealed class CognitiveIndex : IDisposable
                 // Legacy tenant throughout this overload, so the placement being retracted is
                 // exactly ("", ns, id) — the one the locator resolved us to a few lines above.
                 _store.UntrackEntry(id, ns, string.Empty);
+                _store.AdjustAllTenantsCount(-1);
                 _store.RemoveBM25(id, ns);
                 _store.RemoveFromHnsw(ns, id);
                 _store.ScheduleEntryDelete(ns, id, string.Empty);
@@ -1329,6 +1376,7 @@ public sealed class CognitiveIndex : IDisposable
                 // namespace to the next bare-id resolution. UntrackEntry still confines the legacy
                 // locator and TotalCount to the legacy tenant, exactly as the guard here did.
                 _store.UntrackEntry(id, ns, key.Tenant);
+                _store.AdjustAllTenantsCount(-1);
                 _store.RemoveBM25(id, pk);
                 _store.RemoveFromHnsw(pk, id);
                 _store.ScheduleEntryDelete(ns, id, key.Tenant);
@@ -1375,6 +1423,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 // Same cleanup as the unconditional overload — see its comments.
                 _store.UntrackEntry(id, ns, key.Tenant);
+                _store.AdjustAllTenantsCount(-1);
                 _store.RemoveBM25(id, pk);
                 _store.RemoveFromHnsw(pk, id);
                 _store.ScheduleEntryDelete(ns, id, key.Tenant);
@@ -1439,11 +1488,17 @@ public sealed class CognitiveIndex : IDisposable
         {
             _store.EnsureLoaded(request.Namespace);
             var nsEntries = _store.GetNamespace(nskey);
-            if (nsEntries is null || nsEntries.Count == 0)
+            if (nsEntries is null)
                 return Array.Empty<CognitiveSearchResult>();
-            IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot =
-                nsEntries.Values.ToList();
-            HnswIndex? hnswIndex = _store.GetHnswIndex(pk);
+            int entryCount = nsEntries.Count;
+            if (entryCount == 0)
+                return Array.Empty<CognitiveSearchResult>();
+
+            // Lazily build HNSW on large namespaces that have no resident HNSW index (e.g. after
+            // restart on SQLite/SQL Server, stale snapshot, or RebuildEmbeddings invalidation).
+            // Runs safely under the partition read lock via a leaf per-partition monitor.
+            HnswIndex? hnswIndex = _store.GetHnswIndex(pk)
+                ?? (entryCount >= NamespaceStore.HnswThreshold ? _store.EnsureHnswIndex(nskey, pk) : null);
 
             // Entry resolver for BM25-only ("keyword rescue") candidates. Resolves per-candidate
             // straight from nsEntries rather than allocating a second whole-namespace map up front:
@@ -1472,17 +1527,17 @@ public sealed class CognitiveIndex : IDisposable
                 var expandedQueryText = _synonymExpander.Expand(request.QueryText);
 
                 // Scale vector candidate pool with namespace size for better hybrid recall
-                int candidateK = snapshot.Count >= 5000
+                int candidateK = entryCount >= 5000
                     ? Math.Max(request.K * 12, 80)
                     : Math.Max(request.K * 6, 30);
                 var vectorResults = _vectorSearch.Search(
-                    request.Query, snapshot, candidateK, request.MinScore,
+                    request.Query, nsEntries, candidateK, request.MinScore,
                     request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
                 int hybridK = request.SummaryFirst ? candidateK : request.K * diversityMultiplier;
                 var hybridResults = _hybridSearch.HybridSearch(
                     vectorResults, expandedQueryText, pk, hybridK,
                     request.IncludeStates, request.Category,
-                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
+                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount);
 
                 // Auto-PRF: if top hybrid result is low confidence, expand query with
                 // terms from initial results and re-search for improved recall
@@ -1496,20 +1551,23 @@ public sealed class CognitiveIndex : IDisposable
                         var prfResults = _hybridSearch.HybridSearch(
                             vectorResults, prfQuery, pk, hybridK,
                             request.IncludeStates, request.Category,
-                            request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count);
+                            request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount);
                         // Use PRF results if they improve top score
                         if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
-                            return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, snapshot);
+                            return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, nsEntries);
                     }
                 }
 
-                return ApplyDiversity(ApplyCategoryBoost(hybridResults, request.QueryText), request, snapshot);
+                return ApplyDiversity(ApplyCategoryBoost(hybridResults, request.QueryText), request, nsEntries);
             }
 
             // Vector-only search with auto-escalation to hybrid when confidence is low
-            int vectorK = request.K * diversityMultiplier;
+            bool applyVectorRerank = request.Rerank && !string.IsNullOrWhiteSpace(request.QueryText);
+            int vectorK = applyVectorRerank
+                ? Math.Max(request.K * diversityMultiplier, Math.Max(request.K * 3, 15))
+                : request.K * diversityMultiplier;
             var vectorOnlyResults = _vectorSearch.Search(
-                request.Query, snapshot, vectorK, request.MinScore,
+                request.Query, nsEntries, vectorK, request.MinScore,
                 request.Category, request.IncludeStates, request.SummaryFirst, hnswIndex);
 
             // Auto-escalate: if top vector result is low confidence and we have query text,
@@ -1519,21 +1577,24 @@ public sealed class CognitiveIndex : IDisposable
                 vectorOnlyResults[0].Score < 0.50f &&
                 !request.SummaryFirst)
             {
-                int candidateK = snapshot.Count >= 5000
+                int candidateK = entryCount >= 5000
                     ? Math.Max(request.K * 10, 60)
                     : Math.Max(request.K * 5, 25);
                 var broadVectorResults = _vectorSearch.Search(
-                    request.Query, snapshot, candidateK, request.MinScore,
+                    request.Query, nsEntries, candidateK, request.MinScore,
                     request.Category, request.IncludeStates, false, hnswIndex);
                 var expandedQueryText = _synonymExpander.Expand(request.QueryText);
                 var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
                     broadVectorResults, expandedQueryText, pk, request.K * diversityMultiplier,
                     request.IncludeStates, request.Category,
-                    false, request.RrfK, _bm25, _reranker, getEntry, request.Query, snapshot.Count), request.QueryText);
-                return ApplyDiversity(escalatedResults, request, snapshot);
+                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount), request.QueryText);
+                return ApplyDiversity(escalatedResults, request, nsEntries);
             }
 
-            return ApplyDiversity(vectorOnlyResults, request, snapshot);
+            if (applyVectorRerank && vectorOnlyResults.Count > 1)
+                vectorOnlyResults = _reranker.Rerank(request.QueryText!, vectorOnlyResults);
+
+            return ApplyDiversity(vectorOnlyResults, request, nsEntries);
         }
         finally { nsLock.ExitReadLock(); }
     }
@@ -1635,49 +1696,29 @@ public sealed class CognitiveIndex : IDisposable
         if (namespaces.Count == 0)
             return Array.Empty<Models.CrossSearchResult>();
 
-        // Search each namespace independently. When diversity is requested we route
-        // through the SearchRequest path to pick up cluster-aware MMR reranking;
-        // otherwise we keep the fast hybrid/vector path for backward compat.
-        var allRanked = new Dictionary<string, (Models.CrossSearchResult Result, float RrfScore)>();
+        // Route every namespace through the unified SearchRequest pipeline so summaryFirst,
+        // rerank, hybrid, diversity, and tenant isolation behave identically across all modes.
+        var allRanked = new Dictionary<string, (Models.CrossSearchResult Result, float RrfScore, bool IsSummaryNode)>();
 
         foreach (var ns in namespaces)
         {
-            IReadOnlyList<CognitiveSearchResult> nsResults;
-            if (diversity)
+            var nsResults = Search(new SearchRequest
             {
-                nsResults = Search(new SearchRequest
-                {
-                    Query = query,
-                    Namespace = ns,
-                    QueryText = queryText,
-                    K = k,
-                    MinScore = minScore,
-                    Category = category,
-                    IncludeStates = includeStates,
-                    Hybrid = hybrid && queryText is not null,
-                    Rerank = rerank,
-                    RrfK = rrfK,
-                    SummaryFirst = summaryFirst,
-                    Diversity = true,
-                    DiversityLambda = diversityLambda,
-                    TenantId = tenantId,
-                });
-            }
-            else if (hybrid && queryText is not null)
-            {
-                nsResults = HybridSearch(query, queryText, ns, tenantId: tenantId, k, minScore, category, includeStates, rerank, rrfK);
-            }
-            else
-            {
-                // Route through the request path so the tenant scope is applied; for the legacy
-                // tenant this constructs exactly the same request as Search(query, ns, ...).
-                nsResults = Search(new SearchRequest
-                {
-                    Query = query, Namespace = ns, K = k, MinScore = minScore,
-                    Category = category, IncludeStates = includeStates,
-                    SummaryFirst = summaryFirst, TenantId = tenantId
-                });
-            }
+                Query = query,
+                Namespace = ns,
+                QueryText = queryText,
+                K = k,
+                MinScore = minScore,
+                Category = category,
+                IncludeStates = includeStates,
+                Hybrid = hybrid && queryText is not null,
+                Rerank = rerank,
+                RrfK = rrfK,
+                SummaryFirst = summaryFirst,
+                Diversity = diversity,
+                DiversityLambda = diversityLambda,
+                TenantId = tenantId,
+            });
 
             // Assign RRF scores based on rank within this namespace
             for (int rank = 0; rank < nsResults.Count; rank++)
@@ -1693,18 +1734,21 @@ public sealed class CognitiveIndex : IDisposable
                 if (allRanked.TryGetValue(key, out var existing))
                 {
                     // Same entry found in multiple namespaces — sum RRF scores
-                    allRanked[key] = (crossResult, existing.RrfScore + rrfScore);
+                    allRanked[key] = (crossResult, existing.RrfScore + rrfScore, existing.IsSummaryNode || r.IsSummaryNode);
                 }
                 else
                 {
-                    allRanked[key] = (crossResult, rrfScore);
+                    allRanked[key] = (crossResult, rrfScore, r.IsSummaryNode);
                 }
             }
         }
 
-        // Sort by RRF score descending, take top-K
-        return allRanked.Values
-            .OrderByDescending(x => x.RrfScore)
+        // Sort by summary preference (when requested) then RRF score descending, take top-K
+        var ordered = summaryFirst
+            ? allRanked.Values.OrderByDescending(x => x.IsSummaryNode).ThenByDescending(x => x.RrfScore)
+            : allRanked.Values.OrderByDescending(x => x.RrfScore);
+
+        return ordered
             .Take(k)
             .Select(x => x.Result)
             .ToList();
@@ -1783,7 +1827,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 tuple.Entry.AccessCount++;
                 tuple.Entry.LastAccessedAt = Clock.GetUtcNow();
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             }
         }
         finally { nsLock.ExitWriteLock(); }
@@ -1807,7 +1851,7 @@ public sealed class CognitiveIndex : IDisposable
             {
                 tuple.Entry.AccessCount++;
                 tuple.Entry.LastAccessedAt = Clock.GetUtcNow();
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             }
         }
         finally { nsLock.ExitWriteLock(); }
@@ -1838,7 +1882,7 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is not null && nsEntries.TryGetValue(id, out var tuple))
             {
                 tuple.Entry.ActivationEnergy += delta;
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
                 return true;
             }
         }
@@ -1859,7 +1903,7 @@ public sealed class CognitiveIndex : IDisposable
             if (resolvedEntries is not null && resolvedEntries.TryGetValue(id, out var resolvedTuple))
             {
                 resolvedTuple.Entry.ActivationEnergy += delta;
-                _store.ScheduleEntryUpsert(resolvedNs, resolvedTuple.Entry);
+                _store.ScheduleEntryUpsert(resolvedNs, resolvedTuple.Entry, persistHnsw: false);
                 return true;
             }
             return false;
@@ -1886,7 +1930,7 @@ public sealed class CognitiveIndex : IDisposable
                 tuple.Entry.LifecycleState = state;
                 StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, state);
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
                 return true;
             }
             return false;
@@ -1925,7 +1969,7 @@ public sealed class CognitiveIndex : IDisposable
             tuple.Entry.LifecycleState = state;
             StampLifecycleTransition(tuple.Entry, previousState);
             UpdateQuantization(nsEntries, id, tuple, previousState, state);
-            _store.ScheduleEntryUpsert(ns, tuple.Entry);
+            _store.ScheduleEntryUpsert(ns, tuple.Entry, persistHnsw: false);
             if (!string.Equals(previousState, state, StringComparison.Ordinal))
                 lifecycleRevision = tuple.Entry.LifecycleRevision;
             return true;
@@ -1961,6 +2005,7 @@ public sealed class CognitiveIndex : IDisposable
                 var nsEntries = _store.GetNamespace(ns);
                 if (nsEntries is null) continue;
 
+                var changedEntries = new List<CognitiveEntry>(idList.Count);
                 foreach (var id in idList)
                 {
                     if (nsEntries.TryGetValue(id, out var tuple))
@@ -1969,10 +2014,12 @@ public sealed class CognitiveIndex : IDisposable
                         tuple.Entry.LifecycleState = state;
                         StampLifecycleTransition(tuple.Entry, previousState);
                         UpdateQuantization(nsEntries, id, tuple, previousState, state);
-                        _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                        changedEntries.Add(tuple.Entry);
                         updated++;
                     }
                 }
+                if (changedEntries.Count > 0)
+                    _store.ScheduleBatchUpsert(new NsKey(string.Empty, ns), changedEntries, persistHnsw: false);
             }
             finally { nsLock.ExitWriteLock(); }
         }
@@ -1994,6 +2041,7 @@ public sealed class CognitiveIndex : IDisposable
             if (nsEntries is null)
                 return 0;
 
+            var changedEntries = new List<CognitiveEntry>();
             int updated = 0;
             foreach (var id in ids)
             {
@@ -2004,9 +2052,11 @@ public sealed class CognitiveIndex : IDisposable
                 tuple.Entry.LifecycleState = state;
                 StampLifecycleTransition(tuple.Entry, previousState);
                 UpdateQuantization(nsEntries, id, tuple, previousState, state);
-                _store.ScheduleEntryUpsert(ns, tuple.Entry);
+                changedEntries.Add(tuple.Entry);
                 updated++;
             }
+            if (changedEntries.Count > 0)
+                _store.ScheduleBatchUpsert(key, changedEntries, persistHnsw: false);
             return updated;
         }
         finally { nsLock.ExitWriteLock(); }
@@ -2070,6 +2120,66 @@ public sealed class CognitiveIndex : IDisposable
             return true;
         }
         finally { nsLock.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// Apply a batch of decay energy/state updates within one (tenant, ns) partition in bounded
+    /// write-lock chunks. Avoids per-entry lock/timer churn while preserving foreground writer
+    /// responsiveness and never rewriting unchanged HNSW snapshots.
+    /// </summary>
+    internal int SetActivationEnergyAndStateBatch(
+        string ns,
+        string tenantId,
+        IReadOnlyList<(string Id, float ActivationEnergy, string? NewState)> updates,
+        CancellationToken cancellationToken = default)
+    {
+        if (updates.Count == 0)
+            return 0;
+
+        const int ChunkSize = 256;
+        var key = new NsKey(Tenancy.Normalize(tenantId), ns);
+        var nsLock = NsLock(NamespaceStore.PartitionKey(key));
+        int updated = 0;
+
+        for (int offset = 0; offset < updates.Count; offset += ChunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int end = Math.Min(offset + ChunkSize, updates.Count);
+
+            nsLock.EnterWriteLock();
+            try
+            {
+                _store.EnsureLoaded(ns);
+                var nsEntries = _store.GetNamespace(key);
+                if (nsEntries is null)
+                    return updated;
+
+                var changed = new List<CognitiveEntry>(end - offset);
+                for (int i = offset; i < end; i++)
+                {
+                    var (id, activationEnergy, newState) = updates[i];
+                    if (!nsEntries.TryGetValue(id, out var tuple))
+                        continue;
+
+                    var previousState = tuple.Entry.LifecycleState;
+                    tuple.Entry.ActivationEnergy = activationEnergy;
+                    if (newState is not null)
+                    {
+                        tuple.Entry.LifecycleState = newState;
+                        StampLifecycleTransition(tuple.Entry, previousState);
+                        UpdateQuantization(nsEntries, id, tuple, previousState, newState);
+                    }
+                    changed.Add(tuple.Entry);
+                    updated++;
+                }
+
+                if (changed.Count > 0)
+                    _store.ScheduleBatchUpsert(key, changed, persistHnsw: false);
+            }
+            finally { nsLock.ExitWriteLock(); }
+        }
+
+        return updated;
     }
 
     // ── Bulk Reads ──
@@ -2160,8 +2270,7 @@ public sealed class CognitiveIndex : IDisposable
                 // save is scheduled. This clears only the selected partition's BM25/HNSW indexes.
                 _store.RemoveNamespace(key);
                 namespaceRemoved = true;
-                foreach (var id in ids)
-                    _store.ScheduleEntryDelete(ns, id, key.Tenant);
+                _store.ScheduleBatchDelete(key, ids);
                 removed = ids.Count;
                 BumpOccupancy(key.Tenant, ns);
             }
@@ -2262,35 +2371,92 @@ public sealed class CognitiveIndex : IDisposable
         }
     }
 
-    /// <summary>Re-embed all entries in a namespace. Per-namespace write lock. Pass tenantId "" for the legacy partition.</summary>
+    /// <summary>
+    /// Re-embed all entries in a namespace without holding the partition write lock during
+    /// embedding inference. Pass tenantId "" for the legacy partition.
+    /// </summary>
     public (int Updated, int Skipped) RebuildEmbeddings(string ns, IEmbeddingService embedding, string tenantId)
+        => RebuildEmbeddings(ns, embedding, tenantId, useContextualPrefix: false);
+
+    /// <summary>
+    /// Re-embed all entries in a namespace, optionally prepending
+    /// <see cref="BenchmarkRunner.BuildContextualPrefix(string?, string?)"/> so re-embedded vectors
+    /// match contextual-retrieval ingestion. Snapshots texts under a read lock, runs embedding
+    /// inference outside the partition lock so concurrent reads and writes are not stalled, and
+    /// swaps updated vectors under the write lock only for entries whose <see cref="CognitiveEntry.Revision"/>
+    /// did not change in the meantime.
+    /// </summary>
+    public (int Updated, int Skipped) RebuildEmbeddings(
+        string ns, IEmbeddingService embedding, string tenantId, bool useContextualPrefix)
     {
         var key = new NsKey(Tenancy.Normalize(tenantId), ns);
         string pk = NamespaceStore.PartitionKey(key);
         var nsLock = NsLock(pk);
+
+        // Phase 1: snapshot (Id, Revision, Text, Category) under the partition read lock.
+        var toEmbed = new List<(string Id, long Revision, string Text, string? Category)>();
+        int skipped = 0;
+
+        nsLock.EnterReadLock();
+        try
+        {
+            _store.EnsureLoaded(ns);
+            var nsEntries = _store.GetNamespace(key);
+            if (nsEntries is null || nsEntries.Count == 0)
+                return (0, 0);
+
+            foreach (var kv in nsEntries)
+            {
+                var entry = kv.Value.Entry;
+                if (string.IsNullOrWhiteSpace(entry.Text))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                toEmbed.Add((entry.Id, entry.Revision, entry.Text, entry.Category));
+            }
+        }
+        finally { nsLock.ExitReadLock(); }
+
+        if (toEmbed.Count == 0)
+            return (0, skipped);
+
+        // Phase 2: compute new embeddings OUTSIDE the partition lock so concurrent reads and
+        // writes on this namespace are not frozen while model inference runs.
+        var computed = new List<(string Id, long ExpectedRevision, float[] Vector, float Norm)>(toEmbed.Count);
+        foreach (var item in toEmbed)
+        {
+            string textToEmbed = useContextualPrefix
+                ? BenchmarkRunner.BuildContextualPrefix(ns, item.Category) + item.Text
+                : item.Text;
+            float[] newVector = embedding.Embed(textToEmbed);
+            computed.Add((item.Id, item.Revision, newVector, VectorMath.Norm(newVector)));
+        }
+
+        // Phase 3: swap vectors under the partition write lock, verifying each entry's Revision
+        // still matches the snapshot so concurrent upserts/deletes are never clobbered.
+        int updated = 0;
         nsLock.EnterWriteLock();
         try
         {
             _store.EnsureLoaded(ns);
             var nsEntries = _store.GetNamespace(key);
             if (nsEntries is null)
-                return (0, 0);
+                return (0, skipped + computed.Count);
 
-            int updated = 0, skipped = 0;
-            var ids = nsEntries.Keys.ToList();
-
-            foreach (var id in ids)
+            foreach (var item in computed)
             {
-                var (oldEntry, _, _) = nsEntries[id];
-                if (string.IsNullOrWhiteSpace(oldEntry.Text))
+                if (!nsEntries.TryGetValue(item.Id, out var current) ||
+                    current.Entry.Revision != item.ExpectedRevision)
                 {
                     skipped++;
                     continue;
                 }
 
-                float[] newVector = embedding.Embed(oldEntry.Text);
+                var oldEntry = current.Entry;
                 var newEntry = new CognitiveEntry(
-                    oldEntry.Id, newVector, oldEntry.Ns, oldEntry.Text,
+                    oldEntry.Id, item.Vector, oldEntry.Ns, oldEntry.Text,
                     oldEntry.Category, oldEntry.Metadata, oldEntry.LifecycleState,
                     oldEntry.CreatedAt, oldEntry.LastAccessedAt, oldEntry.AccessCount,
                     oldEntry.ActivationEnergy, oldEntry.IsSummaryNode, oldEntry.SourceClusterId,
@@ -2313,9 +2479,9 @@ public sealed class CognitiveIndex : IDisposable
                 newEntry.LifecycleRevision = oldEntry.LifecycleRevision;
 
                 var quantized = newEntry.LifecycleState is "ltm" or "archived"
-                    ? VectorQuantizer.Quantize(newVector)
+                    ? VectorQuantizer.Quantize(item.Vector)
                     : null;
-                nsEntries[id] = (newEntry, VectorMath.Norm(newVector), quantized);
+                nsEntries[item.Id] = (newEntry, item.Norm, quantized);
                 _store.IndexBM25(newEntry);
                 updated++;
             }
@@ -2323,10 +2489,10 @@ public sealed class CognitiveIndex : IDisposable
             if (updated > 0)
             {
                 BumpOccupancy(key.Tenant, ns);
-                _store.ScheduleSave(ns);
-                // Invalidate the stale HNSW index so it is rebuilt lazily on the next search.
-                // The old topology references pre-re-embedding vectors and would return wrong candidates.
+                // Invalidate the stale HNSW index before scheduling the full-namespace save so we
+                // do not persist pre-re-embedding topology only to immediately delete it.
                 _store.InvalidateHnswIndex(pk);
+                _store.ScheduleSave(ns, persistHnsw: false);
             }
 
             return (updated, skipped);
@@ -2368,10 +2534,19 @@ public sealed class CognitiveIndex : IDisposable
         int skipped = 0;
         foreach (var kv in _nsLocks)
         {
-            try { kv.Value.Dispose(); }
-            catch (SynchronizationLockException) { skipped++; }
+            try
+            {
+                kv.Value.Dispose();
+                // Remove only locks that actually disposed cleanly. A contended lock that threw
+                // SynchronizationLockException stays published (mirroring DisposeAttributionFences)
+                // so the in-flight holder's reference matches the table and never splits identity.
+                ((ICollection<KeyValuePair<string, ReaderWriterLockSlim>>)_nsLocks).Remove(kv);
+            }
+            catch (SynchronizationLockException)
+            {
+                skipped++;
+            }
         }
-        _nsLocks.Clear();
         DisposalContendedLockCount = skipped;
 
         // The per-tenant attribution fences, on the same best-effort terms and for the same reason:
@@ -2406,6 +2581,13 @@ public sealed class CognitiveIndex : IDisposable
     /// the instance it entered, which is why a contended fence is never unpublished.
     /// </summary>
     public int DisposalContendedFenceCount { get; private set; }
+
+    /// <summary>
+    /// Diagnostic count of namespace locks currently published in <see cref="_nsLocks"/>.
+    /// After a clean <see cref="Dispose"/> this is 0; when shutdown raced an in-flight holder,
+    /// contended locks stay published so the count equals <see cref="DisposalContendedLockCount"/>.
+    /// </summary>
+    internal int NamespaceLockCount => _nsLocks.Count;
 
     // ── Internal Helpers ──
 
@@ -2451,17 +2633,16 @@ public sealed class CognitiveIndex : IDisposable
     private static IReadOnlyList<CognitiveSearchResult> ApplyDiversity(
         IReadOnlyList<CognitiveSearchResult> results,
         SearchRequest request,
-        IReadOnlyCollection<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> snapshot)
+        IReadOnlyDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> nsEntries)
     {
         if (request.Diversity && results.Count > 1)
         {
             // Keep MMR selection when both options are requested; summary preference
             // orders the selected set without silently disabling diversity.
-            var vectorLookup = new Dictionary<string, float[]>(snapshot.Count);
-            foreach (var (entry, _, _) in snapshot)
-                vectorLookup[entry.Id] = entry.Vector;
+            // Direct dictionary lookup avoids an O(N) vector-table copy on every diverse query.
             results = DiversityReranker.Rerank(
-                results, request.Query, id => vectorLookup.GetValueOrDefault(id),
+                results, request.Query,
+                id => nsEntries.TryGetValue(id, out var tuple) ? tuple.Entry.Vector : null,
                 request.K, request.DiversityLambda);
         }
 
