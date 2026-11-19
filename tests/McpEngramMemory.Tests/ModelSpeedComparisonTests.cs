@@ -41,10 +41,7 @@ public class ModelSpeedComparisonTests
         var m05 = Environment.GetEnvironmentVariable("QWEN05_DIR");
         var m15 = Environment.GetEnvironmentVariable("QWEN15_DIR");
         if (!Ok(m05) || !Ok(m15))
-        {
-            _out.WriteLine(">>>SPEED SKIPPED: set QWEN05_DIR and QWEN15_DIR to staged model dirs");
-            return;
-        }
+            Assert.Skip("Set QWEN05_DIR and QWEN15_DIR to staged ONNX model directories to run speed comparison.");
 
         var a = await BenchAsync("Qwen2.5-0.5B", m05!);
         var b = await BenchAsync("Qwen2.5-1.5B", m15!);

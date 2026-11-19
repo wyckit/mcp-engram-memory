@@ -3,12 +3,12 @@
 ## Supported versions
 
 Security fixes are provided for the latest minor release on the current major
-version line — currently the `v1.5.x` line.
+version line — currently the `v2.1.x` line.
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.5.x    | :white_check_mark: |
-| < 1.5    | :x:                |
+| 2.1.x    | :white_check_mark: |
+| < 2.1    | :x:                |
 
 ## Reporting a vulnerability
 
@@ -42,9 +42,11 @@ Instead, use one of these private channels:
 
 In scope:
 
-- Code in `src/McpEngramMemory` and `src/McpEngramMemory.Core`.
-- The `McpEngramMemory.Core` package published to nuget.org and GitHub
-  Packages, and the `McpEngramMemory` server package on GitHub Packages.
+- Code in `src/McpEngramMemory`, `src/McpEngramMemory.Core`, and
+  `src/McpEngramMemory.Synthesis.Onnx`.
+- All three packages published to nuget.org (and GitHub Packages):
+  `McpEngramMemory.Core`, `McpEngramMemory.Synthesis.Onnx`, and the
+  `McpEngramMemory` .NET global tool.
 - MCP tool surfaces (input handling, serialization, persistence).
 
 Out of scope:
@@ -102,14 +104,16 @@ process-wide bootstrap values.
 Two consequences worth stating plainly:
 
 - **Servers that never set `AGENT_ID` are unaffected.** They run as the default
-  identity, which has unrestricted access and never claims ownership of
-  anything. This is the single-user case and the common deployment. Claiming
-  ownership for the default identity would lock an operator out of their own
-  data the moment they later set an `AGENT_ID`.
-- **A namespace with no owner is open.** Namespaces created before this
-  behaviour existed, or by a server running without an `AGENT_ID`, stay
-  readable and writable by everyone until an identified agent writes to them
-  and claims them. Upgrading does not retroactively protect existing data.
+  identity (`PrincipalContext.LegacyUnisolated` when `MEMORY_TENANT_ID` is also
+  empty), which has unrestricted access and never claims ownership of anything.
+  This is the single-user case and the common deployment. Claiming ownership
+  for the default identity would lock an operator out of their own data the
+  moment they later set an `AGENT_ID`.
+- **Unregistered non-empty namespaces stay closed to identified agents.** An
+  identified principal (`AGENT_ID` set) must own or be granted a namespace to
+  read or write it; a write may atomically claim only a genuinely empty
+  namespace (see *Tenant isolation* below). Pre-existing legacy data is not
+  silently inherited by an identified agent.
 
 All MCP tool profiles pass through the global Constitution pre/post filter and
 the namespace-scoped tools enforce the host principal. Tool-profile selection

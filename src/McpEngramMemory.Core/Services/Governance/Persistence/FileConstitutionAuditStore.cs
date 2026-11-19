@@ -40,11 +40,14 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
 
     private readonly string _path;
     private readonly SemaphoreSlim _gate;
-    private readonly List<ConstitutionAuditRecord> _records = new();
     private readonly List<PersistenceDiagnostic> _diagnostics = new();
-    // Journal length observed at the end of the last successful sync or append. -1 forces the
-    // first sync. Any other value that disagrees with the file means a peer appended.
+    // Tracks only the dense record count and last-observed journal metadata instead of retaining
+    // every historical audit record in RAM across long-running server lifetimes.
+    // _syncedLength == -1 forces the first sync; any change in length or write timestamp means
+    // a peer modified the journal and triggers a validated re-sync before assigning the next sequence.
+    private long _recordCount;
     private long _syncedLength = -1;
+    private long _syncedLastWriteTicks = -1;
 
     public FileConstitutionAuditStore(string root)
     {
@@ -62,21 +65,22 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(record);
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await using var journalLock = await CrashSafeJsonPersistence.AcquireExclusiveLockAsync(
                 _path, LockTimeout, cancellationToken).ConfigureAwait(false);
-            await SyncAsync(cancellationToken);
+            await SyncSequenceAsync(cancellationToken).ConfigureAwait(false);
 
-            long sequence = _records.Count + 1L;
+            long sequence = _recordCount + 1L;
             var stored = record.WithSequence(sequence);
             await CrashSafeJsonPersistence.AppendAsync(
-                _path, StoreName, stored.TenantId, sequence, PersistedAudit.From(stored), cancellationToken);
-            // Observe the new length before publishing the record. If the append tore, _syncedLength
-            // stays stale, the next sync re-replays, and replay truncates the partial tail.
-            _syncedLength = CurrentLength();
-            _records.Add(stored);
+                _path, StoreName, stored.TenantId, sequence, PersistedAudit.From(stored), cancellationToken)
+                .ConfigureAwait(false);
+            // Observe the new file state before advancing the count. If the append tore,
+            // _syncedLength stays stale, the next sync re-replays, and replay truncates the partial tail.
+            (_syncedLength, _syncedLastWriteTicks) = CurrentFileState();
+            _recordCount = sequence;
             return stored;
         }
         finally
@@ -88,15 +92,14 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
     public async ValueTask<IReadOnlyList<ConstitutionAuditRecord>> ReadAllAsync(
         CancellationToken cancellationToken = default)
     {
-        await _gate.WaitAsync(cancellationToken);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // Read under the same lock as append: replay truncates a torn tail, and doing that to a
             // peer's in-flight write would destroy a record that is about to be committed.
             await using var journalLock = await CrashSafeJsonPersistence.AcquireExclusiveLockAsync(
                 _path, LockTimeout, cancellationToken).ConfigureAwait(false);
-            await SyncAsync(cancellationToken);
-            return _records.ToArray();
+            return await ReplayValidatedAsync(materializeRecords: true, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -105,40 +108,52 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
     }
 
     /// <summary>
-    /// Bring in-memory state in line with the journal, replaying only when the file changed since
-    /// this instance last observed it. Caller must hold both <c>_gate</c> and the journal lock.
+    /// Bring the dense sequence counter in line with the journal, replaying only when the file
+    /// changed since this instance last observed it. Caller must hold both <c>_gate</c> and the
+    /// journal lock.
     /// </summary>
-    private async ValueTask SyncAsync(CancellationToken cancellationToken)
+    private async ValueTask SyncSequenceAsync(CancellationToken cancellationToken)
     {
-        if (_syncedLength == CurrentLength()) return;
+        var (length, lastWriteTicks) = CurrentFileState();
+        if (_syncedLength == length && _syncedLastWriteTicks == lastWriteTicks)
+            return;
 
-        var replay = await CrashSafeJsonPersistence.ReplayAsync<PersistedAudit>(
-            _path, StoreName, expectedTenant: null, cancellationToken);
-
-        // Materialize into a local list first. A mid-replay identity failure must not leave the
-        // in-memory journal half-applied: the retry would replay the same records on top of the
-        // partial set, inflating the count and making the next append skip sequence numbers — the
-        // exact dense-sequence break this store treats as unrecoverable corruption.
-        var replayed = new List<ConstitutionAuditRecord>(replay.Records.Count);
-        foreach (var item in replay.Records)
-        {
-            var record = item.Value.ToDomain();
-            if (record.Sequence != item.Sequence || record.TenantId != item.TenantId)
-                throw new InvalidDataException("Audit payload identity does not match its journal envelope.");
-            replayed.Add(record);
-        }
-
-        _records.Clear();
-        _records.AddRange(replayed);
-        lock (_diagnostics) _diagnostics.AddRange(replay.Diagnostics);
-        // Recompute: replay truncates a corrupt tail, so the post-replay length is the authority.
-        _syncedLength = CurrentLength();
+        _ = await ReplayValidatedAsync(materializeRecords: false, cancellationToken).ConfigureAwait(false);
     }
 
-    private long CurrentLength()
+    private async ValueTask<ConstitutionAuditRecord[]> ReplayValidatedAsync(
+        bool materializeRecords,
+        CancellationToken cancellationToken)
+    {
+        var replay = await CrashSafeJsonPersistence.ReplayAsync<PersistedAudit>(
+            _path, StoreName, expectedTenant: null, cancellationToken).ConfigureAwait(false);
+
+        // Validate every record before updating instance state. A mid-replay identity failure must
+        // not leave _recordCount or _syncedLength half-updated: a retry must re-derive from disk
+        // rather than skipping sequence numbers.
+        var replayed = materializeRecords ? new ConstitutionAuditRecord[replay.Records.Count] : null;
+        for (int i = 0; i < replay.Records.Count; i++)
+        {
+            var item = replay.Records[i];
+            var persisted = item.Value;
+            if (persisted.Sequence != item.Sequence || persisted.TenantId != item.TenantId)
+                throw new InvalidDataException("Audit payload identity does not match its journal envelope.");
+            if (replayed is not null)
+                replayed[i] = persisted.ToDomain();
+        }
+
+        _recordCount = replay.Records.Count;
+        if (replay.Diagnostics.Count > 0)
+            lock (_diagnostics) _diagnostics.AddRange(replay.Diagnostics);
+        // Recompute: replay truncates a corrupt tail, so the post-replay state is the authority.
+        (_syncedLength, _syncedLastWriteTicks) = CurrentFileState();
+        return replayed ?? Array.Empty<ConstitutionAuditRecord>();
+    }
+
+    private (long Length, long LastWriteTicks) CurrentFileState()
     {
         var info = new FileInfo(_path);
-        return info.Exists ? info.Length : 0L;
+        return info.Exists ? (info.Length, info.LastWriteTimeUtc.Ticks) : (0L, 0L);
     }
 
     private sealed record PersistedAudit(
@@ -155,8 +170,10 @@ public sealed class FileConstitutionAuditStore : IConstitutionAuditStore
     {
         public static PersistedAudit From(ConstitutionAuditRecord value)
             => new(value.Sequence, value.EventId, value.OperationId, value.TenantId, value.PrincipalId,
-                value.Phase, value.Outcome, value.ConstitutionVersionHashes.ToArray(),
-                value.FindingCodes.ToArray(), value.OccurredAt);
+                value.Phase, value.Outcome,
+                value.ConstitutionVersionHashes as string[] ?? value.ConstitutionVersionHashes.ToArray(),
+                value.FindingCodes as string[] ?? value.FindingCodes.ToArray(),
+                value.OccurredAt);
 
         public ConstitutionAuditRecord ToDomain()
             => new(Sequence, EventId, OperationId, TenantId, PrincipalId, Phase, Outcome,

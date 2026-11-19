@@ -58,14 +58,15 @@ The MCP server registers `ConstitutionMcpFilter` globally with the MCP request-f
 
 1. builds an `OperationEnvelope` from the host principal, tool name, and canonical argument hash;
 2. evaluates and audits the precondition;
-3. invokes the tool only when allowed;
-4. evaluates and audits the postcondition as detection (not retroactive authorization);
-5. returns a tool error if either constitutional phase denies the operation.
+3. invokes the tool only when the precondition allows it (returning a tool error on precondition denial);
+4. evaluates and audits the postcondition as detection/audit only (not retroactive authorization — a postcondition denial is recorded durably, but does not return a false tool failure after state may already have committed).
 
 The shipped Root currently provides the baseline constraints and audit envelope. Hosts can publish
-narrowing overlays and register deterministic rules. The server's default provider and audit store
-are in-memory, so a restart clears published overlays and MCP audit history unless the embedding
-host deliberately wires the file-backed governance stores.
+narrowing overlays and register deterministic rules. In the default server (`Program.cs`), the
+Constitution provider (`InMemoryConstitutionProvider`) is in-memory — so published overlays must be
+reloaded by the host on restart — while the audit store (`FileConstitutionAuditStore`) and governed
+knowledge, provenance, version, and decision stores are file-backed by default under
+`MEMORY_GOVERNANCE_PATH` (defaulting to `<MEMORY_DATA_PATH>/governance`).
 
 ## Memory is not knowledge
 

@@ -22,7 +22,26 @@ public sealed class PersistenceManager : IStorageProvider
         Converters = { new FloatArrayBase64Converter() }
     };
 
+    private static readonly TimeSpan MaxRetryBackoff = TimeSpan.FromSeconds(30);
+    private const string EncodedNamespacePrefix = "ns_enc_";
+    private const string EncodedNamespaceHashPrefix = "ns_enc_h_";
+    private const string TenantHnswPrefix = "hnsw_t_";
+    private const string EncodedHnswPrefix = "hnsw_enc_";
+    private const int MaxReversibleHexUtf8Bytes = 96;
+    private static readonly HashSet<char> InvalidFileNameChars = new(Path.GetInvalidFileNameChars());
+    private static readonly HashSet<string> ReservedControlPlaneStems = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "_edges", "_clusters", "_collapse_history", "_decay_configs"
+    };
+    private static readonly HashSet<string> WindowsReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+
     private readonly string _basePath;
+    private readonly string _basePathWithSeparator;
     private readonly object _timerLock = new();
     private readonly TimeSpan _debounceDelay;
     private readonly ILogger<PersistenceManager>? _logger;
@@ -40,20 +59,24 @@ public sealed class PersistenceManager : IStorageProvider
 
     // Pending namespace saves (keyed by namespace name)
     private readonly Dictionary<string, (ITimer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
+    private readonly Dictionary<string, int> _nsSaveFailures = new();
 
     // Pending global edge save (separate from namespace saves to avoid dummy-data overwrite)
     private ITimer? _pendingEdgeTimer;
     private Func<List<GraphEdge>>? _pendingEdgeProvider;
+    private int _edgeSaveFailures;
 
     // Pending cluster save
     private ITimer? _pendingClusterTimer;
     private Func<List<SemanticCluster>>? _pendingClusterProvider;
+    private int _clusterSaveFailures;
 
     // Pending collapse history save
 
     // Pending decay config save
     private ITimer? _pendingDecayConfigTimer;
     private Func<Dictionary<string, DecayConfig>>? _pendingDecayConfigProvider;
+    private int _decayConfigSaveFailures;
 
     /// <summary>JSON backend does not support incremental writes — always uses full namespace snapshots.</summary>
     public bool SupportsIncrementalWrites => false;
@@ -69,6 +92,10 @@ public sealed class PersistenceManager : IStorageProvider
         // Frozen ABSOLUTE at construction: a relative path resolved per operation would move
         // the backing store (and the gate identity) whenever CurrentDirectory changes.
         _basePath = Path.GetFullPath(basePath ?? Path.Combine(AppContext.BaseDirectory, "data"));
+        _basePathWithSeparator = _basePath.EndsWith(Path.DirectorySeparatorChar)
+            || _basePath.EndsWith(Path.AltDirectorySeparatorChar)
+            ? _basePath
+            : _basePath + Path.DirectorySeparatorChar;
         _debounceDelay = TimeSpan.FromMilliseconds(debounceMs);
         _logger = logger;
 
@@ -252,6 +279,9 @@ public sealed class PersistenceManager : IStorageProvider
     /// Schedule a debounced save of namespace data.
     /// </summary>
     public void ScheduleSave(string ns, Func<NamespaceData> dataProvider)
+        => ScheduleSaveCore(ns, dataProvider, delayOverride: null);
+
+    private void ScheduleSaveCore(string ns, Func<NamespaceData> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
@@ -260,6 +290,7 @@ public sealed class PersistenceManager : IStorageProvider
             if (_pendingNsSaves.TryGetValue(ns, out var existing))
                 existing.Timer.Dispose();
 
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
@@ -288,14 +319,52 @@ public sealed class PersistenceManager : IStorageProvider
                     if (provider is not null)
                         RunWriteAndRelease(() =>
                         {
-                            if (!WriteNamespace(ns, provider))
+                            if (WriteNamespace(ns, provider))
+                                ResetNsFailure(ns);
+                            else
                                 RetainNsSave(ns, provider);
                         });
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
 
             _pendingNsSaves[ns] = (timer, dataProvider);
         }
+    }
+
+    private TimeSpan ComputeRetryDelay(int consecutiveFailures)
+    {
+        if (consecutiveFailures <= 0)
+            return _debounceDelay;
+
+        var baseDelay = _debounceDelay > TimeSpan.Zero ? _debounceDelay : TimeSpan.FromMilliseconds(500);
+        var cap = baseDelay > MaxRetryBackoff ? baseDelay : MaxRetryBackoff;
+        int shift = Math.Min(consecutiveFailures, 20);
+        double scaledMs = baseDelay.TotalMilliseconds * (1 << shift);
+        return scaledMs >= cap.TotalMilliseconds ? cap : TimeSpan.FromMilliseconds(scaledMs);
+    }
+
+    // Must be called while holding _timerLock.
+    private TimeSpan RecordFailureAndComputeDelay(ref int failureCounter)
+    {
+        if (failureCounter < 30)
+            failureCounter++;
+        return ComputeRetryDelay(failureCounter);
+    }
+
+    // Must be called while holding _timerLock.
+    private TimeSpan RecordNsFailureAndComputeDelay(string ns)
+    {
+        int failures = _nsSaveFailures.TryGetValue(ns, out var count) ? count : 0;
+        if (failures < 30)
+            failures++;
+        _nsSaveFailures[ns] = failures;
+        return ComputeRetryDelay(failures);
+    }
+
+    private void ResetNsFailure(string ns)
+    {
+        lock (_timerLock)
+            _nsSaveFailures.Remove(ns);
     }
 
     // Mark a debounced write as in-flight. Must be called while holding _timerLock so
@@ -335,6 +404,9 @@ public sealed class PersistenceManager : IStorageProvider
     /// The provider runs outside the scheduling lock and should return a detached snapshot.
     /// </summary>
     public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
+        => ScheduleSaveGlobalEdgesCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveGlobalEdgesCore(Func<List<GraphEdge>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
@@ -343,6 +415,7 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingEdgeTimer?.Dispose();
             _pendingEdgeProvider = dataProvider;
 
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
@@ -385,21 +458,49 @@ public sealed class PersistenceManager : IStorageProvider
                             {
                                 // A newer schedule wins even if it arrived during capture.
                                 if (_pendingEdgeProvider is not null) return;
-                                // Recheck after capture. Only the detached payload is written
-                                // under this lock, preserving entry-before-topology durability.
-                                if (_pendingNsSaves.Count > 0 || !captured || !WriteGlobalEdges(() => snapshot!))
+                                // Recheck after capture before releasing _timerLock for I/O:
+                                // once no entry writes are pending here, everything referenced
+                                // by the detached snapshot is already durable.
+                                if (_pendingNsSaves.Count > 0)
                                 {
                                     // Dispose waits on _flushGate; keep this save for its
                                     // final drain instead of dropping it or arming a timer.
                                     if (_disposed)
                                         _pendingEdgeProvider = provider;
                                     else
-                                        ScheduleSaveGlobalEdges(provider);
+                                        ScheduleSaveGlobalEdgesCore(provider, _debounceDelay);
+                                    return;
+                                }
+                                if (!captured)
+                                {
+                                    if (_disposed)
+                                        _pendingEdgeProvider = provider;
+                                    else
+                                        ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
+                                    return;
+                                }
+                            }
+
+                            // Perform blocking file I/O strictly outside _timerLock (still
+                            // serialized against flush/dispose by _flushGate).
+                            if (WriteGlobalEdges(() => snapshot!))
+                            {
+                                lock (_timerLock) { _edgeSaveFailures = 0; }
+                            }
+                            else
+                            {
+                                lock (_timerLock)
+                                {
+                                    if (_pendingEdgeProvider is not null) return;
+                                    if (_disposed)
+                                        _pendingEdgeProvider = provider;
+                                    else
+                                        ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
                                 }
                             }
                         });
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingEdgeTimer = timer;
         }
     }
@@ -409,6 +510,9 @@ public sealed class PersistenceManager : IStorageProvider
     /// The provider runs outside the scheduling lock and should return a detached snapshot.
     /// </summary>
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider)
+        => ScheduleSaveClustersCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveClustersCore(Func<List<SemanticCluster>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
@@ -417,6 +521,7 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingClusterTimer?.Dispose();
             _pendingClusterProvider = dataProvider;
 
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
@@ -459,21 +564,49 @@ public sealed class PersistenceManager : IStorageProvider
                             {
                                 // A newer schedule wins even if it arrived during capture.
                                 if (_pendingClusterProvider is not null) return;
-                                // Recheck after capture. Only the detached payload is written
-                                // under this lock, preserving entry-before-topology durability.
-                                if (_pendingNsSaves.Count > 0 || !captured || !WriteClusters(() => snapshot!))
+                                // Recheck after capture before releasing _timerLock for I/O:
+                                // once no entry writes are pending here, everything referenced
+                                // by the detached snapshot is already durable.
+                                if (_pendingNsSaves.Count > 0)
                                 {
                                     // Dispose waits on _flushGate; keep this save for its
                                     // final drain instead of dropping it or arming a timer.
                                     if (_disposed)
                                         _pendingClusterProvider = provider;
                                     else
-                                        ScheduleSaveClusters(provider);
+                                        ScheduleSaveClustersCore(provider, _debounceDelay);
+                                    return;
+                                }
+                                if (!captured)
+                                {
+                                    if (_disposed)
+                                        _pendingClusterProvider = provider;
+                                    else
+                                        ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
+                                    return;
+                                }
+                            }
+
+                            // Perform blocking file I/O strictly outside _timerLock (still
+                            // serialized against flush/dispose by _flushGate).
+                            if (WriteClusters(() => snapshot!))
+                            {
+                                lock (_timerLock) { _clusterSaveFailures = 0; }
+                            }
+                            else
+                            {
+                                lock (_timerLock)
+                                {
+                                    if (_pendingClusterProvider is not null) return;
+                                    if (_disposed)
+                                        _pendingClusterProvider = provider;
+                                    else
+                                        ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
                                 }
                             }
                         });
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingClusterTimer = timer;
         }
     }
@@ -851,6 +984,9 @@ public sealed class PersistenceManager : IStorageProvider
     /// Schedule a debounced save of decay configs.
     /// </summary>
     public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider)
+        => ScheduleSaveDecayConfigsCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveDecayConfigsCore(Func<Dictionary<string, DecayConfig>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
@@ -859,6 +995,7 @@ public sealed class PersistenceManager : IStorageProvider
             _pendingDecayConfigTimer?.Dispose();
             _pendingDecayConfigProvider = dataProvider;
 
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
@@ -901,21 +1038,49 @@ public sealed class PersistenceManager : IStorageProvider
                             {
                                 // A newer schedule wins even if it arrived during capture.
                                 if (_pendingDecayConfigProvider is not null) return;
-                                // Recheck after capture. Only the detached payload is written
-                                // under this lock, preserving entry-before-topology durability.
-                                if (_pendingNsSaves.Count > 0 || !captured || !WriteDecayConfigs(() => snapshot!))
+                                // Recheck after capture before releasing _timerLock for I/O:
+                                // once no entry writes are pending here, everything referenced
+                                // by the detached snapshot is already durable.
+                                if (_pendingNsSaves.Count > 0)
                                 {
                                     // Dispose waits on _flushGate; keep this save for its
                                     // final drain instead of dropping it or arming a timer.
                                     if (_disposed)
                                         _pendingDecayConfigProvider = provider;
                                     else
-                                        ScheduleSaveDecayConfigs(provider);
+                                        ScheduleSaveDecayConfigsCore(provider, _debounceDelay);
+                                    return;
+                                }
+                                if (!captured)
+                                {
+                                    if (_disposed)
+                                        _pendingDecayConfigProvider = provider;
+                                    else
+                                        ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
+                                    return;
+                                }
+                            }
+
+                            // Perform blocking file I/O strictly outside _timerLock (still
+                            // serialized against flush/dispose by _flushGate).
+                            if (WriteDecayConfigs(() => snapshot!))
+                            {
+                                lock (_timerLock) { _decayConfigSaveFailures = 0; }
+                            }
+                            else
+                            {
+                                lock (_timerLock)
+                                {
+                                    if (_pendingDecayConfigProvider is not null) return;
+                                    if (_disposed)
+                                        _pendingDecayConfigProvider = provider;
+                                    else
+                                        ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
                                 }
                             }
                         });
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingDecayConfigTimer = timer;
         }
     }
@@ -929,6 +1094,7 @@ public sealed class PersistenceManager : IStorageProvider
         var path = GetNamespacePath(ns);
         var json = JsonSerializer.Serialize(data, JsonOptions);
         AtomicWriteAllText(path, json);
+        ResetNsFailure(ns);
     }
 
     /// <summary>
@@ -957,12 +1123,21 @@ public sealed class PersistenceManager : IStorageProvider
     {
         try
         {
-            return Directory.GetFiles(_basePath, "*.json")
-                .Where(f => !f.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
-                .Select(Path.GetFileNameWithoutExtension)
-                .Where(n => n != null && !n.StartsWith("_") && !n.StartsWith("__"))
-                .Select(n => n!)
-                .ToList();
+            var results = new List<string>();
+            foreach (var file in Directory.GetFiles(_basePath, "*.json"))
+            {
+                if (file.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var stem = Path.GetFileNameWithoutExtension(file);
+                if (string.IsNullOrEmpty(stem))
+                    continue;
+
+                string? decoded = DecodeNamespaceStem(stem, file);
+                if (string.IsNullOrEmpty(decoded) || decoded.StartsWith('_'))
+                    continue;
+                results.Add(decoded);
+            }
+            return results;
         }
         catch (Exception ex)
         {
@@ -974,6 +1149,57 @@ public sealed class PersistenceManager : IStorageProvider
             _logger?.LogWarning(ex, "Error listing namespace files under '{BasePath}'", _basePath);
             throw new NamespaceEnumerationException(ex);
         }
+    }
+
+    private string? DecodeNamespaceStem(string stem, string filePath)
+    {
+        if (stem.StartsWith(EncodedNamespaceHashPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var json = File.ReadAllText(filePath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("entries", out var entriesEl)
+                    && entriesEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var entryEl in entriesEl.EnumerateArray())
+                    {
+                        if (entryEl.ValueKind == JsonValueKind.Object
+                            && entryEl.TryGetProperty("ns", out var nsEl)
+                            && nsEl.ValueKind == JsonValueKind.String)
+                        {
+                            var name = nsEl.GetString();
+                            if (!string.IsNullOrEmpty(name))
+                                return name;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Could not resolve hashed namespace file '{Stem}'", stem);
+            }
+            return null;
+        }
+
+        if (stem.StartsWith(EncodedNamespacePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var hex = stem.Substring(EncodedNamespacePrefix.Length);
+            if (hex.Length > 0 && hex.Length % 2 == 0)
+            {
+                try
+                {
+                    return Encoding.UTF8.GetString(Convert.FromHexString(hex));
+                }
+                catch (FormatException)
+                {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        return stem;
     }
 
     /// <summary>
@@ -1121,7 +1347,11 @@ public sealed class PersistenceManager : IStorageProvider
 
         foreach (var (ns, provider) in pendingNs)
         {
-            if (!WriteNamespace(ns, provider))
+            if (WriteNamespace(ns, provider))
+            {
+                ResetNsFailure(ns);
+            }
+            else
             {
                 allCommitted = false;
                 RetainNsSave(ns, provider);
@@ -1147,9 +1377,9 @@ public sealed class PersistenceManager : IStorageProvider
                 }
                 else
                 {
-                    if (edgeProvider is not null && _pendingEdgeProvider is null) ScheduleSaveGlobalEdges(edgeProvider);
-                    if (clusterProvider is not null && _pendingClusterProvider is null) ScheduleSaveClusters(clusterProvider);
-                    if (decayConfigProvider is not null && _pendingDecayConfigProvider is null) ScheduleSaveDecayConfigs(decayConfigProvider);
+                    if (edgeProvider is not null && _pendingEdgeProvider is null) ScheduleSaveGlobalEdgesCore(edgeProvider, _debounceDelay);
+                    if (clusterProvider is not null && _pendingClusterProvider is null) ScheduleSaveClustersCore(clusterProvider, _debounceDelay);
+                    if (decayConfigProvider is not null && _pendingDecayConfigProvider is null) ScheduleSaveDecayConfigsCore(decayConfigProvider, _debounceDelay);
                 }
             }
             edgeProvider = null;
@@ -1160,39 +1390,60 @@ public sealed class PersistenceManager : IStorageProvider
         // The lock is reentrant, so the check and the (re-)schedule are one atom: a newer
         // provider that landed in the slot since the drain supersedes the failed one and the
         // failed snapshot is dropped rather than resurrected over it.
-        if (edgeProvider is not null && (!edgeMaterialized || !WriteGlobalEdges(() => edgeData!)))
+        if (edgeProvider is not null)
         {
-            allCommitted = false;
-            lock (_timerLock)
+            if (edgeMaterialized && WriteGlobalEdges(() => edgeData!))
             {
-                if (_disposed)
-                    _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
-                else if (_pendingEdgeProvider is null)
-                    ScheduleSaveGlobalEdges(edgeProvider);
+                lock (_timerLock) { _edgeSaveFailures = 0; }
+            }
+            else
+            {
+                allCommitted = false;
+                lock (_timerLock)
+                {
+                    if (_disposed)
+                        _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
+                    else if (_pendingEdgeProvider is null)
+                        ScheduleSaveGlobalEdgesCore(edgeProvider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
+                }
             }
         }
 
-        if (clusterProvider is not null && (!clusterMaterialized || !WriteClusters(() => clusterData!)))
+        if (clusterProvider is not null)
         {
-            allCommitted = false;
-            lock (_timerLock)
+            if (clusterMaterialized && WriteClusters(() => clusterData!))
             {
-                if (_disposed)
-                    _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
-                else if (_pendingClusterProvider is null)
-                    ScheduleSaveClusters(clusterProvider);
+                lock (_timerLock) { _clusterSaveFailures = 0; }
+            }
+            else
+            {
+                allCommitted = false;
+                lock (_timerLock)
+                {
+                    if (_disposed)
+                        _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
+                    else if (_pendingClusterProvider is null)
+                        ScheduleSaveClustersCore(clusterProvider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
+                }
             }
         }
 
-        if (decayConfigProvider is not null && (!decayMaterialized || !WriteDecayConfigs(() => decayData!)))
+        if (decayConfigProvider is not null)
         {
-            allCommitted = false;
-            lock (_timerLock)
+            if (decayMaterialized && WriteDecayConfigs(() => decayData!))
             {
-                if (_disposed)
-                    _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed flush");
-                else if (_pendingDecayConfigProvider is null)
-                    ScheduleSaveDecayConfigs(decayConfigProvider);
+                lock (_timerLock) { _decayConfigSaveFailures = 0; }
+            }
+            else
+            {
+                allCommitted = false;
+                lock (_timerLock)
+                {
+                    if (_disposed)
+                        _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed flush");
+                    else if (_pendingDecayConfigProvider is null)
+                        ScheduleSaveDecayConfigsCore(decayConfigProvider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
+                }
             }
         }
 
@@ -1234,7 +1485,7 @@ public sealed class PersistenceManager : IStorageProvider
                 return;
             // Inside the (reentrant) lock so the emptiness check and the schedule are one
             // atom — a newer snapshot landing in between must win, not be clobbered.
-            ScheduleSave(ns, provider);
+            ScheduleSaveCore(ns, provider, RecordNsFailureAndComputeDelay(ns));
         }
     }
 
@@ -1279,26 +1530,76 @@ public sealed class PersistenceManager : IStorageProvider
     /// <summary>Delete all entries in a namespace by removing its JSON and checksum files from disk.</summary>
     public Task DeleteNamespaceAsync(string ns)
     {
+        lock (_flushGate)
+        {
+            DeleteNamespaceCore(ns);
+        }
+        return Task.CompletedTask;
+    }
+
+    private void DeleteNamespaceCore(string ns)
+    {
+        lock (_timerLock)
+        {
+            if (_pendingNsSaves.Remove(ns, out var pending))
+                pending.Timer.Dispose();
+            _nsSaveFailures.Remove(ns);
+        }
+
         var path = GetNamespacePath(ns);
         if (File.Exists(path)) File.Delete(path);
         var checksumPath = path + ".sha256";
         if (File.Exists(checksumPath)) File.Delete(checksumPath);
         DeleteHnswSnapshot(ns);
-        return Task.CompletedTask;
     }
 
     /// <summary>Delete only one tenant partition while preserving co-named partitions.</summary>
     public Task DeleteNamespaceAsync(string ns, string tenantId)
     {
         tenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
-        var data = LoadNamespace(ns);
-        var remaining = data.Entries.Where(entry => entry.TenantId != tenantId).ToList();
-        if (remaining.Count == 0)
-            return DeleteNamespaceAsync(ns);
+        lock (_flushGate)
+        {
+            Func<NamespaceData>? pendingProvider = null;
+            lock (_timerLock)
+            {
+                if (_pendingNsSaves.Remove(ns, out var pending))
+                {
+                    pending.Timer.Dispose();
+                    pendingProvider = pending.DataProvider;
+                }
+                _nsSaveFailures.Remove(ns);
+            }
 
-        data.Entries = remaining;
-        SaveNamespaceSync(ns, data);
-        DeleteHnswSnapshot(NamespaceStore.PartitionKey(tenantId, ns));
+            var diskData = LoadNamespace(ns);
+            var remaining = diskData.Entries.Where(entry => entry.TenantId != tenantId).ToList();
+
+            if (pendingProvider is not null
+                && StorageSnapshot.TryCapture(pendingProvider, _logger, out var pendingData)
+                && pendingData is not null)
+            {
+                var pendingOtherTenants = pendingData.Entries
+                    .Where(entry => entry.TenantId != tenantId)
+                    .ToList();
+                if (pendingOtherTenants.Count > 0)
+                {
+                    var pendingTenants = new HashSet<string>(
+                        pendingOtherTenants.Select(e => e.TenantId), StringComparer.Ordinal);
+                    remaining.RemoveAll(e => pendingTenants.Contains(e.TenantId));
+                    remaining.AddRange(pendingOtherTenants);
+                }
+            }
+
+            if (remaining.Count == 0)
+            {
+                DeleteHnswSnapshot(NamespaceStore.PartitionKey(tenantId, ns));
+                DeleteNamespaceCore(ns);
+                return Task.CompletedTask;
+            }
+
+            diskData.Entries = remaining;
+            SaveNamespaceSync(ns, diskData);
+            DeleteHnswSnapshot(NamespaceStore.PartitionKey(tenantId, ns));
+        }
         return Task.CompletedTask;
     }
 
@@ -1317,29 +1618,107 @@ public sealed class PersistenceManager : IStorageProvider
         ReleaseCollapseHistoryGate(StoreIdentity);
     }
 
-    private string GetNamespacePath(string ns)
+    // Internal test seam for verifying _timerLock is not held during global file writes.
+    internal Action<string>? OnBeforeGlobalWrite { get; set; }
+
+    private static bool IsWindowsReservedDeviceName(string value)
     {
-        // Sanitize namespace for filename safety
-        var safe = string.Join("_", ns.Split(Path.GetInvalidFileNameChars()));
-        safe = safe.Replace("..", "_"); // Prevent path traversal
-        var path = Path.Combine(_basePath, $"{safe}.json");
+        int dot = value.IndexOf('.');
+        var head = dot >= 0 ? value.Substring(0, dot) : value;
+        return WindowsReservedDeviceNames.Contains(head);
+    }
 
-        // Guard against path traversal
-        if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(_basePath), StringComparison.OrdinalIgnoreCase))
+    private static bool IsUnsafeFilenameComponent(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return true;
+        if (value == "." || value.EndsWith('.') || value.Contains("..", StringComparison.Ordinal))
+            return true;
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (char.IsControl(c)
+                || c is '/' or '\\' or ':' or '*' or '?' or '"' or '<' or '>' or '|'
+                || InvalidFileNameChars.Contains(c))
+            {
+                return true;
+            }
+        }
+        return IsWindowsReservedDeviceName(value);
+    }
+
+    private static bool RequiresNamespaceEncoding(string ns)
+    {
+        return IsUnsafeFilenameComponent(ns)
+            || ns.StartsWith(EncodedNamespacePrefix, StringComparison.OrdinalIgnoreCase)
+            || ns.EndsWith(".hnsw", StringComparison.OrdinalIgnoreCase)
+            || ReservedControlPlaneStems.Contains(ns);
+    }
+
+    private void EnsureWithinBasePath(string path, string ns)
+    {
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (!Path.GetFullPath(path).StartsWith(_basePathWithSeparator, comparison))
             throw new ArgumentException($"Invalid namespace: '{ns}'");
+    }
 
+    internal string GetNamespacePath(string ns)
+    {
+        if (string.IsNullOrEmpty(ns))
+            throw new ArgumentException("Namespace must not be empty.", nameof(ns));
+
+        string stem;
+        if (!RequiresNamespaceEncoding(ns))
+        {
+            // Keep existing {ns}.json naming for normal safe namespaces (100% backward compatible).
+            stem = ns;
+        }
+        else
+        {
+            // Collision-free, case-insensitive-safe encoding that can never start with '_'
+            // or alias control-plane files (_edges, _clusters, _system_sharing, etc.).
+            var utf8 = Encoding.UTF8.GetBytes(ns);
+            stem = utf8.Length <= MaxReversibleHexUtf8Bytes
+                ? EncodedNamespacePrefix + Convert.ToHexString(utf8).ToLowerInvariant()
+                : EncodedNamespaceHashPrefix + Convert.ToHexString(SHA256.HashData(utf8)).ToLowerInvariant();
+        }
+
+        var path = Path.Combine(_basePath, $"{stem}.json");
+        EnsureWithinBasePath(path, ns);
         return path;
     }
 
-    private string GetHnswPath(string ns)
+    internal string GetHnswPath(string ns)
     {
-        var safe = string.Join("_", ns.Split(Path.GetInvalidFileNameChars()));
-        safe = safe.Replace("..", "_");
-        var path = Path.Combine(_basePath, $"{safe}.hnsw.json");
+        if (string.IsNullOrEmpty(ns))
+            throw new ArgumentException("Namespace must not be empty.", nameof(ns));
 
-        if (!Path.GetFullPath(path).StartsWith(Path.GetFullPath(_basePath), StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException($"Invalid namespace: '{ns}'");
+        string stem;
+        if (ns.IndexOf(Tenancy.PartitionSeparator) >= 0)
+        {
+            // Tenant-qualified HNSW partitions always use a dedicated hashed prefix so they
+            // can never collide with legacy {ns}.hnsw.json (e.g. tenant "acme" + "notes" vs
+            // legacy "acme_notes") or control-plane _*.json files.
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ns))).ToLowerInvariant();
+            stem = TenantHnswPrefix + hash;
+        }
+        else if (IsUnsafeFilenameComponent(ns)
+                 || ns.StartsWith(TenantHnswPrefix, StringComparison.OrdinalIgnoreCase)
+                 || ns.StartsWith(EncodedHnswPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ns))).ToLowerInvariant();
+            stem = EncodedHnswPrefix + hash;
+        }
+        else
+        {
+            // Legacy safe namespaces keep exact {ns}.hnsw.json compatibility.
+            stem = ns;
+        }
 
+        var path = Path.Combine(_basePath, $"{stem}.hnsw.json");
+        EnsureWithinBasePath(path, ns);
         return path;
     }
 
@@ -1365,6 +1744,7 @@ public sealed class PersistenceManager : IStorageProvider
     {
         try
         {
+            OnBeforeGlobalWrite?.Invoke("edges");
             var edges = provider();
             var json = JsonSerializer.Serialize(edges, JsonOptions);
             var path = Path.Combine(_basePath, "_edges.json");
@@ -1382,6 +1762,7 @@ public sealed class PersistenceManager : IStorageProvider
     {
         try
         {
+            OnBeforeGlobalWrite?.Invoke("clusters");
             var clusters = provider();
             var json = JsonSerializer.Serialize(clusters, JsonOptions);
             var path = Path.Combine(_basePath, "_clusters.json");
@@ -1399,6 +1780,7 @@ public sealed class PersistenceManager : IStorageProvider
     {
         try
         {
+            OnBeforeGlobalWrite?.Invoke("decay_configs");
             var configs = provider();
             var list = configs.Values.ToList();
             var json = JsonSerializer.Serialize(list, JsonOptions);

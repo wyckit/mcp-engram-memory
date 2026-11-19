@@ -12,7 +12,8 @@ namespace McpEngramMemory.Tests;
 /// <summary>
 /// Executes the four T2 intelligence-claim datasets (reasoning-ladder-v1, contradiction-arena-v1,
 /// adversarial-retrieval-v1, counterfactual-v1) through the offline AgentOutcomeBenchmarkRunner
-/// with ablations enabled and writes JSON artifacts to benchmarks/YYYY-MM-DD/.
+/// with ablations enabled and writes JSON artifacts to <c>BENCHMARK_ARTIFACTS_PATH</c> when set
+/// or a unique TFM-scoped temp directory otherwise.
 ///
 /// Offline-only — no live model required. Uses the real ONNX embedding service so results reflect
 /// what production retrieval would actually surface.
@@ -91,8 +92,7 @@ public sealed class T2BenchmarkRun : IDisposable
 
         var result = _runner.Run(dataset!, useContextualPrefix: false, runAblations: true);
 
-        string root = FindRepoRoot();
-        string datedDir = Path.Combine(root, "benchmarks", $"{result.RunAt:yyyy-MM-dd}");
+        string datedDir = ResolveArtifactDirectory(result.RunAt);
         Directory.CreateDirectory(datedDir);
         string artifactPath = Path.Combine(datedDir, $"{result.DatasetId}-agent-outcome.json");
         File.WriteAllText(artifactPath, JsonSerializer.Serialize(result, ArtifactJson));
@@ -112,14 +112,16 @@ public sealed class T2BenchmarkRun : IDisposable
         Assert.Equal(6, result.Comparisons.Count); // 3 core + 3 ablations
     }
 
-    private static string FindRepoRoot()
+    internal static string ResolveArtifactDirectory(DateTimeOffset runAt)
     {
-        string dir = AppContext.BaseDirectory;
-        while (!File.Exists(Path.Combine(dir, "McpEngramMemory.slnx")) &&
-               Path.GetDirectoryName(dir) is { } parent && parent != dir)
-        {
-            dir = parent;
-        }
-        return dir;
+        string? explicitRoot = Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH");
+        if (!string.IsNullOrWhiteSpace(explicitRoot))
+            return Path.Combine(explicitRoot, $"{runAt.UtcDateTime:yyyy-MM-dd}");
+
+        return Path.Combine(
+            Path.GetTempPath(),
+            "engram-t2-benchmarks",
+            $"net{Environment.Version.Major}.{Environment.Version.Minor}",
+            $"{runAt.UtcDateTime:yyyy-MM-dd}-{Guid.NewGuid():N}");
     }
 }

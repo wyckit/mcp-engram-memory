@@ -161,11 +161,12 @@ The stdio server bootstraps one process-wide context from `MEMORY_TENANT_ID` and
 environment variables are operator inputs, not authentication.
 
 `PrincipalContext.LegacyUnisolated` (empty tenant plus default agent) preserves historical
-single-user behavior. Entry storage and lookup are tenant-aware, but the cognitive graph, clusters,
-lifecycle support structures, collapse history, and diffusion caches still contain global bare IDs.
-Non-empty-tenant callers therefore fail closed for affected graph/cluster/lifecycle/intelligence/
-accretion/diffusion/spectral/maintenance/synthesis/visualization tools. This prevents cross-tenant disclosure
-or mutation; it does **not** mean the graph is tenant-qualified.
+single-user behavior. Multi-tenant isolation applies across every cognitive structure: entries and
+index partitions, namespace ownership records, the cognitive association graph (keyed by
+`(tenant, id)`), semantic clusters (`(tenant, clusterId)`), collapse history, decay configs, and
+diffusion/spectral bases (`(tenant, ns)`). Non-empty-tenant principals see and mutate only their own
+partition across all standard and full tools, while intra-tenant bare-id collisions fail closed on
+topology operations (see [Security](../SECURITY.md) for the known residual).
 
 See [Security](../SECURITY.md) and [Tenant Isolation Design](tenant-isolation-design.md).
 
@@ -177,6 +178,10 @@ and provenance. Snapshots use checksum-protected temp-write + flush + atomic rep
 use fsync, checksums, and monotonic sequences. Recovery may truncate a corrupt final record only;
 earlier corruption, identity mismatch, schema mismatch, or invalid hashes fail closed.
 
-The server currently registers the in-memory Constitution provider and audit store by default.
-Embedding hosts that require restart-durable governance must explicitly compose the file-backed
-stores and surface their recovery diagnostics.
+The server registers `InMemoryConstitutionProvider` for active policy overlays and durable
+file-backed governance stores (`FileConstitutionAuditStore`, `FileGovernedKnowledgeStore`,
+`FileProvenanceStore`, `FileConstitutionVersionStore`, `FileKnowledgeAssetStore`, and
+`FileConstitutionDecisionStore`) under `MEMORY_GOVERNANCE_PATH` (defaulting to
+`<MEMORY_DATA_PATH>/governance`). Overlay activation across restarts remains host-managed;
+embedding hosts that require restart-durable overlays must reload persisted Constitution versions
+into the provider and surface recovery diagnostics.

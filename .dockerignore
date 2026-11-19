@@ -3,6 +3,7 @@
 **/obj/
 artifacts/
 .engram/
+src/McpEngramMemory.Core/.cache/
 
 # Git
 .git/

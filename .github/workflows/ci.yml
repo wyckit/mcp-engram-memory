@@ -161,7 +161,7 @@ jobs:
       - name: Test (excluding separate benchmark lanes)
         # Capture the active test sequence and a mini dump before terminating a hung
         # host. This is outside the tests' existing 60s/180s worker deadlines.
-        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale&Category!=IndependentRecall" --blame-hang-timeout 5m --blame-hang-dump-type mini
+        run: dotnet test McpEngramMemory.slnx --no-build -c Release --logger "trx;LogFilePrefix=results" --filter "Category!=MSA&Category!=RecallScale&Category!=IndependentRecall&Category!=T2Benchmark&Category!=LiveBenchmark" --blame-hang-timeout 5m --blame-hang-dump-type mini
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -251,7 +251,14 @@ jobs:
             **/TestResults/**/*.dmp
 
   pack:
-    needs: build-and-test
+    needs:
+      - build-and-test
+      - soak-harness-smoke
+      - telemetry-validation
+      - source-installation
+      - installed-package-upgrade
+      - recall-scale-evaluation
+      - independent-recall-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -9,7 +9,7 @@ namespace McpEngramMemory.Tests;
 
 /// <summary>
 /// Live, in-process inference against a staged Qwen2.5-0.5B ONNX GenAI model.
-/// Auto-skips (passes) when no model is staged, so CI without a model stays green.
+/// Skips via <see cref="Assert.Skip(string)"/> when no model is staged, so CI without a model stays green.
 /// Stage with scripts/fetch-synthesis-model.ps1, or set SYNTHESIS_ONNX_MODEL_DIR.
 /// </summary>
 public class LiveSynthesisInferenceTests
@@ -38,7 +38,8 @@ public class LiveSynthesisInferenceTests
     public async Task LiveGenerate_ProducesNonEmptyOutput()
     {
         var dir = ResolveModelDir();
-        if (dir is null) { _out.WriteLine(">>>LIVE SKIPPED: no model staged"); return; }
+        if (dir is null)
+            Assert.Skip("No ONNX synthesis model staged. Stage with scripts/fetch-synthesis-model.ps1 or set SYNTHESIS_ONNX_MODEL_DIR.");
         _out.WriteLine($">>>LIVE model dir: {dir}");
 
         using var gen = new OnnxGenAiTextGenerator(dir);
@@ -59,7 +60,8 @@ public class LiveSynthesisInferenceTests
     public async Task LiveSynthesisEngine_MapReduce_OverSeededMemories()
     {
         var dir = ResolveModelDir();
-        if (dir is null) { _out.WriteLine(">>>LIVE SKIPPED: no model staged"); return; }
+        if (dir is null)
+            Assert.Skip("No ONNX synthesis model staged. Stage with scripts/fetch-synthesis-model.ps1 or set SYNTHESIS_ONNX_MODEL_DIR.");
 
         var dataPath = Path.Combine(Path.GetTempPath(), $"live_synth_{Guid.NewGuid():N}");
         using var persistence = new PersistenceManager(dataPath, debounceMs: 50);

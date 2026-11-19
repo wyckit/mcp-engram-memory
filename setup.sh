@@ -62,7 +62,7 @@ if ! dotnet "${PREPARE[@]}"; then
     exit 1
 fi
 if [[ "$SKIP_CONFIG" -eq 1 ]]; then
-    printf 'Build complete. command: dotnet; args: %s\nSet MEMORY_DATA_PATH=%s and MEMORY_TOOL_PROFILE=%s.\n' "$SERVER" "$DATA_PATH" "$PROFILE"
+    printf 'Build complete. command: dotnet; args: %s\nSet MEMORY_DATA_PATH=%s and MEMORY_TOOL_PROFILE=%s.\n' "$SERVER" "$DATA_PATH" "${PROFILE:-minimal}"
     exit 0
 fi
 [[ -n "$CONFIG_ROOT" ]] || CONFIG_ROOT="$HOME"

@@ -1,6 +1,14 @@
 <Project>
     <PropertyGroup>
-        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == ''">$(MSBuildThisFileDirectory)..\.cache\</BgeMicroModelCacheDir>
+        <!-- Use repo-local .cache/ when building from source, but never mutate the shared NuGet
+             package cache when consumed as a package: default to a user-writable cache directory. -->
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\McpEngramMemory.Core.csproj')">$(MSBuildThisFileDirectory)..\.cache\</BgeMicroModelCacheDir>
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == '' And '$(OS)' == 'Windows_NT' And '$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))' != ''">$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\McpEngramMemory\model-cache\</BgeMicroModelCacheDir>
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == '' And '$(XDG_CACHE_HOME)' != ''">$(XDG_CACHE_HOME)/McpEngramMemory/model-cache/</BgeMicroModelCacheDir>
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == '' And '$(HOME)' != ''">$(HOME)/.cache/McpEngramMemory/model-cache/</BgeMicroModelCacheDir>
+        <BgeMicroModelCacheDir Condition="'$(BgeMicroModelCacheDir)' == ''">$([System.IO.Path]::GetTempPath())McpEngramMemory/model-cache/</BgeMicroModelCacheDir>
+        <BgeMicroModelCacheDir>$([MSBuild]::EnsureTrailingSlash('$(BgeMicroModelCacheDir)'))</BgeMicroModelCacheDir>
+
         <BgeMicroModelUrl Condition="'$(BgeMicroModelUrl)' == ''">https://huggingface.co/SmartComponents/bge-micro-v2/resolve/72908b7/onnx/model_quantized.onnx</BgeMicroModelUrl>
         <BgeMicroVocabUrl Condition="'$(BgeMicroVocabUrl)' == ''">https://huggingface.co/SmartComponents/bge-micro-v2/resolve/72908b7/vocab.txt</BgeMicroVocabUrl>
         <BgeMicroModelSha256 Condition="'$(BgeMicroModelSha256)' == ''">ed65e36025aa94cb74207dab863c85452919ec0ab7df3512092932aa22c9a33a</BgeMicroModelSha256>
@@ -9,7 +17,7 @@
         <BgeMicroVocabPath Condition="'$(BgeMicroVocabPath)' == ''">$(BgeMicroModelCacheDir)$([System.Text.RegularExpressions.Regex]::Replace($(BgeMicroVocabUrl), "[^a-zA-Z0-9\.]", "_"))</BgeMicroVocabPath>
     </PropertyGroup>
 
-    <Target Name="AttachBgeMicroModelFiles" BeforeTargets="AssignTargetPaths" DependsOnTargets="AcquireBgeMicroModel; AcquireBgeMicroVocab">
+    <Target Name="AttachBgeMicroModelFiles" BeforeTargets="AssignTargetPaths" DependsOnTargets="AcquireBgeMicroModel; AcquireBgeMicroVocab; VerifyBgeMicroModelCache">
         <ItemGroup>
             <Content CopyToOutputDirectory="PreserveNewest" Pack="false"
                      Include="$(BgeMicroModelPath)"
@@ -20,49 +28,49 @@
         </ItemGroup>
     </Target>
 
-    <!-- See build/McpEngramMemory.Core.targets for the parallel-TFM race explanation. -->
-
-    <!--
-      Integrity: the downloaded bytes are verified against a pinned SHA-256 before being
-      promoted into the cache, and the build FAILS if they do not match.
-
-      This matters more than a typical build download. These files are fetched at build
-      time and packed directly into the published NuGet packages, so a tampered download
-      on a release build would ship to every consumer with nothing downstream able to
-      detect it. A malicious .onnx is not merely a bad-embeddings problem either: ONNX
-      Runtime has a documented history of memory-safety bugs reachable through crafted
-      model files, so the model is native-code attack surface.
-
-      To move to a new model revision, update the URL and the matching SHA-256 together.
-      Verify the new hash against a fresh download from the upstream host first.
-    -->
+    <!-- See build/McpEngramMemory.Core.targets for the parallel-TFM race and integrity explanation. -->
     <Target Name="AcquireBgeMicroModel" Condition="!Exists('$(BgeMicroModelPath)')">
         <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
-            <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
+            <_BgeMicroModelTempFile>$(BgeMicroModelCacheDir).download-model-$([System.Guid]::NewGuid().ToString('N')).tmp</_BgeMicroModelTempFile>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroModelUrl)"
-                      DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
-                      DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <VerifyFileHash File="$(_TempFilePath)" Hash="$(BgeMicroModelSha256)" Algorithm="SHA256" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroModelPath)"
+                      DestinationFolder="$(BgeMicroModelCacheDir)"
+                      DestinationFileName="$([System.IO.Path]::GetFileName($(_BgeMicroModelTempFile)))" />
+        <VerifyFileHash File="$(_BgeMicroModelTempFile)" Hash="$(BgeMicroModelSha256)" Algorithm="SHA256" />
+        <Move SourceFiles="$(_BgeMicroModelTempFile)" DestinationFiles="$(BgeMicroModelPath)"
               ContinueOnError="WarnAndContinue"
               Condition="!Exists('$(BgeMicroModelPath)')" />
-        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
+        <Delete Files="$(_BgeMicroModelTempFile)" Condition="Exists('$(_BgeMicroModelTempFile)')" />
+        <OnError ExecuteTargets="_CleanupBgeMicroModelTemp" />
+    </Target>
+
+    <Target Name="_CleanupBgeMicroModelTemp">
+        <Delete Files="$(_BgeMicroModelTempFile)" Condition="'$(_BgeMicroModelTempFile)' != '' And Exists('$(_BgeMicroModelTempFile)')" />
     </Target>
 
     <Target Name="AcquireBgeMicroVocab" Condition="!Exists('$(BgeMicroVocabPath)')">
         <MakeDir Directories="$(BgeMicroModelCacheDir)" />
         <PropertyGroup>
-            <_TempFilePath>$([System.IO.Path]::GetTempFileName())</_TempFilePath>
+            <_BgeMicroVocabTempFile>$(BgeMicroModelCacheDir).download-vocab-$([System.Guid]::NewGuid().ToString('N')).tmp</_BgeMicroVocabTempFile>
         </PropertyGroup>
         <DownloadFile SourceUrl="$(BgeMicroVocabUrl)"
-                      DestinationFolder="$([System.IO.Path]::GetDirectoryName($(_TempFilePath)))"
-                      DestinationFileName="$([System.IO.Path]::GetFileName($(_TempFilePath)))" />
-        <VerifyFileHash File="$(_TempFilePath)" Hash="$(BgeMicroVocabSha256)" Algorithm="SHA256" />
-        <Move SourceFiles="$(_TempFilePath)" DestinationFiles="$(BgeMicroVocabPath)"
+                      DestinationFolder="$(BgeMicroModelCacheDir)"
+                      DestinationFileName="$([System.IO.Path]::GetFileName($(_BgeMicroVocabTempFile)))" />
+        <VerifyFileHash File="$(_BgeMicroVocabTempFile)" Hash="$(BgeMicroVocabSha256)" Algorithm="SHA256" />
+        <Move SourceFiles="$(_BgeMicroVocabTempFile)" DestinationFiles="$(BgeMicroVocabPath)"
               ContinueOnError="WarnAndContinue"
               Condition="!Exists('$(BgeMicroVocabPath)')" />
-        <Delete Files="$(_TempFilePath)" Condition="Exists('$(_TempFilePath)')" />
+        <Delete Files="$(_BgeMicroVocabTempFile)" Condition="Exists('$(_BgeMicroVocabTempFile)')" />
+        <OnError ExecuteTargets="_CleanupBgeMicroVocabTemp" />
+    </Target>
+
+    <Target Name="_CleanupBgeMicroVocabTemp">
+        <Delete Files="$(_BgeMicroVocabTempFile)" Condition="'$(_BgeMicroVocabTempFile)' != '' And Exists('$(_BgeMicroVocabTempFile)')" />
+    </Target>
+
+    <Target Name="VerifyBgeMicroModelCache" DependsOnTargets="AcquireBgeMicroModel; AcquireBgeMicroVocab">
+        <VerifyFileHash File="$(BgeMicroModelPath)" Hash="$(BgeMicroModelSha256)" Algorithm="SHA256" />
+        <VerifyFileHash File="$(BgeMicroVocabPath)" Hash="$(BgeMicroVocabSha256)" Algorithm="SHA256" />
     </Target>
 </Project>

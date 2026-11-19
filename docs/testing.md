@@ -3,7 +3,7 @@
 [< Back to README](../README.md)
 
 The xUnit suite targets net8.0, net9.0, and net10.0. It covers the legacy cognitive-memory engine,
-the governed Core substrate, MCP 2.1 conformance, and adversarial identity/tenant boundaries.
+the governed Core substrate, MCP 2.2 conformance, and adversarial identity/tenant boundaries.
 
 The per-file table below is a guide to coverage, not a release test-count ledger. Theory data and
 new regression cases make exact counts change frequently; use the test runner for the current total.
@@ -118,18 +118,19 @@ gh repo view wyckit/mcp-engram-memory --json description --jq .description
 | `AssetRuntimeTests.cs` | Host-sandbox Skill execution, deterministic verifier veto, curriculum training gates, incremental CodeGraph contracts |
 | `GovernancePersistenceTests.cs` | Checksummed snapshots, fsync journals, replay, corrupt-tail recovery, earlier-corruption failure, tenant separation |
 | `McpSdkConformanceTests.cs` | ModelContextProtocol 2.2.0 package, stdio builder registration, protocol negotiation options, generated tool schema/metadata |
-| `TenantStructureIsolationTests.cs` | Same bare IDs across tenant/legacy partitions; tenant fail-closed graph/cluster/lifecycle paths and legacy positive controls |
+| `TenantStructureIsolationTests.cs` | Same bare IDs across tenant/legacy partitions; tenant-qualified graph/cluster/lifecycle/collapse/diffusion isolation and legacy positive controls |
 
 ### Security-test pattern
 
 Isolation tests require a positive control. An empty result is not evidence of enforcement when the
 fixture itself is empty or a spectral threshold was never met. The tenant suites seed data that the
 legacy-unisolated control can read/mutate, then prove an identified non-empty-tenant principal cannot
-observe or change the same global bare-ID structures.
+observe or change another tenant's or the legacy partition's structures.
 
-The current limitation is intentional and tested: tenant-aware entry CRUD works, but graph,
-cluster, lifecycle support, collapse, and diffusion structures are not yet tenant-qualified. Their
-affected MCP tools must fail closed rather than silently use the legacy global structures.
+All cognitive structures — entries, the association graph `(tenant, id)`, semantic clusters
+`(tenant, clusterId)`, collapse history, decay configs, and diffusion bases `(tenant, ns)` — are
+tenant-qualified and isolated across tenants. Within a single tenant, topology operations on a bare
+entry ID duplicated across namespaces fail closed (see [Security](../SECURITY.md)).
 
 ## Test Files
 

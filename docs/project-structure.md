@@ -2,16 +2,20 @@
 
 # Project Structure
 
-The solution is split into two projects:
+The solution contains five projects across three publishable packages plus tests and benchmarks:
 
 | Project | Type | Description |
 |---------|------|-------------|
-| `McpEngramMemory` | Executable | MCP server with stdio transport — register this in your MCP client |
-| `McpEngramMemory.Core` | NuGet Library | Core engine (vector index, graph, clustering, lifecycle, persistence) — use this to embed the memory engine in your own application |
+| `McpEngramMemory` | Executable / Global Tool | MCP server with stdio transport — register this in your MCP client |
+| `McpEngramMemory.Core` | NuGet Library | Core engine (vector index, graph, clustering, lifecycle, governed substrate, persistence) — embed the memory engine in your own application |
+| `McpEngramMemory.Synthesis.Onnx` | NuGet Library | Optional in-process ONNX Runtime GenAI `ITextGenerator` implementation for map-reduce synthesis |
+| `McpEngramMemory.Tests` | Test Project | xUnit v3 test suite targeting `net8.0`, `net9.0`, and `net10.0` |
+| `McpEngramMemory.Benchmarks` | Benchmark Project | Benchmark runner and statistical regression gate harness |
 
 ```
 src/
   McpEngramMemory/              # MCP server (Program.cs + Tool classes)
+  McpEngramMemory.Synthesis.Onnx/ # Optional in-process ONNX GenAI synthesis provider
   McpEngramMemory.Core/         # Core library
     Models/                     # CognitiveEntry, SearchResults, HnswSnapshot, ToolError, etc.
     Services/
@@ -61,10 +65,13 @@ src/
         IStorageProvider.cs     #   Storage abstraction interface
         PersistenceManager.cs   #   JSON file backend with debounced writes
         SqliteStorageProvider.cs #   SQLite backend with WAL mode + busy_timeout
+        SqlServerStorageProvider.cs # SQL Server backend with v3 tenant schema
       Sharing/
         NamespaceRegistry.cs    #   Multi-agent namespace ownership & permissions
 tests/
-  McpEngramMemory.Tests/        # xUnit tests (78 files; 1085 non-live passes per TFM)
+  McpEngramMemory.Tests/        # xUnit v3 test suite (190+ test files across net8.0 / net9.0 / net10.0)
+benchmarks/
+  McpEngramMemory.Benchmarks/   # Benchmark harness & statistical regression gate
 .github/
   workflows/
     ci.yml                      # Build + test on push/PR (excludes MSA)
@@ -110,9 +117,9 @@ var vector = embedding.Embed("The capital of France is Paris");
 var entry = new CognitiveEntry("fact-1", vector, "default", "The capital of France is Paris", "facts");
 index.Upsert(entry);
 
-// Search by text
+// Search by text (pass tenantId: "" for the legacy single-tenant partition)
 var queryVector = embedding.Embed("French capital");
-var results = index.Search(queryVector, "default", k: 5);
+var results = index.Search(queryVector, "default", tenantId: "", k: 5);
 ```
 
 ## Tech Stack

@@ -1102,6 +1102,7 @@ public class BenchmarkRunnerTests
 
         var searchMode = mode switch
         {
+            "vector_rerank" => BenchmarkRunner.SearchMode.VectorRerank,
             "hybrid" => BenchmarkRunner.SearchMode.Hybrid,
             "hybrid_rerank" => BenchmarkRunner.SearchMode.HybridRerank,
             _ => BenchmarkRunner.SearchMode.Vector

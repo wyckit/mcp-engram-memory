@@ -21,6 +21,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
     };
 
     private const int CurrentSchemaVersion = 3;
+    private static readonly TimeSpan MaxRetryBackoff = TimeSpan.FromSeconds(30);
 
     private readonly record struct EntryStorageKey(string TenantId, string EntryId);
 
@@ -33,19 +34,33 @@ public sealed class SqliteStorageProvider : IStorageProvider
     // Internal clock seam for deterministic queued-callback regression tests.
     internal TimeProvider TimerProvider { get; init; } = TimeProvider.System;
 
+    // Internal test seams for concurrency regression tests (non-blocking _timerLock, Dispose vs collapse RMW).
+    internal Action<string>? OnBeforeGlobalWrite { get; set; }
+    internal Action? OnBeforeCollapseCommit { get; set; }
+
+    // Tracks in-flight synchronous collapse-history RMWs so Flush()/Dispose()/CheckpointWal()
+    // cannot race an active mutation (matching PersistenceManager).
+    private int _inFlightWrites;
+    private readonly ManualResetEventSlim _writesIdle = new(initialState: true);
+
     private readonly Dictionary<string, (ITimer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
+    private readonly Dictionary<string, int> _nsSaveFailures = new();
 
     // Incremental write tracking: per-namespace pending upserts and deletes
     private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts = new();
     private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes = new();
     private readonly Dictionary<string, ITimer> _incrementalTimers = new();
+    private readonly Dictionary<string, int> _incrementalFailures = new();
 
     private ITimer? _pendingEdgeTimer;
     private Func<List<GraphEdge>>? _pendingEdgeProvider;
+    private int _edgeSaveFailures;
     private ITimer? _pendingClusterTimer;
     private Func<List<SemanticCluster>>? _pendingClusterProvider;
+    private int _clusterSaveFailures;
     private ITimer? _pendingDecayConfigTimer;
     private Func<Dictionary<string, DecayConfig>>? _pendingDecayConfigProvider;
+    private int _decayConfigSaveFailures;
 
     public SqliteStorageProvider(string? dbPath = null, int debounceMs = 500, ILogger<SqliteStorageProvider>? logger = null)
     {
@@ -56,7 +71,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
         if (dir is not null)
             Directory.CreateDirectory(dir);
 
-        _connectionString = $"Data Source={dbPath}";
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         _dbFullPath = dbPath;
         _debounceDelay = TimeSpan.FromMilliseconds(debounceMs);
         _logger = logger;
@@ -229,6 +244,59 @@ public sealed class SqliteStorageProvider : IStorageProvider
         pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
         pragma.ExecuteNonQuery();
         return conn;
+    }
+
+    private async Task<SqliteConnection> OpenConnectionAsync()
+    {
+        var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        using var pragma = conn.CreateCommand();
+        pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
+        await pragma.ExecuteNonQueryAsync().ConfigureAwait(false);
+        return conn;
+    }
+
+    private void BeginTrackedWrite()
+    {
+        if (Interlocked.Increment(ref _inFlightWrites) == 1)
+            _writesIdle.Reset();
+    }
+
+    private void EndTrackedWrite()
+    {
+        lock (_timerLock)
+        {
+            if (Interlocked.Decrement(ref _inFlightWrites) == 0)
+                _writesIdle.Set();
+        }
+    }
+
+    private TimeSpan ComputeRetryDelay(int consecutiveFailures)
+    {
+        if (consecutiveFailures <= 0)
+            return _debounceDelay;
+
+        var baseDelay = _debounceDelay > TimeSpan.Zero ? _debounceDelay : TimeSpan.FromMilliseconds(500);
+        var cap = baseDelay > MaxRetryBackoff ? baseDelay : MaxRetryBackoff;
+        int shift = Math.Min(consecutiveFailures, 20);
+        double scaledMs = baseDelay.TotalMilliseconds * (1 << shift);
+        return scaledMs >= cap.TotalMilliseconds ? cap : TimeSpan.FromMilliseconds(scaledMs);
+    }
+
+    private TimeSpan RecordFailureAndComputeDelay(ref int failureCounter)
+    {
+        if (failureCounter < 30)
+            failureCounter++;
+        return ComputeRetryDelay(failureCounter);
+    }
+
+    private TimeSpan RecordKeyFailureAndComputeDelay(Dictionary<string, int> failureMap, string ns)
+    {
+        int failures = failureMap.TryGetValue(ns, out var count) ? count : 0;
+        if (failures < 30)
+            failures++;
+        failureMap[ns] = failures;
+        return ComputeRetryDelay(failures);
     }
 
     private static string ComputeChecksum(string data)
@@ -440,6 +508,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
     // ── Save methods (debounced) ──
 
     public void ScheduleSave(string ns, Func<NamespaceData> dataProvider)
+        => ScheduleSaveCore(ns, dataProvider, delayOverride: null);
+
+    private void ScheduleSaveCore(string ns, Func<NamespaceData> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
@@ -448,6 +519,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
             if (_pendingNsSaves.TryGetValue(ns, out var existing))
                 existing.Timer.Dispose();
 
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
@@ -455,7 +527,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 // callback hold an older snapshot at the gate while a newer flush committed,
                 // then write the older one over it -- commit order inverting capture order.
                 // A failed write is RETAINED (newer-wins) rather than dropped with a log line.
-                lock (_flushGate)
+                _flushGate.Wait();
+                try
                 {
                     Func<NamespaceData>? provider = null;
                     lock (_timerLock)
@@ -475,18 +548,34 @@ public sealed class SqliteStorageProvider : IStorageProvider
                             // them through its retained (re-materializing) retry.
                             _pendingEntryUpserts.Remove(ns);
                             _pendingEntryDeletes.Remove(ns);
+                            if (_incrementalTimers.Remove(ns, out var incTimer))
+                                incTimer.Dispose();
+                            _incrementalFailures.Remove(ns);
                         }
                     }
-                    if (provider is not null && !WriteNamespace(ns, provider))
-                        lock (_timerLock)
+                    if (provider is not null)
+                    {
+                        if (WriteNamespace(ns, provider))
                         {
-                            if (_disposed)
-                                _logger?.LogError("Pending write for namespace '{Namespace}' dropped: provider disposed during a failed timer write", ns);
-                            else if (!_pendingNsSaves.ContainsKey(ns))
-                                ScheduleSave(ns, provider);
+                            lock (_timerLock) { _nsSaveFailures.Remove(ns); }
                         }
+                        else
+                        {
+                            lock (_timerLock)
+                            {
+                                if (_disposed)
+                                    _logger?.LogError("Pending write for namespace '{Namespace}' dropped: provider disposed during a failed timer write", ns);
+                                else if (!_pendingNsSaves.ContainsKey(ns))
+                                    ScheduleSaveCore(ns, provider, RecordKeyFailureAndComputeDelay(_nsSaveFailures, ns));
+                            }
+                        }
+                    }
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+                finally
+                {
+                    _flushGate.Release();
+                }
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
 
             _pendingNsSaves[ns] = (timer, dataProvider);
         }
@@ -495,6 +584,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
     public void SaveNamespaceSync(string ns, NamespaceData data)
     {
         WriteNamespaceData(ns, data);
+        lock (_timerLock) { _nsSaveFailures.Remove(ns); }
     }
 
     // ── Incremental writes ──
@@ -519,9 +609,13 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
             // Cancel any pending delete for this entry
             if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
+            {
                 deletes.Remove(key);
+                if (deletes.Count == 0)
+                    _pendingEntryDeletes.Remove(ns);
+            }
 
-            ScheduleIncrementalFlush(ns);
+            ScheduleIncrementalFlush(ns, delayOverride: null);
         }
     }
 
@@ -547,18 +641,23 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
             // Cancel any pending upsert for this entry
             if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
+            {
                 upserts.Remove(key);
+                if (upserts.Count == 0)
+                    _pendingEntryUpserts.Remove(ns);
+            }
 
-            ScheduleIncrementalFlush(ns);
+            ScheduleIncrementalFlush(ns, delayOverride: null);
         }
     }
 
     /// <summary>Schedule or reset a debounce timer for incremental writes on a namespace. Must be called under _timerLock.</summary>
-    private void ScheduleIncrementalFlush(string ns)
+    private void ScheduleIncrementalFlush(string ns, TimeSpan? delayOverride)
     {
         if (_incrementalTimers.TryGetValue(ns, out var existing))
             existing.Dispose();
 
+        var dueTime = delayOverride ?? _debounceDelay;
         ITimer? selfRef = null;
         selfRef = TimerProvider.CreateTimer(_ =>
         {
@@ -567,7 +666,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
             // this write supersedes -- or this write could land, stale, over state the flush
             // just vouched for. A failed write feeds the same retention the flush uses instead
             // of being dropped with a log line.
-            lock (_flushGate)
+            _flushGate.Wait();
+            try
             {
                 Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
                 HashSet<EntryStorageKey>? deletes = null;
@@ -578,24 +678,28 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     if (!_incrementalTimers.TryGetValue(ns, out var current)
                         || !ReferenceEquals(current, selfRef)) return;
 
-                    if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
-                    {
-                        upserts = new(u);
-                        u.Clear();
-                    }
-                    if (_pendingEntryDeletes.TryGetValue(ns, out var d) && d.Count > 0)
-                    {
-                        deletes = new(d);
-                        d.Clear();
-                    }
+                    if (_pendingEntryUpserts.Remove(ns, out var u) && u.Count > 0)
+                        upserts = u;
+                    if (_pendingEntryDeletes.Remove(ns, out var d) && d.Count > 0)
+                        deletes = d;
                     current.Dispose();
                     _incrementalTimers.Remove(ns);
                 }
 
-                if (!WriteIncrementalChanges(ns, upserts, deletes))
+                if (WriteIncrementalChanges(ns, upserts, deletes))
+                {
+                    lock (_timerLock) { _incrementalFailures.Remove(ns); }
+                }
+                else
+                {
                     RetainIncrementalBatch(ns, upserts, deletes);
+                }
             }
-        }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+            finally
+            {
+                _flushGate.Release();
+            }
+        }, null, dueTime, Timeout.InfiniteTimeSpan);
         _incrementalTimers[ns] = selfRef;
     }
 
@@ -674,16 +778,21 @@ public sealed class SqliteStorageProvider : IStorageProvider
     }
 
     public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
+        => ScheduleSaveGlobalEdgesCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveGlobalEdgesCore(Func<List<GraphEdge>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
             if (_disposed) return;
             _pendingEdgeTimer?.Dispose();
             _pendingEdgeProvider = dataProvider;
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
-                lock (_flushGate)
+                _flushGate.Wait();
+                try
                 {
                     Func<List<GraphEdge>>? provider;
                     lock (_timerLock)
@@ -708,34 +817,68 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     lock (_timerLock)
                     {
                         if (_pendingEdgeProvider is not null) return;
-                        // Entry scheduling may have happened during capture. Check and
-                        // write only the detached snapshot atomically with that queue.
-                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("edges", () => snapshot!))
+                        if (HasPendingEntryLevelWork())
                         {
                             // Dispose waits on _flushGate and will drain this provider.
                             if (_disposed)
                                 _pendingEdgeProvider = provider;
                             else
-                                ScheduleSaveGlobalEdges(provider);
+                                ScheduleSaveGlobalEdgesCore(provider, _debounceDelay);
+                            return;
+                        }
+                        if (!captured)
+                        {
+                            if (_disposed)
+                                _pendingEdgeProvider = provider;
+                            else
+                                ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
+                            return;
+                        }
+                    }
+
+                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
+                    // against flush/dispose by _flushGate).
+                    if (WriteGlobalData("edges", () => snapshot!))
+                    {
+                        lock (_timerLock) { _edgeSaveFailures = 0; }
+                    }
+                    else
+                    {
+                        lock (_timerLock)
+                        {
+                            if (_pendingEdgeProvider is not null) return;
+                            if (_disposed)
+                                _pendingEdgeProvider = provider;
+                            else
+                                ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
                         }
                     }
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+                finally
+                {
+                    _flushGate.Release();
+                }
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingEdgeTimer = timer;
         }
     }
 
     public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider)
+        => ScheduleSaveClustersCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveClustersCore(Func<List<SemanticCluster>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
             if (_disposed) return;
             _pendingClusterTimer?.Dispose();
             _pendingClusterProvider = dataProvider;
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
-                lock (_flushGate)
+                _flushGate.Wait();
+                try
                 {
                     Func<List<SemanticCluster>>? provider;
                     lock (_timerLock)
@@ -760,19 +903,48 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     lock (_timerLock)
                     {
                         if (_pendingClusterProvider is not null) return;
-                        // Entry scheduling may have happened during capture. Check and
-                        // write only the detached snapshot atomically with that queue.
-                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("clusters", () => snapshot!))
+                        if (HasPendingEntryLevelWork())
                         {
                             // Dispose waits on _flushGate and will drain this provider.
                             if (_disposed)
                                 _pendingClusterProvider = provider;
                             else
-                                ScheduleSaveClusters(provider);
+                                ScheduleSaveClustersCore(provider, _debounceDelay);
+                            return;
+                        }
+                        if (!captured)
+                        {
+                            if (_disposed)
+                                _pendingClusterProvider = provider;
+                            else
+                                ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
+                            return;
+                        }
+                    }
+
+                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
+                    // against flush/dispose by _flushGate).
+                    if (WriteGlobalData("clusters", () => snapshot!))
+                    {
+                        lock (_timerLock) { _clusterSaveFailures = 0; }
+                    }
+                    else
+                    {
+                        lock (_timerLock)
+                        {
+                            if (_pendingClusterProvider is not null) return;
+                            if (_disposed)
+                                _pendingClusterProvider = provider;
+                            else
+                                ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
                         }
                     }
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+                finally
+                {
+                    _flushGate.Release();
+                }
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingClusterTimer = timer;
         }
     }
@@ -935,9 +1107,21 @@ public sealed class SqliteStorageProvider : IStorageProvider
     // (SQLITE_BUSY) surfaces as an honest false the same way: nothing was committed.
     private bool MutateCollapseHistorySync(Func<List<CollapseRecord>, bool> mutate)
     {
-        lock (_timerLock)
+        // Gate first, tracking second (matching PersistenceManager): bounds the in-flight
+        // drain in Dispose()/TryFlush() so CheckpointWal() and teardown cannot race an active
+        // collapse-history transaction.
+        _flushGate.Wait();
+        try
         {
-            if (_disposed) return false;
+            lock (_timerLock)
+            {
+                if (_disposed) return false;
+                BeginTrackedWrite();
+            }
+        }
+        finally
+        {
+            _flushGate.Release();
         }
 
         bool committed = false;
@@ -992,6 +1176,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
             if (!mutate(records))
                 return true;
 
+            OnBeforeCollapseCommit?.Invoke();
+
             var serialized = JsonSerializer.Serialize(records, JsonOptions);
             var checksum = ComputeChecksum(serialized);
             using var cmd = conn.CreateCommand();
@@ -1016,21 +1202,30 @@ public sealed class SqliteStorageProvider : IStorageProvider
             }
             _logger?.LogWarning(ex, "Post-commit teardown failed after collapse-history save; the commit stands");
         }
+        finally
+        {
+            EndTrackedWrite();
+        }
 
         return true;
     }
 
     public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider)
+        => ScheduleSaveDecayConfigsCore(dataProvider, delayOverride: null);
+
+    private void ScheduleSaveDecayConfigsCore(Func<Dictionary<string, DecayConfig>> dataProvider, TimeSpan? delayOverride)
     {
         lock (_timerLock)
         {
             if (_disposed) return;
             _pendingDecayConfigTimer?.Dispose();
             _pendingDecayConfigProvider = dataProvider;
+            var dueTime = delayOverride ?? _debounceDelay;
             ITimer? timer = null;
             timer = TimerProvider.CreateTimer(_ =>
             {
-                lock (_flushGate)
+                _flushGate.Wait();
+                try
                 {
                     Func<Dictionary<string, DecayConfig>>? provider;
                     lock (_timerLock)
@@ -1055,19 +1250,48 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     lock (_timerLock)
                     {
                         if (_pendingDecayConfigProvider is not null) return;
-                        // Entry scheduling may have happened during capture. Check and
-                        // write only the detached snapshot atomically with that queue.
-                        if (HasPendingEntryLevelWork() || !captured || !WriteGlobalData("decay_configs", () => snapshot!))
+                        if (HasPendingEntryLevelWork())
                         {
                             // Dispose waits on _flushGate and will drain this provider.
                             if (_disposed)
                                 _pendingDecayConfigProvider = provider;
                             else
-                                ScheduleSaveDecayConfigs(provider);
+                                ScheduleSaveDecayConfigsCore(provider, _debounceDelay);
+                            return;
+                        }
+                        if (!captured)
+                        {
+                            if (_disposed)
+                                _pendingDecayConfigProvider = provider;
+                            else
+                                ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
+                            return;
+                        }
+                    }
+
+                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
+                    // against flush/dispose by _flushGate).
+                    if (WriteGlobalData("decay_configs", () => snapshot!))
+                    {
+                        lock (_timerLock) { _decayConfigSaveFailures = 0; }
+                    }
+                    else
+                    {
+                        lock (_timerLock)
+                        {
+                            if (_pendingDecayConfigProvider is not null) return;
+                            if (_disposed)
+                                _pendingDecayConfigProvider = provider;
+                            else
+                                ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
                         }
                     }
                 }
-            }, null, _debounceDelay, Timeout.InfiniteTimeSpan);
+                finally
+                {
+                    _flushGate.Release();
+                }
+            }, null, dueTime, Timeout.InfiniteTimeSpan);
             _pendingDecayConfigTimer = timer;
         }
     }
@@ -1139,6 +1363,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
     {
         try
         {
+            OnBeforeGlobalWrite?.Invoke(key);
             var data = provider();
             var json = JsonSerializer.Serialize(data, JsonOptions);
             var checksum = ComputeChecksum(json);
@@ -1165,68 +1390,139 @@ public sealed class SqliteStorageProvider : IStorageProvider
     /// <summary>Delete all entries in a namespace from the SQLite database.</summary>
     public async Task DeleteNamespaceAsync(string ns)
     {
-        using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync();
-        using var pragma = conn.CreateCommand();
-        pragma.CommandText = "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;";
-        await pragma.ExecuteNonQueryAsync();
-        using var tx = await conn.BeginTransactionAsync();
+        await _flushGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            using var cmdEntries = conn.CreateCommand();
-            cmdEntries.Transaction = (SqliteTransaction)tx;
-            cmdEntries.CommandText = "DELETE FROM entries WHERE ns = @ns";
-            cmdEntries.Parameters.AddWithValue("@ns", ns);
-            await cmdEntries.ExecuteNonQueryAsync();
+            lock (_timerLock)
+            {
+                if (_pendingNsSaves.Remove(ns, out var pendingNs))
+                    pendingNs.Timer.Dispose();
+                if (_incrementalTimers.Remove(ns, out var incTimer))
+                    incTimer.Dispose();
+                _pendingEntryUpserts.Remove(ns);
+                _pendingEntryDeletes.Remove(ns);
+                _nsSaveFailures.Remove(ns);
+                _incrementalFailures.Remove(ns);
+            }
 
-            using var cmdHnsw = conn.CreateCommand();
-            cmdHnsw.Transaction = (SqliteTransaction)tx;
-            cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
-            cmdHnsw.Parameters.AddWithValue("@key", $"hnsw_{ns}");
-            await cmdHnsw.ExecuteNonQueryAsync();
+            using var conn = await OpenConnectionAsync().ConfigureAwait(false);
+            using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                using var cmdEntries = conn.CreateCommand();
+                cmdEntries.Transaction = (SqliteTransaction)tx;
+                cmdEntries.CommandText = "DELETE FROM entries WHERE ns = @ns";
+                cmdEntries.Parameters.AddWithValue("@ns", ns);
+                await cmdEntries.ExecuteNonQueryAsync().ConfigureAwait(false);
 
-            await tx.CommitAsync();
+                using var cmdHnsw = conn.CreateCommand();
+                cmdHnsw.Transaction = (SqliteTransaction)tx;
+                cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
+                cmdHnsw.Parameters.AddWithValue("@key", $"hnsw_{ns}");
+                await cmdHnsw.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+                await tx.CommitAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                await tx.RollbackAsync().ConfigureAwait(false);
+                throw;
+            }
         }
-        catch
+        finally
         {
-            await tx.RollbackAsync();
-            throw;
+            _flushGate.Release();
         }
     }
 
     /// <summary>Delete exactly one tenant + namespace partition.</summary>
     public async Task DeleteNamespaceAsync(string ns, string tenantId)
     {
-        tenantId = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
-        using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync();
-        using var tx = await conn.BeginTransactionAsync();
+        tenantId = NormalizeTenantId(tenantId);
+        await _flushGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            using (var cmdEntries = conn.CreateCommand())
+            Func<NamespaceData>? pendingNsProvider = null;
+            lock (_timerLock)
             {
-                cmdEntries.Transaction = (SqliteTransaction)tx;
-                cmdEntries.CommandText = "DELETE FROM entries WHERE tenant_id = @tenant AND ns = @ns";
-                cmdEntries.Parameters.AddWithValue("@tenant", tenantId);
-                cmdEntries.Parameters.AddWithValue("@ns", ns);
-                await cmdEntries.ExecuteNonQueryAsync();
+                if (_pendingNsSaves.Remove(ns, out var pendingNs))
+                {
+                    pendingNs.Timer.Dispose();
+                    pendingNsProvider = pendingNs.DataProvider;
+                }
+                _nsSaveFailures.Remove(ns);
+
+                if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
+                {
+                    var matchingKeys = upserts.Keys.Where(k => k.TenantId == tenantId).ToList();
+                    foreach (var k in matchingKeys)
+                        upserts.Remove(k);
+                    if (upserts.Count == 0)
+                        _pendingEntryUpserts.Remove(ns);
+                }
+                if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
+                {
+                    deletes.RemoveWhere(k => k.TenantId == tenantId);
+                    if (deletes.Count == 0)
+                        _pendingEntryDeletes.Remove(ns);
+                }
+                if (!_pendingEntryUpserts.ContainsKey(ns) && !_pendingEntryDeletes.ContainsKey(ns))
+                {
+                    if (_incrementalTimers.Remove(ns, out var incTimer))
+                        incTimer.Dispose();
+                    _incrementalFailures.Remove(ns);
+                }
             }
 
-            using (var cmdHnsw = conn.CreateCommand())
+            // Preserve any pending full-save entries belonging to other tenants before deleting
+            // this tenant's partition so cancelling the full-save timer cannot drop peer tenants.
+            if (pendingNsProvider is not null
+                && StorageSnapshot.TryCapture(pendingNsProvider, _logger, out var pendingData)
+                && pendingData is not null)
             {
-                cmdHnsw.Transaction = (SqliteTransaction)tx;
-                cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
-                cmdHnsw.Parameters.AddWithValue("@key",
-                    $"hnsw_{NamespaceStore.PartitionKey(tenantId, ns)}");
-                await cmdHnsw.ExecuteNonQueryAsync();
+                var otherTenantUpserts = new Dictionary<EntryStorageKey, CognitiveEntry>();
+                foreach (var entry in pendingData.Entries)
+                {
+                    if (entry.TenantId != tenantId)
+                        otherTenantUpserts[new EntryStorageKey(entry.TenantId, entry.Id)] = entry;
+                }
+                if (otherTenantUpserts.Count > 0)
+                    WriteIncrementalChanges(ns, otherTenantUpserts, deletes: null);
             }
 
-            await tx.CommitAsync();
+            using var conn = await OpenConnectionAsync().ConfigureAwait(false);
+            using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
+            try
+            {
+                using (var cmdEntries = conn.CreateCommand())
+                {
+                    cmdEntries.Transaction = (SqliteTransaction)tx;
+                    cmdEntries.CommandText = "DELETE FROM entries WHERE tenant_id = @tenant AND ns = @ns";
+                    cmdEntries.Parameters.AddWithValue("@tenant", tenantId);
+                    cmdEntries.Parameters.AddWithValue("@ns", ns);
+                    await cmdEntries.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+
+                using (var cmdHnsw = conn.CreateCommand())
+                {
+                    cmdHnsw.Transaction = (SqliteTransaction)tx;
+                    cmdHnsw.CommandText = "DELETE FROM global_data WHERE key = @key";
+                    cmdHnsw.Parameters.AddWithValue("@key",
+                        $"hnsw_{NamespaceStore.PartitionKey(tenantId, ns)}");
+                    await cmdHnsw.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+
+                await tx.CommitAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                await tx.RollbackAsync().ConfigureAwait(false);
+                throw;
+            }
         }
-        catch
+        finally
         {
-            await tx.RollbackAsync();
-            throw;
+            _flushGate.Release();
         }
     }
 
@@ -1234,18 +1530,26 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
     public void Flush() => TryFlush();
 
-    // Serializes whole flushes: two concurrent TryFlush calls could otherwise interleave so
-    // that the LATER capture commits first and the earlier capture's FAILED batch is then
-    // retained and re-flushed over it — a stale resurrection. One flush at a time makes
-    // capture order commit order.
-    private readonly object _flushGate = new();
+    // Serializes whole flushes, timer commits, and namespace deletions: two concurrent
+    // TryFlush calls could otherwise interleave so that the LATER capture commits first and
+    // the earlier capture's FAILED batch is then retained and re-flushed over it — a stale
+    // resurrection. Deliberately not disposed on Dispose() (no OS wait handle is allocated)
+    // so late timer callbacks queued before disposal exit cleanly without ObjectDisposedException.
+    private readonly SemaphoreSlim _flushGate = new(1, 1);
 
     /// <summary>Flush and REPORT — see <see cref="IStorageProvider.TryFlush"/>: true only when
     /// every pending write committed; failed batches are retained and re-scheduled.</summary>
     public bool TryFlush()
     {
-        lock (_flushGate)
+        _flushGate.Wait();
+        try
+        {
             return TryFlushCore(refuseWhenDisposed: true);
+        }
+        finally
+        {
+            _flushGate.Release();
+        }
     }
 
     private bool TryFlushCore(bool refuseWhenDisposed)
@@ -1309,7 +1613,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 timer.Dispose();
             _pendingNsSaves.Clear();
 
-            // Collect pending incremental writes
+            // Collect pending incremental writes and remove empty namespace keys so
+            // HasPendingEntryLevelWork() never iterates leaked empty entries.
             pendingIncremental = new();
             var incrementalNs = new HashSet<string>(_pendingEntryUpserts.Keys);
             foreach (var k in _pendingEntryDeletes.Keys)
@@ -1319,16 +1624,10 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
                 HashSet<EntryStorageKey>? deletes = null;
 
-                if (_pendingEntryUpserts.TryGetValue(ns, out var u) && u.Count > 0)
-                {
-                    upserts = new(u);
-                    u.Clear();
-                }
-                if (_pendingEntryDeletes.TryGetValue(ns, out var d) && d.Count > 0)
-                {
-                    deletes = new(d);
-                    d.Clear();
-                }
+                if (_pendingEntryUpserts.Remove(ns, out var u) && u.Count > 0)
+                    upserts = u;
+                if (_pendingEntryDeletes.Remove(ns, out var d) && d.Count > 0)
+                    deletes = d;
                 if (upserts is not null || deletes is not null)
                     pendingIncremental.Add((ns, upserts, deletes));
             }
@@ -1401,7 +1700,11 @@ public sealed class SqliteStorageProvider : IStorageProvider
             // the safe order (the full save re-materializes and wins).
             if (refuseWhenDisposed && fullSaveNs.Contains(ns))
                 continue;
-            if (!WriteIncrementalChanges(ns, upserts, deletes))
+            if (WriteIncrementalChanges(ns, upserts, deletes))
+            {
+                lock (_timerLock) { _incrementalFailures.Remove(ns); }
+            }
+            else
             {
                 // Deferred verdict: a same-ns full save committing below SUBSUMES this
                 // failure (its materialization contains everything the batch held), and the
@@ -1426,11 +1729,16 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     if (_disposed)
                         _logger?.LogError("Pending write for namespace '{Namespace}' dropped: provider disposed during a failed flush", ns);
                     else if (!_pendingNsSaves.ContainsKey(ns))
-                        ScheduleSave(ns, provider);
+                        ScheduleSaveCore(ns, provider, RecordKeyFailureAndComputeDelay(_nsSaveFailures, ns));
                 }
             }
             else
             {
+                lock (_timerLock)
+                {
+                    _nsSaveFailures.Remove(ns);
+                    _incrementalFailures.Remove(ns);
+                }
                 unsubsumedBatchFailures.Remove(ns);
             }
         }
@@ -1455,35 +1763,50 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 }
                 else
                 {
-                    if (edgeProvider is not null && _pendingEdgeProvider is null) ScheduleSaveGlobalEdges(edgeProvider);
-                    if (clusterProvider is not null && _pendingClusterProvider is null) ScheduleSaveClusters(clusterProvider);
-                    if (decayConfigProvider is not null && _pendingDecayConfigProvider is null) ScheduleSaveDecayConfigs(decayConfigProvider);
+                    if (edgeProvider is not null && _pendingEdgeProvider is null) ScheduleSaveGlobalEdgesCore(edgeProvider, _debounceDelay);
+                    if (clusterProvider is not null && _pendingClusterProvider is null) ScheduleSaveClustersCore(clusterProvider, _debounceDelay);
+                    if (decayConfigProvider is not null && _pendingDecayConfigProvider is null) ScheduleSaveDecayConfigsCore(decayConfigProvider, _debounceDelay);
                 }
             }
+            _writesIdle.Wait();
             return false;
         }
 
-        if (edgeProvider is not null && (!edgeMaterialized || !WriteGlobalData("edges", () => edgeData!)))
+        if (edgeProvider is not null)
         {
-            allCommitted = false;
-            lock (_timerLock)
+            if (edgeMaterialized && WriteGlobalData("edges", () => edgeData!))
             {
-                if (_disposed)
-                    _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
-                else if (_pendingEdgeProvider is null)
-                    ScheduleSaveGlobalEdges(edgeProvider);
+                lock (_timerLock) { _edgeSaveFailures = 0; }
+            }
+            else
+            {
+                allCommitted = false;
+                lock (_timerLock)
+                {
+                    if (_disposed)
+                        _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
+                    else if (_pendingEdgeProvider is null)
+                        ScheduleSaveGlobalEdgesCore(edgeProvider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
+                }
             }
         }
 
-        if (clusterProvider is not null && (!clusterMaterialized || !WriteGlobalData("clusters", () => clusterData!)))
+        if (clusterProvider is not null)
         {
-            allCommitted = false;
-            lock (_timerLock)
+            if (clusterMaterialized && WriteGlobalData("clusters", () => clusterData!))
             {
-                if (_disposed)
-                    _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
-                else if (_pendingClusterProvider is null)
-                    ScheduleSaveClusters(clusterProvider);
+                lock (_timerLock) { _clusterSaveFailures = 0; }
+            }
+            else
+            {
+                allCommitted = false;
+                lock (_timerLock)
+                {
+                    if (_disposed)
+                        _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
+                    else if (_pendingClusterProvider is null)
+                        ScheduleSaveClustersCore(clusterProvider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
+                }
             }
         }
 
@@ -1491,7 +1814,11 @@ public sealed class SqliteStorageProvider : IStorageProvider
         {
             // The materialized payload commits (see part 3 above); a materialization
             // failure is a failed write — retained like one.
-            if (!decayMaterialized || !WriteGlobalData("decay_configs", () => decayData!))
+            if (decayMaterialized && WriteGlobalData("decay_configs", () => decayData!))
+            {
+                lock (_timerLock) { _decayConfigSaveFailures = 0; }
+            }
+            else
             {
                 allCommitted = false;
                 lock (_timerLock)
@@ -1499,10 +1826,13 @@ public sealed class SqliteStorageProvider : IStorageProvider
                     if (_disposed)
                         _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed flush");
                     else if (_pendingDecayConfigProvider is null)
-                        ScheduleSaveDecayConfigs(decayConfigProvider);
+                        ScheduleSaveDecayConfigsCore(decayConfigProvider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
                 }
             }
         }
+
+        // Wait for any in-flight synchronous collapse-history RMWs to finish before returning.
+        _writesIdle.Wait();
 
         // FINAL LINEARIZATION CHECKPOINT. Schedule calls publish under _timerLock, so at this
         // instant every write queued before the checkpoint is either committed above or visible
@@ -1536,23 +1866,38 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 return;
             }
 
-            if (upserts is not null)
+            if (upserts is not null && upserts.Count > 0)
             {
-                if (!_pendingEntryUpserts.TryGetValue(ns, out var u))
-                    _pendingEntryUpserts[ns] = u = new();
+                _pendingEntryUpserts.TryGetValue(ns, out var u);
                 foreach (var (key, entry) in upserts)
-                    if (!u.ContainsKey(key) && !(_pendingEntryDeletes.TryGetValue(ns, out var dd) && dd.Contains(key)))
+                {
+                    if ((u is null || !u.ContainsKey(key))
+                        && !(_pendingEntryDeletes.TryGetValue(ns, out var dd) && dd.Contains(key)))
+                    {
+                        if (u is null)
+                            _pendingEntryUpserts[ns] = u = new();
                         u[key] = entry;
+                    }
+                }
             }
-            if (deletes is not null)
+            if (deletes is not null && deletes.Count > 0)
             {
-                if (!_pendingEntryDeletes.TryGetValue(ns, out var d))
-                    _pendingEntryDeletes[ns] = d = new();
+                _pendingEntryDeletes.TryGetValue(ns, out var d);
                 foreach (var key in deletes)
+                {
                     if (!(_pendingEntryUpserts.TryGetValue(ns, out var uu) && uu.ContainsKey(key)))
+                    {
+                        if (d is null)
+                            _pendingEntryDeletes[ns] = d = new();
                         d.Add(key);
+                    }
+                }
             }
-            ScheduleIncrementalFlush(ns);
+
+            bool hasPendingForNs = (_pendingEntryUpserts.TryGetValue(ns, out var cu) && cu.Count > 0)
+                || (_pendingEntryDeletes.TryGetValue(ns, out var cd) && cd.Count > 0);
+            if (hasPendingForNs)
+                ScheduleIncrementalFlush(ns, RecordKeyFailureAndComputeDelay(_incrementalFailures, ns));
         }
     }
 
@@ -1564,10 +1909,20 @@ public sealed class SqliteStorageProvider : IStorageProvider
             _disposed = true;
         }
         // The disposing thread's own final flush — bypasses the post-dispose refusal it
-        // itself armed; see TryFlushCore.
-        lock (_flushGate)
+        // itself armed; see TryFlushCore. Also drains any in-flight synchronous collapse-history
+        // writes before CheckpointWal() runs.
+        _flushGate.Wait();
+        try
+        {
             TryFlushCore(refuseWhenDisposed: false);
+            _writesIdle.Wait();
+        }
+        finally
+        {
+            _flushGate.Release();
+        }
         CheckpointWal();
+        _writesIdle.Dispose();
     }
 
     /// <summary>

@@ -52,8 +52,9 @@ if ($ServerStopped) { $prepareArguments += '--server-stopped' }
 & dotnet @prepareArguments
 if ($LASTEXITCODE -ne 0) { Stop-Setup 'Existing data needs migration. Stop the old server, select -LegacyData if needed, and rerun with -ServerStopped. Client configuration was not changed.' }
 if ($SkipConfig) {
+    $displayProfile = if ($Profile) { $Profile } else { 'minimal' }
     Write-Host "Build complete. command: dotnet; args: $server"
-    Write-Host "Set MEMORY_DATA_PATH=$DataPath and MEMORY_TOOL_PROFILE=$Profile."
+    Write-Host "Set MEMORY_DATA_PATH=$DataPath and MEMORY_TOOL_PROFILE=$displayProfile."
     exit 0
 }
 if (-not $ConfigRoot) { $ConfigRoot = $HOME }

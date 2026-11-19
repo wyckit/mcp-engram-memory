@@ -62,17 +62,20 @@ public class SqlServerStorageProviderTests : IDisposable
     }
 
     /// <summary>
-    /// Returns true when the SQL Server connection env var is set. xunit 2.5 lacks
-    /// a runtime <c>Assert.Skip</c>, so each test calls this and early-returns when
-    /// the backend is unavailable. The test is reported as passed (not skipped) —
-    /// acceptable here since the gating is intentional CI infra, not a flaky check.
+    /// Skips the test cleanly via xUnit v3 <see cref="Assert.Skip(string)"/> when
+    /// <see cref="ConnectionEnvVar"/> is not set, so skipped SQL Server integration tests are
+    /// reported accurately as Skipped rather than silently passing.
     /// </summary>
-    private bool IsEnabled() => _enabled;
+    private void RequireSqlServer()
+    {
+        if (!_enabled)
+            Assert.Skip($"Set {ConnectionEnvVar} to run SQL Server storage integration tests.");
+    }
 
     [Fact]
     public void LoadNamespace_Empty_ReturnsEmptyData()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var data = _provider!.LoadNamespace("nonexistent");
         Assert.Empty(data.Entries);
     }
@@ -80,7 +83,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void SaveAndLoad_RoundTrips()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("test-1", new[] { 1f, 2f, 3f }, "myns", "hello world");
         var data = new NamespaceData { Entries = new List<CognitiveEntry> { entry } };
 
@@ -96,7 +99,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void SaveNamespaceSync_Overwrites()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry1 = new CognitiveEntry("a", new[] { 1f, 0f }, "ns", "first");
         _provider!.SaveNamespaceSync("ns", new NamespaceData { Entries = [entry1] });
 
@@ -111,7 +114,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void GetPersistedNamespaces_ListsNamespaces()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         _provider!.SaveNamespaceSync("alpha", new NamespaceData { Entries = [new CognitiveEntry("a", new[] { 1f }, "alpha")] });
         _provider.SaveNamespaceSync("beta", new NamespaceData { Entries = [new CognitiveEntry("b", new[] { 1f }, "beta")] });
 
@@ -123,7 +126,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void GetPersistedNamespaces_ExcludesUnderscorePrefix()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         _provider!.SaveNamespaceSync("_system", new NamespaceData { Entries = [new CognitiveEntry("s", new[] { 1f }, "_system")] });
         _provider.SaveNamespaceSync("normal", new NamespaceData { Entries = [new CognitiveEntry("n", new[] { 1f }, "normal")] });
 
@@ -135,7 +138,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void DebouncedSave_FlushesOnDispose()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("d1", new[] { 1f, 2f }, "debounce-ns", "debounced");
         var data = new NamespaceData { Entries = [entry] };
         _provider!.ScheduleSave("debounce-ns", () => data);
@@ -150,7 +153,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void GlobalEdges_SaveAndLoad()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var edges = new List<GraphEdge>
         {
             new("a", "b", "cross_reference"),
@@ -167,7 +170,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void Clusters_SaveAndLoad()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var clusters = new List<SemanticCluster>
         {
             new("c1", "test", new List<string> { "m1", "m2" }, "test cluster")
@@ -184,7 +187,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void DecayConfigs_SaveAndLoad()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var configs = new Dictionary<string, DecayConfig>
         {
             ["test"] = new("test", decayRate: 0.5f)
@@ -201,7 +204,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void IntegrationWithCognitiveIndex_PersistsAcrossInstances()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
 
         using (var index = new CognitiveIndex(_provider!))
         {
@@ -220,7 +223,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void IncrementalUpsert_LifecycleStateColumnPopulated()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("inc1", new[] { 1f, 2f }, "ns", "incremental", lifecycleState: "archived");
         _provider!.ScheduleUpsertEntry("ns", entry);
         _provider.Flush();
@@ -235,7 +238,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void IncrementalDelete_RemovesEntry()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("d1", new[] { 1f }, "ns", "to-delete");
         _provider!.ScheduleUpsertEntry("ns", entry);
         _provider.Flush();
@@ -250,7 +253,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public async Task DeleteNamespaceAsync_RemovesEntries()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         _provider!.SaveNamespaceSync("doomed",
             new NamespaceData { Entries = [new CognitiveEntry("x", new[] { 1f }, "doomed", "v")] });
 
@@ -264,7 +267,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void TenantId_RoundTripsThroughSaveNamespace()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("t1", new[] { 1f, 2f }, "tns", "tenant text", tenantId: "acme");
         _provider!.SaveNamespaceSync("tns", new NamespaceData { Entries = [entry] });
 
@@ -276,7 +279,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void TenantId_RoundTripsThroughIncrementalUpsert()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("t2", new[] { 1f, 2f }, "tns", "tenant text", tenantId: "globex");
         _provider!.ScheduleUpsertEntry("tns", entry);
         _provider.Flush();
@@ -289,7 +292,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void TenantId_PersistedToColumn()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("t3", new[] { 1f }, "tns", "x", tenantId: "initech");
         _provider!.ScheduleUpsertEntry("tns", entry);
         _provider.Flush();
@@ -304,7 +307,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void LegacyEntry_DefaultsToEmptyTenantColumn()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         var entry = new CognitiveEntry("t4", new[] { 1f }, "tns", "x"); // no tenant
         _provider!.ScheduleUpsertEntry("tns", entry);
         _provider.Flush();
@@ -319,7 +322,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void SameNsId_DifferentTenants_CoexistUnderNewPrimaryKey()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         // Same (ns, id) but two different tenants — only possible because the PK is now
         // (tenant_id, ns, id) and the incremental MERGE keys on the full tenant-rooted key.
         _provider!.ScheduleUpsertEntry("shared",
@@ -338,7 +341,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void PendingDelete_CancelsOnlyMatchingTenantUpsert()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
 
         _provider!.ScheduleUpsertEntry("shared",
             new CognitiveEntry("dup", new[] { 1f }, "shared", "tenant-a copy", tenantId: "A"));
@@ -379,7 +382,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void SchemaVersion_IsV3_AfterInitialization()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         using var conn = new SqlConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -390,7 +393,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void Migration_IsIdempotent_OnReconstruction()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         // Seed via the first provider (already migrated to v3 in the ctor).
         _provider!.SaveNamespaceSync("idem",
             new NamespaceData { Entries = [new CognitiveEntry("i1", new[] { 1f }, "idem", "v", tenantId: "z")] });
@@ -415,7 +418,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void Migration_PrimaryKeyIsTenantRooted()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         using var conn = new SqlConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -437,7 +440,7 @@ public class SqlServerStorageProviderTests : IDisposable
     [Fact]
     public void Migration_IsReversible_ThenReMigratable()
     {
-        if (!IsEnabled()) return;
+        RequireSqlServer();
         // Seed a legacy-tenant row so the reverse (which requires all tenant_id='') is valid.
         _provider!.SaveNamespaceSync("rev",
             new NamespaceData { Entries = [new CognitiveEntry("r1", new[] { 1f }, "rev", "legacy")] });
