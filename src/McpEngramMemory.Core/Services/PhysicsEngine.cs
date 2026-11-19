@@ -67,11 +67,13 @@ public sealed class PhysicsEngine
 
     /// <summary>
     /// Compute gravitational force.
-    /// Formula: F_g = mass / distance²  where distance = 1 - cosineScore (clamped to min 0.001)
+    /// Formula: F_g = mass / distance²  where distance = 1 - clamp(cosineScore, -1, 1) (clamped to min 0.001).
+    /// Clamping cosineScore to &lt;= 1 prevents boosted scores &gt; 1.0 from collapsing distance below zero.
     /// </summary>
     public static float ComputeGravity(float mass, float cosineScore)
     {
-        float distance = MathF.Max(1.0f - cosineScore, MinDistance);
+        float clampedScore = float.IsNaN(cosineScore) ? 0f : Math.Clamp(cosineScore, -1.0f, 1.0f);
+        float distance = MathF.Max(1.0f - clampedScore, MinDistance);
         return mass / (distance * distance);
     }
 
@@ -121,8 +123,13 @@ public sealed class PhysicsEngine
                 r.Category, r.IsSummaryNode, r.SourceClusterId));
         }
 
-        // Asteroid = highest cosine score (input is already sorted by cosine desc, so first)
+        // Asteroid = highest cosine score
         var asteroid = ranked[0];
+        for (int i = 1; i < ranked.Count; i++)
+        {
+            if (ranked[i].CosineScore > asteroid.CosineScore)
+                asteroid = ranked[i];
+        }
 
         // Sun = highest gravitational force
         var sun = ranked[0];
@@ -132,21 +139,33 @@ public sealed class PhysicsEngine
                 sun = ranked[i];
         }
 
-        // Sort by temperature-blended score when temperature > 0, otherwise by gravity
-        if (temperature > 0f && maxGravity > 0f)
+        // Sort by temperature-blended score: T=0 pure semantic (cosine desc),
+        // T=1 pure physics (gravity desc), 0 < T < 1 linear blend.
+        float clampedTemp = float.IsNaN(temperature) ? 0f : Math.Clamp(temperature, 0f, 1f);
+        if (clampedTemp <= 0f || maxGravity <= 0f)
+        {
+            ranked.Sort((a, b) => b.CosineScore.CompareTo(a.CosineScore));
+        }
+        else if (clampedTemp >= 1f)
+        {
+            ranked.Sort((a, b) =>
+            {
+                int cmp = b.GravityForce.CompareTo(a.GravityForce);
+                return cmp != 0 ? cmp : b.CosineScore.CompareTo(a.CosineScore);
+            });
+        }
+        else
         {
             ranked.Sort((a, b) =>
             {
                 float normalizedA = a.GravityForce / maxGravity;
                 float normalizedB = b.GravityForce / maxGravity;
-                float blendedA = ComputeBlendedScore(a.CosineScore, normalizedA, temperature);
-                float blendedB = ComputeBlendedScore(b.CosineScore, normalizedB, temperature);
+                float scoreA = float.IsNaN(a.CosineScore) ? 0f : Math.Clamp(a.CosineScore, -1f, 1f);
+                float scoreB = float.IsNaN(b.CosineScore) ? 0f : Math.Clamp(b.CosineScore, -1f, 1f);
+                float blendedA = ComputeBlendedScore(scoreA, normalizedA, clampedTemp);
+                float blendedB = ComputeBlendedScore(scoreB, normalizedB, clampedTemp);
                 return blendedB.CompareTo(blendedA);
             });
-        }
-        else
-        {
-            ranked.Sort((a, b) => b.GravityForce.CompareTo(a.GravityForce));
         }
 
         return new SlingshotResult(asteroid, sun, ranked);

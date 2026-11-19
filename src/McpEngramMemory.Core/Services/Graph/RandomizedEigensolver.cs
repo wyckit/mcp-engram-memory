@@ -4,8 +4,10 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// Randomized subspace iteration for the top-K largest-magnitude eigenpairs of a
 /// symmetric matrix M, supplied implicitly via a matrix-vector product callback.
 /// Used by <see cref="MemoryDiffusionKernel"/> to find the top-K eigenpairs of the
-/// normalized adjacency D^(-1/2) W D^(-1/2); these convert to the smallest
-/// eigenpairs of the normalized Laplacian via lambda_L = 1 - lambda_M.
+/// shifted positive semi-definite normalized adjacency S = (I + D^(-1/2) W D^(-1/2)) / 2
+/// (spectrum [0, 1]); these convert to the smallest eigenpairs of the normalized
+/// Laplacian via lambda_L = 2 * (1 - lambda_S) without negative eigenvalues hijacking
+/// the power-iteration sketch on bipartite, tree, or star graphs.
 ///
 /// Method (Halko/Martinsson/Tropp, 2011): draw a Gaussian sketch Omega in R^(N x m)
 /// with m = K + oversample, run q power iterations Y &lt;- M Omega; Q &lt;- orth(Y);
@@ -43,6 +45,7 @@ public static class RandomizedEigensolver
     {
         if (n <= 0) throw new ArgumentOutOfRangeException(nameof(n));
         if (topK <= 0) throw new ArgumentOutOfRangeException(nameof(topK));
+        if (powerIters < 0) throw new ArgumentOutOfRangeException(nameof(powerIters));
         if (topK > n) topK = n;
 
         int m = Math.Min(topK + Math.Max(oversample, 0), n);

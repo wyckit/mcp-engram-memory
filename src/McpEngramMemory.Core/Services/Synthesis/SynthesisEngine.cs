@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Services.Intelligence;
@@ -12,7 +14,7 @@ namespace McpEngramMemory.Core.Services.Synthesis;
 ///
 /// Pipeline: Chunker → Channel → MapWorker(s) → Channel → ReduceWorker → Output
 /// </summary>
-public sealed class SynthesisEngine
+public sealed class SynthesisEngine : IDisposable
 {
     private const int DefaultChunkSize = 15;
     private const int MaxMapWorkers = 2;
@@ -21,32 +23,57 @@ public sealed class SynthesisEngine
     private readonly CognitiveIndex _index;
     private readonly ClusterManager _clusters;
     private readonly ITextGenerator _generator;
+    private readonly bool _ownsGenerator;
     private readonly string _mapModel;
     private readonly string _reduceModel;
+    private int _disposed;
 
     /// <summary>
     /// Convenience constructor that uses the Ollama backend (preserves pre-1.2.0 behavior).
+    /// Owns and disposes the internally created <see cref="OllamaClient"/>.
     /// </summary>
     public SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
         string mapModel = "qwen2.5:0.5b", string reduceModel = "qwen2.5:0.5b",
         string? ollamaUrl = null)
-        : this(index, clusters, new OllamaClient(ollamaUrl ?? "http://localhost:11434"), mapModel, reduceModel)
+        : this(index, clusters, new OllamaClient(ollamaUrl ?? "http://localhost:11434"), mapModel, reduceModel, ownsGenerator: true)
     {
     }
 
     /// <summary>
     /// Backend-agnostic constructor: inject any <see cref="ITextGenerator"/> — e.g.
     /// <c>OnnxGenAiTextGenerator</c> (McpEngramMemory.Synthesis.Onnx) for fully in-process synthesis with no external daemon.
+    /// Does not take ownership of <paramref name="generator"/>.
     /// </summary>
     public SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
         ITextGenerator generator,
         string mapModel = "qwen2.5:0.5b", string reduceModel = "qwen2.5:0.5b")
+        : this(index, clusters, generator, mapModel, reduceModel, ownsGenerator: false)
+    {
+    }
+
+    private SynthesisEngine(CognitiveIndex index, ClusterManager clusters,
+        ITextGenerator generator,
+        string mapModel, string reduceModel, bool ownsGenerator)
     {
         _index = index;
         _clusters = clusters;
         _generator = generator;
+        _ownsGenerator = ownsGenerator;
         _mapModel = mapModel;
         _reduceModel = reduceModel;
+    }
+
+    /// <summary>
+    /// Disposes the internally constructed generator when created via the convenience constructor.
+    /// Externally injected <see cref="ITextGenerator"/> instances are not disposed.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        if (_ownsGenerator && _generator is IDisposable disposable)
+            disposable.Dispose();
     }
 
     /// <summary>
@@ -61,7 +88,7 @@ public sealed class SynthesisEngine
         string ns, string? query, string tenantId, int maxEntries = 200,
         CancellationToken ct = default)
     {
-        // 1. Check backend availability (Ollama daemon or in-process ONNX model).
+        // 1. Check backend availability for map model (and reduce model when distinct).
         bool available = await _generator.IsAvailableAsync(_mapModel, ct);
         if (!available)
         {
@@ -75,6 +102,24 @@ public sealed class SynthesisEngine
                 Error: $"Synthesis backend unavailable or model '{_mapModel}' not found. " +
                        "For Ollama: ensure it is running (ollama serve) and the model is pulled. " +
                        "For the in-process ONNX backend: stage the model dir or set SYNTHESIS_ONNX_MODEL_DIR.");
+        }
+
+        if (!string.Equals(_reduceModel, _mapModel, StringComparison.OrdinalIgnoreCase))
+        {
+            bool reduceAvailable = await _generator.IsAvailableAsync(_reduceModel, ct);
+            if (!reduceAvailable)
+            {
+                return new SynthesisResult(
+                    Status: "error",
+                    Synthesis: null,
+                    EntriesProcessed: 0,
+                    ChunksProcessed: 0,
+                    MapModel: _mapModel,
+                    ReduceModel: _reduceModel,
+                    Error: $"Synthesis backend unavailable or reduce model '{_reduceModel}' not found. " +
+                           "For Ollama: ensure it is running (ollama serve) and the model is pulled. " +
+                           "For the in-process ONNX backend: stage the model dir or set SYNTHESIS_ONNX_MODEL_DIR.");
+            }
         }
 
         // 2. Gather memories (within this tenant)
@@ -95,6 +140,7 @@ public sealed class SynthesisEngine
         // 4. Map phase: summarize each chunk in parallel
         var mapChannel = Channel.CreateBounded<MemoryChunk>(ChannelCapacity);
         var mapResults = Channel.CreateBounded<MapResult>(ChannelCapacity);
+        var chunkWarnings = new ConcurrentQueue<string>();
 
         // Producer: feed chunks
         var producer = Task.Run(async () =>
@@ -106,7 +152,7 @@ public sealed class SynthesisEngine
 
         // Map workers
         var workers = Enumerable.Range(0, Math.Min(MaxMapWorkers, chunks.Count))
-            .Select(_ => MapWorkerAsync(mapChannel.Reader, mapResults.Writer, query, ct))
+            .Select(_ => MapWorkerAsync(mapChannel.Reader, mapResults.Writer, chunkWarnings, query, ct))
             .ToArray();
 
         // Collector
@@ -123,21 +169,55 @@ public sealed class SynthesisEngine
         mapResults.Writer.Complete();
         await collector;
 
-        if (summaries.Count == 0)
-            return new SynthesisResult("map_failed", null, entries.Count, 0,
-                _mapModel, _reduceModel, Error: "All map workers failed.");
+        int failedChunks = chunkWarnings.Count;
+        var warnings = failedChunks > 0 ? chunkWarnings.ToArray() : null;
+        int entriesProcessed = summaries.Sum(s => s.EntryCount);
 
-        // 5. Reduce phase: synthesize all chunk summaries
-        var synthesis = await ReduceAsync(summaries, query, ct);
+        if (summaries.Count == 0)
+        {
+            string mapError = warnings is { Length: > 0 }
+                ? $"All {failedChunks} map chunk(s) failed. First error: {warnings[0]}"
+                : "All map workers failed.";
+            return new SynthesisResult("map_failed", null, 0, 0,
+                _mapModel, _reduceModel, Error: mapError)
+            {
+                ChunksFailed = failedChunks,
+                Warnings = warnings
+            };
+        }
+
+        // 5. Reduce phase: synthesize all chunk summaries, handling transport/runtime failures gracefully.
+        string? synthesis = null;
+        string? reduceError = null;
+        try
+        {
+            synthesis = await ReduceAsync(summaries, query, ct);
+            if (string.IsNullOrWhiteSpace(synthesis))
+                synthesis = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            reduceError = $"Reduce phase failed ({ex.GetType().Name}): {ex.Message}";
+        }
+
+        string status = synthesis is not null ? "synthesized" : "reduce_failed";
+        string? error = synthesis is not null
+            ? null
+            : reduceError ?? "Reduce worker returned an empty synthesis.";
 
         return new SynthesisResult(
-            Status: synthesis is not null ? "synthesized" : "reduce_failed",
+            Status: status,
             Synthesis: synthesis,
-            EntriesProcessed: entries.Count,
+            EntriesProcessed: entriesProcessed,
             ChunksProcessed: summaries.Count,
             MapModel: _mapModel,
             ReduceModel: _reduceModel,
-            ChunkSummaries: summaries.Select(s => s.Summary).ToList());
+            Error: error,
+            ChunkSummaries: summaries.Select(s => s.Summary).ToList())
+        {
+            ChunksFailed = failedChunks,
+            Warnings = warnings
+        };
     }
 
     /// <summary>
@@ -190,7 +270,7 @@ public sealed class SynthesisEngine
 
     /// <summary>Map worker: reads chunks from channel, summarizes via SLM, writes results.</summary>
     private async Task MapWorkerAsync(ChannelReader<MemoryChunk> input,
-        ChannelWriter<MapResult> output, string? query, CancellationToken ct)
+        ChannelWriter<MapResult> output, ConcurrentQueue<string> warnings, string? query, CancellationToken ct)
     {
         await foreach (var chunk in input.ReadAllAsync(ct))
         {
@@ -201,14 +281,14 @@ public sealed class SynthesisEngine
 
                 if (!string.IsNullOrWhiteSpace(summary))
                     await output.WriteAsync(new MapResult(summary, chunk.Entries.Count, chunk.ClusterLabel), ct);
+                else
+                    warnings.Enqueue($"Map chunk of {chunk.Entries.Count} items returned an empty summary.");
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                // Graceful degradation: skip failed chunks, but surface the error so callers
-                // can distinguish "Ollama crashed" from "inputs were empty".
-                Console.Error.WriteLine(
-                    $"[SynthesisEngine] MapWorker failed for chunk of {chunk.Entries.Count} items: " +
-                    $"{ex.GetType().Name}: {ex.Message}");
+                // Graceful degradation: skip failed chunks and surface the failure in SynthesisResult.Warnings.
+                warnings.Enqueue(
+                    $"Map chunk of {chunk.Entries.Count} items failed ({ex.GetType().Name}): {ex.Message}");
             }
         }
     }
@@ -281,4 +361,13 @@ public sealed record SynthesisResult(
     string MapModel,
     string ReduceModel,
     string? Error = null,
-    IReadOnlyList<string>? ChunkSummaries = null);
+    IReadOnlyList<string>? ChunkSummaries = null)
+{
+    /// <summary>Number of map chunks that failed during the map phase.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ChunksFailed { get; init; }
+
+    /// <summary>Structured failure warnings when one or more map chunks failed.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Warnings { get; init; }
+}

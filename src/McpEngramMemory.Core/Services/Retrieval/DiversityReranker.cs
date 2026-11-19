@@ -50,6 +50,16 @@ public static class DiversityReranker
         if (candidates.Count == 0)
             return Array.Empty<CognitiveSearchResult>();
 
+        // Normalize relevance scores by maxScore so small-scale upstream scores (e.g., RRF
+        // ~0.016-0.033) are placed on the same [0, 1] scale as pairwise vector redundancy and
+        // group penalties, without mutating the original Score on returned results.
+        float maxScore = 0f;
+        foreach (var c in candidates)
+        {
+            if (c.Result.Score > maxScore)
+                maxScore = c.Result.Score;
+        }
+
         var selected = new List<CognitiveSearchResult>(Math.Min(k, candidates.Count));
         var selectedVectors = new List<(float[] Vector, float Norm)>(k);
         var selectedClusters = new HashSet<string>();
@@ -68,15 +78,15 @@ public static class DiversityReranker
 
                 var c = candidates[i];
 
-                // Relevance: cosine similarity to query (already computed as r.Score,
-                // but we use it directly to stay consistent with the MMR formula)
-                float relevance = c.Result.Score;
+                // Relevance normalized to [0, 1] relative to the candidate pool's top score
+                // so RRF scores (~0.016-0.033) are not drowned out by [0, 1] redundancy.
+                float relevance = maxScore > 0f ? c.Result.Score / maxScore : c.Result.Score;
 
                 // Redundancy: max cosine similarity to any already-selected result
                 float redundancy = 0f;
                 foreach (var (selVec, selNorm) in selectedVectors)
                 {
-                    if (c.Norm == 0f || selNorm == 0f) continue;
+                    if (c.Norm == 0f || selNorm == 0f || c.Vector.Length != selVec.Length) continue;
                     float sim = VectorMath.Dot(c.Vector, selVec) / (c.Norm * selNorm);
                     if (sim > redundancy) redundancy = sim;
                 }

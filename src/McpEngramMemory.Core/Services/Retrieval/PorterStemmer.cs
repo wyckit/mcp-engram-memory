@@ -8,6 +8,26 @@ namespace McpEngramMemory.Core.Services.Retrieval;
 /// </summary>
 public static class PorterStemmer
 {
+    private static readonly (string Suffix, string Replacement)[] Step2Suffixes =
+    [
+        ("ational", "ate"), ("tional", "tion"), ("enci", "ence"),
+        ("anci", "ance"), ("izer", "ize"), ("abli", "able"),
+        ("alli", "al"), ("entli", "ent"), ("eli", "e"),
+        ("ousli", "ous"), ("ization", "ize"), ("ation", "ate"),
+        ("ator", "ate"), ("alism", "al"), ("iveness", "ive"),
+        ("fulness", "ful"), ("ousness", "ous"), ("aliti", "al"),
+        ("iviti", "ive"), ("biliti", "ble"),
+        // IR-critical: normalize -tion to match -ting stems
+        // "encryption" → "encrypt", matching "encrypting" → "encrypt"
+        ("tion", "t"),
+    ];
+
+    private static readonly (string Suffix, string Replacement)[] Step3Suffixes =
+    [
+        ("icate", "ic"), ("ative", ""), ("alize", "al"),
+        ("iciti", "ic"), ("ical", "ic"), ("ful", ""), ("ness", ""),
+    ];
+
     /// <summary>
     /// Stem a single lowercase token using Porter's algorithm (steps 1-3).
     /// Returns the stemmed form, or the original token if no rules apply.
@@ -17,14 +37,15 @@ public static class PorterStemmer
         if (word.Length < 3)
             return word;
 
-        // Step 1a: plurals and -ed/-ing
+        // Step 1a, 1b, 1c: plurals, -ed/-ing, terminal y -> i
         word = Step1a(word);
         word = Step1b(word);
+        word = Step1c(word);
 
-        // Step 2: -tion, -ness, -ment, etc.
+        // Step 2: -tion, -enci, -biliti, etc.
         word = Step2(word);
 
-        // Step 3: -ful, -ness, -ive, etc.
+        // Step 3: -ful, -ness, -iciti, etc.
         word = Step3(word);
 
         return word;
@@ -32,34 +53,33 @@ public static class PorterStemmer
 
     private static string Step1a(string word)
     {
-        if (word.EndsWith("sses"))
+        if (word.EndsWith("sses", StringComparison.Ordinal))
             return word[..^2]; // sses -> ss
-        if (word.EndsWith("ies"))
+        if (word.EndsWith("ies", StringComparison.Ordinal))
             return word[..^2]; // ies -> i  (but we want at least 3 chars)
-        if (word.EndsWith("ss"))
+        if (word.EndsWith("ss", StringComparison.Ordinal))
             return word; // ss -> ss (no change)
-        if (word.EndsWith("s") && word.Length > 3)
+        if (word.EndsWith('s') && word.Length > 3)
             return word[..^1]; // s -> (remove)
         return word;
     }
 
     private static string Step1b(string word)
     {
-        if (word.EndsWith("eed"))
+        if (word.EndsWith("eed", StringComparison.Ordinal))
         {
             // eed -> ee if stem has measure > 0
-            var stem = word[..^3];
-            if (Measure(stem) > 0)
+            if (Measure(word.AsSpan(0, word.Length - 3)) > 0)
                 return word[..^1]; // eed -> ee
             return word;
         }
 
         string? modified = null;
-        if (word.EndsWith("ing") && word.Length > 4 && ContainsVowel(word[..^3]))
+        if (word.EndsWith("ing", StringComparison.Ordinal) && word.Length > 4 && ContainsVowel(word.AsSpan(0, word.Length - 3)))
         {
             modified = word[..^3]; // ing -> (remove)
         }
-        else if (word.EndsWith("ed") && word.Length > 3 && ContainsVowel(word[..^2]))
+        else if (word.EndsWith("ed", StringComparison.Ordinal) && word.Length > 3 && ContainsVowel(word.AsSpan(0, word.Length - 2)))
         {
             modified = word[..^2]; // ed -> (remove)
         }
@@ -67,7 +87,9 @@ public static class PorterStemmer
         if (modified is not null)
         {
             // Post-processing: fix up the stem
-            if (modified.EndsWith("at") || modified.EndsWith("bl") || modified.EndsWith("iz"))
+            if (modified.EndsWith("at", StringComparison.Ordinal) ||
+                modified.EndsWith("bl", StringComparison.Ordinal) ||
+                modified.EndsWith("iz", StringComparison.Ordinal))
                 return modified + "e";
             if (modified.Length >= 2 && IsDoubleConsonant(modified) &&
                 modified[^1] is not 'l' and not 's' and not 'z')
@@ -80,30 +102,23 @@ public static class PorterStemmer
         return word;
     }
 
+    private static string Step1c(string word)
+    {
+        if (word.EndsWith('y') && word.Length > 1 && ContainsVowel(word.AsSpan(0, word.Length - 1)))
+            return string.Concat(word.AsSpan(0, word.Length - 1), "i");
+        return word;
+    }
+
     private static string Step2(string word)
     {
         // Only apply if stem has measure > 0
-        var suffixes = new (string suffix, string replacement)[]
+        foreach (var (suffix, replacement) in Step2Suffixes)
         {
-            ("ational", "ate"), ("tional", "tion"), ("enci", "ence"),
-            ("anci", "ance"), ("izer", "ize"), ("abli", "able"),
-            ("alli", "al"), ("entli", "ent"), ("eli", "e"),
-            ("ousli", "ous"), ("ization", "ize"), ("ation", "ate"),
-            ("ator", "ate"), ("alism", "al"), ("iveness", "ive"),
-            ("fulness", "ful"), ("ousness", "ous"), ("aliti", "al"),
-            ("iviti", "ive"), ("biliti", "ble"),
-            // IR-critical: normalize -tion to match -ting stems
-            // "encryption" → "encrypt", matching "encrypting" → "encrypt"
-            ("tion", "t"),
-        };
-
-        foreach (var (suffix, replacement) in suffixes)
-        {
-            if (word.EndsWith(suffix))
+            if (word.EndsWith(suffix, StringComparison.Ordinal))
             {
-                var stem = word[..^suffix.Length];
+                var stem = word.AsSpan(0, word.Length - suffix.Length);
                 if (Measure(stem) > 0)
-                    return stem + replacement;
+                    return string.Concat(stem, replacement);
                 return word;
             }
         }
@@ -113,19 +128,13 @@ public static class PorterStemmer
 
     private static string Step3(string word)
     {
-        var suffixes = new (string suffix, string replacement)[]
+        foreach (var (suffix, replacement) in Step3Suffixes)
         {
-            ("icate", "ic"), ("ative", ""), ("alize", "al"),
-            ("iciti", "ic"), ("ical", "ic"), ("ful", ""), ("ness", ""),
-        };
-
-        foreach (var (suffix, replacement) in suffixes)
-        {
-            if (word.EndsWith(suffix))
+            if (word.EndsWith(suffix, StringComparison.Ordinal))
             {
-                var stem = word[..^suffix.Length];
+                var stem = word.AsSpan(0, word.Length - suffix.Length);
                 if (Measure(stem) > 0)
-                    return stem + replacement;
+                    return string.Concat(stem, replacement);
                 return word;
             }
         }
@@ -134,7 +143,7 @@ public static class PorterStemmer
     }
 
     // Measure (m) = number of VC sequences in the word
-    private static int Measure(string word)
+    private static int Measure(ReadOnlySpan<char> word)
     {
         int m = 0;
         int i = 0;
@@ -153,14 +162,14 @@ public static class PorterStemmer
         return m;
     }
 
-    private static bool ContainsVowel(string word)
+    private static bool ContainsVowel(ReadOnlySpan<char> word)
     {
         for (int i = 0; i < word.Length; i++)
             if (IsVowel(word, i)) return true;
         return false;
     }
 
-    private static bool IsVowel(string word, int i)
+    private static bool IsVowel(ReadOnlySpan<char> word, int i)
     {
         char c = word[i];
         if (c is 'a' or 'e' or 'i' or 'o' or 'u') return true;
@@ -168,13 +177,13 @@ public static class PorterStemmer
         return false;
     }
 
-    private static bool IsDoubleConsonant(string word)
+    private static bool IsDoubleConsonant(ReadOnlySpan<char> word)
     {
         if (word.Length < 2) return false;
         return word[^1] == word[^2] && !IsVowel(word, word.Length - 1);
     }
 
-    private static bool EndsWithCVC(string word)
+    private static bool EndsWithCVC(ReadOnlySpan<char> word)
     {
         if (word.Length < 3) return false;
         int len = word.Length;

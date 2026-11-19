@@ -161,7 +161,7 @@ public class PhysicsEngineTests
             MakeResult("c", score: 0.7f, accessCount: 200, state: "ltm"),
         };
 
-        var slingshot = _engine.Slingshot(results);
+        var slingshot = _engine.Slingshot(results, temperature: 1f);
 
         for (int i = 0; i < slingshot.AllResults.Count - 1; i++)
             Assert.True(slingshot.AllResults[i].GravityForce >= slingshot.AllResults[i + 1].GravityForce);

@@ -65,9 +65,18 @@ public sealed class ExpertDispatcher
     public (string Status, IReadOnlyList<ExpertMatch> Experts) Route(
         float[] queryVector, int topK = 3, float threshold = DefaultThreshold)
     {
+        // Search broadly enough that routing-only root/branch domain nodes cannot
+        // crowd out leaf experts before we filter them out.
+        int searchK = topK <= 0
+            ? topK
+            : Math.Max(topK, _index.CountInNamespace(SystemNamespace, tenantId: ""));
+
         var results = _index.Search(
-            queryVector, SystemNamespace, tenantId: "", k: topK, minScore: 0f,
-            includeStates: new HashSet<string> { "ltm" });
+                queryVector, SystemNamespace, tenantId: "", k: searchK, minScore: 0f,
+                includeStates: new HashSet<string> { "ltm" })
+            .Where(IsLeafResult)
+            .Take(topK)
+            .ToList();
 
         if (results.Count == 0 || results[0].Score < threshold)
         {
@@ -183,12 +192,19 @@ public sealed class ExpertDispatcher
         if (level == "branch" && string.IsNullOrWhiteSpace(parentNodeId))
             throw new ArgumentException("Branch nodes must have a parent.", nameof(parentNodeId));
 
-        // Verify parent exists if specified
+        // Verify parent exists and is a valid non-self domain node if specified
         if (parentNodeId is not null)
         {
+            if (string.Equals(nodeId, parentNodeId, StringComparison.Ordinal))
+                throw new ArgumentException("A domain node cannot be its own parent.", nameof(parentNodeId));
+
             var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
             if (parentEntry is null)
                 throw new ArgumentException($"Parent node '{parentNodeId}' does not exist.", nameof(parentNodeId));
+
+            string parentLevel = GetLevel(parentEntry);
+            if (parentLevel != "root" && parentLevel != "branch")
+                throw new ArgumentException($"Parent node '{parentNodeId}' must be a root or branch domain node.", nameof(parentNodeId));
         }
 
         string targetNamespace = $"domain_{nodeId}";
@@ -326,35 +342,40 @@ public sealed class ExpertDispatcher
                 path.Add(EntryToDomainNode(branch.Entry, branch.Score));
         }
 
-        // Step 4: Get leaf children of matched branches + direct leaves from roots
-        var allLeaves = new List<CognitiveEntry>(directLeaves);
+        // Step 4: Get leaf children of matched branches + direct leaves from roots.
+        // Never add routing-only branch/root nodes into allLeaves.
+        var leafIds = new HashSet<string>(StringComparer.Ordinal);
+        var allLeaves = new List<CognitiveEntry>();
+        foreach (var leaf in directLeaves)
+        {
+            if (IsLeafEntry(leaf) && leafIds.Add(leaf.Id))
+                allLeaves.Add(leaf);
+        }
         if (matchedBranches.Count > 0)
         {
             foreach (var branch in matchedBranches)
             {
                 var children = GetChildren(branch.Entry.Id, cachedEntries);
-                allLeaves.AddRange(children);
-            }
-        }
-        else if (directLeaves.Count == 0)
-        {
-            // No branches and no direct leaves — try roots' children as fallback
-            foreach (var root in matchedRoots)
-            {
-                var children = GetChildren(root.Entry.Id, cachedEntries);
-                allLeaves.AddRange(children);
+                foreach (var child in children)
+                {
+                    if (IsLeafEntry(child) && leafIds.Add(child.Id))
+                        allLeaves.Add(child);
+                }
             }
         }
 
-        // Step 5: Score leaves and select top-K above threshold
+        // Step 5: Score leaves and select top-K above threshold (sorted descending once
+        // so matchedLeafExperts and path stay strictly aligned and ordered).
         var matchedLeafExperts = new List<ExpertMatch>();
         if (allLeaves.Count > 0)
         {
-            var scoredLeaves = ScoreEntries(allLeaves, queryVector, queryNorm);
-            matchedLeafExperts = scoredLeaves
+            var topLeaves = ScoreEntries(allLeaves, queryVector, queryNorm)
                 .Where(s => s.Score >= threshold)
                 .OrderByDescending(s => s.Score)
                 .Take(topK)
+                .ToList();
+
+            matchedLeafExperts = topLeaves
                 .Select(s => new ExpertMatch(
                     s.Entry.Id,
                     s.Entry.Text ?? "",
@@ -363,7 +384,7 @@ public sealed class ExpertDispatcher
                     s.Entry.AccessCount))
                 .ToList();
 
-            foreach (var leaf in scoredLeaves.Where(s => s.Score >= threshold).Take(topK))
+            foreach (var leaf in topLeaves)
                 path.Add(EntryToDomainNode(leaf.Entry, leaf.Score));
         }
 
@@ -410,8 +431,10 @@ public sealed class ExpertDispatcher
             .Select(e => BuildTreeNode(e, nodeMap))
             .ToList();
 
-        // Calculate max depth
-        int maxDepth = roots.Count > 0 ? roots.Max(r => CalculateDepth(r, nodeMap)) : 0;
+        // Calculate max depth with cycle guard
+        int maxDepth = roots.Count > 0
+            ? roots.Max(r => CalculateDepth(r, nodeMap, new HashSet<string>(StringComparer.Ordinal)))
+            : 0;
 
         // If there are no explicit roots but there are entries, they're all flat leaves
         if (roots.Count == 0)
@@ -432,20 +455,50 @@ public sealed class ExpertDispatcher
     /// </summary>
     public bool LinkToParent(string expertId, string parentNodeId)
     {
+        if (string.Equals(expertId, parentNodeId, StringComparison.Ordinal))
+            return false;
+
         var entry = _index.Get(expertId, SystemNamespace, tenantId: "");
         if (entry is null) return false;
 
         var parentEntry = _index.Get(parentNodeId, SystemNamespace, tenantId: "");
         if (parentEntry is null) return false;
 
+        // Validate hierarchy invariants: roots cannot be re-parented, and parents must be
+        // domain nodes (root or branch), never leaf experts.
+        string entryLevel = GetLevel(entry);
+        if (entryLevel == "root")
+            return false;
+
+        string parentLevel = GetLevel(parentEntry);
+        if (parentLevel != "root" && parentLevel != "branch")
+            return false;
+
+        // Reject cycles (e.g., linking a branch under one of its own descendants).
+        var ancestors = new HashSet<string>(StringComparer.Ordinal) { expertId };
+        string? cursor = parentNodeId;
+        while (cursor is not null)
+        {
+            if (!ancestors.Add(cursor))
+                return false;
+            var cursorEntry = _index.Get(cursor, SystemNamespace, tenantId: "");
+            if (cursorEntry is null)
+                break;
+            cursor = cursorEntry.Metadata.GetValueOrDefault("parentNodeId");
+        }
+
         // Unlink from previous parent if any
         var oldParent = entry.Metadata.GetValueOrDefault("parentNodeId");
         if (oldParent is not null && oldParent != parentNodeId)
             RemoveChildFromParent(oldParent, expertId);
 
-        entry.Metadata["parentNodeId"] = parentNodeId;
-        entry.Metadata["level"] = "leaf";
-        _index.Upsert(entry);
+        // Clone metadata before upserting instead of mutating live index entry dictionaries in place.
+        var updatedMetadata = new Dictionary<string, string>(entry.Metadata)
+        {
+            ["parentNodeId"] = parentNodeId,
+            ["level"] = entryLevel == "branch" ? "branch" : "leaf"
+        };
+        _index.Upsert(CloneWithMetadata(entry, updatedMetadata));
 
         AddChildToParent(parentNodeId, expertId);
         return true;
@@ -560,8 +613,11 @@ public sealed class ExpertDispatcher
         var childIds = existing.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
         if (childIds.Remove(childNodeId))
         {
-            parentEntry.Metadata["childNodeIds"] = string.Join(",", childIds);
-            _index.Upsert(parentEntry);
+            var updatedMetadata = new Dictionary<string, string>(parentEntry.Metadata)
+            {
+                ["childNodeIds"] = string.Join(",", childIds)
+            };
+            _index.Upsert(CloneWithMetadata(parentEntry, updatedMetadata));
         }
     }
 
@@ -593,6 +649,42 @@ public sealed class ExpertDispatcher
     {
         string targetNamespace = r.Metadata?.GetValueOrDefault("targetNamespace") ?? "";
         return new ExpertMatch(r.Id, r.Text ?? "", targetNamespace, r.Score, r.AccessCount);
+    }
+
+    private static bool IsLeafResult(CognitiveSearchResult r)
+    {
+        var level = r.Metadata?.GetValueOrDefault("level");
+        return level is null || (level != "root" && level != "branch");
+    }
+
+    private static bool IsLeafEntry(CognitiveEntry entry)
+    {
+        string level = GetLevel(entry);
+        return level != "root" && level != "branch";
+    }
+
+    private static CognitiveEntry CloneWithMetadata(CognitiveEntry entry, Dictionary<string, string> metadata)
+    {
+        return new CognitiveEntry(
+            id: entry.Id,
+            vector: (float[])entry.Vector.Clone(),
+            ns: entry.Ns,
+            text: entry.Text,
+            category: entry.Category,
+            metadata: metadata,
+            lifecycleState: entry.LifecycleState,
+            createdAt: entry.CreatedAt,
+            lastAccessedAt: entry.LastAccessedAt,
+            accessCount: entry.AccessCount,
+            activationEnergy: entry.ActivationEnergy,
+            isSummaryNode: entry.IsSummaryNode,
+            sourceClusterId: entry.SourceClusterId,
+            keywords: entry.Keywords,
+            tenantId: entry.TenantId)
+        {
+            SourceClusterStamp = entry.SourceClusterStamp,
+            SourceClusterInstance = entry.SourceClusterInstance
+        };
     }
 
     /// <summary>
@@ -637,8 +729,11 @@ public sealed class ExpertDispatcher
         if (!childIds.Contains(childNodeId))
         {
             childIds.Add(childNodeId);
-            parentEntry.Metadata["childNodeIds"] = string.Join(",", childIds);
-            _index.Upsert(parentEntry);
+            var updatedMetadata = new Dictionary<string, string>(parentEntry.Metadata)
+            {
+                ["childNodeIds"] = string.Join(",", childIds)
+            };
+            _index.Upsert(CloneWithMetadata(parentEntry, updatedMetadata));
         }
     }
 
@@ -697,24 +792,34 @@ public sealed class ExpertDispatcher
     }
 
     /// <summary>
-    /// Calculate depth of a node in the tree.
+    /// Calculate depth of a node in the tree, guarding against cycles in persisted metadata.
     /// </summary>
-    private int CalculateDepth(DomainNode node, Dictionary<string, CognitiveEntry> nodeMap)
+    private int CalculateDepth(DomainNode node, Dictionary<string, CognitiveEntry> nodeMap, HashSet<string> visited)
     {
-        if (node.ChildNodeIds.Count == 0)
-            return 1;
+        if (!visited.Add(node.NodeId))
+            return 0;
 
-        int maxChildDepth = 0;
-        foreach (var childId in node.ChildNodeIds)
+        try
         {
-            if (nodeMap.TryGetValue(childId, out var childEntry))
+            if (node.ChildNodeIds.Count == 0)
+                return 1;
+
+            int maxChildDepth = 0;
+            foreach (var childId in node.ChildNodeIds)
             {
-                var childNode = BuildTreeNode(childEntry, nodeMap);
-                int childDepth = CalculateDepth(childNode, nodeMap);
-                if (childDepth > maxChildDepth)
-                    maxChildDepth = childDepth;
+                if (nodeMap.TryGetValue(childId, out var childEntry) && !visited.Contains(childId))
+                {
+                    var childNode = BuildTreeNode(childEntry, nodeMap);
+                    int childDepth = CalculateDepth(childNode, nodeMap, visited);
+                    if (childDepth > maxChildDepth)
+                        maxChildDepth = childDepth;
+                }
             }
+            return 1 + maxChildDepth;
         }
-        return 1 + maxChildDepth;
+        finally
+        {
+            visited.Remove(node.NodeId);
+        }
     }
 }

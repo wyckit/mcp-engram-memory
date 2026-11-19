@@ -163,14 +163,10 @@ public sealed class PaddedTenantRetractionTests : IDisposable
     }
 
     /// <summary>
-    /// A cached basis for a namespace that no longer qualifies is RETRACTED, one partition per
-    /// <c>GetBasis</c> call.
-    ///
-    /// The rotation is the same shape as <c>AutoLinkScanner.ReconcileOneResumeCursor</c> and for the
-    /// same two reasons: nothing tells this singleton that a namespace was torn down, and anything
-    /// done here that is linear in the cache size is quadratic across a warmup cycle that calls
-    /// <c>GetBasis</c> once per namespace. So the retraction is bounded work, and the property is
-    /// that the dictionary shrinks rather than that it shrinks immediately.
+    /// Full-namespace teardown retracts the cached basis immediately via
+    /// <see cref="CognitiveIndex.NamespaceRemoved"/>, and a namespace that shrinks below
+    /// <see cref="MemoryDiffusionKernel.MinimumNodesForSpectral"/> via per-entry deletes is
+    /// retracted by the bounded one-partition-per-call rotation.
     /// </summary>
     [Fact]
     public void TheKernel_RetractsTheCachedBasisOfANamespaceThatNoLongerQualifies()
@@ -182,13 +178,22 @@ public sealed class PaddedTenantRetractionTests : IDisposable
         Assert.NotNull(kernel.GetBasis("doomed", Canonical));
         Assert.Equal(1, kernel.CachedPartitionCount);
 
-        // The namespace goes away exactly as purge_debates makes it go away: the entries are deleted
-        // and nothing notifies the kernel.
+        // Full-namespace teardown raises CognitiveIndex.NamespaceRemoved, retracting immediately.
         Assert.True(_index.DeleteAllInNamespace("doomed", Canonical) > 0);
+        Assert.Equal(0, kernel.CachedPartitionCount);
+
+        // Per-entry shrinking below MinimumNodesForSpectral does not raise NamespaceRemoved;
+        // the bounded rotation reclaims the dead basis when other namespaces are queried.
+        SeedQualifyingNamespace(graph, "shrinking");
+        Assert.NotNull(kernel.GetBasis("shrinking", Canonical));
         Assert.Equal(1, kernel.CachedPartitionCount);
 
-        // A warmup cycle asking about some OTHER namespace steps the rotation. That namespace is too
-        // small to qualify, so it caches nothing of its own and the count can only fall.
+        const int nodes = MemoryDiffusionKernel.MinimumNodesForSpectral + 4;
+        for (int i = 0; i < 6; i++)
+            Assert.True(_index.Delete($"shrinking-{i}", "shrinking", Canonical));
+        Assert.True(nodes - 6 < MemoryDiffusionKernel.MinimumNodesForSpectral);
+        Assert.Equal(1, kernel.CachedPartitionCount);
+
         _index.Upsert(new CognitiveEntry("solo", [1f, 0f], "tiny", "solo", tenantId: Canonical));
         for (int i = 0; i < 4 && kernel.CachedPartitionCount > 0; i++)
             Assert.Null(kernel.GetBasis("tiny", Canonical));

@@ -37,10 +37,13 @@ namespace McpEngramMemory.Core.Services.Graph;
 ///    out-of-basis pass-through in <see cref="ApplySpectralFilter"/> implements
 ///    exactly that. If the remaining linked core is smaller than
 ///    <see cref="MinimumNodesForSpectral"/>, the kernel bypasses entirely.
-/// 5. Find the top-K largest eigenpairs (lambda_M, u) of M = D^(-1/2) W D^(-1/2)
+/// 5. Find the top-K largest eigenpairs (lambda_S, u) of the shifted positive
+///    semi-definite operator S = (I + D^(-1/2) W D^(-1/2)) / 2 (spectrum [0, 1])
 ///    over the linked subgraph via <see cref="RandomizedEigensolver.SolveTopK"/>;
-///    convert to the smallest eigenpairs of L via lambda_L = 1 - lambda_M and
-///    sort ascending.
+///    convert to the smallest eigenpairs of L = I - D^(-1/2) W D^(-1/2) via
+///    lambda_L = 2 * (1 - lambda_S) and sort ascending. Shifting guarantees that
+///    negative eigenvalues of M near -1 on bipartite, tree, or star graphs cannot
+///    hijack the power-iteration sketch.
 ///
 /// Cache invalidation is revision-based on TWO revisions, and one of them is not
 /// about edges at all. <see cref="KnowledgeGraph.RevisionFor"/> says which edges
@@ -114,10 +117,10 @@ public class MemoryDiffusionKernel
 
     /// <summary>
     /// Negative cache: namespaces whose basis computation threw, keyed by the graph AND attribution
-    /// revisions at failure time. The eigensolver RNG is seeded from
-    /// <c>graphRevision ^ ns.GetHashCode()</c>, so a failure is deterministic per
-    /// (namespace, revision) — re-running the expensive eigensolve before the inputs change would
-    /// repay the full cost for a guaranteed-identical failure. Instead <see cref="GetBasis"/>
+    /// revisions at failure time. The eigensolver RNG is seeded deterministically from
+    /// <c>graphRevision</c> and a stable FNV-1a hash of <c>ns</c>, so a failure is deterministic per
+    /// (namespace, revision) across restarts — re-running the expensive eigensolve before the inputs
+    /// change would repay the full cost for a guaranteed-identical failure. Instead <see cref="GetBasis"/>
     /// rethrows a cheap exception until one of the revisions moves, which re-arms exactly one
     /// retry. Attribution is in the key for the same reason it is in the positive cache: a twin
     /// insert changes which edges the computation is handed while leaving the graph revision — and
@@ -133,6 +136,12 @@ public class MemoryDiffusionKernel
         _index = index;
         _graph = graph;
         _logger = logger;
+        _index.NamespaceRemoved += OnNamespaceRemoved;
+    }
+
+    private void OnNamespaceRemoved(NsKey key)
+    {
+        Retract(NamespaceStore.PartitionKey(key));
     }
 
     /// <summary>
@@ -181,8 +190,10 @@ public class MemoryDiffusionKernel
         string pk = NamespaceStore.PartitionKey(tenantId, ns);
 
         // Retraction first, and exactly one partition of it — see
-        // ReconcileOneRetractablePartition.
-        ReconcileOneRetractablePartition();
+        // ReconcileOneRetractablePartition. Never retract the partition currently
+        // being requested, or concurrent callers on the same cold partition would
+        // delete each other's active compute lock while ComputeBasis is in flight.
+        ReconcileOneRetractablePartition(skipPartitionKey: pk);
 
         // Both revisions are read BEFORE the data they describe is snapshotted, and this ordering
         // is load-bearing rather than incidental. A mutation landing between the read and the
@@ -214,7 +225,7 @@ public class MemoryDiffusionKernel
             currentAttribution = _index.AttributionRevisionFor(tenantId);
             if (_cache.TryGetValue(pk, out cached)
                 && IsFresh(cached, currentRev, currentAttribution)
-                && cached.Basis.TopK >= topK)
+                && (cached.Basis.TopK >= topK || cached.Basis.TopK >= cached.Basis.NodeCount))
             {
                 return cached;
             }
@@ -425,16 +436,12 @@ public class MemoryDiffusionKernel
     /// <summary>
     /// Reconcile exactly ONE retractable partition against the store, and never more than one.
     ///
-    /// THE RETRACTION. Nothing tells a DI singleton that a namespace was torn down.
-    /// <c>CognitiveIndex</c> raises no namespace-removal event — <c>EntryDeleted</c> fires per entry
-    /// and not at all from <c>DeleteAllInNamespace</c>, which is the path <c>purge_debates</c> takes
-    /// — and <see cref="Invalidate"/> is called from the diffusion tools and nowhere else, never
-    /// from any teardown path. So a namespace that qualified once, was warmed by
-    /// <c>DiffusionKernelWarmupService</c>, and was then deleted leaves its whole eigenbasis
-    /// resident: the doesn't-qualify branch in <see cref="GetCachedBasis"/> can never reach it,
-    /// because nothing ever asks for that partition's basis again. A host churning one debate
-    /// namespace per conversation accumulates one basis per debate, monotonically, in a process
-    /// designed to run for weeks.
+    /// THE RETRACTION. Full-namespace deletion fires <see cref="CognitiveIndex.NamespaceRemoved"/>,
+    /// which retracts the partition immediately via <see cref="OnNamespaceRemoved"/>. This bounded
+    /// rotation complements that event by reclaiming partitions that shrink below
+    /// <see cref="MinimumNodesForSpectral"/> via per-entry deletes, partitions whose in-flight
+    /// compute completed after a concurrent retraction, and lock-only entries left by bypassed
+    /// namespaces.
     ///
     /// LOCK-ONLY STATE. A too-small or too-sparse namespace returns no basis and no failure, but it
     /// still acquired a compute lock. Such a partition has no expensive state worth retaining and
@@ -455,9 +462,10 @@ public class MemoryDiffusionKernel
     /// harmless — the next request recomputes — which is what makes it safe to probe a key another
     /// thread is currently computing for.
     /// </summary>
-    private void ReconcileOneRetractablePartition()
+    private void ReconcileOneRetractablePartition(string skipPartitionKey)
     {
         if (!TryTakeNextRetractablePartition(out var pk, out var ns, out var tenant)) return;
+        if (string.Equals(pk, skipPartitionKey, StringComparison.Ordinal)) return;
 
         // A marker with neither a basis nor a failure represents only a compute lock (or the
         // harmless marker-only residue of a retraction race). Neither is worth retaining.
@@ -685,7 +693,11 @@ public class MemoryDiffusionKernel
             invSqrtDeg[i] = 1f / MathF.Sqrt(degree[i]);
         }
 
-        // (M x)[i] = invSqrtDeg[i] * sum over neighbors j: w_ij * invSqrtDeg[j] * x[j]
+        // Shifted PSD operator S = (I + M) / 2 where M = D^(-1/2) W D^(-1/2).
+        // (S x)[i] = 0.5 * (x[i] + invSqrtDeg[i] * sum over neighbors j: w_ij * invSqrtDeg[j] * x[j]).
+        // Spectrum of M is [-1, +1]; spectrum of S is [0, 1] with identical eigenvectors, so
+        // randomized power iteration cannot be hijacked by negative eigenvalues near -1 on
+        // bipartite, tree, or star graphs.
         void MatVec(ReadOnlySpan<float> x, Span<float> y)
         {
             for (int i = 0; i < n; i++)
@@ -696,40 +708,42 @@ public class MemoryDiffusionKernel
                 float si = invSqrtDeg[i];
                 for (int p = rs; p < re; p++)
                     acc += vals[p] * invSqrtDeg[colIdx[p]] * x[colIdx[p]];
-                y[i] = si * acc;
+                y[i] = 0.5f * (x[i] + si * acc);
             }
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var rng = new Random(unchecked((int)(graphRevision ^ ns.GetHashCode())));
-        var (mEig, mVec) = RandomizedEigensolver.SolveTopK(n, topK, Oversample, PowerIterations, MatVec, rng);
+        var rng = new Random(ComputeDeterministicSeed(graphRevision, ns));
+        var (sEig, sVec) = RandomizedEigensolver.SolveTopK(n, topK, Oversample, PowerIterations, MatVec, rng);
         sw.Stop();
 
-        // Convert eigenpairs of M to eigenpairs of L = I - M and sort ascending.
+        // Convert eigenpairs of S = (I + M) / 2 to eigenpairs of L = I - M via
+        // lambda_L = 2 * (1 - lambda_S) and sort ascending.
         // Eigenvalues of the normalized Laplacian must lie in [0, 2]; clamp small
         // negative numerical noise (typically the smallest eigenvalue, which is
         // exactly 0 in exact arithmetic for connected components) so callers can
         // safely apply MathF.Pow(lambda, alpha) for fractional-Laplacian filters
         // without producing NaN.
-        var lEigsUnsorted = new float[mEig.Length];
-        for (int j = 0; j < mEig.Length; j++)
+        var lEigsUnsorted = new float[sEig.Length];
+        for (int j = 0; j < sEig.Length; j++)
         {
-            float lambdaL = 1f - mEig[j];
+            float lambdaL = 2f * (1f - sEig[j]);
             if (lambdaL < 0f) lambdaL = 0f;
+            else if (lambdaL > 2f) lambdaL = 2f;
             lEigsUnsorted[j] = lambdaL;
         }
 
-        var order = new int[mEig.Length];
-        for (int j = 0; j < mEig.Length; j++) order[j] = j;
+        var order = new int[sEig.Length];
+        for (int j = 0; j < sEig.Length; j++) order[j] = j;
         Array.Sort(order, (a, b) => lEigsUnsorted[a].CompareTo(lEigsUnsorted[b]));
 
-        var lEigs = new float[mEig.Length];
-        var lVecs = new float[n, mEig.Length];
-        for (int j = 0; j < mEig.Length; j++)
+        var lEigs = new float[sEig.Length];
+        var lVecs = new float[n, sEig.Length];
+        for (int j = 0; j < sEig.Length; j++)
         {
             int src = order[j];
             lEigs[j] = lEigsUnsorted[src];
-            for (int i = 0; i < n; i++) lVecs[i, j] = mVec[i, src];
+            for (int i = 0; i < n; i++) lVecs[i, j] = sVec[i, src];
         }
 
         _logger?.LogInformation(
@@ -737,5 +751,28 @@ public class MemoryDiffusionKernel
             ns, n, entryIds.Length, isolatedCount, edgeCount, lEigs.Length, sw.ElapsedMilliseconds);
 
         return new DiffusionBasis(ns, basisEntryIds, lEigs, lVecs, edgeCount, graphRevision);
+    }
+
+    /// <summary>
+    /// Deterministic cross-process RNG seed combining <paramref name="graphRevision"/> and a
+    /// 32-bit FNV-1a hash of <paramref name="ns"/> (unlike <see cref="string.GetHashCode()"/>,
+    /// which is randomized per process).
+    /// </summary>
+    internal static int ComputeDeterministicSeed(long graphRevision, string ns)
+    {
+        unchecked
+        {
+            uint hash = 2166136261u;
+            for (int i = 0; i < ns.Length; i++)
+            {
+                char c = ns[i];
+                hash ^= (byte)(c & 0xFF);
+                hash *= 16777619u;
+                hash ^= (byte)(c >> 8);
+                hash *= 16777619u;
+            }
+            int revFold = (int)(graphRevision ^ (graphRevision >> 32));
+            return revFold ^ (int)hash;
+        }
     }
 }

@@ -15,6 +15,9 @@ public static class VectorQuantizer
     /// </summary>
     public static QuantizedVector Quantize(float[] fp32)
     {
+        if (fp32.Length == 0)
+            return new QuantizedVector(Array.Empty<sbyte>(), 0f, 1f);
+
         float min = float.MaxValue, max = float.MinValue;
         for (int i = 0; i < fp32.Length; i++)
         {
@@ -88,13 +91,80 @@ public static class VectorQuantizer
     }
 
     /// <summary>
-    /// Compute approximate cosine similarity between two quantized vectors.
-    /// Uses Int8 dot product for the numerator and precomputed SelfDot for norms.
+    /// SIMD-accelerated sum of Int8 elements used to de-offset asymmetric min/max quantization.
+    /// </summary>
+    private static int Int8Sum(ReadOnlySpan<sbyte> a)
+    {
+        int length = a.Length;
+        int sum = 0;
+        int i = 0;
+
+        if (Vector.IsHardwareAccelerated && length >= Vector<sbyte>.Count)
+        {
+            var acc = Vector<int>.Zero;
+            int sbyteCount = Vector<sbyte>.Count;
+            int simdEnd = length - (length % sbyteCount);
+
+            for (; i < simdEnd; i += sbyteCount)
+            {
+                var va = new Vector<sbyte>(a.Slice(i));
+                Vector.Widen(va, out var vaShortLo, out var vaShortHi);
+                Vector.Widen(vaShortLo, out var v0, out var v1);
+                Vector.Widen(vaShortHi, out var v2, out var v3);
+                acc += v0 + v1 + v2 + v3;
+            }
+
+            sum = Vector.Sum(acc);
+        }
+
+        for (; i < length; i++)
+            sum += a[i];
+
+        return sum;
+    }
+
+    /// <summary>
+    /// Compute approximate cosine similarity between two asymmetrically quantized vectors.
+    /// Reconstructs the exact de-offsetted dot product and L2 norms from <see cref="QuantizedVector.Min"/>,
+    /// <see cref="QuantizedVector.Scale"/>, <see cref="QuantizedVector.SelfDot"/>, and SIMD Int8 dot/sum
+    /// so skewed or non-zero-centered vectors accurately approximate FP32 cosine similarity.
     /// </summary>
     public static float ApproximateCosine(QuantizedVector a, QuantizedVector b)
     {
-        if (a.SelfDot == 0 || b.SelfDot == 0) return 0f;
-        int dot = Int8DotProduct(a.Data, b.Data);
-        return dot / (MathF.Sqrt(a.SelfDot) * MathF.Sqrt(b.SelfDot));
+        int d = Math.Min(a.Data.Length, b.Data.Length);
+        if (d == 0 || a.Scale <= 0f || b.Scale <= 0f) return 0f;
+
+        // Quantize maps x[i] -> q[i] = round((x[i] - min) * scale) - 128, so the dequantized
+        // coordinate is x_hat[i] = (p[i] + m) / scale where p[i] = q[i] + 128 in [0, 255] and
+        // m = min * scale. Cosine similarity is invariant to positive scaling (1/scale), so we
+        // evaluate cosine(p_a + m_a, p_b + m_b). Performing the +128 shift in exact 64-bit integer
+        // arithmetic avoids catastrophic cancellation on zero and constant vectors.
+        var spanA = a.Data.AsSpan(0, d);
+        var spanB = b.Data.AsSpan(0, d);
+
+        long dotQ = Int8DotProduct(spanA, spanB);
+        long sumQA = Int8Sum(spanA);
+        long sumQB = Int8Sum(spanB);
+        long selfDotQA = a.Data.Length == d ? a.SelfDot : Int8DotProduct(spanA, spanA);
+        long selfDotQB = b.Data.Length == d ? b.SelfDot : Int8DotProduct(spanB, spanB);
+
+        long ld = d;
+        long sumPA = sumQA + 128L * ld;
+        long sumPB = sumQB + 128L * ld;
+        long selfDotPA = selfDotQA + 256L * sumQA + 16384L * ld;
+        long selfDotPB = selfDotQB + 256L * sumQB + 16384L * ld;
+        long dotP = dotQ + 128L * sumQA + 128L * sumQB + 16384L * ld;
+
+        double mA = (double)a.Min * a.Scale;
+        double mB = (double)b.Min * b.Scale;
+
+        double normSqA = selfDotPA + 2.0 * mA * sumPA + ld * mA * mA;
+        double normSqB = selfDotPB + 2.0 * mB * sumPB + ld * mB * mB;
+        if (normSqA <= 0.0 || normSqB <= 0.0) return 0f;
+
+        double num = dotP + mB * sumPA + mA * sumPB + ld * mA * mB;
+        double cosine = num / (Math.Sqrt(normSqA) * Math.Sqrt(normSqB));
+        if (!double.IsFinite(cosine)) return 0f;
+        return (float)Math.Clamp(cosine, -1.0, 1.0);
     }
 }

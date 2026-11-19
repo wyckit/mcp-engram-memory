@@ -25,6 +25,15 @@ public sealed class OllamaClient : IDisposable, ITextGenerator
         };
     }
 
+    internal OllamaClient(HttpMessageHandler handler, string baseUrl = "http://localhost:11434")
+    {
+        _baseUrl = baseUrl.TrimEnd('/');
+        _http = new HttpClient(handler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromSeconds(120)
+        };
+    }
+
     /// <summary>Check if Ollama is running and a model is available.</summary>
     public async Task<bool> IsAvailableAsync(string model, CancellationToken ct = default)
     {
@@ -34,12 +43,40 @@ public sealed class OllamaClient : IDisposable, ITextGenerator
             if (!response.IsSuccessStatusCode) return false;
 
             var result = await response.Content.ReadFromJsonAsync<OllamaTagsResponse>(cancellationToken: ct);
-            return result?.Models?.Any(m => m.Name.StartsWith(model, StringComparison.OrdinalIgnoreCase)) == true;
+            return result?.Models?.Any(m => ModelNameMatches(m.Name, model)) == true;
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Exact model name matching against Ollama's <c>/api/tags</c> names.
+    /// Matches an exact case-insensitive model name, or an exact base name with the implicit
+    /// <c>:latest</c> tag when <paramref name="requestedModel"/> does not specify a tag.
+    /// Prevents prefix false positives such as <c>"qwen2.5:1"</c> matching <c>"qwen2.5:14b"</c>.
+    /// </summary>
+    internal static bool ModelNameMatches(string? availableName, string? requestedModel)
+    {
+        if (string.IsNullOrWhiteSpace(availableName) || string.IsNullOrWhiteSpace(requestedModel))
+            return false;
+
+        string available = availableName.Trim();
+        string requested = requestedModel.Trim();
+
+        if (string.Equals(available, requested, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        int lastSlash = requested.LastIndexOf('/');
+        bool requestedHasTag = requested.IndexOf(':', lastSlash + 1) >= 0;
+        if (!requestedHasTag &&
+            string.Equals(available, requested + ":latest", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

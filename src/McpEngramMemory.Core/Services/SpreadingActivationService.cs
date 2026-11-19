@@ -36,7 +36,6 @@ public sealed class SpreadingActivationService
     private const float RecursiveDecay = 0.5f;
     private const float ClusterSummaryBoost = 1.0f;
     private const float ClusterPeerBoost = 0.5f;
-    private const float ClusterNeighborBoost = 0.25f;
     private const int MaxClusterPeers = 3;
 
     private readonly CognitiveIndex _index;
@@ -116,7 +115,7 @@ public sealed class SpreadingActivationService
             return new SpreadingResult(id, 0, 0, 0f);
 
         // Phase 1: Graph-based spreading activation (within the caller's tenant)
-        PropagateGraph(id, baseEnergy, depth: 0, boosted, tenantId);
+        PropagateGraph(id, baseEnergy, boosted, tenantId);
 
         // Phase 2: Cluster-based pre-warming
         PropagateCluster(id, baseEnergy, boosted, tenantId);
@@ -154,44 +153,82 @@ public sealed class SpreadingActivationService
             : _index.BoostActivationEnergy(targetId, targetNs, boost, tenantId: tenantId);
 
     /// <summary>
-    /// Recursive graph-based energy propagation with fan-out attenuation and depth cutoff.
+    /// Level-synchronous BFS graph energy propagation with fan-out attenuation, depth cutoff,
+    /// and a per-propagation visited set to prevent bidirectional edges and graph cycles
+    /// from bouncing energy back and multiplying lock contention.
     ///
     /// No topology test of its own, and that is the boundary fix working rather than an omission.
     /// <see cref="KnowledgeGraph.GetNeighbors"/> withholds any edge whose far endpoint is
     /// unattributable, so an ambiguous intermediate is not merely absent from the boosts — it is
-    /// absent from the adjacency this walk recurses into, which is the half that matters. A node
+    /// absent from the adjacency this walk expands into, which is the half that matters. A node
     /// crossed and then filtered has already led the walk to a twin's descendants.
     /// </summary>
-    private void PropagateGraph(string id, float energy, int depth, Dictionary<(string Ns, string Id), float> boosted,
+    private void PropagateGraph(string rootId, float baseEnergy, Dictionary<(string Ns, string Id), float> boosted,
         string tenantId)
     {
-        if (depth >= MaxPropagationDepth || energy < MinPropagationThreshold)
+        if (baseEnergy < MinPropagationThreshold)
             return;
 
-        var neighborsResult = _graph.GetNeighbors(id, relation: null, direction: "both", tenantId: tenantId);
+        // Track already-reached bare node IDs (graph adjacency is keyed by (tenant, id))
+        // so cycles such as A <-> B cannot bounce energy back to prior hops or the root.
+        // Advancing visited level-by-level lets converging equal-depth paths (diamonds) still
+        // combine energy onto a shared next-hop node while expanding each node at most once.
+        var visited = new HashSet<string>(StringComparer.Ordinal) { rootId };
+        var frontier = new Dictionary<string, float>(StringComparer.Ordinal) { [rootId] = baseEnergy };
 
-        // Degree is the ADMITTED neighbour count, which is the only one available here and also the
-        // right one: attenuating by a fan-out that included withheld edges would make the
-        // suppression readable off the energy the survivors received.
-        int nodeDegree = neighborsResult.Neighbors.Count;
-
-        foreach (var neighbor in neighborsResult.Neighbors)
+        for (int depth = 0; depth < MaxPropagationDepth && frontier.Count > 0; depth++)
         {
-            string neighborId = neighbor.Entry.Id;
-            // The traversal already resolved this neighbor to a concrete entry, so its namespace is
-            // authoritative — it is where the boost must land, not wherever the caller came from.
-            string neighborNs = neighbor.Entry.Namespace;
-            float boost = PhysicsEngine.ComputeSpreadingEnergy(energy, neighbor.Edge.Relation, nodeDegree);
+            Dictionary<string, float>? nextFrontier = depth + 1 < MaxPropagationDepth
+                ? new Dictionary<string, float>(StringComparer.Ordinal)
+                : null;
+            List<string>? reachedThisLevel = nextFrontier is null ? null : new List<string>();
 
-            if (boost < MinPropagationThreshold)
-                continue;
+            foreach (var (currentId, energy) in frontier)
+            {
+                if (energy < MinPropagationThreshold)
+                    continue;
 
-            Accumulate(boosted, neighborNs, neighborId, boost);
+                var neighborsResult = _graph.GetNeighbors(currentId, relation: null, direction: "both", tenantId: tenantId);
 
-            // Recursive spread at reduced energy. The bare id is correct here: graph adjacency is
-            // keyed (tenant, id) with no namespace dimension, so there is nothing else to pass — and
-            // this id already passed the edge test that admitted it, so it names one entry.
-            PropagateGraph(neighborId, boost * RecursiveDecay, depth + 1, boosted, tenantId);
+                // Degree is the ADMITTED neighbour count, which is the only one available here and also the
+                // right one: attenuating by a fan-out that included withheld edges would make the
+                // suppression readable off the energy the survivors received.
+                int nodeDegree = neighborsResult.Neighbors.Count;
+
+                foreach (var neighbor in neighborsResult.Neighbors)
+                {
+                    string neighborId = neighbor.Entry.Id;
+                    if (visited.Contains(neighborId))
+                        continue;
+
+                    // The traversal already resolved this neighbor to a concrete entry, so its namespace is
+                    // authoritative — it is where the boost must land, not wherever the caller came from.
+                    string neighborNs = neighbor.Entry.Namespace;
+                    float boost = PhysicsEngine.ComputeSpreadingEnergy(energy, neighbor.Edge.Relation, nodeDegree);
+
+                    if (boost < MinPropagationThreshold)
+                        continue;
+
+                    Accumulate(boosted, neighborNs, neighborId, boost);
+
+                    if (nextFrontier is not null)
+                    {
+                        float nextEnergy = boost * RecursiveDecay;
+                        nextFrontier[neighborId] = nextFrontier.TryGetValue(neighborId, out float existing)
+                            ? existing + nextEnergy
+                            : nextEnergy;
+                        reachedThisLevel!.Add(neighborId);
+                    }
+                }
+            }
+
+            if (nextFrontier is null || nextFrontier.Count == 0)
+                break;
+
+            foreach (var reachedId in reachedThisLevel!)
+                visited.Add(reachedId);
+
+            frontier = nextFrontier;
         }
     }
 

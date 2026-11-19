@@ -54,6 +54,30 @@ public sealed class HybridSearchEngine
         Func<string, string, CognitiveEntry?> getEntry,
         float[]? queryVector = null,
         int entryCount = 0)
+        => HybridSearch(
+            vectorResults, queryText, ns, k, includeStates, category,
+            rerank, rrfK, bm25, reranker, getEntry, queryVector, entryCount,
+            bm25IncludeIds: null);
+
+    /// <summary>
+    /// Execute a hybrid search combining vector and BM25 results via RRF, with an optional
+    /// pre-computed set of eligible entry IDs to scope BM25 scoring before top-K truncation.
+    /// </summary>
+    public IReadOnlyList<CognitiveSearchResult> HybridSearch(
+        IReadOnlyList<CognitiveSearchResult> vectorResults,
+        string queryText,
+        string ns,
+        int k,
+        HashSet<string>? includeStates,
+        string? category,
+        bool rerank,
+        int rrfK,
+        BM25Index bm25,
+        IReranker reranker,
+        Func<string, string, CognitiveEntry?> getEntry,
+        float[]? queryVector,
+        int entryCount,
+        HashSet<string>? bm25IncludeIds)
     {
         // High-confidence early exit: if vector search returned strong results,
         // skip BM25 fusion to reduce P95 latency. BM25 mainly helps when
@@ -83,6 +107,9 @@ public sealed class HybridSearchEngine
                 adaptiveRrfK = Math.Min(rrfK, 30); // amplify BM25
         }
 
+        var states = includeStates ?? new HashSet<string> { "stm", "ltm" };
+        bool hasExplicitFilter = category is not null || !IsDefaultStates(includeStates);
+
         // Cascade mode: for large namespaces, BM25 primarily boosts vector results,
         // but also injects top BM25-only candidates that pass a semantic gate.
         // This prevents BM25 noise while still allowing keyword rescue when HNSW misses.
@@ -91,10 +118,13 @@ public sealed class HybridSearchEngine
             _metrics?.Increment("hybrid.cascade");
             var vectorIds = vectorResults.Select(r => r.Id).ToHashSet();
 
-            // Search BM25 for both overlap and new candidates.
-            // Scale with namespace size so keyword rescue has enough candidates.
+            // Search BM25 for both overlap and new candidates without allowing filtered-out
+            // entries to crowd out eligible hits before top-K truncation.
             int bm25CandidateK = entryCount >= 5000 ? Math.Max(k * 8, 40) : Math.Max(k * 4, 20);
-            var bm25All = bm25.Search(queryText, ns, bm25CandidateK);
+            var cascadeResolved = new Dictionary<string, CognitiveEntry?>();
+            var bm25All = SearchEligibleBm25(
+                bm25, queryText, ns, bm25CandidateK, vectorIds, states, category,
+                hasExplicitFilter, getEntry, cascadeResolved, bm25IncludeIds);
             var bm25ScoreLookup = bm25All.ToDictionary(x => x.Id, x => x.Score);
 
             // Boost vector results that also score well in BM25
@@ -119,7 +149,6 @@ public sealed class HybridSearchEngine
             if (queryVector is not null)
             {
                 float queryNorm = VectorMath.Norm(queryVector);
-                var cascadeStates = includeStates ?? new HashSet<string> { "stm", "ltm" };
                 int injected = 0;
                 // Scale BM25 injection limit with namespace size — larger namespaces
                 // have more entries that HNSW may miss in distant neighborhoods
@@ -130,10 +159,7 @@ public sealed class HybridSearchEngine
                     if (injected >= maxInject) break;
                     if (vectorIds.Contains(id)) continue;
 
-                    var entry = getEntry(id, ns);
-                    if (entry is null) continue;
-                    if (!cascadeStates.Contains(entry.LifecycleState)) continue;
-                    if (category is not null && entry.Category != category) continue;
+                    if (!cascadeResolved.TryGetValue(id, out var entry) || entry is null) continue;
 
                     float cosine = VectorMath.Dot(queryVector, entry.Vector) /
                         (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
@@ -171,43 +197,25 @@ public sealed class HybridSearchEngine
 
         // Build set of vector result IDs (used for both eligibility tracking and semantic gate)
         var vectorIdSet = vectorResults.Select(r => r.Id).ToHashSet();
-        var eligibleIds = new HashSet<string>(vectorIdSet);
 
-        // BM25 search
+        // BM25 search without pre-truncation loss when category/state filters are active.
         int candidateK = Math.Max(k * 4, 20);
-        var bm25Unfiltered = bm25.Search(queryText, ns, candidateK);
+        var resolvedEntries = new Dictionary<string, CognitiveEntry?>();
+        var bm25Eligible = SearchEligibleBm25(
+            bm25, queryText, ns, candidateK, vectorIdSet, states, category,
+            hasExplicitFilter, getEntry, resolvedEntries, bm25IncludeIds);
 
-        // Add BM25-only results that pass filters, caching resolved entries
-        var states = includeStates ?? new HashSet<string> { "stm", "ltm" };
-        var resolvedEntries = new Dictionary<string, CognitiveEntry>();
-        foreach (var (id, _) in bm25Unfiltered)
-        {
-            if (!eligibleIds.Contains(id))
-            {
-                var entry = getEntry(id, ns);
-                if (entry is not null &&
-                    states.Contains(entry.LifecycleState) &&
-                    (category is null || entry.Category == category))
-                {
-                    eligibleIds.Add(id);
-                    resolvedEntries[id] = entry;
-                }
-            }
-        }
-
-        // Eligibility is mandatory even when the semantic gate is inactive. Rejected
-        // keyword hits must not occupy fusion ranks or return through late resolution.
         // Semantic gate: filter BM25-only results by cosine similarity to query vector.
         // Prevents low-relevance keyword matches from polluting RRF fusion.
         // Only apply when vector results show reasonable confidence (real embeddings).
-        var bm25Gated = new List<(string Id, float Score)>(bm25Unfiltered.Count);
+        var bm25Gated = new List<(string Id, float Score)>(bm25Eligible.Count);
         bool applyGate = queryVector is not null &&
             vectorResults.Count > 0 && vectorResults[0].Score >= Bm25SemanticGate;
 
         if (applyGate)
         {
             float queryNorm = VectorMath.Norm(queryVector!);
-            foreach (var (id, bm25Score) in bm25Unfiltered)
+            foreach (var (id, bm25Score) in bm25Eligible)
             {
                 if (vectorIdSet.Contains(id))
                 {
@@ -215,7 +223,7 @@ public sealed class HybridSearchEngine
                     continue;
                 }
 
-                if (resolvedEntries.TryGetValue(id, out var entry))
+                if (resolvedEntries.TryGetValue(id, out var entry) && entry is not null)
                 {
                     float cosine = VectorMath.Dot(queryVector!, entry.Vector) /
                         (queryNorm * VectorMath.Norm(entry.Vector) + 1e-9f);
@@ -226,9 +234,7 @@ public sealed class HybridSearchEngine
         }
         else
         {
-            foreach (var item in bm25Unfiltered)
-                if (eligibleIds.Contains(item.Id))
-                    bm25Gated.Add(item);
+            bm25Gated.AddRange(bm25Eligible);
         }
 
         // Reciprocal Rank Fusion
@@ -258,7 +264,9 @@ public sealed class HybridSearchEngine
 
         rrfScores.Sort((a, b) => b.RrfScore.CompareTo(a.RrfScore));
 
-        // Build result objects with RRF scores
+        // Build result objects with RRF scores (preserving 2.x score scale compatibility
+        // with Auto-PRF, CompositeTools archive fallback, and frozen recall baselines;
+        // DiversityReranker normalizes relevance scores internally).
         var vectorLookup = vectorResults.ToDictionary(r => r.Id);
         int takeCount = rerank ? k * 2 : k;
         var results = new List<CognitiveSearchResult>(Math.Min(takeCount, rrfScores.Count));
@@ -275,7 +283,7 @@ public sealed class HybridSearchEngine
                     vr.Category, vr.Metadata,
                     vr.IsSummaryNode, vr.SourceClusterId, vr.AccessCount));
             }
-            else if (resolvedEntries.TryGetValue(id, out var entry))
+            else if (resolvedEntries.TryGetValue(id, out var entry) && entry is not null)
             {
                 // Only materialize BM25-only entries admitted by the filter loop.
                 results.Add(new CognitiveSearchResult(
@@ -297,5 +305,94 @@ public sealed class HybridSearchEngine
         }
 
         return results;
+    }
+
+    private static bool IsDefaultStates(HashSet<string>? includeStates)
+        => includeStates is null || (includeStates.Count == 2 && includeStates.Contains("stm") && includeStates.Contains("ltm"));
+
+    /// <summary>
+    /// Query BM25 while preventing category or lifecycle-state filters from losing eligible matches
+    /// to pre-truncation. When explicit filters are active (or when an unfiltered top-K pass had
+    /// hits rejected by filters), inspects the full ranked BM25 match list until <paramref name="targetK"/>
+    /// eligible candidates are collected.
+    /// </summary>
+    private static List<(string Id, float Score)> SearchEligibleBm25(
+        BM25Index bm25,
+        string queryText,
+        string ns,
+        int targetK,
+        HashSet<string> vectorIds,
+        HashSet<string> states,
+        string? category,
+        bool hasExplicitFilter,
+        Func<string, string, CognitiveEntry?> getEntry,
+        Dictionary<string, CognitiveEntry?> resolvedEntries,
+        HashSet<string>? bm25IncludeIds)
+    {
+        if (states.Count == 0 && vectorIds.Count == 0)
+            return new List<(string Id, float Score)>();
+
+        // If caller explicitly supplied eligible IDs, scope BM25 directly; otherwise skip the
+        // truncated first pass whenever a category/non-default state filter is active.
+        int initialK = bm25IncludeIds is null && hasExplicitFilter ? int.MaxValue : targetK;
+        var raw = bm25.Search(queryText, ns, initialK, bm25IncludeIds);
+        var eligible = FilterEligibleBm25(raw, targetK, ns, vectorIds, states, category, getEntry, resolvedEntries);
+
+        // Even without explicit filters, archived or below-minScore hits can crowd out eligible
+        // entries from BM25's top-K. Retry once unbounded only when BM25 actually hit its cap
+        // and filtering dropped at least one hit.
+        if (initialK != int.MaxValue && raw.Count == initialK && eligible.Count < targetK)
+        {
+            raw = bm25.Search(queryText, ns, int.MaxValue, bm25IncludeIds);
+            eligible = FilterEligibleBm25(raw, targetK, ns, vectorIds, states, category, getEntry, resolvedEntries);
+        }
+
+        return eligible;
+    }
+
+    private static List<(string Id, float Score)> FilterEligibleBm25(
+        IReadOnlyList<(string Id, float Score)> raw,
+        int targetK,
+        string ns,
+        HashSet<string> vectorIds,
+        HashSet<string> states,
+        string? category,
+        Func<string, string, CognitiveEntry?> getEntry,
+        Dictionary<string, CognitiveEntry?> resolvedEntries)
+    {
+        var eligible = new List<(string Id, float Score)>(Math.Min(targetK, raw.Count));
+        foreach (var (id, score) in raw)
+        {
+            if (eligible.Count >= targetK)
+                break;
+
+            if (vectorIds.Contains(id))
+            {
+                eligible.Add((id, score));
+                continue;
+            }
+
+            if (resolvedEntries.TryGetValue(id, out var cached))
+            {
+                if (cached is not null)
+                    eligible.Add((id, score));
+                continue;
+            }
+
+            var entry = getEntry(id, ns);
+            if (entry is not null &&
+                states.Contains(entry.LifecycleState) &&
+                (category is null || entry.Category == category))
+            {
+                resolvedEntries[id] = entry;
+                eligible.Add((id, score));
+            }
+            else
+            {
+                resolvedEntries[id] = null;
+            }
+        }
+
+        return eligible;
     }
 }
