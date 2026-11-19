@@ -29,11 +29,22 @@ public sealed class MemoryDiffusionTools
         [Description("Number of eigenpairs to retain (default 96). Higher = finer multi-scale resolution at higher compute cost.")] int topK = MemoryDiffusionKernel.DefaultTopK,
         [Description("Drop any cached basis and recompute from scratch.")] bool force = false)
     {
+        // Authorize read access first so this ReadOnly tool never triggers
+        // NamespaceRegistry.TryClaimEmptyNamespace on an unclaimed empty namespace.
         // Nullable return already models "nothing here" (below spectral threshold), so a
-        // denied write reuses that same shape rather than a distinct error.
-        if (!_access.CanWrite(ns)) return null;
+        // denied check reuses that same shape rather than a distinct error.
+        if (!_access.CanRead(ns)) return null;
 
-        if (force) _kernel.Invalidate(ns, tenantId: _access.TenantId);
+        // Dropping an existing cached basis (`force: true`) mutates cache state, so require
+        // write access before invalidating. Because CanRead(ns) already succeeded, the
+        // namespace is either already registered or the caller is legacy-unisolated, so
+        // CanWrite(ns) here cannot claim an unclaimed namespace.
+        if (force)
+        {
+            if (!_access.CanWrite(ns)) return null;
+            _kernel.Invalidate(ns, tenantId: _access.TenantId);
+        }
+
         _ = _kernel.GetBasis(ns, tenantId: _access.TenantId, topK: topK);
         return _kernel.GetStats(ns, tenantId: _access.TenantId);
     }

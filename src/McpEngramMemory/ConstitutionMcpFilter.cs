@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text.Json;
 using McpEngramMemory.Core.Models;
@@ -12,76 +13,253 @@ namespace McpEngramMemory;
 /// <summary>Applies the Core Constitution around every MCP tool call without coupling Core to MCP.</summary>
 public static class ConstitutionMcpFilter
 {
+    private static readonly IReadOnlyDictionary<string, CognitiveOperationKind> ToolOperations =
+        new ReadOnlyDictionary<string, CognitiveOperationKind>(
+            new Dictionary<string, CognitiveOperationKind>(StringComparer.Ordinal)
+            {
+                // Core memory tools
+                ["store_memory"] = CognitiveOperationKind.WriteMemory,
+                ["store_batch"] = CognitiveOperationKind.WriteMemory,
+                ["search_memory"] = CognitiveOperationKind.Retrieve,
+                ["delete_memory"] = CognitiveOperationKind.DeleteMemory,
+
+                // Composite tools
+                ["remember"] = CognitiveOperationKind.WriteMemory,
+                ["recall"] = CognitiveOperationKind.Retrieve,
+                ["reflect"] = CognitiveOperationKind.WriteMemory,
+                ["get_context_block"] = CognitiveOperationKind.CompileContext,
+
+                // Admin tools
+                ["get_memory"] = CognitiveOperationKind.ReadMemory,
+                ["cognitive_stats"] = CognitiveOperationKind.ReadMemory,
+                ["engram_status"] = CognitiveOperationKind.ReadMemory,
+                ["purge_debates"] = CognitiveOperationKind.DeleteMemory,
+
+                // Multi-agent tools
+                ["cross_search"] = CognitiveOperationKind.Retrieve,
+                ["share_namespace"] = CognitiveOperationKind.AdministerGovernance,
+                ["unshare_namespace"] = CognitiveOperationKind.AdministerGovernance,
+                ["list_shared"] = CognitiveOperationKind.ReadMemory,
+                ["whoami"] = CognitiveOperationKind.ReadMemory,
+
+                // Graph tools
+                ["link_memories"] = CognitiveOperationKind.WriteMemory,
+                ["unlink_memories"] = CognitiveOperationKind.DeleteMemory,
+                ["get_neighbors"] = CognitiveOperationKind.ReadMemory,
+                ["traverse_graph"] = CognitiveOperationKind.ReadMemory,
+
+                // Lifecycle tools
+                ["promote_memory"] = CognitiveOperationKind.WriteMemory,
+                ["deep_recall"] = CognitiveOperationKind.Retrieve,
+                ["memory_feedback"] = CognitiveOperationKind.WriteMemory,
+                ["configure_decay"] = CognitiveOperationKind.AdministerGovernance,
+
+                // Cluster tools
+                ["create_cluster"] = CognitiveOperationKind.WriteMemory,
+                ["update_cluster"] = CognitiveOperationKind.WriteMemory,
+                ["store_cluster_summary"] = CognitiveOperationKind.WriteMemory,
+                ["get_cluster"] = CognitiveOperationKind.ReadMemory,
+                ["list_clusters"] = CognitiveOperationKind.ReadMemory,
+
+                // Intelligence tools
+                ["detect_duplicates"] = CognitiveOperationKind.ReadMemory,
+                ["find_contradictions"] = CognitiveOperationKind.ReadMemory,
+                ["uncollapse_cluster"] = CognitiveOperationKind.WriteMemory,
+                ["list_collapse_history"] = CognitiveOperationKind.ReadMemory,
+                ["merge_memories"] = CognitiveOperationKind.WriteMemory,
+
+                // Accretion tools
+                ["get_pending_collapses"] = CognitiveOperationKind.ReadMemory,
+                ["collapse_cluster"] = CognitiveOperationKind.WriteMemory,
+                ["dismiss_collapse"] = CognitiveOperationKind.DeleteMemory,
+
+                // Memory diffusion & spectral retrieval tools
+                ["compute_diffusion_basis"] = CognitiveOperationKind.ReadMemory,
+                ["diffusion_stats"] = CognitiveOperationKind.ReadMemory,
+                ["invalidate_diffusion"] = CognitiveOperationKind.AdministerGovernance,
+                ["spectral_recall"] = CognitiveOperationKind.Retrieve,
+
+                // Governed learning & synthesis tools
+                ["promote_knowledge"] = CognitiveOperationKind.PromoteKnowledge,
+                ["synthesize_memories"] = CognitiveOperationKind.ProposeKnowledge,
+
+                // Debate tools
+                ["consult_expert_panel"] = CognitiveOperationKind.WriteMemory,
+                ["map_debate_graph"] = CognitiveOperationKind.WriteMemory,
+                ["resolve_debate"] = CognitiveOperationKind.WriteMemory,
+
+                // Expert routing tools
+                ["dispatch_task"] = CognitiveOperationKind.Retrieve,
+                ["create_expert"] = CognitiveOperationKind.AdministerGovernance,
+                ["link_to_parent"] = CognitiveOperationKind.AdministerGovernance,
+                ["get_domain_tree"] = CognitiveOperationKind.ReadMemory,
+
+                // Maintenance & visualization tools
+                ["rebuild_embeddings"] = CognitiveOperationKind.AdministerGovernance,
+                ["compression_stats"] = CognitiveOperationKind.ReadMemory,
+                ["get_graph_snapshot"] = CognitiveOperationKind.ReadMemory,
+
+                // Benchmark & metrics tools
+                ["run_benchmark"] = CognitiveOperationKind.AdministerGovernance,
+                ["run_agent_outcome_benchmark"] = CognitiveOperationKind.AdministerGovernance,
+                ["run_live_agent_outcome_benchmark"] = CognitiveOperationKind.AdministerGovernance,
+                ["compare_live_agent_outcome_artifacts"] = CognitiveOperationKind.ReadMemory,
+                ["check_for_regression"] = CognitiveOperationKind.ReadMemory,
+                ["get_metrics"] = CognitiveOperationKind.ReadMemory,
+                ["reset_metrics"] = CognitiveOperationKind.AdministerGovernance,
+                ["run_mrcr_benchmark"] = CognitiveOperationKind.AdministerGovernance,
+                ["compare_mrcr_artifacts"] = CognitiveOperationKind.ReadMemory
+            });
+
+    internal static IReadOnlyDictionary<string, CognitiveOperationKind> ToolOperationMap => ToolOperations;
+
     public static McpRequestHandler<CallToolRequestParams, CallToolResult> Create(
         McpRequestHandler<CallToolRequestParams, CallToolResult> next)
-        => async (request, cancellationToken) =>
+        => (request, cancellationToken) =>
         {
             var services = request.Server.Services
                 ?? throw new InvalidOperationException("The MCP server has no service provider.");
-            var kernel = services.GetRequiredService<ConstitutionKernel>();
-            var principal = services.GetRequiredService<IPrincipalContext>();
-            var operation = CreateEnvelope(request, principal);
-
-            var precondition = await kernel.EvaluateAndAuditAsync(
-                operation, ConstitutionPhase.Precondition, cancellationToken).ConfigureAwait(false);
-            if (precondition.Outcome != ConstitutionOutcome.Allow)
-                return Denied(precondition);
-
-            try
-            {
-                var result = await next(request, cancellationToken).ConfigureAwait(false);
-                // Postconditions are detection/audit, not authorization: the tool may already
-                // have committed. A denial is therefore recorded durably but never disguised as
-                // a failed tool call without a rollback transaction.
-                await kernel.EvaluateAndAuditAsync(
-                    operation, ConstitutionPhase.Postcondition, cancellationToken).ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                // The attempted operation and its precondition decision are already durable in audit.
-                // Preserve the SDK's normal exception-to-tool-error handling for the underlying failure.
-                throw;
-            }
+            return InvokeAsync(
+                services,
+                request.Params.Name,
+                request.Params.Arguments,
+                GetRequestId(request),
+                ct => next(request, ct),
+                cancellationToken);
         };
+
+    internal static async ValueTask<CallToolResult> InvokeAsync(
+        IServiceProvider services,
+        string? rawToolName,
+        IDictionary<string, JsonElement>? arguments,
+        string requestId,
+        Func<CancellationToken, ValueTask<CallToolResult>> next,
+        CancellationToken cancellationToken = default)
+    {
+        var kernel = services.GetRequiredService<ConstitutionKernel>();
+        var principal = services.GetRequiredService<IPrincipalContext>();
+        var name = rawToolName?.Trim() ?? string.Empty;
+        var resolvedRequestId = string.IsNullOrEmpty(requestId) ? Guid.NewGuid().ToString("N") : requestId;
+
+        if (!TryMapOperation(name, out var operationKind))
+        {
+            var operationId = $"mcp:{resolvedRequestId}:{name}";
+            var provider = services.GetService<IConstitutionProvider>();
+            var versionHashes = provider?.Current.VersionHashes ?? Array.Empty<string>();
+            var denied = new ConstitutionDecision(
+                operationId,
+                ConstitutionPhase.Precondition,
+                ConstitutionOutcome.Deny,
+                [
+                    new ConstitutionFinding(
+                        "constitution.mcp-filter",
+                        "unmapped-mcp-tool",
+                        ConstitutionOutcome.Deny,
+                        $"MCP tool '{name}' is not mapped to a governed cognitive operation.")
+                ],
+                versionHashes);
+
+            var auditStore = services.GetService<IConstitutionAuditStore>();
+            if (auditStore is not null)
+            {
+                await auditStore.AppendAsync(new ConstitutionAuditRecord(
+                    0,
+                    $"{operationId}:{ConstitutionPhase.Precondition}:{Guid.NewGuid():N}",
+                    operationId,
+                    principal.TenantId,
+                    principal.AgentId,
+                    ConstitutionPhase.Precondition,
+                    ConstitutionOutcome.Deny,
+                    versionHashes,
+                    ["unmapped-mcp-tool"],
+                    DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+            }
+
+            return Denied(denied);
+        }
+
+        var operation = CreateEnvelope(principal, name, resolvedRequestId, operationKind, arguments);
+
+        var precondition = await kernel.EvaluateAndAuditAsync(
+            operation, ConstitutionPhase.Precondition, cancellationToken).ConfigureAwait(false);
+        if (precondition.Outcome != ConstitutionOutcome.Allow)
+            return Denied(precondition);
+
+        try
+        {
+            var result = await next(cancellationToken).ConfigureAwait(false);
+            // Postconditions are detection/audit, not authorization: the tool may already
+            // have committed. A denial is therefore recorded durably but never disguised as
+            // a failed tool call without a rollback transaction.
+            await kernel.EvaluateAndAuditAsync(
+                operation, ConstitutionPhase.Postcondition, cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+        catch
+        {
+            // The attempted operation and its precondition decision are already durable in audit.
+            // Preserve the SDK's normal exception-to-tool-error handling for the underlying failure.
+            throw;
+        }
+    }
 
     internal static OperationEnvelope CreateEnvelope(
         RequestContext<CallToolRequestParams> request,
         IPrincipalContext principal)
     {
         var name = request.Params.Name?.Trim() ?? string.Empty;
-        var requestId = request.JsonRpcRequest.Id.ToString();
-        if (requestId.Length == 0)
-            requestId = Guid.NewGuid().ToString("N");
-        return new OperationEnvelope(
+        return CreateEnvelope(principal, name, GetRequestId(request), MapOperation(name), request.Params.Arguments);
+    }
+
+    private static OperationEnvelope CreateEnvelope(
+        IPrincipalContext principal,
+        string name,
+        string requestId,
+        CognitiveOperationKind operationKind,
+        IDictionary<string, JsonElement>? arguments)
+        => new(
             $"mcp:{requestId}:{name}",
-            MapOperation(name),
+            operationKind,
             principal.TenantId,
             principal.AgentId,
             $"MCP tool call: {name}",
             Array.Empty<OperationArtifactReference>(),
             null,
-            HashArguments(request.Params.Arguments),
+            HashArguments(arguments),
             DateTimeOffset.UtcNow,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["adapter"] = "mcp",
                 ["tool"] = name
             });
+
+    private static string GetRequestId(RequestContext<CallToolRequestParams> request)
+    {
+        var requestId = request.JsonRpcRequest.Id.ToString();
+        return requestId.Length == 0 ? Guid.NewGuid().ToString("N") : requestId;
+    }
+
+    internal static bool TryMapOperation(string? toolName, out CognitiveOperationKind operation)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            operation = default;
+            return false;
+        }
+
+        return ToolOperations.TryGetValue(toolName.Trim(), out operation);
     }
 
     internal static CognitiveOperationKind MapOperation(string toolName)
-        => toolName switch
-        {
-            "store_memory" or "store_batch" or "remember" or "reflect" => CognitiveOperationKind.WriteMemory,
-            "delete_memory" or "purge_debates" => CognitiveOperationKind.DeleteMemory,
-            "synthesize_memories" => CognitiveOperationKind.ProposeKnowledge,
-            "promote_knowledge" => CognitiveOperationKind.PromoteKnowledge,
-            "recall" or "search_memory" or "cross_search" or "deep_recall" or "spectral_recall" => CognitiveOperationKind.Retrieve,
-            "get_context_block" => CognitiveOperationKind.CompileContext,
-            "share_namespace" or "unshare_namespace" or "configure_decay" => CognitiveOperationKind.AdministerGovernance,
-            _ => CognitiveOperationKind.ReadMemory
-        };
+    {
+        if (TryMapOperation(toolName, out var operation))
+            return operation;
+
+        throw new ArgumentOutOfRangeException(
+            nameof(toolName),
+            toolName,
+            $"MCP tool '{toolName}' is not mapped to a governed cognitive operation.");
+    }
 
     internal static string HashArguments(IDictionary<string, JsonElement>? arguments)
     {

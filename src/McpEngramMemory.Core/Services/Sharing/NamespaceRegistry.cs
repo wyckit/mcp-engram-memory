@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 
 namespace McpEngramMemory.Core.Services.Sharing;
@@ -17,6 +18,11 @@ public sealed class NamespaceRegistry
 
     private const string PermissionCategory = "ns-permission";
 
+    private static readonly JsonSerializerOptions GrantsJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly CognitiveIndex _index;
     private readonly IEmbeddingService _embedding;
 
@@ -28,6 +34,9 @@ public sealed class NamespaceRegistry
 
     private object LockFor(string ns, string tenantId) =>
         _permissionLocks.GetOrAdd(PermissionEntryId(ns, tenantId), _ => new object());
+
+    private static bool IsLegacyDefault(string agentId, string tenantId) =>
+        agentId == AgentIdentity.DefaultAgentId && Tenancy.Normalize(tenantId).Length == 0;
 
     public NamespaceRegistry(CognitiveIndex index, IEmbeddingService embedding)
     {
@@ -49,7 +58,7 @@ public sealed class NamespaceRegistry
     public ShareResult Share(string ns, string ownerAgentId, string targetAgentId, string accessLevel,
         string tenantId)
     {
-        if (accessLevel is not ("read" or "write"))
+        if (string.IsNullOrWhiteSpace(targetAgentId) || accessLevel is not ("read" or "write"))
             return new ShareResult("error", ns, targetAgentId, accessLevel);
 
         if (ns.StartsWith('_'))
@@ -62,8 +71,8 @@ public sealed class NamespaceRegistry
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, accessLevel);
 
-            // Check ownership (default agent bypasses ownership checks for backward compat)
-            if (permission.Owner != ownerAgentId && ownerAgentId != AgentIdentity.DefaultAgentId)
+            // Check ownership (only legacy-unisolated default agent bypasses ownership checks for backward compat)
+            if (permission.Owner != ownerAgentId && !IsLegacyDefault(ownerAgentId, tenantId))
                 return new ShareResult("error_not_owner", ns, targetAgentId, accessLevel);
 
             // Update sharing list
@@ -85,13 +94,18 @@ public sealed class NamespaceRegistry
     /// </summary>
     public ShareResult Unshare(string ns, string ownerAgentId, string targetAgentId, string tenantId)
     {
+        if (ns.StartsWith('_'))
+            return new ShareResult("error_not_found", ns, targetAgentId, "none");
+
         lock (LockFor(ns, tenantId: tenantId))
         {
             var permission = GetPermission(ns, tenantId);
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, "none");
 
-            if (permission.Owner != ownerAgentId)
+            // Keep legacy-unisolated default policy consistent with Share: only the owner or
+            // legacy-unisolated default administrator may revoke grants.
+            if (permission.Owner != ownerAgentId && !IsLegacyDefault(ownerAgentId, tenantId))
                 return new ShareResult("error_not_owner", ns, targetAgentId, "none");
 
             var grants = permission.SharedWith.Where(g => g.AgentId != targetAgentId).ToList();
@@ -155,6 +169,7 @@ public sealed class NamespaceRegistry
 
         var owned = new List<string>();
         var shared = new List<NamespacePermission>();
+        bool isLegacyDefault = IsLegacyDefault(agentId, tenantId);
 
         foreach (var entry in allPermissions)
         {
@@ -169,9 +184,13 @@ public sealed class NamespaceRegistry
             {
                 var grantsStr = entry.Metadata.GetValueOrDefault("grants") ?? "";
                 var grants = ParseGrants(grantsStr);
-                if (grants.Any(g => g.AgentId == agentId))
+                var callerGrants = grants.Where(g => g.AgentId == agentId).ToList();
+                if (callerGrants.Count > 0)
                 {
-                    shared.Add(new NamespacePermission(ns, owner, grants));
+                    // Prevent co-grantee disclosure: non-owners (except legacy default) receive
+                    // only their own grant, not the identities or access levels of other grantees.
+                    IReadOnlyList<ShareGrant> visibleGrants = isLegacyDefault ? grants : callerGrants;
+                    shared.Add(new NamespacePermission(ns, owner, visibleGrants));
                 }
             }
         }
@@ -236,11 +255,19 @@ public sealed class NamespaceRegistry
 
     private NamespacePermission? GetPermission(string ns, string tenantId)
     {
+        tenantId = Tenancy.Normalize(tenantId);
         var entryId = PermissionEntryId(ns, tenantId);
         // Sharing metadata deliberately lives in the legacy partition: the tenant discriminator
         // is folded into the entry id by PermissionEntryId, not into the index partition.
         var entry = _index.Get(entryId, SystemNamespace, tenantId: "");
         if (entry is null) return null;
+
+        // Defense-in-depth: confirm stored metadata agrees with the requested (tenantId, ns)
+        // pair so a historical colliding id or hash collision can never cross partitions.
+        var storedTenant = Tenancy.Normalize(entry.Metadata.GetValueOrDefault("tenantId"));
+        var storedNs = entry.Metadata.GetValueOrDefault("ns");
+        if (storedTenant != tenantId || (storedNs is not null && storedNs != ns))
+            return null;
 
         var owner = entry.Metadata.GetValueOrDefault("owner") ?? AgentIdentity.DefaultAgentId;
         var grantsStr = entry.Metadata.GetValueOrDefault("grants") ?? "";
@@ -291,7 +318,9 @@ public sealed class NamespaceRegistry
     {
         tenantId = Tenancy.Normalize(tenantId);
         var entryId = PermissionEntryId(ns, tenantId);
-        var grantsStr = string.Join(";", grants.Select(g => $"{g.AgentId}:{g.AccessLevel}"));
+        // Serialize grants as JSON so delimiter characters (':' or ';') in agent IDs cannot
+        // corrupt or forge ACL entries. ParseGrants retains backward-compatible legacy parsing.
+        var grantsStr = JsonSerializer.Serialize(grants, GrantsJsonOptions);
         var vector = _embedding.Embed($"namespace permission {ns}");
 
         var entry = new CognitiveEntry(
@@ -315,11 +344,18 @@ public sealed class NamespaceRegistry
         _index.Upsert(entry);
     }
 
-    private static string PermissionEntryId(string ns, string tenantId)
+    internal static string PermissionEntryId(string ns, string tenantId)
     {
         tenantId = Tenancy.Normalize(tenantId);
         if (tenantId.Length == 0)
-            return $"perm_{ns}";
+        {
+            // Keep normal legacy ids byte-for-byte stable (`perm_{ns}`), while isolating legacy
+            // namespaces shaped like `t_<16hex>_...` so they can never collide with tenant ids
+            // (`perm_t_<16hex>_...`) in `_system_sharing`.
+            return HasReservedTenantDiscriminatorPrefix(ns)
+                ? $"legacy_perm_{ns}"
+                : $"perm_{ns}";
+        }
 
         // Keep legacy ids byte-for-byte stable while using a bounded, non-reversible tenant
         // discriminator for new partitions. The full tenant remains in private metadata.
@@ -327,10 +363,43 @@ public sealed class NamespaceRegistry
         return $"perm_t_{tenantHash}_{ns}";
     }
 
-    private static IReadOnlyList<ShareGrant> ParseGrants(string grantsStr)
+    private static bool HasReservedTenantDiscriminatorPrefix(string ns)
     {
-        if (string.IsNullOrEmpty(grantsStr))
+        if (ns.Length < 19 || !ns.StartsWith("t_", StringComparison.Ordinal) || ns[18] != '_')
+            return false;
+
+        for (int i = 2; i < 18; i++)
+        {
+            if (!Uri.IsHexDigit(ns[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static IReadOnlyList<ShareGrant> ParseGrants(string grantsStr)
+    {
+        if (string.IsNullOrWhiteSpace(grantsStr))
             return Array.Empty<ShareGrant>();
+
+        var trimmed = grantsStr.TrimStart();
+        if (trimmed.StartsWith('['))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<List<ShareGrant>>(trimmed, GrantsJsonOptions);
+                if (parsed is not null)
+                {
+                    return parsed
+                        .Where(g => g is not null && !string.IsNullOrEmpty(g.AgentId) && g.AccessLevel is ("read" or "write"))
+                        .ToList();
+                }
+            }
+            catch (JsonException)
+            {
+                // Fall back to legacy semicolon/colon format for pre-2.1.x persisted metadata.
+            }
+        }
 
         return grantsStr.Split(';', StringSplitOptions.RemoveEmptyEntries)
             .Select(g =>

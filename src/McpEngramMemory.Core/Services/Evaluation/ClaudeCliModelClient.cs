@@ -19,7 +19,8 @@ public sealed class ClaudeCliModelClient : IAgentOutcomeModelClient
 
     public ClaudeCliModelClient(string? executable = null, TimeSpan? timeout = null)
     {
-        _executable = string.IsNullOrWhiteSpace(executable) ? DefaultExecutable : executable;
+        var baseName = string.IsNullOrWhiteSpace(executable) ? DefaultExecutable : executable.Trim();
+        _executable = CliExecutableResolver.Resolve(baseName);
         _timeout = timeout ?? TimeSpan.FromMinutes(5);
     }
 

@@ -444,22 +444,48 @@ function toggleConnected(el) {
 }
 
 // ── Main render ───────────────────────────────────────────────────────────────
+function getStateColor(state) {
+  return (state && Object.prototype.hasOwnProperty.call(STATE_COLOR, state))
+    ? STATE_COLOR[state]
+    : STATE_COLOR.archived;
+}
+
+function getRelationColor(relation) {
+  return (relation && Object.prototype.hasOwnProperty.call(RELATION_COLOR, relation))
+    ? RELATION_COLOR[relation]
+    : '#64748b';
+}
+
+function safeFiniteNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function safeRadiusEnergy(node) {
+  const energy = safeFiniteNumber(node?.activationEnergy, 0);
+  return energy > 0 ? energy : 0;
+}
+
 function render(data) {
   document.getElementById('empty').style.display = 'none';
 
+  const rawNodes = Array.isArray(data?.nodes) ? data.nodes : [];
+  const rawEdges = Array.isArray(data?.edges) ? data.edges : [];
+  const rawClusters = Array.isArray(data?.clusters) ? data.clusters : [];
+
   // Update stats bar
-  document.getElementById('s-nodes').textContent    = data.stats.nodeCount;
-  document.getElementById('s-edges').textContent    = data.stats.edgeCount;
-  document.getElementById('s-clusters').textContent = data.stats.clusterCount;
+  document.getElementById('s-nodes').textContent    = data?.stats?.nodeCount ?? rawNodes.length;
+  document.getElementById('s-edges').textContent    = data?.stats?.edgeCount ?? rawEdges.length;
+  document.getElementById('s-clusters').textContent = data?.stats?.clusterCount ?? rawClusters.length;
   document.getElementById('s-time').textContent     =
-    new Date(data.capturedAt).toLocaleString();
+    data?.capturedAt ? new Date(data.capturedAt).toLocaleString() : '—';
 
   // Filter nodes by lifecycle state
-  let nodes = data.nodes.filter(n => visibleStates.has(n.lifecycleState));
+  let nodes = rawNodes.filter(n => visibleStates.has(n?.lifecycleState ?? 'archived'));
   let nodeSet = new Set(nodes.map(n => n.id));
 
   // Build edge list for the current lifecycle-visible set
-  let edges = data.edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
+  let edges = rawEdges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
 
   // Connected-only filter: drop nodes with no edges among the visible set
   if (connectedOnly) {
@@ -470,7 +496,7 @@ function render(data) {
     edges = edges.filter(e => nodeSet.has(e.source) && nodeSet.has(e.target));
   }
 
-  const clusters = data.clusters.filter(c => c.memberIds.some(id => nodeSet.has(id)));
+  const clusters = rawClusters.filter(c => Array.isArray(c?.memberIds) && c.memberIds.some(id => nodeSet.has(id)));
 
   // Clone nodes/edges so D3 can mutate them with x/y
   const simNodes = nodes.map(n => ({ ...n }));
@@ -548,8 +574,8 @@ function render(data) {
     .data(simEdges)
     .enter().append('line')
       .attr('class', 'edge')
-      .attr('stroke', d => RELATION_COLOR[d.relation] ?? '#64748b')
-      .attr('marker-end', d => `url(#arrow-${d.relation in RELATION_COLOR ? d.relation : 'default'})`)
+      .attr('stroke', d => getRelationColor(d.relation))
+      .attr('marker-end', d => `url(#arrow-${d.relation && Object.prototype.hasOwnProperty.call(RELATION_COLOR, d.relation) ? d.relation : 'default'})`)
       .on('mouseenter', (event, d) => showEdgeTip(event, d))
       .on('mouseleave', hideTip);
 
@@ -557,7 +583,7 @@ function render(data) {
   const nodeLayer = root.append('g').attr('class', 'nodes');
 
   // Node radius: base 6, scaled by activation energy + access
-  const maxEnergy = d3.max(simNodes, n => n.activationEnergy) || 1;
+  const maxEnergy = d3.max(simNodes, safeRadiusEnergy) || 1;
   const rScale = d3.scaleSqrt().domain([0, maxEnergy]).range([5, 18]);
 
   // Build adjacency for hover depth effect
@@ -598,7 +624,7 @@ function render(data) {
   // Search ring — outside halo, pulsing when matched
   nodeSel.append('circle')
     .attr('class', 'search-ring')
-    .attr('r', d => rScale(d.activationEnergy) * 5.5)
+    .attr('r', d => rScale(safeRadiusEnergy(d)) * 5.5)
     .attr('fill', 'none')
     .attr('stroke', '#ffd040')
     .attr('stroke-width', 1.5)
@@ -607,25 +633,25 @@ function render(data) {
   // Outer halo — soft glow corona
   nodeSel.append('circle')
     .attr('class', 'halo')
-    .attr('r', d => rScale(d.activationEnergy) * 3.5)
-    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).halo)
+    .attr('r', d => rScale(safeRadiusEnergy(d)) * 3.5)
+    .attr('fill', d => getStateColor(d.lifecycleState).halo)
     .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.025 : 0.07)
     .attr('stroke', 'none');
 
   // Inner core — bright dot
   nodeSel.append('circle')
     .attr('class', 'core')
-    .attr('r', d => rScale(d.activationEnergy) * 0.55)
-    .attr('fill', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
-    .attr('stroke', d => (STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived).fill)
+    .attr('r', d => rScale(safeRadiusEnergy(d)) * 0.55)
+    .attr('fill', d => getStateColor(d.lifecycleState).fill)
+    .attr('stroke', d => getStateColor(d.lifecycleState).fill)
     .attr('fill-opacity', d => d.lifecycleState === 'archived' ? 0.25 : 0.95);
 
   // Label — hidden until hover
   nodeSel.append('text')
     .attr('class', 'node-label')
-    .attr('dy', d => rScale(d.activationEnergy) * 0.55 + 5)
+    .attr('dy', d => rScale(safeRadiusEnergy(d)) * 0.55 + 5)
     .text(d => {
-      const label = d.text || d.id;
+      const label = String(d.text || d.id || '');
       return label.length > 28 ? label.slice(0, 26) + '…' : label;
     });
 
@@ -641,7 +667,7 @@ function render(data) {
       .strength(0.4))
     .force('charge', d3.forceManyBody().strength(-220))
     .force('center', d3.forceCenter(W / 2, H / 2))
-    .force('collide', d3.forceCollide(d => rScale(d.activationEnergy) + 4))
+    .force('collide', d3.forceCollide(d => rScale(safeRadiusEnergy(d)) + 4))
     .on('tick', ticked)
     .on('end', () => {
       // Simulation settled — render fractal if we're zoomed out enough
@@ -718,30 +744,38 @@ function render(data) {
 const tip = document.getElementById('tooltip');
 
 function showNodeTip(event, d) {
-  const sc = STATE_COLOR[d.lifecycleState] ?? STATE_COLOR.archived;
+  const state = String(d?.lifecycleState ?? 'unknown');
+  const sc = getStateColor(state);
+  const energy = safeFiniteNumber(d?.activationEnergy, 0);
+  const accessCount = safeFiniteNumber(d?.accessCount, 0);
+  const textStr = typeof d?.text === 'string' ? d.text : (d?.text != null ? String(d.text) : '');
   const tags = [
-    `<span class="tag" style="background:${sc.fill}22;border:1px solid ${sc.fill};color:${sc.fill}">${d.lifecycleState.toUpperCase()}</span>`,
-    d.category ? `<span class="tag" style="background:#1e3a5f;border:1px solid #3b82f6;color:#93c5fd">${d.category}</span>` : '',
-    d.isSummaryNode ? `<span class="tag" style="background:#1a1d2e;border:1px solid #6366f1;color:#a5b4fc">cluster summary</span>` : '',
-    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">⚡ ${d.activationEnergy.toFixed(1)}</span>`,
-    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">👁 ${d.accessCount}×</span>`,
+    `<span class="tag" style="background:${sc.fill}22;border:1px solid ${sc.fill};color:${sc.fill}">${escHtml(state.toUpperCase())}</span>`,
+    d?.category ? `<span class="tag" style="background:#1e3a5f;border:1px solid #3b82f6;color:#93c5fd">${escHtml(d.category)}</span>` : '',
+    d?.isSummaryNode ? `<span class="tag" style="background:#1a1d2e;border:1px solid #6366f1;color:#a5b4fc">cluster summary</span>` : '',
+    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">⚡ ${energy.toFixed(1)}</span>`,
+    `<span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">👁 ${accessCount}×</span>`,
   ].filter(Boolean).join('');
 
   tip.innerHTML = `
-    <div class="tt-id">${d.id} &nbsp;·&nbsp; ${d.ns}</div>
-    <div class="tt-text">${d.text ? escHtml(d.text.slice(0, 200)) + (d.text.length > 200 ? '…' : '') : '<em style="color:#4b5563">no text</em>'}</div>
+    <div class="tt-id">${escHtml(d?.id)} &nbsp;·&nbsp; ${escHtml(d?.ns)}</div>
+    <div class="tt-text">${textStr ? escHtml(textStr.slice(0, 200)) + (textStr.length > 200 ? '…' : '') : '<em style="color:#4b5563">no text</em>'}</div>
     <div class="tt-meta">${tags}</div>
   `;
   positionTip(event);
 }
 
 function showEdgeTip(event, d) {
-  const color = RELATION_COLOR[d.relation] ?? '#64748b';
+  const relation = String(d?.relation ?? 'unknown');
+  const color = getRelationColor(relation);
+  const weight = safeFiniteNumber(d?.weight, 0);
+  const sourceId = d?.source && typeof d.source === 'object' ? d.source.id : d?.source;
+  const targetId = d?.target && typeof d.target === 'object' ? d.target.id : d?.target;
   tip.innerHTML = `
-    <div class="tt-id">${d.source.id} → ${d.target.id}</div>
+    <div class="tt-id">${escHtml(sourceId)} → ${escHtml(targetId)}</div>
     <div class="tt-meta">
-      <span class="tag" style="background:${color}22;border:1px solid ${color};color:${color}">${d.relation}</span>
-      <span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">weight ${d.weight.toFixed(2)}</span>
+      <span class="tag" style="background:${color}22;border:1px solid ${color};color:${color}">${escHtml(relation)}</span>
+      <span class="tag" style="background:#1a1d2e;border:1px solid #374151;color:#64748b">weight ${weight.toFixed(2)}</span>
     </div>
   `;
   positionTip(event);
@@ -762,7 +796,12 @@ function positionTip(event) {
 function hideTip() { tip.style.display = 'none'; }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ── Rotation ──────────────────────────────────────────────────────────────────

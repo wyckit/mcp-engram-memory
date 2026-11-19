@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -81,13 +82,26 @@ public sealed class BenchmarkTools
                 $"Unknown agent-outcome dataset '{datasetId}'. Available: {string.Join(", ", AgentOutcomeBenchmarkRunner.GetAvailableDatasets())}");
         }
 
+        string? validatedArtifactRoot = null;
+        if (persistArtifact || artifactDirectory is not null)
+        {
+            try
+            {
+                validatedArtifactRoot = BenchmarkSecurityGuard.ResolveArtifactRoot(artifactDirectory);
+            }
+            catch (ArgumentException ex)
+            {
+                return new AgentOutcomeBenchmarkRunOutput("error", null, null, ex.Message);
+            }
+        }
+
         var result = _outcomeRunner.Run(dataset, contextualPrefix);
         if (!persistArtifact)
             return new AgentOutcomeBenchmarkRunOutput("completed", result, null, "Artifact persistence disabled.");
 
         try
         {
-            var artifactPath = PersistAgentOutcomeArtifact(result, artifactDirectory);
+            var artifactPath = PersistAgentOutcomeArtifact(result, validatedArtifactRoot!);
             return new AgentOutcomeBenchmarkRunOutput("completed", result, artifactPath, null);
         }
         catch (Exception ex)
@@ -134,9 +148,22 @@ public sealed class BenchmarkTools
                 $"Unknown agent-outcome dataset '{datasetId}'. Available: {string.Join(", ", AgentOutcomeBenchmarkRunner.GetAvailableDatasets())}");
         }
 
+        string? validatedArtifactRoot = null;
+        string? validatedEndpoint;
         try
         {
-            using var client = _modelClientFactory.Create(provider, endpoint);
+            validatedEndpoint = BenchmarkSecurityGuard.ValidateProviderEndpoint(provider, endpoint);
+            if (persistArtifact || artifactDirectory is not null)
+                validatedArtifactRoot = BenchmarkSecurityGuard.ResolveArtifactRoot(artifactDirectory);
+        }
+        catch (ArgumentException ex)
+        {
+            return new LiveAgentOutcomeBenchmarkRunOutput("error", null, null, ex.Message);
+        }
+
+        try
+        {
+            using var client = _modelClientFactory.Create(provider, validatedEndpoint);
             bool available = await client.IsAvailableAsync(model, cancellationToken);
             if (!available)
             {
@@ -150,7 +177,7 @@ public sealed class BenchmarkTools
             var options = new LiveAgentOutcomeGenerationOptions(
                 provider,
                 model,
-                endpoint,
+                validatedEndpoint,
                 contextualPrefix,
                 maxTokens,
                 temperature,
@@ -162,7 +189,7 @@ public sealed class BenchmarkTools
 
             try
             {
-                var artifactPath = PersistLiveAgentOutcomeArtifact(result, artifactDirectory);
+                var artifactPath = PersistLiveAgentOutcomeArtifact(result, validatedArtifactRoot!);
                 return new LiveAgentOutcomeBenchmarkRunOutput("completed", result, artifactPath, null);
             }
             catch (Exception ex)
@@ -174,7 +201,7 @@ public sealed class BenchmarkTools
                     $"Live benchmark completed but artifact persistence failed: {ex.Message}");
             }
         }
-        catch (ArgumentOutOfRangeException ex)
+        catch (ArgumentException ex)
         {
             return new LiveAgentOutcomeBenchmarkRunOutput("error", null, null, ex.Message);
         }
@@ -220,7 +247,11 @@ public sealed class BenchmarkTools
 
         try
         {
-            var report = LiveAgentOutcomeBenchmarkComparer.CompareArtifacts(baselineArtifactPath, candidateArtifactPath);
+            var resolvedBaseline = BenchmarkSecurityGuard.ValidateReadableFilePath(
+                baselineArtifactPath, nameof(baselineArtifactPath));
+            var resolvedCandidate = BenchmarkSecurityGuard.ValidateReadableFilePath(
+                candidateArtifactPath, nameof(candidateArtifactPath));
+            var report = LiveAgentOutcomeBenchmarkComparer.CompareArtifacts(resolvedBaseline, resolvedCandidate);
             return new LiveAgentOutcomeArtifactComparisonOutput("completed", report, null);
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or InvalidOperationException or JsonException or ArgumentException)
@@ -296,37 +327,33 @@ public sealed class BenchmarkTools
             : "All metrics reset.";
     }
 
-    private static string PersistAgentOutcomeArtifact(AgentOutcomeBenchmarkResult result, string? artifactDirectory)
+    private static string PersistAgentOutcomeArtifact(AgentOutcomeBenchmarkResult result, string validatedRoot)
     {
-        string root = ResolveArtifactRoot(artifactDirectory);
-
-        string datedDir = Path.Combine(root, $"{result.RunAt:yyyy-MM-dd}");
+        string datedDir = Path.Combine(validatedRoot, $"{result.RunAt:yyyy-MM-dd}");
         Directory.CreateDirectory(datedDir);
 
-        string path = Path.Combine(datedDir, $"{result.DatasetId}-agent-outcome.json");
+        string datasetSegment = BenchmarkSecurityGuard.ValidateDatasetId(result.DatasetId);
+        string path = Path.Combine(datedDir, $"{datasetSegment}-agent-outcome.json");
+        BenchmarkSecurityGuard.EnsurePathWithinDirectory(path, datedDir);
         File.WriteAllText(path, JsonSerializer.Serialize(result, JsonOptions));
         return Path.GetFullPath(path);
     }
 
-    private static string PersistLiveAgentOutcomeArtifact(LiveAgentOutcomeBenchmarkResult result, string? artifactDirectory)
+    private static string PersistLiveAgentOutcomeArtifact(LiveAgentOutcomeBenchmarkResult result, string validatedRoot)
     {
-        string root = ResolveArtifactRoot(artifactDirectory);
-        string datedDir = Path.Combine(root, $"{result.RunAt:yyyy-MM-dd}");
+        string datedDir = Path.Combine(validatedRoot, $"{result.RunAt:yyyy-MM-dd}");
         Directory.CreateDirectory(datedDir);
 
+        string datasetSegment = BenchmarkSecurityGuard.ValidateDatasetId(result.DatasetId);
         string providerSegment = SanitizeArtifactSegment(result.Provider);
         string modelSegment = SanitizeArtifactSegment(result.Model);
         string path = Path.Combine(
             datedDir,
-            $"{result.DatasetId}-live-agent-outcome-{providerSegment}-{modelSegment}.json");
+            $"{datasetSegment}-live-agent-outcome-{providerSegment}-{modelSegment}.json");
+        BenchmarkSecurityGuard.EnsurePathWithinDirectory(path, datedDir);
         File.WriteAllText(path, JsonSerializer.Serialize(result, JsonOptions));
         return Path.GetFullPath(path);
     }
-
-    private static string ResolveArtifactRoot(string? artifactDirectory)
-        => artifactDirectory
-            ?? Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH")
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "benchmarks");
 
     private static string SanitizeArtifactSegment(string value)
     {
@@ -346,6 +373,377 @@ public sealed class BenchmarkTools
 
         var sanitized = builder.ToString().Trim('-');
         return string.IsNullOrWhiteSpace(sanitized) ? "default" : sanitized;
+    }
+}
+
+/// <summary>
+/// Input boundary validation for full-profile benchmark MCP tools.
+/// Blocks arbitrary CLI execution, Ollama SSRF, and path traversal / arbitrary file read-write.
+/// </summary>
+internal static class BenchmarkSecurityGuard
+{
+    internal const string AllowCustomEndpointEnvVar = "ENGRAM_ALLOW_CUSTOM_BENCHMARK_ENDPOINT";
+    internal const string AllowCustomPathsEnvVar = "ENGRAM_ALLOW_CUSTOM_BENCHMARK_PATHS";
+
+    private static bool IsEnvFlagEnabled(string envVarName)
+    {
+        var raw = Environment.GetEnvironmentVariable(envVarName);
+        return string.Equals(raw?.Trim(), "1", StringComparison.Ordinal)
+            || string.Equals(raw?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string? ValidateProviderEndpoint(string provider, string? endpoint)
+    {
+        var normalized = provider?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized switch
+        {
+            "ollama" => ValidateOllamaEndpoint(endpoint),
+            "claude-cli" or "claude_cli" or "claudecli" => ValidateCliEndpoint(provider!, endpoint, ClaudeCliModelClient.DefaultExecutable),
+            "codex-cli" or "codex_cli" or "codexcli" => ValidateCliEndpoint(provider!, endpoint, CodexCliModelClient.DefaultExecutable),
+            "gemini-cli" or "gemini_cli" or "geminicli" => ValidateCliEndpoint(provider!, endpoint, GeminiCliModelClient.DefaultExecutable),
+            _ => endpoint
+        };
+    }
+
+    private static string? ValidateOllamaEndpoint(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return null;
+
+        var configuredOllamaUrl = Environment.GetEnvironmentVariable("OLLAMA_URL");
+        string trimmed = endpoint.Trim();
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            throw new ArgumentException("Invalid Ollama endpoint URL.", nameof(endpoint));
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Ollama endpoint must use http or https.", nameof(endpoint));
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("Ollama endpoint must not contain userinfo credentials.", nameof(endpoint));
+
+        if (!IsEnvFlagEnabled(AllowCustomEndpointEnvVar) &&
+            !IsLoopbackHost(uri) &&
+            !MatchesConfiguredOllamaHost(uri, configuredOllamaUrl))
+        {
+            throw new ArgumentException(
+                $"Ollama endpoint host '{uri.IdnHost}' is not permitted. Only loopback hosts (localhost, 127.0.0.1, ::1) or the operator-configured OLLAMA_URL host are allowed unless {AllowCustomEndpointEnvVar}=1 is set.",
+                nameof(endpoint));
+        }
+
+        return trimmed;
+    }
+
+    private static string? ValidateCliEndpoint(string provider, string? endpoint, string canonicalExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return null;
+
+        string trimmed = endpoint.Trim();
+        if (trimmed.Any(char.IsControl))
+            throw new ArgumentException("Endpoint must not contain control characters.", nameof(endpoint));
+
+        if (IsEnvFlagEnabled(AllowCustomEndpointEnvVar))
+            return trimmed;
+
+        if (string.Equals(trimmed, canonicalExecutable, StringComparison.OrdinalIgnoreCase))
+            return canonicalExecutable;
+
+        throw new ArgumentException(
+            $"Custom CLI executable endpoint is not permitted for provider '{provider}'. Only the canonical '{canonicalExecutable}' CLI is allowed unless {AllowCustomEndpointEnvVar}=1 is set.",
+            nameof(endpoint));
+    }
+
+    internal static string ValidateDatasetId(string datasetId)
+    {
+        if (string.IsNullOrWhiteSpace(datasetId))
+            throw new ArgumentException("Dataset ID must not be empty.", nameof(datasetId));
+
+        string trimmed = datasetId.Trim();
+        if (trimmed is "." or ".." ||
+            trimmed.Contains("..", StringComparison.Ordinal) ||
+            trimmed.IndexOfAny(['/', '\\', ':']) >= 0 ||
+            trimmed.Any(char.IsControl) ||
+            trimmed.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException(
+                "Dataset ID must be a single safe filename segment without path separators or '..'.",
+                nameof(datasetId));
+        }
+
+        return trimmed;
+    }
+
+    internal static string ResolveArtifactRoot(string? artifactDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(artifactDirectory))
+        {
+            string defaultRoot = Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH")
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "benchmarks");
+            return Path.GetFullPath(defaultRoot);
+        }
+
+        return ValidateConfinedPath(artifactDirectory, nameof(artifactDirectory), includeDatasetRoots: false);
+    }
+
+    internal static string ValidateReadableFilePath(
+        string path,
+        string parameterName,
+        bool includeDatasetRoots = false)
+        => ValidateConfinedPath(path, parameterName, includeDatasetRoots);
+
+    internal static void EnsurePathWithinDirectory(string candidatePath, string parentDirectory)
+    {
+        string fullCandidate = Path.GetFullPath(candidatePath);
+        string fullParent = Path.GetFullPath(parentDirectory);
+        if (!IsWithinRoot(fullCandidate, fullParent))
+        {
+            throw new ArgumentException(
+                "Resolved artifact path escapes the target artifact directory.",
+                nameof(candidatePath));
+        }
+    }
+
+    private static string ValidateConfinedPath(string rawPath, string parameterName, bool includeDatasetRoots)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath))
+            throw new ArgumentException($"Path '{parameterName}' must not be empty.", parameterName);
+
+        string trimmed = rawPath.Trim();
+        if (trimmed.Any(char.IsControl))
+            throw new ArgumentException($"Path '{parameterName}' must not contain control characters.", parameterName);
+
+        if (ContainsParentTraversal(trimmed))
+            throw new ArgumentException($"Path '{parameterName}' must not contain '..' traversal segments.", parameterName);
+
+        // Reject NTFS Alternate Data Streams (':' outside the Windows drive specifier).
+        int colonIndex = trimmed.IndexOf(':');
+        if (colonIndex >= 0)
+        {
+            bool validWindowsDrive = OperatingSystem.IsWindows()
+                && colonIndex == 1
+                && char.IsAsciiLetter(trimmed[0])
+                && trimmed.IndexOf(':', 2) < 0;
+            if (!validWindowsDrive)
+                throw new ArgumentException($"Path '{parameterName}' contains an invalid ':' character.", parameterName);
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(trimmed);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new ArgumentException($"Path '{parameterName}' is not a valid filesystem path.", parameterName, ex);
+        }
+
+        if (IsEnvFlagEnabled(AllowCustomPathsEnvVar))
+            return fullPath;
+
+        var allowedRoots = GetAllowedRoots(includeDatasetRoots);
+        if (!IsWithinAnyRoot(fullPath, allowedRoots))
+        {
+            throw new ArgumentException(
+                $"Path '{parameterName}' must stay within the configured benchmarks or temp directory. Set {AllowCustomPathsEnvVar}=1 to permit custom paths.",
+                parameterName);
+        }
+
+        // Guard against symlink escapes out of the allowed root set, including symlinks on
+        // existing ancestor directories of a not-yet-created target path.
+        ValidateNoEscapingSymlink(fullPath, allowedRoots, parameterName);
+
+        return fullPath;
+    }
+
+    private static void ValidateNoEscapingSymlink(string fullPath, IReadOnlyList<string> allowedRoots, string parameterName)
+    {
+        string? current = Path.TrimEndingDirectorySeparator(fullPath);
+        while (!string.IsNullOrEmpty(current) && IsWithinAnyRoot(current, allowedRoots))
+        {
+            FileSystemInfo? target = null;
+            if (File.Exists(current))
+                target = File.ResolveLinkTarget(current, returnFinalTarget: true);
+            else if (Directory.Exists(current))
+                target = Directory.ResolveLinkTarget(current, returnFinalTarget: true);
+
+            if (target is not null && !IsWithinAnyRoot(target.FullName, allowedRoots))
+            {
+                throw new ArgumentException(
+                    $"Path '{parameterName}' resolves via symlink outside allowed benchmark roots.",
+                    parameterName);
+            }
+
+            // Stop once we have checked an allowed root itself so OS-level symlinks above the root
+            // (e.g., macOS /var -> /private/var) do not produce false positives.
+            if (IsExactRoot(current, allowedRoots))
+                break;
+
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, current, StringComparison.Ordinal))
+                break;
+            current = Path.TrimEndingDirectorySeparator(parent);
+        }
+    }
+
+    private static bool IsExactRoot(string normalizedPath, IReadOnlyList<string> roots)
+    {
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        foreach (var root in roots)
+        {
+            if (string.Equals(normalizedPath, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), comparison))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool ContainsParentTraversal(string path)
+    {
+        foreach (var segment in path.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == "..")
+                return true;
+        }
+        return false;
+    }
+
+    private static List<string> GetAllowedRoots(bool includeDatasetRoots)
+    {
+        var roots = new List<string>();
+
+        static void AddRoot(List<string> list, string? candidate)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return;
+            try
+            {
+                string full = Path.GetFullPath(candidate.Trim());
+                list.Add(full);
+                if (Directory.Exists(full))
+                {
+                    var target = Directory.ResolveLinkTarget(full, returnFinalTarget: true);
+                    if (target is not null)
+                        list.Add(target.FullName);
+                }
+            }
+            catch
+            {
+                // Ignore malformed environment paths when constructing allowlist.
+            }
+        }
+
+        AddRoot(roots, Path.Combine(Directory.GetCurrentDirectory(), "benchmarks"));
+        AddRoot(roots, Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH"));
+        AddRoot(roots, Path.GetTempPath());
+
+        // When invoked from a nested working directory (e.g. dotnet test bin/...),
+        // also permit the repository's top-level benchmarks directory if present.
+        AddRoot(roots, TryFindRepoBenchmarksRoot(Directory.GetCurrentDirectory()));
+        AddRoot(roots, TryFindRepoBenchmarksRoot(AppContext.BaseDirectory));
+
+        if (includeDatasetRoots)
+        {
+            var mrcrEnv = Environment.GetEnvironmentVariable("MRCR_DATASET_PATH");
+            if (!string.IsNullOrWhiteSpace(mrcrEnv))
+            {
+                try
+                {
+                    string mrcrFull = Path.GetFullPath(mrcrEnv.Trim());
+                    AddRoot(roots, Directory.Exists(mrcrFull) ? mrcrFull : Path.GetDirectoryName(mrcrFull));
+                }
+                catch
+                {
+                    // Ignore malformed env path.
+                }
+            }
+        }
+
+        return roots;
+    }
+
+    private static string? TryFindRepoBenchmarksRoot(string startDir)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(startDir);
+            while (dir is not null)
+            {
+                if (File.Exists(Path.Combine(dir.FullName, "McpEngramMemory.slnx")))
+                    return Path.Combine(dir.FullName, "benchmarks");
+                dir = dir.Parent;
+            }
+        }
+        catch
+        {
+            // Ignore IO errors while probing ancestors.
+        }
+        return null;
+    }
+
+    private static bool IsWithinAnyRoot(string fullPath, IReadOnlyList<string> roots)
+    {
+        foreach (var root in roots)
+        {
+            if (IsWithinRoot(fullPath, root))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsWithinRoot(string fullPath, string rootPath)
+    {
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        string normalizedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(fullPath));
+        string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
+
+        if (string.Equals(normalizedPath, normalizedRoot, comparison))
+            return true;
+
+        string prefix = normalizedRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(prefix, comparison);
+    }
+
+    private static bool IsLoopbackHost(Uri uri)
+    {
+        string host = uri.IdnHost;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (IPAddress.TryParse(host, out var ip))
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+            return IPAddress.IsLoopback(ip);
+        }
+
+        return false;
+    }
+
+    private static bool MatchesConfiguredOllamaHost(Uri candidate, string? configuredOllamaUrl)
+    {
+        if (string.IsNullOrWhiteSpace(configuredOllamaUrl))
+            return false;
+
+        if (!Uri.TryCreate(configuredOllamaUrl.Trim(), UriKind.Absolute, out var configuredUri))
+            return false;
+
+        if (!string.Equals(configuredUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(configuredUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.Equals(candidate.IdnHost, configuredUri.IdnHost, StringComparison.OrdinalIgnoreCase);
     }
 }
 

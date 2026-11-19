@@ -54,10 +54,29 @@ public sealed class MrcrBenchmarkTools
         if (string.IsNullOrWhiteSpace(model))
             return new MrcrBenchmarkRunOutput("error", null, null, "Model is required for run_mrcr_benchmark.");
 
+        string validatedDatasetId;
+        string? validatedEndpoint;
+        string? validatedArtifactRoot = null;
+        string resolvedPath;
+        try
+        {
+            validatedDatasetId = BenchmarkSecurityGuard.ValidateDatasetId(datasetId);
+            validatedEndpoint = BenchmarkSecurityGuard.ValidateProviderEndpoint(provider, endpoint);
+            if (persistArtifact || artifactDirectory is not null)
+                validatedArtifactRoot = BenchmarkSecurityGuard.ResolveArtifactRoot(artifactDirectory);
+
+            resolvedPath = !string.IsNullOrWhiteSpace(datasetPath)
+                ? BenchmarkSecurityGuard.ValidateReadableFilePath(datasetPath, nameof(datasetPath), includeDatasetRoots: true)
+                : MrcrDatasetLoader.ResolveDefaultPath(null);
+        }
+        catch (ArgumentException ex)
+        {
+            return new MrcrBenchmarkRunOutput("error", null, null, ex.Message);
+        }
+
         IReadOnlyList<MrcrTask> tasks;
         try
         {
-            var resolvedPath = MrcrDatasetLoader.ResolveDefaultPath(datasetPath);
             tasks = MrcrDatasetLoader.Load(resolvedPath, limit > 0 ? limit : null);
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException)
@@ -70,25 +89,25 @@ public sealed class MrcrBenchmarkTools
 
         try
         {
-            using var client = _modelClientFactory.Create(provider, endpoint);
+            using var client = _modelClientFactory.Create(provider, validatedEndpoint);
             bool available = await client.IsAvailableAsync(model, cancellationToken);
             if (!available)
                 return new MrcrBenchmarkRunOutput("error", null, null,
                     $"Provider '{provider}' reported model '{model}' is not available.");
 
             var options = new MrcrGenerationOptions(
-                provider, model, endpoint,
+                provider, model, validatedEndpoint,
                 limit, topK, maxTokens, temperature, maxContextTokens,
                 runFullContextArm, runEngramArm, engramMode);
 
-            var result = await _runner.RunAsync(datasetId, tasks, options, client, cancellationToken);
+            var result = await _runner.RunAsync(validatedDatasetId, tasks, options, client, cancellationToken);
 
             if (!persistArtifact)
                 return new MrcrBenchmarkRunOutput("completed", result, null, "Artifact persistence disabled.");
 
             try
             {
-                string artifactPath = PersistArtifact(result, artifactDirectory);
+                string artifactPath = PersistArtifact(result, validatedArtifactRoot!);
                 return new MrcrBenchmarkRunOutput("completed", result, artifactPath, null);
             }
             catch (Exception ex)
@@ -97,7 +116,7 @@ public sealed class MrcrBenchmarkTools
                     $"Benchmark completed but artifact persistence failed: {ex.Message}");
             }
         }
-        catch (ArgumentOutOfRangeException ex)
+        catch (ArgumentException ex)
         {
             return new MrcrBenchmarkRunOutput("error", null, null, ex.Message);
         }
@@ -124,7 +143,11 @@ public sealed class MrcrBenchmarkTools
 
         try
         {
-            var report = MrcrBenchmarkComparer.CompareArtifacts(baselineArtifactPath, candidateArtifactPath);
+            var resolvedBaseline = BenchmarkSecurityGuard.ValidateReadableFilePath(
+                baselineArtifactPath, nameof(baselineArtifactPath));
+            var resolvedCandidate = BenchmarkSecurityGuard.ValidateReadableFilePath(
+                candidateArtifactPath, nameof(candidateArtifactPath));
+            var report = MrcrBenchmarkComparer.CompareArtifacts(resolvedBaseline, resolvedCandidate);
             return new MrcrArtifactComparisonOutput("completed", report, null);
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or InvalidOperationException or JsonException or ArgumentException)
@@ -133,19 +156,17 @@ public sealed class MrcrBenchmarkTools
         }
     }
 
-    private static string PersistArtifact(MrcrBenchmarkResult result, string? artifactDirectory)
+    private static string PersistArtifact(MrcrBenchmarkResult result, string validatedRoot)
     {
-        string root = artifactDirectory
-            ?? Environment.GetEnvironmentVariable("BENCHMARK_ARTIFACTS_PATH")
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "benchmarks");
-
-        string datedDir = Path.Combine(root, $"{result.RunAt:yyyy-MM-dd}");
+        string datedDir = Path.Combine(validatedRoot, $"{result.RunAt:yyyy-MM-dd}");
         Directory.CreateDirectory(datedDir);
 
+        string datasetId = BenchmarkSecurityGuard.ValidateDatasetId(result.DatasetId);
         string provider = SanitizeSegment(result.Provider);
         string model = SanitizeSegment(result.Model);
         string mode = SanitizeSegment(result.EngramMode);
-        string path = Path.Combine(datedDir, $"{result.DatasetId}-mrcr-{provider}-{model}-{mode}.json");
+        string path = Path.Combine(datedDir, $"{datasetId}-mrcr-{provider}-{model}-{mode}.json");
+        BenchmarkSecurityGuard.EnsurePathWithinDirectory(path, datedDir);
         File.WriteAllText(path, JsonSerializer.Serialize(result, JsonOptions));
         return Path.GetFullPath(path);
     }

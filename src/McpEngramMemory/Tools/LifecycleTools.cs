@@ -177,7 +177,14 @@ public sealed class LifecycleTools
     private float[] ResolveVector(float[]? vector, string? text)
     {
         if (vector is not null && vector.Length > 0)
+        {
+            if (vector.Length != _embedding.Dimensions)
+                throw new ArgumentException(
+                    $"Vector must have exactly {_embedding.Dimensions} dimensions to match the embedding model (got {vector.Length}).",
+                    nameof(vector));
+
             return vector;
+        }
 
         if (!string.IsNullOrWhiteSpace(text))
             return _embedding.Embed(text);
