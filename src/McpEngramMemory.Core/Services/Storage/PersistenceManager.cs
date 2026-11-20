@@ -26,8 +26,17 @@ public sealed class PersistenceManager : IStorageProvider
     private const string EncodedNamespaceHashPrefix = "ns_enc_h_";
     private const string TenantHnswPrefix = "hnsw_t_";
     private const string EncodedHnswPrefix = "hnsw_enc_";
+    private const string MigrationManifestStem = "_engram-migration";
     private const int MaxReversibleHexUtf8Bytes = 96;
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
     private static readonly HashSet<char> InvalidFileNameChars = new(Path.GetInvalidFileNameChars());
+    private static readonly HashSet<char> WindowsInvalidFileNameChars = BuildWindowsInvalidFileNameChars();
     private static readonly HashSet<string> ReservedControlPlaneStems = new(StringComparer.OrdinalIgnoreCase)
     {
         "_edges", "_clusters", "_collapse_history", "_decay_configs"
@@ -39,10 +48,20 @@ public sealed class PersistenceManager : IStorageProvider
         "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
     };
 
+    private static HashSet<char> BuildWindowsInvalidFileNameChars()
+    {
+        var set = new HashSet<char> { '"', '<', '>', '|', ':', '*', '?', '\\', '/' };
+        for (int c = 0; c < 32; c++)
+            set.Add((char)c);
+        return set;
+    }
+
     private readonly string _basePath;
     private readonly string _basePathWithSeparator;
     private readonly ILogger<PersistenceManager>? _logger;
     private readonly DebouncedStorageCoordinator<DefaultEntryStorageKey> _coordinator;
+    private readonly object _legacyMigrationLock = new();
+    private volatile bool _legacyMigrationIncomplete;
     // Retained directly on the provider instance pointing at the coordinator's scheduling lock
     // and disposal flag for deterministic concurrency-test synchronization.
     private readonly object _timerLock;
@@ -63,8 +82,10 @@ public sealed class PersistenceManager : IStorageProvider
         set => _coordinator.MaxGlobalDeferrals = value;
     }
 
-    // Internal test seam for verifying _timerLock is not held during global file writes.
+    // Internal test seams for deterministic durability & migration regression tests.
     internal Action<string>? OnBeforeGlobalWrite { get; set; }
+    internal Action<string>? OnAfterPayloadBeforeChecksumWrite { get; set; }
+    internal Action<string, string>? OnAfterLegacyMigrationTargetCommit { get; set; }
 
     /// <summary>JSON backend does not support incremental writes — always uses full namespace snapshots.</summary>
     public bool SupportsIncrementalWrites => false;
@@ -91,6 +112,10 @@ public sealed class PersistenceManager : IStorageProvider
         // first run, so that method can refuse instead of reporting an empty store.
         Directory.CreateDirectory(_basePath);
 
+        // Migrate any unambiguous 2.0.x/2.1.x legacy namespace filenames (e.g., ns_enc_notes.json)
+        // to their canonical encoded filenames before serving reads or enumerations.
+        MigrateLegacyNamespaceFiles();
+
         _coordinator = new DebouncedStorageCoordinator<DefaultEntryStorageKey>(
             TimeSpan.FromMilliseconds(debounceMs),
             supportsIncrementalWrites: false,
@@ -115,46 +140,40 @@ public sealed class PersistenceManager : IStorageProvider
     public string StoreIdentity => StoreIdentityUtil.CanonicalPath(_basePath);
 
     /// <summary>
-    /// Load namespace data from disk. Returns empty data if file does not exist, is corrupted,
-    /// or fails checksum verification (matching SQLite and SQL Server backends).
+    /// Load namespace data from disk. Recovers the last verified backup snapshot if the primary
+    /// payload/checksum pair was torn by an interrupted write; returns empty data only if the file
+    /// does not exist or neither primary nor backup verifies cleanly (matching SQLite/SQL Server).
     /// </summary>
     public NamespaceData LoadNamespace(string ns)
     {
         var path = GetNamespacePath(ns);
         if (!File.Exists(path))
+        {
+            if (_legacyMigrationIncomplete || HasPotentialLegacyFileFor(ns))
+                MigrateLegacyNamespaceFiles();
+            if (!File.Exists(path))
+                return new NamespaceData { StorageVersion = CurrentStorageVersion };
+        }
+
+        var loaded = LoadVerifiedPayload<NamespaceData>(path, $"namespace '{ns}'", out bool fromPrimary);
+        if (loaded is null)
             return new NamespaceData { StorageVersion = CurrentStorageVersion };
 
-        try
+        // Forward-compatibility guard: reject files from newer versions without falling back.
+        if (loaded.StorageVersion > CurrentStorageVersion)
         {
-            var json = File.ReadAllText(path);
-            if (!VerifyChecksum(path, json))
-            {
-                _logger?.LogWarning("Checksum mismatch for namespace '{Namespace}'; dropping corrupted payload", ns);
-                return new NamespaceData { StorageVersion = CurrentStorageVersion };
-            }
-            var data = JsonSerializer.Deserialize<NamespaceData>(json, JsonOptions) ?? new NamespaceData();
-
-            // Forward-compatibility guard: reject files from newer versions
-            if (data.StorageVersion > CurrentStorageVersion)
-            {
-                _logger?.LogError(
-                    "Namespace '{Namespace}' has storage version {FileVersion} but this server supports up to version {CurrentVersion}. " +
-                    "Upgrade the server or use the version that created this data.",
-                    ns, data.StorageVersion, CurrentStorageVersion);
-                return new NamespaceData { StorageVersion = CurrentStorageVersion };
-            }
-
-            // Run migrations for older versions
-            if (data.StorageVersion < CurrentStorageVersion)
-                data = RunMigrations(data, ns);
-
-            return data;
-        }
-        catch (JsonException ex)
-        {
-            _logger?.LogWarning(ex, "Corrupted JSON in namespace '{Namespace}', returning empty data", ns);
+            _logger?.LogError(
+                "Namespace '{Namespace}' has storage version {FileVersion} but this server supports up to version {CurrentVersion}. " +
+                "Upgrade the server or use the version that created this data.",
+                ns, loaded.StorageVersion, CurrentStorageVersion);
             return new NamespaceData { StorageVersion = CurrentStorageVersion };
         }
+
+        // Run migrations for older versions only when loaded from the primary file.
+        if (fromPrimary && loaded.StorageVersion < CurrentStorageVersion)
+            loaded = RunMigrations(loaded, ns);
+
+        return loaded;
     }
 
     private NamespaceData RunMigrations(NamespaceData data, string ns)
@@ -233,21 +252,7 @@ public sealed class PersistenceManager : IStorageProvider
         if (!File.Exists(path))
             return null;
 
-        try
-        {
-            var json = File.ReadAllText(path);
-            if (!VerifyChecksum(path, json))
-            {
-                _logger?.LogWarning("Checksum mismatch for {Label} file; dropping corrupted payload", label);
-                return null;
-            }
-            return JsonSerializer.Deserialize<T>(json, JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            _logger?.LogWarning(ex, "Corrupted JSON in {Label} file, returning empty data", label);
-            return null;
-        }
+        return LoadVerifiedPayload<T>(path, $"{label} file", out _);
     }
 
     // ── Debounced Scheduling (delegated to DebouncedStorageCoordinator) ──
@@ -557,9 +562,13 @@ public sealed class PersistenceManager : IStorageProvider
 
     public IReadOnlyList<string> GetPersistedNamespaces()
     {
+        if (_legacyMigrationIncomplete && Directory.Exists(_basePath))
+            MigrateLegacyNamespaceFiles();
+
         try
         {
             var results = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var file in Directory.GetFiles(_basePath, "*.json"))
             {
                 if (file.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
@@ -571,7 +580,8 @@ public sealed class PersistenceManager : IStorageProvider
                 string? decoded = DecodeNamespaceStem(stem, file);
                 if (string.IsNullOrEmpty(decoded) || decoded.StartsWith('_'))
                     continue;
-                results.Add(decoded);
+                if (seen.Add(decoded))
+                    results.Add(decoded);
             }
             return results;
         }
@@ -588,22 +598,12 @@ public sealed class PersistenceManager : IStorageProvider
         {
             try
             {
-                var json = File.ReadAllText(filePath);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("entries", out var entriesEl)
-                    && entriesEl.ValueKind == JsonValueKind.Array)
+                if (TryInspectVerifiedNamespaceFile(filePath, out var data, out var ownerNs, out bool ambiguous)
+                    && !ambiguous
+                    && !string.IsNullOrEmpty(ownerNs)
+                    && SamePath(GetNamespacePath(ownerNs), filePath))
                 {
-                    foreach (var entryEl in entriesEl.EnumerateArray())
-                    {
-                        if (entryEl.ValueKind == JsonValueKind.Object
-                            && entryEl.TryGetProperty("ns", out var nsEl)
-                            && nsEl.ValueKind == JsonValueKind.String)
-                        {
-                            var name = nsEl.GetString();
-                            if (!string.IsNullOrEmpty(name))
-                                return name;
-                        }
-                    }
+                    return ownerNs;
                 }
             }
             catch (Exception ex)
@@ -616,15 +616,38 @@ public sealed class PersistenceManager : IStorageProvider
         if (stem.StartsWith(EncodedNamespacePrefix, StringComparison.OrdinalIgnoreCase))
         {
             var hex = stem.Substring(EncodedNamespacePrefix.Length);
-            if (hex.Length > 0 && hex.Length % 2 == 0)
-            {
-                try { return Encoding.UTF8.GetString(Convert.FromHexString(hex)); }
-                catch (FormatException) { return null; }
-            }
+            if (TryDecodeCanonicalHexNamespace(hex, filePath, out var decoded))
+                return decoded;
             return null;
         }
 
         return stem;
+    }
+
+    private bool TryDecodeCanonicalHexNamespace(string hex, string filePath, out string? decoded)
+    {
+        decoded = null;
+        if (hex.Length == 0 || hex.Length % 2 != 0 || hex.Length > MaxReversibleHexUtf8Bytes * 2)
+            return false;
+
+        try
+        {
+            var candidate = StrictUtf8.GetString(Convert.FromHexString(hex));
+            if (string.IsNullOrEmpty(candidate) || !RequiresNamespaceEncoding(candidate))
+                return false;
+
+            // Round-trip check ensures legacy ns_enc_<validhex>.json files are never misclassified
+            // as encoded namespaces for unrelated names.
+            if (!SamePath(GetNamespacePath(candidate), filePath))
+                return false;
+
+            decoded = candidate;
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or DecoderFallbackException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     public void Flush() => TryFlush();
@@ -639,13 +662,13 @@ public sealed class PersistenceManager : IStorageProvider
 
         try
         {
-            var json = File.ReadAllText(path);
-            if (!VerifyChecksum(path, json))
+            var rawBytes = File.ReadAllBytes(path);
+            if (!VerifyChecksumBytes(path, rawBytes))
             {
                 _logger?.LogWarning("Checksum mismatch for HNSW snapshot '{Namespace}'; dropping and rebuilding", ns);
                 return null;
             }
-            return JsonSerializer.Deserialize<HnswSnapshot>(json, JsonOptions);
+            return JsonSerializer.Deserialize<HnswSnapshot>(DecodeUtf8(rawBytes), JsonOptions);
         }
         catch (JsonException ex)
         {
@@ -658,7 +681,7 @@ public sealed class PersistenceManager : IStorageProvider
     {
         var path = GetHnswPath(ns);
         var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-        AtomicWriteAllText(path, json);
+        AtomicWriteAllText(path, json, keepBackup: false);
     }
 
     private bool TrySaveHnswSnapshotSync(string ns, HnswSnapshot snapshot)
@@ -692,6 +715,8 @@ public sealed class PersistenceManager : IStorageProvider
     {
         _coordinator.CancelHnswSave(ns);
         var path = GetHnswPath(ns);
+        var backupPath = path + ".bak";
+        if (File.Exists(backupPath)) File.Delete(backupPath);
         if (File.Exists(path)) File.Delete(path);
         var checksumPath = path + ".sha256";
         if (File.Exists(checksumPath)) File.Delete(checksumPath);
@@ -716,6 +741,9 @@ public sealed class PersistenceManager : IStorageProvider
         _coordinator.CancelAllPendingForNamespaceUnlockedByGate(ns);
 
         var path = GetNamespacePath(ns);
+        // Remove backup first so a crash mid-delete can never resurrect a deleted namespace.
+        var backupPath = path + ".bak";
+        if (File.Exists(backupPath)) File.Delete(backupPath);
         if (File.Exists(path)) File.Delete(path);
         var checksumPath = path + ".sha256";
         if (File.Exists(checksumPath)) File.Delete(checksumPath);
@@ -758,6 +786,9 @@ public sealed class PersistenceManager : IStorageProvider
 
             diskData.Entries = remaining;
             SaveNamespaceSync(ns, diskData);
+            // Refresh backup immediately after committing the filtered snapshot so deleted
+            // tenant entries are never retained on disk or resurrected by a later torn write.
+            BackupVerifiedPrimaryIfPresent(GetNamespacePath(ns));
             DeleteHnswSnapshotUnlockedByGate(NamespaceStore.PartitionKey(tenantId, ns));
         }
         finally
@@ -809,12 +840,15 @@ public sealed class PersistenceManager : IStorageProvider
             || ReservedControlPlaneStems.Contains(ns);
     }
 
+    private bool IsWithinBasePath(string path)
+        => Path.GetFullPath(path).StartsWith(_basePathWithSeparator, PathComparison);
+
+    private static bool SamePath(string a, string b)
+        => string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), PathComparison);
+
     private void EnsureWithinBasePath(string path, string ns)
     {
-        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        if (!Path.GetFullPath(path).StartsWith(_basePathWithSeparator, comparison))
+        if (!IsWithinBasePath(path))
             throw new ArgumentException($"Invalid namespace: '{ns}'");
     }
 
@@ -867,6 +901,425 @@ public sealed class PersistenceManager : IStorageProvider
         var path = Path.Combine(_basePath, $"{stem}.hnsw.json");
         EnsureWithinBasePath(path, ns);
         return path;
+    }
+
+    // ── Legacy namespace filename migration (2.0.x / 2.1.0 -> hardened canonical filenames) ──
+
+    private sealed record LegacyMigrationCandidate(
+        string SourcePath,
+        string OwnerNs,
+        string TargetPath,
+        NamespaceData Data);
+
+    /// <summary>
+    /// Safely migrates verified legacy namespace files (such as <c>ns_enc_notes.json</c> or
+    /// 2.0/2.1 sanitized filenames) to their canonical encoded filenames. Verifies ownership
+    /// from entry payloads, preserves originals on any ambiguity or target conflict, and can
+    /// safely resume after an interruption between committing the target and removing the source.
+    /// </summary>
+    internal void MigrateLegacyNamespaceFiles()
+    {
+        lock (_legacyMigrationLock)
+        {
+            if (!Directory.Exists(_basePath))
+                return;
+
+            string[] files;
+            try
+            {
+                files = Directory.GetFiles(_basePath, "*.json");
+                Array.Sort(files, StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                _legacyMigrationIncomplete = true;
+                _logger?.LogWarning(ex, "Could not scan '{BasePath}' for legacy namespace filename migration", _basePath);
+                return;
+            }
+
+            bool incomplete = false;
+            var candidates = new List<LegacyMigrationCandidate>();
+
+            foreach (var filePath in files)
+            {
+                var fileName = Path.GetFileName(filePath);
+                string stem;
+
+                if (fileName.EndsWith(".hnsw.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Fast header peek avoids parsing multi-MB HNSW caches while still catching
+                    // rare legacy namespaces literally named "*.hnsw".
+                    if (!LooksLikeNamespaceDataHeader(filePath))
+                        continue;
+                    stem = fileName.Substring(0, fileName.Length - ".json".Length);
+                }
+                else
+                {
+                    stem = Path.GetFileNameWithoutExtension(filePath);
+                    if (string.IsNullOrEmpty(stem)
+                        || ReservedControlPlaneStems.Contains(stem)
+                        || string.Equals(stem, MigrationManifestStem, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    // A 2.0/2.1 legacy filename can only differ from the hardened canonical filename
+                    // if the stem requires encoding itself or contains '_' from legacy sanitization.
+                    if (!RequiresNamespaceEncoding(stem) && !stem.Contains('_'))
+                        continue;
+                }
+
+                try
+                {
+                    if (!TryInspectVerifiedNamespaceFile(filePath, out var data, out var ownerNs, out bool ambiguous))
+                    {
+                        // Unreadable, corrupted, non-NamespaceData, or future-version file: preserve untouched.
+                        continue;
+                    }
+
+                    if (ambiguous || data is null || string.IsNullOrEmpty(ownerNs))
+                    {
+                        if (RequiresNamespaceEncoding(stem) && !IsAlreadyCanonicalEncodedStem(stem, filePath))
+                        {
+                            _logger?.LogWarning(
+                                "Preserving legacy namespace file '{File}' untouched: ownership could not be unambiguously verified from entries.",
+                                fileName);
+                        }
+                        continue;
+                    }
+
+                    if (ReservedControlPlaneStems.Contains(ownerNs))
+                        continue;
+
+                    var targetPath = GetNamespacePath(ownerNs);
+                    if (SamePath(filePath, targetPath))
+                        continue;
+
+                    if (!IsValidLegacyStemForNamespace(ownerNs, stem))
+                    {
+                        _logger?.LogWarning(
+                            "Preserving namespace file '{File}' untouched: entries belong to '{Namespace}' which does not match legacy filename sanitization.",
+                            fileName, ownerNs);
+                        continue;
+                    }
+
+                    candidates.Add(new LegacyMigrationCandidate(filePath, ownerNs, targetPath, data));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    incomplete = true;
+                    _logger?.LogWarning(ex, "Transient error inspecting legacy namespace file '{File}'; will retry", fileName);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Preserving legacy namespace file '{File}' untouched after inspection error", fileName);
+                }
+            }
+
+            // Detect cross-file ambiguity before writing anything: if two legacy files claim the
+            // same canonical target, preserve all of them untouched.
+            var groupedByTarget = new Dictionary<string, List<LegacyMigrationCandidate>>(PathComparer);
+            foreach (var candidate in candidates)
+            {
+                if (!groupedByTarget.TryGetValue(candidate.TargetPath, out var group))
+                {
+                    group = new List<LegacyMigrationCandidate>();
+                    groupedByTarget[candidate.TargetPath] = group;
+                }
+                group.Add(candidate);
+            }
+
+            foreach (var (_, group) in groupedByTarget)
+            {
+                if (group.Count > 1)
+                {
+                    _logger?.LogWarning(
+                        "Preserving {Count} ambiguous legacy namespace files claiming namespace '{Namespace}': {Files}",
+                        group.Count,
+                        group[0].OwnerNs,
+                        string.Join(", ", group.Select(c => Path.GetFileName(c.SourcePath))));
+                    continue;
+                }
+
+                var candidate = group[0];
+                if (!TryMigrateSingleLegacyFile(candidate))
+                    incomplete = true;
+            }
+
+            _legacyMigrationIncomplete = incomplete;
+        }
+    }
+
+    private bool TryMigrateSingleLegacyFile(LegacyMigrationCandidate candidate)
+    {
+        try
+        {
+            var normalizedData = new NamespaceData
+            {
+                StorageVersion = CurrentStorageVersion,
+                Entries = candidate.Data.Entries
+            };
+            var canonicalJson = JsonSerializer.Serialize(normalizedData, JsonOptions);
+
+            if (File.Exists(candidate.TargetPath))
+            {
+                // Resumability check: if a prior run committed the canonical target and stopped
+                // before removing the legacy source, both files contain the exact same entries.
+                if (!TryInspectVerifiedNamespaceFile(
+                        candidate.TargetPath, out var existingTarget, out var targetOwnerNs, out bool targetAmbiguous)
+                    || targetAmbiguous
+                    || existingTarget is null
+                    || !string.Equals(targetOwnerNs, candidate.OwnerNs, StringComparison.Ordinal))
+                {
+                    _logger?.LogWarning(
+                        "Preserving legacy namespace file '{Source}' untouched: canonical target '{Target}' already exists and could not be verified as an identical migration.",
+                        Path.GetFileName(candidate.SourcePath), Path.GetFileName(candidate.TargetPath));
+                    return true;
+                }
+
+                var existingNormalizedJson = JsonSerializer.Serialize(new NamespaceData
+                {
+                    StorageVersion = CurrentStorageVersion,
+                    Entries = existingTarget.Entries
+                }, JsonOptions);
+
+                if (!string.Equals(canonicalJson, existingNormalizedJson, StringComparison.Ordinal))
+                {
+                    _logger?.LogWarning(
+                        "Preserving legacy namespace file '{Source}' untouched: canonical target '{Target}' already exists with different content.",
+                        Path.GetFileName(candidate.SourcePath), Path.GetFileName(candidate.TargetPath));
+                    return true;
+                }
+
+                // If the previous run stopped between writing target payload and its .sha256,
+                // complete the checksum commit before removing the legacy original.
+                var targetChecksumPath = candidate.TargetPath + ".sha256";
+                if (!File.Exists(targetChecksumPath)
+                    || !VerifyChecksumBytes(candidate.TargetPath, File.ReadAllBytes(candidate.TargetPath)))
+                {
+                    AtomicWriteAllText(candidate.TargetPath, canonicalJson, keepBackup: true);
+                }
+            }
+            else
+            {
+                AtomicWriteAllText(candidate.TargetPath, canonicalJson, keepBackup: true);
+
+                // Verify the newly committed canonical file + checksum before touching the original.
+                var committedBytes = File.ReadAllBytes(candidate.TargetPath);
+                if (!File.Exists(candidate.TargetPath + ".sha256")
+                    || !VerifyChecksumBytes(candidate.TargetPath, committedBytes))
+                {
+                    _logger?.LogWarning(
+                        "Legacy migration verification failed for '{Source}'; original file preserved.",
+                        Path.GetFileName(candidate.SourcePath));
+                    return false;
+                }
+
+                OnAfterLegacyMigrationTargetCommit?.Invoke(candidate.SourcePath, candidate.TargetPath);
+            }
+
+            // Target is durably committed and verified; remove legacy source files.
+            // Delete backup first, then primary, then checksum so partial deletion stays safe.
+            TryDeleteFileStrict(candidate.SourcePath + ".bak");
+            TryDeleteFileStrict(candidate.SourcePath);
+            TryDeleteFileStrict(candidate.SourcePath + ".sha256");
+
+            _logger?.LogInformation(
+                "Migrated legacy namespace file '{Source}' to '{Target}' for namespace '{Namespace}'.",
+                Path.GetFileName(candidate.SourcePath),
+                Path.GetFileName(candidate.TargetPath),
+                candidate.OwnerNs);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Legacy namespace migration interrupted for '{Source}'; original preserved for safe resume.",
+                Path.GetFileName(candidate.SourcePath));
+            return false;
+        }
+    }
+
+    private static void TryDeleteFileStrict(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    private bool HasPotentialLegacyFileFor(string ns)
+    {
+        if (string.IsNullOrEmpty(ns) || !RequiresNamespaceEncoding(ns))
+            return false;
+
+        var canonicalPath = GetNamespacePath(ns);
+        foreach (var candidateStem in EnumerateLegacyCandidateStems(ns))
+        {
+            if (string.IsNullOrEmpty(candidateStem)
+                || ReservedControlPlaneStems.Contains(candidateStem)
+                || string.Equals(candidateStem, MigrationManifestStem, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (candidateStem.IndexOfAny(['/', '\\', '\0']) >= 0
+                || candidateStem == "."
+                || candidateStem.Contains("..", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string candidatePath;
+            try
+            {
+                candidatePath = Path.Combine(_basePath, $"{candidateStem}.json");
+                if (!IsWithinBasePath(candidatePath) || SamePath(candidatePath, canonicalPath))
+                    continue;
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (File.Exists(candidatePath))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> EnumerateLegacyCandidateStems(string ns)
+    {
+        yield return ns;
+        yield return LegacySanitizeLinux(ns);
+        yield return LegacySanitizeWindows(ns);
+        yield return LegacySanitizeCurrentOs(ns);
+    }
+
+    private static bool IsValidLegacyStemForNamespace(string ns, string stem)
+    {
+        return string.Equals(ns, stem, PathComparison)
+            || string.Equals(LegacySanitizeLinux(ns), stem, PathComparison)
+            || string.Equals(LegacySanitizeWindows(ns), stem, PathComparison)
+            || string.Equals(LegacySanitizeCurrentOs(ns), stem, PathComparison);
+    }
+
+    private static string LegacySanitizeLinux(string ns)
+        => ns.Replace('\0', '_').Replace('/', '_').Replace("..", "_");
+
+    private static string LegacySanitizeWindows(string ns)
+    {
+        var sb = new StringBuilder(ns.Length);
+        for (int i = 0; i < ns.Length; i++)
+        {
+            char c = ns[i];
+            sb.Append(WindowsInvalidFileNameChars.Contains(c) ? '_' : c);
+        }
+        return sb.ToString().Replace("..", "_");
+    }
+
+    private static string LegacySanitizeCurrentOs(string ns)
+        => string.Join("_", ns.Split(Path.GetInvalidFileNameChars())).Replace("..", "_");
+
+    private bool IsAlreadyCanonicalEncodedStem(string stem, string filePath)
+    {
+        if (stem.StartsWith(EncodedNamespaceHashPrefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (stem.StartsWith(EncodedNamespacePrefix, StringComparison.OrdinalIgnoreCase))
+            return TryDecodeCanonicalHexNamespace(stem.Substring(EncodedNamespacePrefix.Length), filePath, out _);
+        return false;
+    }
+
+    private static bool LooksLikeNamespaceDataHeader(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            Span<byte> buffer = stackalloc byte[256];
+            int read = stream.Read(buffer);
+            if (read <= 0)
+                return false;
+            var snippet = Encoding.UTF8.GetString(buffer.Slice(0, read));
+            if (snippet.Contains("\"nodeIds\"", StringComparison.Ordinal)
+                || snippet.Contains("\"efConstruction\"", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            return snippet.Contains("\"entries\"", StringComparison.Ordinal)
+                || snippet.Contains("\"storageVersion\"", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryInspectVerifiedNamespaceFile(
+        string filePath,
+        out NamespaceData? data,
+        out string? ownerNs,
+        out bool ambiguous)
+    {
+        data = null;
+        ownerNs = null;
+        ambiguous = false;
+
+        if (!TryReadVerifiedJson(filePath, Path.GetFileName(filePath), out var json))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("entries", out var entriesEl)
+                || entriesEl.ValueKind != JsonValueKind.Array
+                || doc.RootElement.TryGetProperty("nodeIds", out _))
+            {
+                return false;
+            }
+
+            var parsed = JsonSerializer.Deserialize<NamespaceData>(json, JsonOptions);
+            if (parsed is null || parsed.StorageVersion > CurrentStorageVersion)
+                return false;
+
+            if (parsed.Entries.Count == 0)
+            {
+                data = parsed;
+                ambiguous = true;
+                return true;
+            }
+
+            string? singleOwner = null;
+            foreach (var entry in parsed.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.Ns))
+                {
+                    data = parsed;
+                    ambiguous = true;
+                    return true;
+                }
+
+                if (singleOwner is null)
+                {
+                    singleOwner = entry.Ns;
+                }
+                else if (!string.Equals(singleOwner, entry.Ns, StringComparison.Ordinal))
+                {
+                    data = parsed;
+                    ambiguous = true;
+                    return true;
+                }
+            }
+
+            data = parsed;
+            ownerNs = singleOwner;
+            ambiguous = false;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     // ── Backend writers & atomic I/O ──
@@ -935,16 +1388,209 @@ public sealed class PersistenceManager : IStorageProvider
     }
 
     /// <summary>
-    /// Write payload and companion .sha256 atomically using unique flushed temp files and atomic moves
-    /// so a crash or concurrent reader never observes a truncated payload or half-written checksum file.
+    /// Snapshot the previously verified primary payload into a single atomic self-checksummed
+    /// <c>.bak</c> file before replacing the primary payload and companion <c>.sha256</c>.
+    /// If a crash interrupts execution between payload replacement and checksum replacement,
+    /// readers recover the last verified snapshot from <c>.bak</c> instead of losing the namespace.
     /// </summary>
-    private static void AtomicWriteAllText(string path, string content)
+    private void AtomicWriteAllText(string path, string content, bool keepBackup = true)
     {
+        if (keepBackup)
+            BackupVerifiedPrimaryIfPresent(path);
+
         var bytes = Encoding.UTF8.GetBytes(content);
         AtomicWriteBytes(path, bytes);
 
+        OnAfterPayloadBeforeChecksumWrite?.Invoke(path);
+
         var hashBytes = Encoding.UTF8.GetBytes(Convert.ToHexString(SHA256.HashData(bytes)));
         AtomicWriteBytes(path + ".sha256", hashBytes);
+    }
+
+    private static void BackupVerifiedPrimaryIfPresent(string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        byte[] prevBytes;
+        try
+        {
+            prevBytes = File.ReadAllBytes(path);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (prevBytes.Length == 0)
+            return;
+
+        var prevHash = Convert.ToHexString(SHA256.HashData(prevBytes));
+        var checksumPath = path + ".sha256";
+        if (File.Exists(checksumPath))
+        {
+            string expected;
+            try
+            {
+                expected = File.ReadAllText(checksumPath).Trim();
+            }
+            catch
+            {
+                return;
+            }
+
+            // Never overwrite an existing verified backup with a torn/mismatched primary.
+            if (!string.Equals(prevHash, expected, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+        else
+        {
+            // Legacy file without .sha256: only back up if it is parseable JSON.
+            try
+            {
+                using var _ = JsonDocument.Parse(prevBytes);
+            }
+            catch (JsonException)
+            {
+                return;
+            }
+        }
+
+        // Single atomic self-verifying backup file: "<64-char SHA256 hex>\n<raw UTF-8 JSON bytes>".
+        var header = Encoding.ASCII.GetBytes(prevHash + "\n");
+        var backupBytes = new byte[header.Length + prevBytes.Length];
+        Buffer.BlockCopy(header, 0, backupBytes, 0, header.Length);
+        Buffer.BlockCopy(prevBytes, 0, backupBytes, header.Length, prevBytes.Length);
+        AtomicWriteBytes(path + ".bak", backupBytes);
+    }
+
+    private T? LoadVerifiedPayload<T>(string path, string label, out bool fromPrimary) where T : class
+    {
+        fromPrimary = false;
+        try
+        {
+            var rawBytes = File.ReadAllBytes(path);
+            if (VerifyChecksumBytes(path, rawBytes))
+            {
+                var parsed = JsonSerializer.Deserialize<T>(DecodeUtf8(rawBytes), JsonOptions);
+                fromPrimary = true;
+                return parsed;
+            }
+
+            if (TryDeserializeVerifiedBackup<T>(path, label, out var recovered))
+            {
+                _logger?.LogWarning(
+                    "Checksum mismatch for {Label}; recovered last verified snapshot from backup",
+                    label);
+                return recovered;
+            }
+
+            _logger?.LogWarning("Checksum mismatch for {Label}; dropping corrupted payload", label);
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            if (TryDeserializeVerifiedBackup<T>(path, label, out var recovered))
+            {
+                _logger?.LogWarning(
+                    ex,
+                    "Corrupted JSON in {Label}; recovered last verified snapshot from backup",
+                    label);
+                return recovered;
+            }
+
+            _logger?.LogWarning(ex, "Corrupted JSON in {Label}, returning empty data", label);
+            return null;
+        }
+    }
+
+    private bool TryDeserializeVerifiedBackup<T>(string path, string label, out T? value) where T : class
+    {
+        value = null;
+        if (!TryReadVerifiedBackup(path, out var backupJson))
+            return false;
+
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(backupJson, JsonOptions);
+            return value is not null;
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogWarning(ex, "Corrupted JSON in backup snapshot for {Label}", label);
+            return false;
+        }
+    }
+
+    private bool TryReadVerifiedJson(string path, string label, out string json)
+    {
+        json = string.Empty;
+        try
+        {
+            var rawBytes = File.ReadAllBytes(path);
+            if (VerifyChecksumBytes(path, rawBytes))
+            {
+                json = DecodeUtf8(rawBytes);
+                return true;
+            }
+
+            if (TryReadVerifiedBackup(path, out json))
+            {
+                _logger?.LogWarning(
+                    "Checksum mismatch for {Label}; using last verified snapshot from backup",
+                    label);
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryReadVerifiedBackup(string path, out string json)
+    {
+        json = string.Empty;
+        var backupPath = path + ".bak";
+        if (!File.Exists(backupPath))
+            return false;
+
+        try
+        {
+            var raw = File.ReadAllBytes(backupPath);
+            // Header format: 64 ASCII SHA-256 hex chars + '\n' (65 bytes) followed by payload bytes.
+            if (raw.Length <= 65 || raw[64] != (byte)'\n')
+            {
+                _logger?.LogWarning("Backup snapshot '{Path}' has invalid header; ignoring", backupPath);
+                return false;
+            }
+
+            var expectedHash = Encoding.ASCII.GetString(raw, 0, 64);
+            var payloadSpan = raw.AsSpan(65);
+            var actualHash = Convert.ToHexString(SHA256.HashData(payloadSpan));
+            if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger?.LogWarning("Backup snapshot '{Path}' failed checksum verification; ignoring", backupPath);
+                return false;
+            }
+
+            json = DecodeUtf8(payloadSpan);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not read backup snapshot '{Path}'", backupPath);
+            return false;
+        }
+    }
+
+    private static string DecodeUtf8(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            bytes = bytes.Slice(3);
+        return Encoding.UTF8.GetString(bytes);
     }
 
     private static void AtomicWriteBytes(string path, byte[] bytes)
@@ -972,6 +1618,9 @@ public sealed class PersistenceManager : IStorageProvider
     }
 
     private bool VerifyChecksum(string path, string content)
+        => VerifyChecksumBytes(path, Encoding.UTF8.GetBytes(content));
+
+    private bool VerifyChecksumBytes(string path, byte[] rawBytes)
     {
         var checksumPath = path + ".sha256";
         if (!File.Exists(checksumPath))
@@ -980,7 +1629,7 @@ public sealed class PersistenceManager : IStorageProvider
         try
         {
             var expected = File.ReadAllText(checksumPath).Trim();
-            var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+            var actual = Convert.ToHexString(SHA256.HashData(rawBytes));
             return string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex)

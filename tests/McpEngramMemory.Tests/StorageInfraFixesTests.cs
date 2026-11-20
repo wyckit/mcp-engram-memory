@@ -1,4 +1,7 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using McpEngramMemory.Core.Models;
 using McpEngramMemory.Core.Models.Constitution;
 using McpEngramMemory.Core.Services;
@@ -212,6 +215,285 @@ public sealed class StorageInfraFixesTests : IDisposable
 
         Assert.Empty(pm.LoadNamespace("notes").Entries);
         Assert.Null(pm.LoadHnswSnapshot(tenantKey));
+    }
+
+    // ── 1b. Legacy 2.0/2.1 namespace filename migration (verified ownership, ambiguity preservation, resumability) ──
+
+    private static readonly JsonSerializerOptions LegacyJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new FloatArrayBase64Converter() }
+    };
+
+    private static string WriteLegacyFile(string dir, string fileName, object payload, bool writeChecksum = true)
+    {
+        var path = Path.Combine(dir, fileName);
+        var json = JsonSerializer.Serialize(payload, LegacyJsonOptions);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        File.WriteAllBytes(path, bytes);
+        if (writeChecksum)
+            File.WriteAllText(path + ".sha256", Convert.ToHexString(SHA256.HashData(bytes)));
+        return path;
+    }
+
+    [Fact]
+    public void PersistenceManager_LegacyMigration_MigratesNsEncPrefixAndSanitizedFilesOnStartup()
+    {
+        var dir = SubDir("legacy-migration-startup");
+
+        // Seed 2.1.0-style files on disk BEFORE constructing the hardened PersistenceManager.
+        WriteLegacyFile(dir, "ordinary_notes.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("ord-1", "ordinary_notes", "ordinary record")]
+        });
+        WriteLegacyFile(dir, "ns_enc_notes.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("enc-1", "ns_enc_notes", "legacy ns_enc prefix record")]
+        });
+        // Literal 2.1.0 namespace whose suffix is valid hex ("6162" == "ab").
+        WriteLegacyFile(dir, "ns_enc_6162.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("hex-1", "ns_enc_6162", "literal hex suffix record")]
+        });
+        // Windows 2.1.0 sanitized legacy file for "tenant-a::work".
+        WriteLegacyFile(dir, "tenant-a__work.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("ten-1", "tenant-a::work", "colon namespace record")]
+        });
+        // 2.1.0 sanitized legacy file for "foo..bar".
+        WriteLegacyFile(dir, "foo_bar.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("dot-1", "foo..bar", "dotdot namespace record")]
+        });
+        // Real HNSW snapshot (must remain completely untouched).
+        var realHnswPath = WriteLegacyFile(dir, "ordinary_notes.hnsw.json", new HnswSnapshot
+        {
+            M = 16,
+            EfConstruction = 200,
+            NodeIds = ["ord-1"]
+        });
+        // Rare 2.1.0 namespace literally ending in ".hnsw".
+        WriteLegacyFile(dir, "special.hnsw.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("hnsw-ns-1", "special.hnsw", "literal dot-hnsw namespace")]
+        });
+
+        using (var pm = new PersistenceManager(dir, debounceMs: 60_000))
+        {
+            // Ordinary namespace stayed in place.
+            Assert.True(File.Exists(Path.Combine(dir, "ordinary_notes.json")));
+            Assert.Equal("ordinary record", Assert.Single(pm.LoadNamespace("ordinary_notes").Entries).Text);
+
+            // Legacy ns_enc_notes migrated to canonical encoded file and original removed.
+            Assert.False(File.Exists(Path.Combine(dir, "ns_enc_notes.json")));
+            Assert.False(File.Exists(Path.Combine(dir, "ns_enc_notes.json.sha256")));
+            Assert.True(File.Exists(pm.GetNamespacePath("ns_enc_notes")));
+            Assert.True(File.Exists(pm.GetNamespacePath("ns_enc_notes") + ".sha256"));
+            Assert.Equal("legacy ns_enc prefix record", Assert.Single(pm.LoadNamespace("ns_enc_notes").Entries).Text);
+
+            // Literal ns_enc_6162 migrated cleanly and is NOT misdecoded as "ab".
+            Assert.False(File.Exists(Path.Combine(dir, "ns_enc_6162.json")));
+            Assert.Equal("literal hex suffix record", Assert.Single(pm.LoadNamespace("ns_enc_6162").Entries).Text);
+
+            // Sanitized legacy namespaces migrated cleanly.
+            Assert.False(File.Exists(Path.Combine(dir, "tenant-a__work.json")));
+            Assert.Equal("colon namespace record", Assert.Single(pm.LoadNamespace("tenant-a::work").Entries).Text);
+
+            Assert.False(File.Exists(Path.Combine(dir, "foo_bar.json")));
+            Assert.Equal("dotdot namespace record", Assert.Single(pm.LoadNamespace("foo..bar").Entries).Text);
+
+            // Real HNSW snapshot untouched; literal .hnsw namespace migrated.
+            Assert.True(File.Exists(realHnswPath));
+            Assert.Equal(["ord-1"], pm.LoadHnswSnapshot("ordinary_notes")!.NodeIds);
+            Assert.False(File.Exists(Path.Combine(dir, "special.hnsw.json")));
+            Assert.Equal("literal dot-hnsw namespace", Assert.Single(pm.LoadNamespace("special.hnsw").Entries).Text);
+
+            // Enumeration reports every migrated namespace and never produces spurious hex decodes.
+            var persisted = pm.GetPersistedNamespaces();
+            Assert.Contains("ordinary_notes", persisted);
+            Assert.Contains("ns_enc_notes", persisted);
+            Assert.Contains("ns_enc_6162", persisted);
+            Assert.Contains("tenant-a::work", persisted);
+            Assert.Contains("foo..bar", persisted);
+            Assert.Contains("special.hnsw", persisted);
+            Assert.DoesNotContain("ab", persisted);
+        }
+
+        // Second restart verifies post-migration steady state.
+        using (var restarted = new PersistenceManager(dir, debounceMs: 60_000))
+        {
+            Assert.Equal("legacy ns_enc prefix record", Assert.Single(restarted.LoadNamespace("ns_enc_notes").Entries).Text);
+            Assert.Equal("ordinary record", Assert.Single(restarted.LoadNamespace("ordinary_notes").Entries).Text);
+            Assert.Contains("ns_enc_notes", restarted.GetPersistedNamespaces());
+        }
+    }
+
+    [Fact]
+    public void PersistenceManager_LegacyMigration_PreservesOriginalsOnAmbiguity()
+    {
+        // (a) Mixed namespaces inside a single colliding legacy file.
+        var mixedDir = SubDir("legacy-ambig-mixed");
+        var mixedPath = WriteLegacyFile(mixedDir, "mixed_ns.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries =
+            [
+                MakeEntry("e1", "mixed_ns", "owner 1"),
+                MakeEntry("e2", "mixed/ns", "owner 2")
+            ]
+        });
+        using (var pm = new PersistenceManager(mixedDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(mixedPath));
+            Assert.False(File.Exists(pm.GetNamespacePath("mixed/ns")));
+        }
+
+        // (b) Empty legacy file (no entries to prove ownership) + non-hex/hex ns_enc_* never falsely enumerated.
+        var emptyDir = SubDir("legacy-ambig-empty");
+        var emptyLegacy = WriteLegacyFile(emptyDir, "ns_enc_empty.json", new NamespaceData { StorageVersion = 2, Entries = [] });
+        var emptyHexLegacy = WriteLegacyFile(emptyDir, "ns_enc_6162.json", new NamespaceData { StorageVersion = 2, Entries = [] });
+        using (var pm = new PersistenceManager(emptyDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(emptyLegacy));
+            Assert.True(File.Exists(emptyHexLegacy));
+            Assert.DoesNotContain("ab", pm.GetPersistedNamespaces());
+        }
+
+        // (c) Canonical target already exists with different content (conflict).
+        var conflictDir = SubDir("legacy-ambig-conflict");
+        var conflictLegacy = WriteLegacyFile(conflictDir, "ns_enc_conflict.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("old-1", "ns_enc_conflict", "legacy version")]
+        });
+        string canonicalPath;
+        using (var probe = new PersistenceManager(SubDir("legacy-ambig-probe"), debounceMs: 60_000))
+            canonicalPath = Path.Combine(conflictDir, Path.GetFileName(probe.GetNamespacePath("ns_enc_conflict")));
+        WriteLegacyFile(conflictDir, Path.GetFileName(canonicalPath), new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("new-1", "ns_enc_conflict", "canonical version")]
+        });
+        using (var pm = new PersistenceManager(conflictDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(conflictLegacy));
+            Assert.True(File.Exists(canonicalPath));
+            Assert.Equal("canonical version", Assert.Single(pm.LoadNamespace("ns_enc_conflict").Entries).Text);
+            Assert.Equal(1, pm.GetPersistedNamespaces().Count(n => n == "ns_enc_conflict"));
+        }
+
+        // (d) Two distinct legacy files claiming the same namespace ("ns_enc_a..b").
+        var dupDir = SubDir("legacy-ambig-duplicate");
+        var dup1 = WriteLegacyFile(dupDir, "ns_enc_a..b.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("d1", "ns_enc_a..b", "copy 1")]
+        });
+        var dup2 = WriteLegacyFile(dupDir, "ns_enc_a_b.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("d2", "ns_enc_a..b", "copy 2")]
+        });
+        using (var pm = new PersistenceManager(dupDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(dup1));
+            Assert.True(File.Exists(dup2));
+            Assert.False(File.Exists(pm.GetNamespacePath("ns_enc_a..b")));
+        }
+
+        // (e) Misnamed file whose entry ns does not match legacy filename sanitization.
+        var misnamedDir = SubDir("legacy-ambig-misnamed");
+        var misnamed = WriteLegacyFile(misnamedDir, "foo_bar.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("m1", "completely_unrelated", "unrelated")]
+        });
+        using (var pm = new PersistenceManager(misnamedDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(misnamed));
+            Assert.False(File.Exists(pm.GetNamespacePath("completely_unrelated")));
+        }
+
+        // (f) Corrupted checksum on legacy file is preserved untouched rather than migrated.
+        var corruptDir = SubDir("legacy-ambig-corrupt");
+        var corrupt = WriteLegacyFile(corruptDir, "ns_enc_corrupt.json", new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("c1", "ns_enc_corrupt", "corrupt")]
+        }, writeChecksum: false);
+        File.WriteAllText(corrupt + ".sha256", new string('0', 64));
+        using (var pm = new PersistenceManager(corruptDir, debounceMs: 60_000))
+        {
+            Assert.True(File.Exists(corrupt));
+            Assert.False(File.Exists(pm.GetNamespacePath("ns_enc_corrupt")));
+        }
+    }
+
+    [Fact]
+    public void PersistenceManager_LegacyMigration_SafelyResumesAfterInterruption()
+    {
+        // (a) Interrupted strictly after canonical target + checksum commit, before legacy deletion.
+        var dirA = SubDir("legacy-resume-after-commit");
+        string legacyPathA;
+        string targetPathA;
+        using (var pm = new PersistenceManager(dirA, debounceMs: 60_000))
+        {
+            legacyPathA = WriteLegacyFile(dirA, "ns_enc_resume.json", new NamespaceData
+            {
+                StorageVersion = 2,
+                Entries = [MakeEntry("r1", "ns_enc_resume", "resume payload")]
+            });
+            targetPathA = pm.GetNamespacePath("ns_enc_resume");
+            pm.OnAfterLegacyMigrationTargetCommit = (_, _) =>
+                throw new IOException("Simulated stop between canonical commit and legacy cleanup");
+            pm.MigrateLegacyNamespaceFiles();
+            pm.OnAfterLegacyMigrationTargetCommit = null;
+
+            // Both files exist after the interrupted pass — original is preserved.
+            Assert.True(File.Exists(legacyPathA));
+            Assert.True(File.Exists(targetPathA));
+            Assert.True(File.Exists(targetPathA + ".sha256"));
+        }
+
+        // Restart resumes cleanly, verifies matching canonical content, and removes legacy original.
+        using (var resumed = new PersistenceManager(dirA, debounceMs: 60_000))
+        {
+            Assert.False(File.Exists(legacyPathA));
+            Assert.False(File.Exists(legacyPathA + ".sha256"));
+            Assert.True(File.Exists(targetPathA));
+            Assert.True(File.Exists(targetPathA + ".sha256"));
+            Assert.Equal("resume payload", Assert.Single(resumed.LoadNamespace("ns_enc_resume").Entries).Text);
+            Assert.Contains("ns_enc_resume", resumed.GetPersistedNamespaces());
+        }
+
+        // (b) Interrupted after canonical payload write, before canonical .sha256 was written.
+        var dirB = SubDir("legacy-resume-before-checksum");
+        var dataB = new NamespaceData
+        {
+            StorageVersion = 2,
+            Entries = [MakeEntry("r2", "ns_enc_resume2", "resume before checksum")]
+        };
+        var legacyPathB = WriteLegacyFile(dirB, "ns_enc_resume2.json", dataB);
+        string targetFileNameB;
+        using (var probe = new PersistenceManager(SubDir("legacy-resume-probe"), debounceMs: 60_000))
+            targetFileNameB = Path.GetFileName(probe.GetNamespacePath("ns_enc_resume2"));
+        var targetPathB = WriteLegacyFile(dirB, targetFileNameB, dataB, writeChecksum: false);
+        Assert.False(File.Exists(targetPathB + ".sha256"));
+
+        using (var resumedB = new PersistenceManager(dirB, debounceMs: 60_000))
+        {
+            Assert.False(File.Exists(legacyPathB));
+            Assert.True(File.Exists(targetPathB));
+            Assert.True(File.Exists(targetPathB + ".sha256"));
+            Assert.Equal("resume before checksum", Assert.Single(resumedB.LoadNamespace("ns_enc_resume2").Entries).Text);
+        }
     }
 
     // ── 2. _timerLock never held across blocking global save I/O ──

@@ -57,11 +57,14 @@ def main():
             for identity, ns, text in [
                 ("owner", "public", "Citrine production deployment is owned by Nessa Vale."),
                 ("backup", "public", "Citrine production backups run every six hours."),
-                ("private", "private", "Citrine production private answer is PRIVATE_SCOPE_SENTINEL.")]:
+                ("private", "private", "Citrine production private answer is PRIVATE_SCOPE_SENTINEL."),
+                ("ordinary-note", "ordinary_notes", "Ordinary namespace note preserved across upgrades."),
+                ("legacy-ns-enc", "ns_enc_notes", "Encoded-prefix namespace note preserved across upgrades.")]:
                 assert c.call("remember", id=identity, ns=ns, text=text, lifecycleState="ltm",
                               metadata={"validation": "published-2.0.0"})["status"] == "stored"
             c.call("share_namespace", ns="public", agentId="reader", accessLevel="read")
-            original = {key: c.call("get_memory", id=key) for key in ("owner", "backup", "private")}
+            original = {key: c.call("get_memory", id=key)
+                        for key in ("owner", "backup", "private", "ordinary-note", "legacy-ns-enc")}
         with client("seed-foreign", tenant="tenant-b") as c:
             assert c.call("remember", id="owner", ns="public", text="Citrine production owner is FOREIGN_TENANT_SENTINEL.",
                           lifecycleState="ltm")["status"] == "stored"
@@ -74,19 +77,36 @@ def main():
         if backend != "sqlite-external":
             assert (durable / "_engram-migration.json").is_file()
             assert (backup / "_engram-migration.json").is_file()
+        if backend == "json":
+            assert (durable / "ordinary_notes.json").is_file(), "Expected ordinary_notes.json from 2.0.0 seed"
+            assert (durable / "ns_enc_notes.json").is_file(), "Expected legacy ns_enc_notes.json from 2.0.0 seed"
+            assert (backup / "ns_enc_notes.json").is_file(), "Expected untouched ns_enc_notes.json in backup"
+
+        migrated_ns_enc_file = durable / ("ns_enc_" + "ns_enc_notes".encode("utf-8").hex() + ".json")
 
         for phase in ("upgraded", "restart"):
             with client(phase) as c:
                 for key, before in original.items():
                     after = c.call("get_memory", id=key)
+                    assert isinstance(after, dict), (backend, phase, key, after)
                     for field in ("entry", "text", "metadata", "lifecycleState", "createdAt", "edges", "clusterIds"):
                         assert before[field] == after[field], (backend, phase, key, field)
                 recalled = c.call("recall", query="Who owns Citrine production deployment, and how often are backups taken?", ns="public")
                 assert {x["id"] for x in recalled["results"]} == {"owner", "backup"}, recalled
                 assert "FOREIGN_TENANT_SENTINEL" not in json.dumps(recalled)
+                recalled_ordinary = c.call("recall", query="Ordinary namespace note preserved across upgrades", ns="ordinary_notes")
+                assert {x["id"] for x in recalled_ordinary["results"]} == {"ordinary-note"}, recalled_ordinary
+                recalled_legacy_enc = c.call("recall", query="Encoded-prefix namespace note preserved across upgrades", ns="ns_enc_notes")
+                assert {x["id"] for x in recalled_legacy_enc["results"]} == {"legacy-ns-enc"}, recalled_legacy_enc
+            if backend == "json":
+                assert (durable / "ordinary_notes.json").is_file()
+                assert not (durable / "ns_enc_notes.json").exists(), "Legacy ns_enc_notes.json should be migrated"
+                assert migrated_ns_enc_file.is_file(), "Expected canonical encoded file for ns_enc_notes"
+                assert (backup / "ns_enc_notes.json").is_file(), "Pre-upgrade backup must remain untouched"
             with client(phase + "-reader", agent="reader") as c:
                 assert isinstance(c.call("get_memory", id="owner"), dict)
                 assert isinstance(c.call("get_memory", id="private"), str)
+                assert isinstance(c.call("get_memory", id="legacy-ns-enc"), str)
                 denied = c.call_error("remember", id="forbidden", ns="public", text="Forbidden reader write")
                 assert isinstance(denied, str) and denied.startswith("Error:"), denied
                 recalled = c.call("recall", query="Who owns Citrine production deployment?", k=10, minScore=0)
