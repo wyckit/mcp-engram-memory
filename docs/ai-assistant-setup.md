@@ -6,7 +6,7 @@ Detailed setup instructions for each AI assistant tool. For quick start, use the
 
 ## Claude Code
 
-**Quick start**: Copy [`examples/CLAUDE.md`](../examples/CLAUDE.md) to `~/.claude/CLAUDE.md` and [`examples/claude-code.json`](../examples/claude-code.json) to your MCP config.
+**Quick start**: Copy [`examples/CLAUDE.md`](../examples/CLAUDE.md) to `~/.claude/CLAUDE.md` and [`examples/claude-code.json`](../examples/claude-code.json) (`standard` profile) — or [`examples/claude-code-minimal.json`](../examples/claude-code-minimal.json) (`minimal` profile) — to your MCP config.
 
 **Or** open Claude Code in your project directory and paste:
 
@@ -15,7 +15,7 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Add the MCP server to my Claude Code config. The server runs via:
    command: dotnet
-   args: run --project /path/to/mcp-engram-memory/src/McpEngramMemory
+   args: ["/path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll"]
 
 2. Create or update my CLAUDE.md (global at ~/.claude/CLAUDE.md) with these sections:
 
@@ -82,7 +82,7 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 1. Create .vscode/mcp.json with a stdio server entry:
    name: engram-memory
    command: dotnet
-   args: ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
+   args: ["/path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll"]
 
 2. Create .github/copilot-instructions.md with vector memory instructions:
 
@@ -116,7 +116,7 @@ Set up mcp-engram-memory as my persistent memory system. Do the following:
 1. Add the MCP server to my Gemini CLI config (edit ~/.gemini/settings.json):
    name: engram-memory
    command: dotnet
-   args: ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"]
+   args: ["/path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll"]
 
 2. Create GEMINI.md in my workspace root with vector memory instructions
    following the Recall / Store / Expert Routing pattern.
@@ -145,7 +145,7 @@ Run them with `codex -p engram-expert`, `codex -p engram-expert-deep`, `codex -p
 Set up mcp-engram-memory as my persistent memory system. Do the following:
 
 1. Add the MCP server to my Codex config:
-   codex mcp add engram-memory -- dotnet run --project /path/to/mcp-engram-memory/src/McpEngramMemory
+   codex mcp add engram-memory -- dotnet /path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll
 
 2. Create AGENTS.md in the project root with vector memory instructions
    following the Recall / Store / Expert Routing pattern and the model/reasoning

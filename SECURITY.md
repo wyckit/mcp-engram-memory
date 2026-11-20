@@ -44,7 +44,8 @@ In scope:
 
 - Code in `src/McpEngramMemory`, `src/McpEngramMemory.Core`, and
   `src/McpEngramMemory.Synthesis.Onnx`.
-- All three packages published to nuget.org (and GitHub Packages):
+- All three packages published to nuget.org (and any GitHub Packages mirrors
+  published from the same validated release archives):
   `McpEngramMemory.Core`, `McpEngramMemory.Synthesis.Onnx`, and the
   `McpEngramMemory` .NET global tool.
 - MCP tool surfaces (input handling, serialization, persistence).

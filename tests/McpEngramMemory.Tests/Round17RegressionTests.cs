@@ -279,6 +279,9 @@ public class Round17RegressionTests : IDisposable
         var poisoned = json.Replace("\"entries\": [", "\"entries\": [null,{\"id\":null,\"vector\":[1.0],\"ns\":\"poisonload\"},");
         Assert.NotEqual(json, poisoned);
         File.WriteAllText(path, poisoned);
+        // Remove the companion checksum so this test exercises null-row shape sanitization on
+        // a well-formed file rather than checksum-mismatch rejection (tested in ChecksumTests).
+        File.Delete(path + ".sha256");
 
         using var persistence2 = new PersistenceManager(_testDataPath, debounceMs: 60_000);
         using var index2 = new CognitiveIndex(persistence2);

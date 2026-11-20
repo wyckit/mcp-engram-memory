@@ -74,7 +74,7 @@ public static class ConstitutionMcpFilter
                 ["dismiss_collapse"] = CognitiveOperationKind.DeleteMemory,
 
                 // Memory diffusion & spectral retrieval tools
-                ["compute_diffusion_basis"] = CognitiveOperationKind.ReadMemory,
+                ["compute_diffusion_basis"] = CognitiveOperationKind.Retrieve,
                 ["diffusion_stats"] = CognitiveOperationKind.ReadMemory,
                 ["invalidate_diffusion"] = CognitiveOperationKind.AdministerGovernance,
                 ["spectral_recall"] = CognitiveOperationKind.Retrieve,
@@ -193,7 +193,7 @@ public static class ConstitutionMcpFilter
             // a failed tool call without a rollback transaction.
             await kernel.EvaluateAndAuditAsync(
                 operation, ConstitutionPhase.Postcondition, cancellationToken).ConfigureAwait(false);
-            return result;
+            return NormalizeToolErrorResult(result);
         }
         catch
         {
@@ -301,6 +301,58 @@ public static class ConstitutionMcpFilter
                 element.WriteTo(writer);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Standardize MCP wire error signaling so tools returning either <see cref="ToolError"/> /
+    /// <c>{"status":"error..."}</c> payloads or <c>"Error: ..."</c> strings always surface
+    /// <see cref="CallToolResult.IsError"/> = <c>true</c> to MCP clients.
+    /// </summary>
+    internal static CallToolResult NormalizeToolErrorResult(CallToolResult result)
+    {
+        if (result.IsError == true || result.Content is null || result.Content.Count == 0)
+            return result;
+
+        if (result.Content[0] is not TextContentBlock { Text: { Length: > 0 } text })
+            return result;
+
+        if (IsErrorPayloadText(text))
+            result.IsError = true;
+
+        return result;
+    }
+
+    private static bool IsErrorPayloadText(string text)
+    {
+        var span = text.AsSpan().TrimStart();
+        if (span.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (span.Length == 0 || span[0] != '{')
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                (doc.RootElement.TryGetProperty("status", out var statusEl) ||
+                 doc.RootElement.TryGetProperty("Status", out statusEl)) &&
+                statusEl.ValueKind == JsonValueKind.String)
+            {
+                var status = statusEl.GetString();
+                if (string.Equals(status, "error", StringComparison.OrdinalIgnoreCase) ||
+                    (status is not null && status.StartsWith("error_", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON text starting with '{' is treated as normal content.
+        }
+
+        return false;
     }
 
     private static CallToolResult Denied(ConstitutionDecision decision)

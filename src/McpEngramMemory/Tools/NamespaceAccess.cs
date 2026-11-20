@@ -49,6 +49,54 @@ public sealed class NamespaceAccess
         _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "write", tenantId: _principal.TenantId);
 
     /// <summary>
+    /// Side-effect-free write check: does NOT claim ownership of an unregistered empty namespace.
+    /// Use during input validation and dry-run paths, then call <see cref="TryAcquireWriteAccess"/>
+    /// immediately before committing a validated write.
+    /// </summary>
+    public bool CanWriteWithoutClaiming(string ns) => _principal.IsSystem ||
+        _registry.CanWriteWithoutClaiming(_principal.AgentId, ns, tenantId: _principal.TenantId);
+
+    /// <summary>Atomically verify write access and claim an empty unregistered namespace right before writing.</summary>
+    public bool TryAcquireWriteAccess(string ns) => _principal.IsSystem ||
+        _registry.TryAcquireWriteAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
+
+    /// <summary>Returns true if this principal is the owner of <paramref name="ns"/> (or system/legacy-unisolated).</summary>
+    public bool IsOwner(string ns) => _principal.IsSystem ||
+        _registry.IsOwner(_principal.AgentId, ns, tenantId: _principal.TenantId);
+
+    public IReadOnlyList<string> GetDerivedSources(string ns) =>
+        _registry.GetDerivedSources(ns, tenantId: _principal.TenantId);
+
+    public void AddDerivedSources(string ns, IReadOnlyCollection<string> sourceNamespaces)
+    {
+        if (!_principal.IsSystem)
+            _registry.AddDerivedSources(ns, sourceNamespaces, tenantId: _principal.TenantId);
+    }
+
+    public bool CanAllReadersAccessSources(string ns, IReadOnlyCollection<string> sourceNamespaces) =>
+        _principal.IsSystem ||
+        _registry.CanAllReadersAccessSources(ns, _principal.AgentId, sourceNamespaces, tenantId: _principal.TenantId);
+
+    /// <summary>
+    /// Atomically verify write access, enforce derived-source reader policy, claim an empty
+    /// unregistered namespace, and attach <paramref name="sourceNamespaces"/> under one lock.
+    /// </summary>
+    public bool TryAcquireWriteAccessForDerived(
+        string ns,
+        IReadOnlyCollection<string>? sourceNamespaces,
+        out bool rejectedByDerivedPolicy)
+    {
+        if (_principal.IsSystem)
+        {
+            rejectedByDerivedPolicy = false;
+            return true;
+        }
+
+        return _registry.TryAcquireWriteAccessForDerived(
+            _principal.AgentId, ns, sourceNamespaces, tenantId: _principal.TenantId, out rejectedByDerivedPolicy);
+    }
+
+    /// <summary>
     /// Claim ownership of a namespace on write. A no-op for the default agent, so servers
     /// that never set <c>AGENT_ID</c> create no records and are entirely unaffected — see
     /// <see cref="NamespaceRegistry.ClaimOwnershipOnWrite"/> for why that matters.
@@ -100,5 +148,5 @@ public sealed class NamespaceAccess
     /// verb against the right object.
     /// </summary>
     public CognitiveEntry? ResolveWritableEntry(CognitiveIndex index, string id, string? preferredNs = null)
-        => EntryAccessResolver.Resolve(index, id, tenantId: TenantId, CanWrite, preferredNs);
+        => EntryAccessResolver.Resolve(index, id, tenantId: TenantId, CanWriteWithoutClaiming, preferredNs);
 }

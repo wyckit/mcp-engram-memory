@@ -1,4 +1,5 @@
 using McpEngramMemory.Core.Models.Constitution;
+using McpEngramMemory.Core.Services.Governance.Persistence;
 
 namespace McpEngramMemory.Core.Services.Constitution;
 
@@ -119,7 +120,7 @@ public sealed class ConstitutionKernel
                 }, current.VersionHashes);
         }
 
-        var audit = await _audit.AppendAsync(new ConstitutionAuditRecord(
+        var auditRecord = new ConstitutionAuditRecord(
             0,
             $"{operation.OperationId}:{phase}:{Guid.NewGuid():N}",
             operation.OperationId,
@@ -129,7 +130,21 @@ public sealed class ConstitutionKernel
             decision.Outcome,
             decision.ConstitutionVersionHashes,
             decision.Findings.Select(finding => finding.Code),
-            _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+            _timeProvider.GetUtcNow());
+
+        // Read-only Allow events in Precondition/Postcondition may be batched by a configured
+        // FileConstitutionAuditStore to avoid two synchronous fsyncs per read call. Mutating
+        // operations, Commits, and all Deny/Quarantine decisions always flush immediately.
+        bool isDeferrableRead =
+            phase is ConstitutionPhase.Precondition or ConstitutionPhase.Postcondition &&
+            decision.Outcome == ConstitutionOutcome.Allow &&
+            operation.Kind is CognitiveOperationKind.ReadMemory
+                or CognitiveOperationKind.Retrieve
+                or CognitiveOperationKind.CompileContext;
+
+        var audit = isDeferrableRead && _audit is FileConstitutionAuditStore fileAudit
+            ? await fileAudit.AppendDeferredIfConfiguredAsync(auditRecord, cancellationToken).ConfigureAwait(false)
+            : await _audit.AppendAsync(auditRecord, cancellationToken).ConfigureAwait(false);
         return (decision, audit);
     }
 }

@@ -94,6 +94,14 @@ class PackageValidationTests(unittest.TestCase):
         self.change("McpEngramMemory", lambda f: f.update({"tools/net8.0/any/runtimes/ios-arm64/native/onnx": b"mobile"}))
         self.rejected()
 
+    def test_dead_sqlite_rid_fails(self):
+        self.change("McpEngramMemory", lambda f: f.update({"tools/net8.0/any/runtimes/linux-musl-x64/native/libe_sqlite3.so": b"dead"}))
+        self.rejected()
+
+    def test_native_cpp_lib_fails(self):
+        self.change("McpEngramMemory", lambda f: f.update({"tools/net8.0/any/runtimes/win-x64/native/onnxruntime.lib": b"lib"}))
+        self.rejected()
+
     def test_missing_desktop_native_fails(self):
         self.change("McpEngramMemory", lambda f: f.pop("tools/net8.0/any/runtimes/osx-arm64/native/onnxruntime.dll"))
         self.rejected()

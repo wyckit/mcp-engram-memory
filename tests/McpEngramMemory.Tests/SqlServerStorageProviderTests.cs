@@ -493,6 +493,122 @@ public class SqlServerStorageProviderTests : IDisposable
     }
 
     [Fact]
+    public void BulkInsertEntries_RoundTripsMultiTenantUnicodePayload()
+    {
+        RequireSqlServer();
+        var entries = Enumerable.Range(0, SqlServerStorageProvider.DefaultBulkBatchThreshold + 7)
+            .Select(i => new CognitiveEntry(
+                $"bulk-ins-{i}",
+                new[] { (float)i, 1f / (i + 1) },
+                "bulk-ins-ns",
+                $"Unicode payload #{i}: 日本語・Ελληνικά — rocket 🚀",
+                category: i % 2 == 0 ? "pattern" : null,
+                metadata: new Dictionary<string, string> { ["idx"] = i.ToString(), ["tag"] = "αβγ" },
+                lifecycleState: i % 3 == 0 ? "ltm" : "stm",
+                tenantId: i % 2 == 0 ? "tenant-a" : "tenant-b"))
+            .ToList();
+
+        _provider!.SaveNamespaceSync("bulk-ins-ns", new NamespaceData { Entries = entries });
+
+        var loaded = _provider.LoadNamespace("bulk-ins-ns");
+        Assert.Equal(entries.Count, loaded.Entries.Count);
+        var byKey = loaded.Entries.ToDictionary(e => (e.TenantId, e.Id));
+        foreach (var expected in entries)
+        {
+            Assert.True(byKey.TryGetValue((expected.TenantId, expected.Id), out var actual));
+            Assert.Equal(expected.Text, actual!.Text);
+            Assert.Equal(expected.LifecycleState, actual.LifecycleState);
+            Assert.Equal(expected.Category, actual.Category);
+            Assert.Equal(expected.Metadata["tag"], actual.Metadata["tag"]);
+        }
+    }
+
+    [Fact]
+    public void BulkMergeEntries_InsertsAndUpdatesMultiRowBatch()
+    {
+        RequireSqlServer();
+        int batchCount = SqlServerStorageProvider.DefaultBulkBatchThreshold + 3; // 8 rows >= threshold 5
+
+        // First bulk MERGE: insert all 8 rows across two tenants.
+        for (int i = 0; i < batchCount; i++)
+        {
+            _provider!.ScheduleUpsertEntry("bulk-merge-ns", new CognitiveEntry(
+                $"m-{i}", new[] { 1f, (float)i }, "bulk-merge-ns", $"v1-{i}",
+                lifecycleState: "stm", tenantId: i < 4 ? "tA" : "tB"));
+        }
+        Assert.True(_provider!.TryFlush());
+
+        // Second bulk MERGE: update 4 existing rows + insert 4 brand-new rows (8 rows >= threshold 5).
+        for (int i = 0; i < 4; i++)
+        {
+            _provider.ScheduleUpsertEntry("bulk-merge-ns", new CognitiveEntry(
+                $"m-{i}", new[] { 2f, (float)i }, "bulk-merge-ns", $"v2-{i}",
+                lifecycleState: "ltm", tenantId: "tA"));
+        }
+        for (int i = batchCount; i < batchCount + 4; i++)
+        {
+            _provider.ScheduleUpsertEntry("bulk-merge-ns", new CognitiveEntry(
+                $"m-{i}", new[] { 3f, (float)i }, "bulk-merge-ns", $"new-{i}",
+                lifecycleState: "archived", tenantId: "tB"));
+        }
+        Assert.True(_provider.TryFlush());
+
+        var loaded = _provider.LoadNamespace("bulk-merge-ns").Entries.ToDictionary(e => (e.TenantId, e.Id));
+        Assert.Equal(batchCount + 4, loaded.Count);
+        for (int i = 0; i < 4; i++)
+        {
+            Assert.Equal($"v2-{i}", loaded[("tA", $"m-{i}")].Text);
+            Assert.Equal("ltm", loaded[("tA", $"m-{i}")].LifecycleState);
+        }
+        for (int i = 4; i < batchCount; i++)
+            Assert.Equal($"v1-{i}", loaded[("tB", $"m-{i}")].Text);
+        for (int i = batchCount; i < batchCount + 4; i++)
+            Assert.Equal($"new-{i}", loaded[("tB", $"m-{i}")].Text);
+    }
+
+    [Fact]
+    public void BulkDeleteEntries_RemovesOnlyTargetedTenantRows()
+    {
+        RequireSqlServer();
+        int count = SqlServerStorageProvider.DefaultBulkBatchThreshold + 3; // 8 rows per tenant
+
+        for (int i = 0; i < count; i++)
+        {
+            _provider!.ScheduleUpsertEntry("bulk-del-ns",
+                new CognitiveEntry($"d-{i}", new[] { 1f }, "bulk-del-ns", $"A-{i}", tenantId: "tA"));
+            _provider.ScheduleUpsertEntry("bulk-del-ns",
+                new CognitiveEntry($"d-{i}", new[] { 1f }, "bulk-del-ns", $"B-{i}", tenantId: "tB"));
+        }
+        Assert.True(_provider!.TryFlush());
+
+        // Delete 6 rows from tA (>= threshold 5 -> BulkDeleteEntries path); leave 2 in tA and all 8 in tB.
+        for (int i = 0; i < count - 2; i++)
+            _provider.ScheduleDeleteEntry("bulk-del-ns", $"d-{i}", "tA");
+        Assert.True(_provider.TryFlush());
+
+        var loaded = _provider.LoadNamespace("bulk-del-ns").Entries;
+        Assert.Equal(2, loaded.Count(e => e.TenantId == "tA"));
+        Assert.Equal(count, loaded.Count(e => e.TenantId == "tB"));
+    }
+
+    [Fact]
+    public async Task DeleteNamespaceAsync_TenantScoped_RemovesOnlyTargetTenant()
+    {
+        RequireSqlServer();
+        _provider!.ScheduleUpsertEntry("shared-del",
+            new CognitiveEntry("k1", new[] { 1f }, "shared-del", "tenant A", tenantId: "tA"));
+        _provider.ScheduleUpsertEntry("shared-del",
+            new CognitiveEntry("k1", new[] { 1f }, "shared-del", "tenant B", tenantId: "tB"));
+        Assert.True(_provider.TryFlush());
+
+        await _provider.DeleteNamespaceAsync("shared-del", "tA");
+
+        var remaining = _provider.LoadNamespace("shared-del").Entries;
+        var survivor = Assert.Single(remaining);
+        Assert.Equal("tB", survivor.TenantId);
+    }
+
+    [Fact]
     public void InvalidSchemaName_Throws()
     {
         // No connection required — pure constructor validation

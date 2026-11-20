@@ -47,7 +47,7 @@ public class ChecksumTests : IDisposable
     }
 
     [Fact]
-    public void Load_WithCorruptedChecksum_StillLoads()
+    public void Load_WithCorruptedChecksum_DropsCorruptedData()
     {
         // Save valid data
         var entry = new CognitiveEntry("c3", new[] { 1f, 0f }, "corrupt", "corrupted checksum test");
@@ -57,10 +57,37 @@ public class ChecksumTests : IDisposable
         var checksumPath = Path.Combine(_testDataPath, "corrupt.json.sha256");
         File.WriteAllText(checksumPath, "0000000000000000000000000000000000000000000000000000000000000000");
 
-        // Should still load (with a warning log, but not fail)
+        // Aligned with SQLite and SQL Server: checksum-mismatched payloads are dropped rather than returned
         var loaded = _persistence.LoadNamespace("corrupt");
-        Assert.Single(loaded.Entries);
-        Assert.Equal("c3", loaded.Entries[0].Id);
+        Assert.Empty(loaded.Entries);
+    }
+
+    [Fact]
+    public void LoadGlobalFilesAndHnsw_WithCorruptedChecksum_DropCorruptedPayloads()
+    {
+        _persistence.ScheduleSaveGlobalEdges(() => [new GraphEdge("a", "b", "cross_reference")]);
+        _persistence.ScheduleSaveClusters(() => [new SemanticCluster("cl1", "test", ["a"], "lbl")]);
+        _persistence.SaveHnswSnapshotSync("test", new HnswSnapshot { NodeIds = ["a"] });
+        Assert.True(_persistence.TryFlush());
+
+        string badHash = new string('0', 64);
+        File.WriteAllText(Path.Combine(_testDataPath, "_edges.json.sha256"), badHash);
+        File.WriteAllText(Path.Combine(_testDataPath, "_clusters.json.sha256"), badHash);
+        File.WriteAllText(Path.Combine(_testDataPath, "test.hnsw.json.sha256"), badHash);
+
+        Assert.Empty(_persistence.LoadGlobalEdges());
+        Assert.Empty(_persistence.LoadClusters());
+        Assert.Null(_persistence.LoadHnswSnapshot("test"));
+    }
+
+    [Fact]
+    public void AtomicChecksumWrite_LeavesNoTempFilesBehind()
+    {
+        var entry = new CognitiveEntry("atomic-1", new[] { 1f, 0f }, "atomicns", "atomic checksum test");
+        _persistence.SaveNamespaceSync("atomicns", new NamespaceData { Entries = [entry] });
+
+        var leftoverTmps = Directory.GetFiles(_testDataPath, "*.tmp");
+        Assert.Empty(leftoverTmps);
     }
 
     [Fact]

@@ -8,7 +8,7 @@ internal static class ServerNativeRuntime
     // ONNX's name-only Windows probe can select System32's incompatible runtime
     // when a deeply nested global-tool path exceeds LoadLibrary's path limit.
     // Bind the server to its shipped binary before any ONNX static initialization.
-    internal static void Configure()
+    internal static void Configure(string[]? args = null)
     {
         if (!OperatingSystem.IsWindows()) return;
         RequireReviewedTelemetryVersion(typeof(InferenceSession).Assembly.GetName().Version);
@@ -16,10 +16,24 @@ internal static class ServerNativeRuntime
         var handle = new Lazy<IntPtr>(() => NativeLibrary.Load(ExtendedWindowsPath(path)));
         NativeLibrary.SetDllImportResolver(typeof(InferenceSession).Assembly, (name, _, _) =>
             name == "onnxruntime" ? handle.Value : IntPtr.Zero);
-        var sqlite = ResolveWindowsLibrary(AppContext.BaseDirectory, RuntimeInformation.ProcessArchitecture, "e_sqlite3.dll");
-        var sqliteHandle = new Lazy<IntPtr>(() => NativeLibrary.Load(ExtendedWindowsPath(sqlite)));
-        NativeLibrary.SetDllImportResolver(typeof(SQLitePCL.SQLite3Provider_e_sqlite3).Assembly, (name, _, _) =>
-            name == "e_sqlite3" ? sqliteHandle.Value : IntPtr.Zero);
+
+        // Only probe and bind e_sqlite3.dll when SQLite storage or data migration commands
+        // actually need it; JSON and SQL Server deployments should not require or probe SQLite natives.
+        if (ShouldBindSqlite(Environment.GetEnvironmentVariable("MEMORY_STORAGE"), args))
+        {
+            var sqlite = ResolveWindowsLibrary(AppContext.BaseDirectory, RuntimeInformation.ProcessArchitecture, "e_sqlite3.dll");
+            var sqliteHandle = new Lazy<IntPtr>(() => NativeLibrary.Load(ExtendedWindowsPath(sqlite)));
+            NativeLibrary.SetDllImportResolver(typeof(SQLitePCL.SQLite3Provider_e_sqlite3).Assembly, (name, _, _) =>
+                name == "e_sqlite3" ? sqliteHandle.Value : IntPtr.Zero);
+        }
+    }
+
+    internal static bool ShouldBindSqlite(string? storageMode, string[]? args = null)
+    {
+        if (string.Equals(storageMode?.Trim(), "sqlite", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return args is { Length: > 0 } && args[0] is "migrate-data" or "prepare-data";
     }
 
     internal static void RequireReviewedTelemetryVersion(Version? version)

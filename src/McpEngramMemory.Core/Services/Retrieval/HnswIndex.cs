@@ -26,6 +26,11 @@ public sealed class HnswIndex
     private int _maxLevel = -1;
     private readonly Random _rng = new(42); // Deterministic for reproducibility
 
+    // Pure leaf monitor serializing mutations (Add/Remove) against debounced CreateSnapshot()
+    // calls running on background timer threads. Search runs under the partition read lock
+    // (mutually exclusive with Add/Remove) and never contends on this lock.
+    private readonly object _snapshotGate = new();
+
     /// <summary>Number of active (non-deleted) entries in the index.</summary>
     public int Count => _vectors.Count - _deleted.Count;
 
@@ -50,73 +55,76 @@ public sealed class HnswIndex
     /// </summary>
     public void Add(string id, float[] vector)
     {
-        if (_idToIndex.ContainsKey(id))
-            Remove(id);
-
-        float norm = VectorMath.Norm(vector);
-        if (norm == 0f) return; // Skip zero vectors
-
-        // Store normalized vector for efficient cosine via dot product
-        var normalized = Normalize(vector, norm);
-
-        int nodeIndex = _vectors.Count;
-        _vectors.Add(normalized);
-        _originalNorms.Add(norm);
-        _ids.Add(id);
-        _idToIndex[id] = nodeIndex;
-
-        int level = RandomLevel();
-        _nodeLevels.Add(level);
-
-        // Initialize connection lists for all layers
-        var nodeConnections = new List<HashSet<int>>(level + 1);
-        for (int i = 0; i <= level; i++)
-            nodeConnections.Add(new HashSet<int>());
-        _connections.Add(nodeConnections);
-
-        if (_entryPoint == -1)
+        lock (_snapshotGate)
         {
-            _entryPoint = nodeIndex;
-            _maxLevel = level;
-            return;
-        }
+            if (_idToIndex.ContainsKey(id))
+                RemoveUnlocked(id);
 
-        // Greedy search from entry point down to level+1
-        int current = _entryPoint;
-        for (int l = _maxLevel; l > level; l--)
-            current = GreedyClosest(normalized, current, l);
+            float norm = VectorMath.Norm(vector);
+            if (norm == 0f) return; // Skip zero vectors
 
-        // For layers min(level, maxLevel) down to 0: search and connect
-        for (int l = Math.Min(level, _maxLevel); l >= 0; l--)
-        {
-            var neighbors = SearchLayer(normalized, new[] { current }, _efConstruction, l);
-            int maxConn = l == 0 ? _mMax0 : _m;
+            // Store normalized vector for efficient cosine via dot product
+            var normalized = Normalize(vector, norm);
 
-            var selected = SelectNeighbors(normalized, neighbors, maxConn);
+            int nodeIndex = _vectors.Count;
+            _vectors.Add(normalized);
+            _originalNorms.Add(norm);
+            _ids.Add(id);
+            _idToIndex[id] = nodeIndex;
 
-            foreach (var neighbor in selected)
+            int level = RandomLevel();
+            _nodeLevels.Add(level);
+
+            // Initialize connection lists for all layers
+            var nodeConnections = new List<HashSet<int>>(level + 1);
+            for (int i = 0; i <= level; i++)
+                nodeConnections.Add(new HashSet<int>());
+            _connections.Add(nodeConnections);
+
+            if (_entryPoint == -1)
             {
-                _connections[nodeIndex][l].Add(neighbor);
-
-                EnsureLayerExists(neighbor, l);
-                _connections[neighbor][l].Add(nodeIndex);
-
-                // Prune neighbor if too many connections
-                if (_connections[neighbor][l].Count > maxConn)
-                {
-                    var pruned = SelectNeighbors(_vectors[neighbor], _connections[neighbor][l], maxConn);
-                    _connections[neighbor][l] = new HashSet<int>(pruned);
-                }
+                _entryPoint = nodeIndex;
+                _maxLevel = level;
+                return;
             }
 
-            if (selected.Count > 0)
-                current = selected[0];
-        }
+            // Greedy search from entry point down to level+1
+            int current = _entryPoint;
+            for (int l = _maxLevel; l > level; l--)
+                current = GreedyClosest(normalized, current, l);
 
-        if (level > _maxLevel)
-        {
-            _entryPoint = nodeIndex;
-            _maxLevel = level;
+            // For layers min(level, maxLevel) down to 0: search and connect
+            for (int l = Math.Min(level, _maxLevel); l >= 0; l--)
+            {
+                var neighbors = SearchLayer(normalized, new[] { current }, _efConstruction, l);
+                int maxConn = l == 0 ? _mMax0 : _m;
+
+                var selected = SelectNeighbors(normalized, neighbors, maxConn);
+
+                foreach (var neighbor in selected)
+                {
+                    _connections[nodeIndex][l].Add(neighbor);
+
+                    EnsureLayerExists(neighbor, l);
+                    _connections[neighbor][l].Add(nodeIndex);
+
+                    // Prune neighbor if too many connections
+                    if (_connections[neighbor][l].Count > maxConn)
+                    {
+                        var pruned = SelectNeighbors(_vectors[neighbor], _connections[neighbor][l], maxConn);
+                        _connections[neighbor][l] = new HashSet<int>(pruned);
+                    }
+                }
+
+                if (selected.Count > 0)
+                    current = selected[0];
+            }
+
+            if (level > _maxLevel)
+            {
+                _entryPoint = nodeIndex;
+                _maxLevel = level;
+            }
         }
     }
 
@@ -166,6 +174,12 @@ public sealed class HnswIndex
 
     /// <summary>Mark an entry as deleted. The node remains in the graph but is excluded from results.</summary>
     public bool Remove(string id)
+    {
+        lock (_snapshotGate)
+            return RemoveUnlocked(id);
+    }
+
+    private bool RemoveUnlocked(string id)
     {
         if (!_idToIndex.TryGetValue(id, out var index))
             return false;
@@ -219,26 +233,29 @@ public sealed class HnswIndex
     /// </summary>
     public HnswSnapshot CreateSnapshot()
     {
-        var connections = new List<List<List<int>>>(_connections.Count);
-        for (int i = 0; i < _connections.Count; i++)
+        lock (_snapshotGate)
         {
-            var nodeConns = new List<List<int>>(_connections[i].Count);
-            foreach (var layer in _connections[i])
-                nodeConns.Add(layer.ToList());
-            connections.Add(nodeConns);
-        }
+            var connections = new List<List<List<int>>>(_connections.Count);
+            for (int i = 0; i < _connections.Count; i++)
+            {
+                var nodeConns = new List<List<int>>(_connections[i].Count);
+                foreach (var layer in _connections[i])
+                    nodeConns.Add(layer.ToList());
+                connections.Add(nodeConns);
+            }
 
-        return new HnswSnapshot
-        {
-            M = _m,
-            EfConstruction = _efConstruction,
-            EntryPoint = _entryPoint,
-            MaxLevel = _maxLevel,
-            NodeIds = new List<string>(_ids),
-            NodeLevels = new List<int>(_nodeLevels),
-            Connections = connections,
-            Deleted = _deleted.ToList()
-        };
+            return new HnswSnapshot
+            {
+                M = _m,
+                EfConstruction = _efConstruction,
+                EntryPoint = _entryPoint,
+                MaxLevel = _maxLevel,
+                NodeIds = new List<string>(_ids),
+                NodeLevels = new List<int>(_nodeLevels),
+                Connections = connections,
+                Deleted = _deleted.ToList()
+            };
+        }
     }
 
     /// <summary>

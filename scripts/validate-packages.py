@@ -62,6 +62,8 @@ def verify_packages(source, version):
                 runtime = json.loads(archive.read(prefix + "McpEngramMemory.runtimeconfig.json"))
                 assert runtime["runtimeOptions"]["tfm"] == "net8.0", "Tool runtime changed"
                 assert not any(re.search(r"/runtimes/(ios|android|maccatalyst|browser)[^/]*/", f) for f in files), "Mobile native runtime in tool"
+                assert not any(re.search(r"/runtimes/(linux-arm|linux-armel|linux-mips64|linux-musl-[^/]+|linux-ppc64le|linux-riscv64|linux-s390x|linux-x86|osx-x64|win-x86)/", f) for f in files), "Dead SQLite-only native RID in tool"
+                assert not any(re.search(r"/runtimes/[^/]+/native/.*\.lib$", f, re.IGNORECASE) for f in files), "C++ static link .lib in tool"
                 for rid in ("win-x64", "linux-x64", "osx-arm64"):
                     assert any(f.startswith(prefix + f"runtimes/{rid}/native/") and "onnxruntime" in f for f in files), (rid, "ONNX runtime missing")
             results.append({"package": name, "version": version, "bytes": package.stat().st_size,

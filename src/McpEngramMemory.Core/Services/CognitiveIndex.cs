@@ -404,6 +404,13 @@ public sealed class CognitiveIndex : IDisposable
         return _store.GetAllTenants();
     }
 
+    /// <summary>
+    /// All non-system <c>(TenantId, Namespace)</c> partitions currently loaded in memory,
+    /// without forcing a full <c>LoadAll()</c> disk sweep.
+    /// </summary>
+    public IReadOnlyList<(string TenantId, string Namespace)> GetLoadedPartitions()
+        => _store.GetLoadedPartitions();
+
     // ── CRUD ──
 
     /// <summary>Add or replace a cognitive entry. LTM/archived entries are auto-quantized for fast search.</summary>
@@ -1537,7 +1544,8 @@ public sealed class CognitiveIndex : IDisposable
                 var hybridResults = _hybridSearch.HybridSearch(
                     vectorResults, expandedQueryText, pk, hybridK,
                     request.IncludeStates, request.Category,
-                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount);
+                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount,
+                    bm25IncludeIds: null, rerankQueryText: request.QueryText);
 
                 // Auto-PRF: if top hybrid result is low confidence, expand query with
                 // terms from initial results and re-search for improved recall
@@ -1551,7 +1559,8 @@ public sealed class CognitiveIndex : IDisposable
                         var prfResults = _hybridSearch.HybridSearch(
                             vectorResults, prfQuery, pk, hybridK,
                             request.IncludeStates, request.Category,
-                            request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount);
+                            request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount,
+                            bm25IncludeIds: null, rerankQueryText: request.QueryText);
                         // Use PRF results if they improve top score
                         if (prfResults.Count > 0 && prfResults[0].Score > hybridResults[0].Score)
                             return ApplyDiversity(ApplyCategoryBoost(prfResults, request.QueryText), request, nsEntries);
@@ -1587,7 +1596,8 @@ public sealed class CognitiveIndex : IDisposable
                 var escalatedResults = ApplyCategoryBoost(_hybridSearch.HybridSearch(
                     broadVectorResults, expandedQueryText, pk, request.K * diversityMultiplier,
                     request.IncludeStates, request.Category,
-                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount), request.QueryText);
+                    request.Rerank, request.RrfK, _bm25, _reranker, getEntry, request.Query, entryCount,
+                    bm25IncludeIds: null, rerankQueryText: request.QueryText), request.QueryText);
                 return ApplyDiversity(escalatedResults, request, nsEntries);
             }
 
@@ -1780,10 +1790,23 @@ public sealed class CognitiveIndex : IDisposable
     public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
         string ns, string tenantId, float threshold = 0.95f, string? category = null,
         HashSet<string>? includeStates = null, int maxResults = 100)
+        => FindDuplicates(ns, tenantId, threshold, category, includeStates, maxResults,
+            DuplicateDetector.DefaultMaxEntries, DuplicateDetector.DefaultMaxPairComparisons, CancellationToken.None);
+
+    /// <summary>
+    /// Find near-duplicate entries within a namespace with explicit entry-count, pair-comparison,
+    /// and cancellation bounds.
+    /// </summary>
+    public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
+        string ns, string tenantId, float threshold, string? category,
+        HashSet<string>? includeStates, int maxResults,
+        int maxEntries, long maxPairComparisons,
+        CancellationToken cancellationToken = default)
     {
         if (threshold < 0f || threshold > 1f)
             throw new ArgumentOutOfRangeException(nameof(threshold), "Threshold must be between 0 and 1.");
 
+        cancellationToken.ThrowIfCancellationRequested();
         includeStates ??= new HashSet<string> { "stm", "ltm" };
 
         List<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates;
@@ -1805,9 +1828,11 @@ public sealed class CognitiveIndex : IDisposable
         }
         finally { nsLock.ExitReadLock(); }
 
+        cancellationToken.ThrowIfCancellationRequested();
         // Sort by norm ascending for early-exit optimization
         candidates.Sort((a, b) => a.Norm.CompareTo(b.Norm));
-        return _duplicateDetector.FindDuplicates(candidates, threshold, maxResults);
+        return _duplicateDetector.FindDuplicates(
+            candidates, threshold, maxResults, maxEntries, maxPairComparisons, cancellationToken);
     }
 
     // ── Access Tracking ──

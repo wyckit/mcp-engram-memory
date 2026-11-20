@@ -96,7 +96,7 @@ public sealed class LifecycleTools
         return _lifecycle.DeepRecall(resolved, ns, tenantId: _access.TenantId,
             k: k, minScore: minScore, resurrectionThreshold: resurrectionThreshold,
             queryText: text, hybrid: hybrid, rerank: rerank,
-            resurrect: _access.CanWrite(ns));
+            resurrect: _access.CanWriteWithoutClaiming(ns));
     }
 
     [McpServerTool(Name = "memory_feedback", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -166,7 +166,15 @@ public sealed class LifecycleTools
     {
         if (string.IsNullOrWhiteSpace(ns))
             return "Error: Namespace must not be empty.";
-        if (!_access.CanWrite(ns))
+        try
+        {
+            Tenancy.ValidatePartitionComponent(ns, nameof(ns));
+        }
+        catch (ArgumentException ex)
+        {
+            return $"Error: {ex.Message}";
+        }
+        if (!_access.TryAcquireWriteAccess(ns))
             return NamespaceAccess.WriteDenied(ns);
 
         var config = _lifecycle.SetDecayConfig(ns, decayRate, reinforcementWeight, stmThreshold, archiveThreshold,

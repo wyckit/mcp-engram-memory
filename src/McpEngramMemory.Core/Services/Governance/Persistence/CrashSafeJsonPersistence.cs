@@ -143,34 +143,54 @@ internal static class CrashSafeJsonPersistence
         return new PersistenceLoadResult<T>(value, diagnostics);
     }
 
-    public static async ValueTask AppendAsync<T>(
+    public static ValueTask AppendAsync<T>(
         string path,
         string store,
         string tenantId,
         long sequence,
         T value,
         CancellationToken cancellationToken)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-        using var payloadDocument = JsonDocument.Parse(payload);
-        var normalizedPayload = payloadDocument.RootElement.Clone();
-        var envelope = new JournalEnvelope(
-            CurrentSchemaVersion,
-            store,
-            tenantId ?? string.Empty,
-            sequence,
-            Hash(JsonSerializer.SerializeToUtf8Bytes(normalizedPayload, JsonOptions)),
-            normalizedPayload);
-        byte[] line = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+        => AppendBatchAsync(path, store, [(tenantId, sequence, value)], flushToDisk: true, cancellationToken);
 
+    public static async ValueTask AppendBatchAsync<T>(
+        string path,
+        string store,
+        IReadOnlyList<(string TenantId, long Sequence, T Value)> entries,
+        bool flushToDisk,
+        CancellationToken cancellationToken)
+    {
+        if (entries.Count == 0)
+            return;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var buffer = new MemoryStream(capacity: entries.Count * 512);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var (tenantId, sequence, value) = entries[i];
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+            using var payloadDocument = JsonDocument.Parse(payload);
+            var normalizedPayload = payloadDocument.RootElement.Clone();
+            var envelope = new JournalEnvelope(
+                CurrentSchemaVersion,
+                store,
+                tenantId ?? string.Empty,
+                sequence,
+                Hash(JsonSerializer.SerializeToUtf8Bytes(normalizedPayload, JsonOptions)),
+                normalizedPayload);
+            byte[] line = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonOptions);
+            buffer.Write(line, 0, line.Length);
+            buffer.WriteByte((byte)'\n');
+        }
+
+        var options = FileOptions.Asynchronous | (flushToDisk ? FileOptions.WriteThrough : FileOptions.None);
         await using var stream = new FileStream(
             path, FileMode.Append, FileAccess.Write, FileShare.Read,
-            16 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
-        await stream.WriteAsync(line, cancellationToken);
-        await stream.WriteAsync("\n"u8.ToArray(), cancellationToken);
-        await stream.FlushAsync(cancellationToken);
-        stream.Flush(flushToDisk: true);
+            16 * 1024, options);
+        await stream.WriteAsync(buffer.GetBuffer().AsMemory(0, (int)buffer.Length), cancellationToken)
+            .ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        if (flushToDisk)
+            stream.Flush(flushToDisk: true);
     }
 
     public static async ValueTask<JournalReplay<T>> ReplayAsync<T>(

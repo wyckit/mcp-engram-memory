@@ -78,7 +78,36 @@ public sealed class HybridSearchEngine
         float[]? queryVector,
         int entryCount,
         HashSet<string>? bm25IncludeIds)
+        => HybridSearch(
+            vectorResults, queryText, ns, k, includeStates, category,
+            rerank, rrfK, bm25, reranker, getEntry, queryVector, entryCount,
+            bm25IncludeIds, rerankQueryText: null);
+
+    /// <summary>
+    /// Execute a hybrid search combining vector and BM25 results via RRF, using
+    /// <paramref name="queryText"/> for BM25 retrieval (which may be synonym- or PRF-expanded)
+    /// and <paramref name="rerankQueryText"/> (defaulting to <paramref name="queryText"/>) for
+    /// token-level reranking so exact user phrasing is not diluted by expansion terms.
+    /// </summary>
+    public IReadOnlyList<CognitiveSearchResult> HybridSearch(
+        IReadOnlyList<CognitiveSearchResult> vectorResults,
+        string queryText,
+        string ns,
+        int k,
+        HashSet<string>? includeStates,
+        string? category,
+        bool rerank,
+        int rrfK,
+        BM25Index bm25,
+        IReranker reranker,
+        Func<string, string, CognitiveEntry?> getEntry,
+        float[]? queryVector,
+        int entryCount,
+        HashSet<string>? bm25IncludeIds,
+        string? rerankQueryText)
     {
+        string effectiveRerankQuery = string.IsNullOrWhiteSpace(rerankQueryText) ? queryText : rerankQueryText;
+
         // High-confidence early exit: if vector search returned strong results,
         // skip BM25 fusion to reduce P95 latency. BM25 mainly helps when
         // vector search struggles (semantic gap / keyword mismatch).
@@ -88,7 +117,7 @@ public sealed class HybridSearchEngine
             _metrics?.Increment("hybrid.early_exit");
             var highConf = vectorResults.Take(rerank ? k * 2 : k).ToList();
             if (rerank && highConf.Count > 0)
-                highConf = reranker.Rerank(queryText, highConf).Take(k).ToList();
+                highConf = reranker.Rerank(effectiveRerankQuery, highConf).Take(k).ToList();
             else if (highConf.Count > k)
                 highConf.RemoveRange(k, highConf.Count - k);
             return highConf;
@@ -181,7 +210,7 @@ public sealed class HybridSearchEngine
             boosted.Sort((a, b) => b.Score.CompareTo(a.Score));
 
             if (rerank && boosted.Count > 0)
-                boosted = reranker.Rerank(queryText, boosted).Take(k).ToList();
+                boosted = reranker.Rerank(effectiveRerankQuery, boosted).Take(k).ToList();
             else if (boosted.Count > k)
                 boosted.RemoveRange(k, boosted.Count - k);
 
@@ -297,7 +326,7 @@ public sealed class HybridSearchEngine
         // Optional reranking
         if (rerank && results.Count > 0)
         {
-            results = reranker.Rerank(queryText, results).Take(k).ToList();
+            results = reranker.Rerank(effectiveRerankQuery, results).Take(k).ToList();
         }
         else if (results.Count > k)
         {

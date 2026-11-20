@@ -139,8 +139,12 @@ jobs:
             artifacts/publisher-check/
 
   build-and-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -167,7 +171,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
+          name: test-results-${{ matrix.os }}
           path: |
             **/TestResults/*.trx
             **/TestResults/recall-realistic-*.json
@@ -184,8 +188,69 @@ jobs:
       # themselves yields zero deltas (p=1), so this job effectively asserts
       # floors + parseability, same as before. jq remains only for the legacy
       # bash fallback path.
-      - name: Benchmark regression gate (pinned baselines)
+      - name: Benchmark regression gate (pinned baselines, Linux)
+        if: runner.os == 'Linux'
         run: bash scripts/check-benchmark-regression.sh benchmarks/baselines
+
+      - name: Benchmark regression gate (pinned baselines, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-benchmark-regression.ps1 -Path benchmarks/baselines
+
+  sqlserver-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "EngramCi!StrongPass2026"
+          MSSQL_PID: "Express"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P EngramCi!StrongPass2026 -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P EngramCi!StrongPass2026 -Q 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDKs
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Wait for SQL Server readiness
+        run: |
+          python3 - <<'PY'
+          import socket, time, sys
+          deadline = time.time() + 90
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection(("127.0.0.1", 1433), timeout=2):
+                      time.sleep(5)
+                      sys.exit(0)
+              except OSError:
+                  time.sleep(2)
+          sys.exit("SQL Server did not become reachable on 127.0.0.1:1433 within 90s")
+          PY
+
+      - name: Run SQL Server storage and migration tests
+        env:
+          ENGRAM_TEST_SQLSERVER_CONNECTION: "Server=127.0.0.1,1433;Database=master;User Id=sa;Password=EngramCi!StrongPass2026;TrustServerCertificate=True;Encrypt=False"
+        run: dotnet test tests/McpEngramMemory.Tests/McpEngramMemory.Tests.csproj -c Release -f net8.0 --filter "FullyQualifiedName~SqlServer" --logger "trx;LogFileName=sqlserver-integration.trx"
+
+      - name: Upload SQL Server test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sqlserver-integration-results
+          path: "**/TestResults/sqlserver-integration.trx"
 
   recall-scale-evaluation:
     runs-on: ubuntu-latest
@@ -253,6 +318,7 @@ jobs:
   pack:
     needs:
       - build-and-test
+      - sqlserver-integration
       - soak-harness-smoke
       - telemetry-validation
       - source-installation

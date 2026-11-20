@@ -157,7 +157,7 @@ internal sealed record CommittedMergeMembership(
 /// reschedules it. Freezing on publish costs one small object per mutation and nothing per save,
 /// and it leaves every critical section exactly the length it already was.
 /// </summary>
-public sealed class ClusterManager
+public sealed class ClusterManager : IDisposable
 {
     private readonly Dictionary<(string Tenant, string Id), SemanticCluster> _clusters = new();
 
@@ -197,6 +197,7 @@ public sealed class ClusterManager
     private readonly CognitiveIndex _index;
     private readonly IStorageProvider _persistence;
     private bool _loaded;
+    private int _disposedFlag;
 
     public ClusterManager(CognitiveIndex index, IStorageProvider persistence)
     {
@@ -1905,5 +1906,22 @@ public sealed class ClusterManager
         }
 
         return centroid;
+    }
+
+    /// <summary>
+    /// Flush any pending cluster snapshot referencing this manager's lock, then release the underlying
+    /// <see cref="ReaderWriterLockSlim"/>. Idempotent and safe under either disposal order with
+    /// <see cref="IStorageProvider"/>.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0)
+            return;
+
+        try { _persistence.TryFlush(); }
+        catch { /* best effort before releasing lock */ }
+
+        try { _lock.Dispose(); }
+        catch (SynchronizationLockException) { /* contended lock left to GC */ }
     }
 }

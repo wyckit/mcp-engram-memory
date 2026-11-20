@@ -22,8 +22,17 @@ namespace McpEngramMemory.Core.Services.Lifecycle;
 /// </summary>
 public sealed class ConsolidationBackgroundService : BackgroundService
 {
-    private static readonly TimeSpan StartupDelay = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
+    /// <summary>Default startup delay before the first consolidation pass.</summary>
+    public static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromMinutes(10);
+
+    /// <summary>Default interval between consolidation passes.</summary>
+    public static readonly TimeSpan DefaultInterval = TimeSpan.FromHours(24);
+
+    /// <summary>Configurable startup delay before the first consolidation pass.</summary>
+    public TimeSpan StartupDelay { get; set; } = DefaultStartupDelay;
+
+    /// <summary>Configurable interval between consolidation passes.</summary>
+    public TimeSpan Interval { get; set; } = DefaultInterval;
 
     private readonly LifecycleEngine _lifecycle;
     private readonly IBackgroundWorkerStatusTracker? _statusTracker;

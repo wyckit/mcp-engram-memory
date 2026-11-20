@@ -94,7 +94,7 @@ public sealed class CompositeTools
         if (!BareIdTopology.IsTopologySafe(_index, targetId, _access.TenantId))
             return null;
 
-        return EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWrite, preferredNs);
+        return EntryAccessResolver.Resolve(_index, targetId, _access.TenantId, _access.CanWriteWithoutClaiming, preferredNs);
     }
 
     [McpServerTool(Name = "remember", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
@@ -110,7 +110,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(id)) return "Error: id must not be empty.";
         if (string.IsNullOrWhiteSpace(ns)) return "Error: ns must not be empty.";
         if (string.IsNullOrWhiteSpace(text)) return "Error: text must not be empty.";
-        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+        if (!_access.CanWriteWithoutClaiming(ns)) return NamespaceAccess.WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("remember");
         var state = lifecycleState ?? "stm";
@@ -138,6 +138,7 @@ public sealed class CompositeTools
         // 3. Store the entry
         var entry = new CognitiveEntry(id, vector, ns, text, category,
             MetadataNormalizer.Normalize(metadata), state, tenantId: _access.TenantId);
+        if (!_access.TryAcquireWriteAccess(ns)) return NamespaceAccess.WriteDenied(ns);
         _index.Upsert(entry);
         _access.ClaimOnWrite(ns);
         actions.Add("stored");
@@ -339,7 +340,7 @@ public sealed class CompositeTools
         if (string.IsNullOrWhiteSpace(topic)) return "Error: topic must not be empty.";
         if (!StringListNormalizer.TryNormalize(relatedIds, nameof(relatedIds), out var relatedIdList, out var relatedIdsError))
             return $"Error: {relatedIdsError}";
-        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+        if (!_access.CanWriteWithoutClaiming(ns)) return NamespaceAccess.WriteDenied(ns);
 
         using var timer = _metrics.StartTimer("reflect");
         var actions = new List<string>();
@@ -367,6 +368,7 @@ public sealed class CompositeTools
         var entry = new CognitiveEntry(id, vector, ns, text, "lesson",
             new Dictionary<string, string> { ["topic"] = topic },
             lifecycleState: "ltm", tenantId: _access.TenantId);
+        if (!_access.TryAcquireWriteAccess(ns)) return NamespaceAccess.WriteDenied(ns);
         _index.Upsert(entry);
         _access.ClaimOnWrite(ns);
         actions.Add("stored as ltm lesson");
@@ -1004,7 +1006,7 @@ public sealed class CompositeTools
             var result = candidate.Result;
             // Historical usefulness does not make a superseded fact current again.
             if (candidate.Resurrect && !RecallFreshness.IsSuperseded(result.Text) &&
-                !disputed.Contains((candidate.Namespace, result.Id)) && _access.CanWrite(candidate.Namespace) &&
+                !disputed.Contains((candidate.Namespace, result.Id)) && _access.CanWriteWithoutClaiming(candidate.Namespace) &&
                 _index.SetLifecycleState(result.Id, "stm", candidate.Namespace, _access.TenantId))
                 result = result with { LifecycleState = "stm" };
             _index.RecordAccess(result.Id, candidate.Namespace, _access.TenantId);

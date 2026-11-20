@@ -36,7 +36,7 @@ public sealed class ExpertTools
         _access = access;
     }
 
-    [McpServerTool(Name = "dispatch_task", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "dispatch_task", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Find which expert namespace best matches your question, then retrieve relevant memories from it — use this when you don't know which namespace holds the answer. Don't use it as a general search; if you already know the namespace, use `recall` directly.")]
     public object DispatchTask(
         [Description("The core problem, question, or task to route to an expert.")] string taskDescription,

@@ -159,6 +159,19 @@ public interface IStorageProvider : IDisposable
     /// <summary>Save an HNSW graph snapshot for a namespace.</summary>
     void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot);
 
+    /// <summary>
+    /// Schedule a debounced HNSW graph snapshot save for a namespace/partition key.
+    /// Providers should coalesce rapid vector upserts/deletes off the caller's write lock and
+    /// flush on <see cref="TryFlush"/> / <see cref="IDisposable.Dispose"/>. Default delegates
+    /// synchronously for backward compatibility with external <see cref="IStorageProvider"/> implementations.
+    /// </summary>
+    void ScheduleSaveHnswSnapshot(string ns, Func<HnswSnapshot?> snapshotProvider)
+    {
+        var snapshot = snapshotProvider();
+        if (snapshot is not null)
+            SaveHnswSnapshotSync(ns, snapshot);
+    }
+
     /// <summary>Delete persisted HNSW snapshot for a namespace.</summary>
     void DeleteHnswSnapshot(string ns);
 

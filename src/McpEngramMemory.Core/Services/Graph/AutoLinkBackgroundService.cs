@@ -19,8 +19,17 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// </summary>
 public sealed class AutoLinkBackgroundService : BackgroundService
 {
-    private static readonly TimeSpan StartupDelay = TimeSpan.FromMinutes(15);
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+    /// <summary>Default startup delay before the first auto-link pass.</summary>
+    public static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromMinutes(15);
+
+    /// <summary>Default interval between auto-link passes.</summary>
+    public static readonly TimeSpan DefaultInterval = TimeSpan.FromHours(6);
+
+    /// <summary>Configurable startup delay before the first auto-link pass.</summary>
+    public TimeSpan StartupDelay { get; set; } = DefaultStartupDelay;
+
+    /// <summary>Configurable interval between auto-link passes.</summary>
+    public TimeSpan Interval { get; set; } = DefaultInterval;
 
     private readonly AutoLinkScanner _scanner;
     private readonly CognitiveIndex _index;

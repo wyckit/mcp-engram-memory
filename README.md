@@ -268,7 +268,7 @@ Copy the reference harness for your tool — each includes recall/store/routing 
 
 | Tool | Harness File | MCP Config |
 |------|-------------|------------|
-| Claude Code | [`examples/CLAUDE.md`](examples/CLAUDE.md) → `~/.claude/CLAUDE.md` | [`examples/claude-code.json`](examples/claude-code.json) |
+| Claude Code | [`examples/CLAUDE.md`](examples/CLAUDE.md) → `~/.claude/CLAUDE.md` | [`examples/claude-code.json`](examples/claude-code.json) (`standard`) / [`claude-code-minimal.json`](examples/claude-code-minimal.json) (`minimal`) |
 | GitHub Copilot | [`examples/copilot-instructions.md`](examples/copilot-instructions.md) → `.github/` | [`examples/vscode-copilot.json`](examples/vscode-copilot.json) |
 | Google Gemini | [`GEMINI.md`](GEMINI.md) → workspace root | [Gemini CLI config](https://github.com/google/gemini-cli) |
 | OpenAI Codex | [`examples/AGENTS.md`](examples/AGENTS.md) → project root | [Codex config](https://github.com/openai/codex) |
@@ -305,7 +305,9 @@ Opus thinks, Sonnet remembers, Haiku explores.
 ## NuGet / GitHub Packages
 
 The server ships as a `dotnet` global tool, and the core engine as a library you can embed in your
-own .NET applications.
+own .NET applications. **NuGet.org** is the primary distribution feed (published via
+`publish-nuget.ps1` from validated CI archives); **GitHub Packages** mirrors are published
+separately using the same archives and require GitHub package authentication.
 
 **Server (global tool)**
 
@@ -317,10 +319,10 @@ engram-memory
 **Core engine (library)**
 
 ```bash
-# nuget.org
+# nuget.org (primary)
 dotnet add package McpEngramMemory.Core --version 2.1.0
 
-# GitHub Packages
+# GitHub Packages (optional mirror; requires GitHub Packages auth)
 dotnet add package McpEngramMemory.Core --version 2.1.0 \
   --source https://nuget.pkg.github.com/wyckit/index.json
 ```

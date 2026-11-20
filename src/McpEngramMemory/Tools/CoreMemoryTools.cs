@@ -63,8 +63,11 @@ public sealed class CoreMemoryTools
     private bool CanRead(string ns) => _principal.IsSystem ||
         _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
 
-    private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", tenantId: _principal.TenantId);
+    private bool CanWriteWithoutClaiming(string ns) => _principal.IsSystem ||
+        _registry.CanWriteWithoutClaiming(_principal.AgentId, ns, tenantId: _principal.TenantId);
+
+    private bool TryAcquireWriteAccess(string ns) => _principal.IsSystem ||
+        _registry.TryAcquireWriteAccess(_principal.AgentId, ns, tenantId: _principal.TenantId);
 
     /// <summary>
     /// Denial message for a read. Deliberately shaped like "not found" rather than "denied":
@@ -92,7 +95,7 @@ public sealed class CoreMemoryTools
         [Description("Optional metadata as a JSON object. Values may be any JSON type — strings are stored verbatim, numbers/booleans become their literal text, and arrays/objects are serialized to compact JSON so the dictionary storage stays flat.")] Dictionary<string, JsonElement>? metadata = null,
         [Description("Initial lifecycle state: 'stm' (default), 'ltm', or 'archived'.")] string? lifecycleState = null)
     {
-        if (!CanWrite(ns)) return WriteDenied(ns);
+        if (!CanWriteWithoutClaiming(ns)) return WriteDenied(ns);
 
         try
         {
@@ -108,6 +111,7 @@ public sealed class CoreMemoryTools
             var entry = new CognitiveEntry(id, resolved, ns, text, category,
                 MetadataNormalizer.Normalize(metadata),
                 lifecycleState ?? "stm", tenantId: _principal.TenantId);
+            if (!TryAcquireWriteAccess(ns)) return WriteDenied(ns);
             _index.Upsert(entry);
             _registry.ClaimOwnershipOnWrite(ns, _principal.AgentId, _principal.TenantId);
 
@@ -136,8 +140,8 @@ public sealed class CoreMemoryTools
         [Description("Check for near-duplicates within the batch (default: true).")] bool checkDuplicates = true)
     {
         if (entries is null || entries.Length == 0)
-            return new { status = "error", message = "No entries provided." };
-        if (!CanWrite(ns)) return new { status = "error", message = WriteDenied(ns) };
+            return ToolError.Create("No entries provided.");
+        if (!CanWriteWithoutClaiming(ns)) return ToolError.Create(WriteDenied(ns));
 
         using var timer = _metrics.StartTimer("store_batch");
 
@@ -162,11 +166,13 @@ public sealed class CoreMemoryTools
         }
         catch (ArgumentException ex)
         {
-            return new { status = "error", message = ex.Message };
+            return ToolError.Create(ex.Message);
         }
 
         if (cognitiveEntries.Count == 0)
-            return new { status = "error", message = "No valid entries (each needs 'id' and 'text')." };
+            return ToolError.Create("No valid entries (each needs 'id' and 'text').");
+
+        if (!TryAcquireWriteAccess(ns)) return ToolError.Create(WriteDenied(ns));
 
         // Batch upsert with single lock
         int stored = _index.UpsertBatch(cognitiveEntries);
@@ -198,7 +204,7 @@ public sealed class CoreMemoryTools
         };
     }
 
-    [McpServerTool(Name = "search_memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "search_memory", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Find memories in one namespace with full parameter control (hybrid search, physics ranking, explain mode). Don't use this as your default search; use `recall` instead — it adds auto-routing, fallback to archived entries, and spectral re-ranking automatically.")]
     public object SearchMemory(
         [Description("Namespace to search.")] string ns,
@@ -257,8 +263,13 @@ public sealed class CoreMemoryTools
         }
         else if (hybrid && text is not null)
         {
-            results = _index.HybridSearch(resolved, text, ns, tenantId: _principal.TenantId,
-                k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
+            results = _index.Search(new SearchRequest
+            {
+                Query = resolved, Namespace = ns, QueryText = text, K = k,
+                MinScore = minScore, Category = category, IncludeStates = states,
+                Hybrid = true, Rerank = rerank, SummaryFirst = summaryFirst,
+                TenantId = _principal.TenantId
+            });
         }
         else
         {
@@ -278,8 +289,13 @@ public sealed class CoreMemoryTools
                 IReadOnlyList<CognitiveSearchResult> expandedResults;
                 if (hybrid)
                 {
-                    expandedResults = _index.HybridSearch(expandedVector, expandedText, ns, tenantId: _principal.TenantId,
-                        k: k, minScore: minScore, category: category, includeStates: states, rerank: rerank);
+                    expandedResults = _index.Search(new SearchRequest
+                    {
+                        Query = expandedVector, Namespace = ns, QueryText = expandedText, K = k,
+                        MinScore = minScore, Category = category, IncludeStates = states,
+                        Hybrid = true, Rerank = rerank, SummaryFirst = summaryFirst,
+                        TenantId = _principal.TenantId
+                    });
                 }
                 else
                 {
@@ -488,7 +504,7 @@ public sealed class CoreMemoryTools
             return $"Entry '{id}' not found.";
 
         // Same reply as a genuine miss - a distinct denial would confirm the id exists.
-        if (!CanWrite(existing.Ns))
+        if (!CanWriteWithoutClaiming(existing.Ns))
             return $"Entry '{id}' not found.";
 
         // Cascade the delete to the entry's tenant-partitioned graph edges and cluster

@@ -9,8 +9,8 @@ namespace McpEngramMemory.Core.Services.Storage;
 
 /// <summary>
 /// SQLite-backed storage provider with transactional writes, crash safety,
-/// and per-entry granularity. Implements the same debounced write pattern
-/// as PersistenceManager for consistency.
+/// and per-entry granularity. Shares debounced-write, backoff, anti-starvation,
+/// and flush coordination with JSON and SQL Server via <see cref="DebouncedStorageCoordinator{TEntryKey}"/>.
 /// </summary>
 public sealed class SqliteStorageProvider : IStorageProvider
 {
@@ -21,51 +21,40 @@ public sealed class SqliteStorageProvider : IStorageProvider
     };
 
     private const int CurrentSchemaVersion = 3;
-    private static readonly TimeSpan MaxRetryBackoff = TimeSpan.FromSeconds(30);
 
     private readonly record struct EntryStorageKey(string TenantId, string EntryId);
 
     private readonly string _connectionString;
-    private readonly object _timerLock = new();
-    private readonly TimeSpan _debounceDelay;
+    private readonly string _dbFullPath;
     private readonly ILogger<SqliteStorageProvider>? _logger;
+    private readonly DebouncedStorageCoordinator<EntryStorageKey> _coordinator;
+
+    // Retained directly on the provider pointing at the coordinator's live locks/queues
+    // for deterministic concurrency-test inspection.
+    private readonly object _timerLock;
+#pragma warning disable CS0414 // Reflected on by StorageTimerOwnershipTests; updated via coordinator disposal callback.
     private bool _disposed;
+#pragma warning restore CS0414
+    private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts;
+    private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes;
 
-    // Internal clock seam for deterministic queued-callback regression tests.
-    internal TimeProvider TimerProvider { get; init; } = TimeProvider.System;
+    internal TimeProvider TimerProvider
+    {
+        get => _coordinator.TimerProvider;
+        init => _coordinator.TimerProvider = value;
+    }
 
-    // Internal test seams for concurrency regression tests (non-blocking _timerLock, Dispose vs collapse RMW).
+    internal int MaxGlobalDeferrals
+    {
+        get => _coordinator.MaxGlobalDeferrals;
+        set => _coordinator.MaxGlobalDeferrals = value;
+    }
+
     internal Action<string>? OnBeforeGlobalWrite { get; set; }
     internal Action? OnBeforeCollapseCommit { get; set; }
 
-    // Tracks in-flight synchronous collapse-history RMWs so Flush()/Dispose()/CheckpointWal()
-    // cannot race an active mutation (matching PersistenceManager).
-    private int _inFlightWrites;
-    private readonly ManualResetEventSlim _writesIdle = new(initialState: true);
-
-    private readonly Dictionary<string, (ITimer Timer, Func<NamespaceData> DataProvider)> _pendingNsSaves = new();
-    private readonly Dictionary<string, int> _nsSaveFailures = new();
-
-    // Incremental write tracking: per-namespace pending upserts and deletes
-    private readonly Dictionary<string, Dictionary<EntryStorageKey, CognitiveEntry>> _pendingEntryUpserts = new();
-    private readonly Dictionary<string, HashSet<EntryStorageKey>> _pendingEntryDeletes = new();
-    private readonly Dictionary<string, ITimer> _incrementalTimers = new();
-    private readonly Dictionary<string, int> _incrementalFailures = new();
-
-    private ITimer? _pendingEdgeTimer;
-    private Func<List<GraphEdge>>? _pendingEdgeProvider;
-    private int _edgeSaveFailures;
-    private ITimer? _pendingClusterTimer;
-    private Func<List<SemanticCluster>>? _pendingClusterProvider;
-    private int _clusterSaveFailures;
-    private ITimer? _pendingDecayConfigTimer;
-    private Func<Dictionary<string, DecayConfig>>? _pendingDecayConfigProvider;
-    private int _decayConfigSaveFailures;
-
     public SqliteStorageProvider(string? dbPath = null, int debounceMs = 500, ILogger<SqliteStorageProvider>? logger = null)
     {
-        // Frozen ABSOLUTE at construction: a relative path resolved per connection would move
-        // the backing store (and the gate identity) whenever CurrentDirectory changes.
         dbPath = Path.GetFullPath(dbPath ?? Path.Combine(AppContext.BaseDirectory, "data", "memory.db"));
         var dir = Path.GetDirectoryName(dbPath);
         if (dir is not null)
@@ -73,30 +62,38 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         _dbFullPath = dbPath;
-        _debounceDelay = TimeSpan.FromMilliseconds(debounceMs);
         _logger = logger;
 
         InitializeSchema();
+
+        _coordinator = new DebouncedStorageCoordinator<EntryStorageKey>(
+            TimeSpan.FromMilliseconds(debounceMs),
+            supportsIncrementalWrites: true,
+            logger: _logger,
+            makeKey: static (t, id) => new EntryStorageKey(t, id),
+            getTenantId: static k => k.TenantId,
+            writeNamespace: WriteNamespace,
+            writeIncremental: WriteIncrementalChanges,
+            writeEdges: edges => WriteGlobalData("edges", edges),
+            writeClusters: clusters => WriteGlobalData("clusters", clusters),
+            writeDecayConfigs: configs => WriteGlobalData("decay_configs", configs.Values.ToList()),
+            writeHnsw: TrySaveHnswSnapshotSync,
+            onDisposedUnderLock: () => _disposed = true);
+        _timerLock = _coordinator.TimerLock;
+        _pendingEntryUpserts = _coordinator.PendingEntryUpserts;
+        _pendingEntryDeletes = _coordinator.PendingEntryDeletes;
     }
 
-    private readonly string _dbFullPath;
-
-    /// <summary>The store's durable identity: the database file path canonicalized by
-    /// <see cref="StoreIdentityUtil.CanonicalPath"/> — resolved, prefix-stripped,
-    /// separator-trimmed, case-folded on Windows — so alias spellings of one file share one
-    /// identity. See <see cref="IStorageProvider.StoreIdentity"/>.</summary>
     public string StoreIdentity => StoreIdentityUtil.CanonicalPath(_dbFullPath);
 
     private void InitializeSchema()
     {
         using var conn = OpenConnection();
 
-        // Set WAL journal mode once per database (persists across connections)
         using var walCmd = conn.CreateCommand();
         walCmd.CommandText = "PRAGMA journal_mode=WAL;";
         walCmd.ExecuteNonQuery();
 
-        // Create base tables (v1 schema) — idempotent via IF NOT EXISTS
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS schema_version (
@@ -121,7 +118,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
             """;
         cmd.ExecuteNonQuery();
 
-        // Read current version and run any pending migrations
         int currentVersion = GetSchemaVersion(conn);
         if (currentVersion < CurrentSchemaVersion)
             RunMigrations(conn, currentVersion);
@@ -133,7 +129,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
         cmd.CommandText = "SELECT COUNT(*) FROM schema_version";
         var count = (long)cmd.ExecuteScalar()!;
         if (count == 0)
-            return 0; // Fresh database
+            return 0;
 
         cmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
         return Convert.ToInt32(cmd.ExecuteScalar()!);
@@ -149,7 +145,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
             if (fromVersion < 3)
                 MigrateToV3(conn, transaction);
 
-            // Upsert version row
             using var cmd = conn.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = fromVersion == 0
@@ -168,14 +163,11 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
-    /// <summary>v1→v2: Add lifecycle_state column for server-side filtering without JSON deserialization.</summary>
     private static void MigrateToV2(SqliteConnection conn, SqliteTransaction transaction)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = transaction;
 
-        // Add column (no-op on fresh DBs where column doesn't need to exist yet,
-        // but ALTER TABLE is idempotent-safe via try/catch for "duplicate column" errors)
         try
         {
             cmd.CommandText = "ALTER TABLE entries ADD COLUMN lifecycle_state TEXT DEFAULT 'stm'";
@@ -183,15 +175,12 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 && ex.Message.Contains("duplicate column"))
         {
-            // Column already exists (e.g., re-run after partial migration) — safe to ignore
+            // Column already exists
         }
 
         cmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_entries_ns_state ON entries(ns, lifecycle_state)";
         cmd.ExecuteNonQuery();
 
-        // Backfill lifecycle_state from JSON for existing entries.
-        // ALTER TABLE ADD COLUMN with DEFAULT sets existing rows to 'stm',
-        // so correct rows whose JSON actually has 'ltm' or 'archived'.
         cmd.CommandText = """
             UPDATE entries
             SET lifecycle_state = json_extract(json_data, '$.lifecycleState')
@@ -201,11 +190,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// v2→v3: Make tenant identity part of the physical entry key. SQLite cannot alter a
-    /// primary key in place, so rebuild the table transactionally and place all existing rows
-    /// in the legacy empty-string tenant.
-    /// </summary>
     private static void MigrateToV3(SqliteConnection conn, SqliteTransaction transaction)
     {
         using var cmd = conn.CreateCommand();
@@ -256,54 +240,8 @@ public sealed class SqliteStorageProvider : IStorageProvider
         return conn;
     }
 
-    private void BeginTrackedWrite()
-    {
-        if (Interlocked.Increment(ref _inFlightWrites) == 1)
-            _writesIdle.Reset();
-    }
-
-    private void EndTrackedWrite()
-    {
-        lock (_timerLock)
-        {
-            if (Interlocked.Decrement(ref _inFlightWrites) == 0)
-                _writesIdle.Set();
-        }
-    }
-
-    private TimeSpan ComputeRetryDelay(int consecutiveFailures)
-    {
-        if (consecutiveFailures <= 0)
-            return _debounceDelay;
-
-        var baseDelay = _debounceDelay > TimeSpan.Zero ? _debounceDelay : TimeSpan.FromMilliseconds(500);
-        var cap = baseDelay > MaxRetryBackoff ? baseDelay : MaxRetryBackoff;
-        int shift = Math.Min(consecutiveFailures, 20);
-        double scaledMs = baseDelay.TotalMilliseconds * (1 << shift);
-        return scaledMs >= cap.TotalMilliseconds ? cap : TimeSpan.FromMilliseconds(scaledMs);
-    }
-
-    private TimeSpan RecordFailureAndComputeDelay(ref int failureCounter)
-    {
-        if (failureCounter < 30)
-            failureCounter++;
-        return ComputeRetryDelay(failureCounter);
-    }
-
-    private TimeSpan RecordKeyFailureAndComputeDelay(Dictionary<string, int> failureMap, string ns)
-    {
-        int failures = failureMap.TryGetValue(ns, out var count) ? count : 0;
-        if (failures < 30)
-            failures++;
-        failureMap[ns] = failures;
-        return ComputeRetryDelay(failures);
-    }
-
     private static string ComputeChecksum(string data)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(data));
-        return Convert.ToHexString(hash);
-    }
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(data)));
 
     private static string NormalizeTenantId(string? tenantId)
         => string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
@@ -338,7 +276,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
                 var checksum = reader.GetString(1);
 
                 if (!VerifyChecksum(json, checksum, $"entry in namespace '{ns}'"))
-                    continue; // Skip corrupted entries
+                    continue;
 
                 var entry = JsonSerializer.Deserialize<CognitiveEntry>(json, JsonOptions);
                 if (entry is not null)
@@ -354,20 +292,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
-    /// <summary>
-    /// Every namespace with at least one persisted row. A returned list means the query ran: an
-    /// empty one is a store with no namespaces, never a store that could not be read.
-    ///
-    /// This throws where the other read paths log and degrade, and the asymmetry is deliberate. A
-    /// failed <see cref="LoadNamespace"/> yields one unreadable namespace, and the caller can still
-    /// tell that namespace apart from the rest. A failed listing yields an empty set that is
-    /// indistinguishable from an empty database, and every downstream caller reads it as fact: the
-    /// full-load sweep would mark itself complete over it, leaving persisted entries invisible for
-    /// the life of the process. Invisible entries are not merely missing — an unlisted twin makes a
-    /// duplicated id look unique, so the tenant-wide duplicate test that topology fails closed on
-    /// passes instead.
-    /// </summary>
-    /// <exception cref="NamespaceEnumerationException">The listing query failed.</exception>
     public IReadOnlyList<string> GetPersistedNamespaces()
     {
         try
@@ -384,8 +308,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
         catch (Exception ex)
         {
-            // Logged here with the full backend detail and rethrown without it: the wrapper's
-            // message reaches callers, and a SqliteException's does not.
             _logger?.LogWarning(ex, "Error listing namespaces from SQLite");
             throw new NamespaceEnumerationException(ex);
         }
@@ -393,10 +315,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
     public List<GraphEdge> LoadGlobalEdges() => LoadGlobalData<List<GraphEdge>>("edges") ?? new();
     public List<SemanticCluster> LoadClusters() => LoadGlobalData<List<SemanticCluster>>("clusters") ?? new();
+
     public List<CollapseRecord> LoadCollapseHistory()
     {
-        // LENIENT boot load still validates RAW rows so an explicit tenant null or an unknown
-        // future field cannot be normalized away and later laundered by a record RMW.
         try
         {
             using var conn = OpenConnection();
@@ -427,10 +348,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
     public Dictionary<string, DecayConfig> LoadDecayConfigs()
     {
         var list = LoadGlobalData<List<DecayConfig>>("decay_configs");
-        // Key by the (tenant, ns) partition so two tenants can each hold a config for the same
-        // namespace without colliding. Legacy configs (tenant "") key on the bare ns as before.
-        // A store poisoned before partition-component validation existed must still boot, so the
-        // shared builder resolves a colliding pair rather than throwing on a duplicate key.
         return NamespaceStore.DecayConfigsByPartition(list, _logger);
     }
 
@@ -467,6 +384,9 @@ public sealed class SqliteStorageProvider : IStorageProvider
         => LoadGlobalData<HnswSnapshot>($"hnsw_{ns}");
 
     public void SaveHnswSnapshotSync(string ns, HnswSnapshot snapshot)
+        => _ = TrySaveHnswSnapshotSync(ns, snapshot);
+
+    private bool TrySaveHnswSnapshotSync(string ns, HnswSnapshot snapshot)
     {
         try
         {
@@ -482,230 +402,323 @@ public sealed class SqliteStorageProvider : IStorageProvider
             cmd.Parameters.AddWithValue("@json", json);
             cmd.Parameters.AddWithValue("@checksum", checksum);
             cmd.ExecuteNonQuery();
+            return true;
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to save HNSW snapshot for namespace '{Namespace}'", ns);
+            return false;
         }
     }
+
+    public void ScheduleSaveHnswSnapshot(string ns, Func<HnswSnapshot?> snapshotProvider)
+        => _coordinator.ScheduleHnswSave(ns, snapshotProvider);
 
     public void DeleteHnswSnapshot(string ns)
     {
+        _coordinator.FlushGate.Wait();
         try
         {
-            using var conn = OpenConnection();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "DELETE FROM global_data WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", $"hnsw_{ns}");
-            cmd.ExecuteNonQuery();
+            _coordinator.CancelHnswSave(ns);
+            try
+            {
+                using var conn = OpenConnection();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM global_data WHERE key = @key";
+                cmd.Parameters.AddWithValue("@key", $"hnsw_{ns}");
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to delete HNSW snapshot for namespace '{Namespace}'", ns);
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            _logger?.LogError(ex, "Failed to delete HNSW snapshot for namespace '{Namespace}'", ns);
+            _coordinator.FlushGate.Release();
         }
     }
 
-    // ── Save methods (debounced) ──
+    // ── Debounced save scheduling (delegated to DebouncedStorageCoordinator) ──
+
+    public bool SupportsIncrementalWrites => true;
 
     public void ScheduleSave(string ns, Func<NamespaceData> dataProvider)
-        => ScheduleSaveCore(ns, dataProvider, delayOverride: null);
-
-    private void ScheduleSaveCore(string ns, Func<NamespaceData> dataProvider, TimeSpan? delayOverride)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
-
-            if (_pendingNsSaves.TryGetValue(ns, out var existing))
-                existing.Timer.Dispose();
-
-            var dueTime = delayOverride ?? _debounceDelay;
-            ITimer? timer = null;
-            timer = TimerProvider.CreateTimer(_ =>
-            {
-                // CAPTURE AND WRITE both inside the flush gate: capturing outside let this
-                // callback hold an older snapshot at the gate while a newer flush committed,
-                // then write the older one over it -- commit order inverting capture order.
-                // A failed write is RETAINED (newer-wins) rather than dropped with a log line.
-                _flushGate.Wait();
-                try
-                {
-                    Func<NamespaceData>? provider = null;
-                    lock (_timerLock)
-                    {
-                        if (_pendingNsSaves.TryGetValue(ns, out var entry)
-                            && ReferenceEquals(entry.Timer, timer))
-                        {
-                            provider = entry.DataProvider;
-                            entry.Timer.Dispose();
-                            _pendingNsSaves.Remove(ns);
-                            // SUBSUMPTION at the point of commitment — see TryFlushCore's
-                            // part 1: this full save materializes the live state, which
-                            // already contains every change the pending increments for this
-                            // namespace describe. Left queued, a frozen increment firing
-                            // AFTER this commit would overwrite fresher rows with stale
-                            // values; dropped here, a FAILED full save still re-subsumes
-                            // them through its retained (re-materializing) retry.
-                            _pendingEntryUpserts.Remove(ns);
-                            _pendingEntryDeletes.Remove(ns);
-                            if (_incrementalTimers.Remove(ns, out var incTimer))
-                                incTimer.Dispose();
-                            _incrementalFailures.Remove(ns);
-                        }
-                    }
-                    if (provider is not null)
-                    {
-                        if (WriteNamespace(ns, provider))
-                        {
-                            lock (_timerLock) { _nsSaveFailures.Remove(ns); }
-                        }
-                        else
-                        {
-                            lock (_timerLock)
-                            {
-                                if (_disposed)
-                                    _logger?.LogError("Pending write for namespace '{Namespace}' dropped: provider disposed during a failed timer write", ns);
-                                else if (!_pendingNsSaves.ContainsKey(ns))
-                                    ScheduleSaveCore(ns, provider, RecordKeyFailureAndComputeDelay(_nsSaveFailures, ns));
-                            }
-                        }
-                    }
-                }
-                finally
-                {
-                    _flushGate.Release();
-                }
-            }, null, dueTime, Timeout.InfiniteTimeSpan);
-
-            _pendingNsSaves[ns] = (timer, dataProvider);
-        }
-    }
+        => _coordinator.ScheduleSave(ns, dataProvider);
 
     public void SaveNamespaceSync(string ns, NamespaceData data)
     {
         WriteNamespaceData(ns, data);
-        lock (_timerLock) { _nsSaveFailures.Remove(ns); }
+        _coordinator.ResetNamespaceFailure(ns);
     }
 
-    // ── Incremental writes ──
-
-    /// <summary>SQLite supports per-entry incremental writes via INSERT OR REPLACE.</summary>
-    public bool SupportsIncrementalWrites => true;
-
-    /// <summary>Schedule a debounced upsert of a single entry.</summary>
     public void ScheduleUpsertEntry(string ns, CognitiveEntry entry)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
+        => _coordinator.ScheduleUpsertEntry(ns, entry);
 
-            if (!_pendingEntryUpserts.TryGetValue(ns, out var upserts))
-            {
-                upserts = new();
-                _pendingEntryUpserts[ns] = upserts;
-            }
-            var key = new EntryStorageKey(entry.TenantId, entry.Id);
-            upserts[key] = entry;
-
-            // Cancel any pending delete for this entry
-            if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
-            {
-                deletes.Remove(key);
-                if (deletes.Count == 0)
-                    _pendingEntryDeletes.Remove(ns);
-            }
-
-            ScheduleIncrementalFlush(ns, delayOverride: null);
-        }
-    }
-
-    /// <summary>Schedule a debounced delete of a single entry.</summary>
     public void ScheduleDeleteEntry(string ns, string entryId)
-        => ScheduleDeleteEntry(ns, entryId, string.Empty);
+        => _coordinator.ScheduleDeleteEntry(ns, entryId, string.Empty);
 
-    /// <summary>Schedule a debounced delete of one tenant-scoped entry.</summary>
     public void ScheduleDeleteEntry(string ns, string entryId, string tenantId)
+        => _coordinator.ScheduleDeleteEntry(ns, entryId, tenantId);
+
+    public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
+        => _coordinator.ScheduleSaveGlobalEdges(dataProvider);
+
+    public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider)
+        => _coordinator.ScheduleSaveClusters(dataProvider);
+
+    public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider)
+        => _coordinator.ScheduleSaveDecayConfigs(dataProvider);
+
+    // ── Collapse history synchronous CAS RMW ──
+
+    public bool UpsertCollapseRecordSync(CollapseRecord record)
     {
-        lock (_timerLock)
+        if (CollapseRecordShape.Describe(record) is { } defect)
         {
-            if (_disposed) return;
+            _logger?.LogError("Collapse-history upsert refused: {Defect}", defect);
+            return false;
+        }
+        return MutateCollapseHistorySync(records =>
+        {
+            records.RemoveAll(r => r.CollapseId == record.CollapseId);
+            records.Add(record);
+            return true;
+        });
+    }
 
-            var key = new EntryStorageKey(NormalizeTenantId(tenantId), entryId);
+    public bool DeleteCollapseRecordSync(string collapseId)
+        => MutateCollapseHistorySync(records => records.RemoveAll(r => r.CollapseId == collapseId) > 0);
 
-            if (!_pendingEntryDeletes.TryGetValue(ns, out var deletes))
+    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration)
+    {
+        var outcome = CollapseRecordCas.StoreFailed;
+        bool storeAgrees = MutateCollapseHistorySync(records =>
+        {
+            var current = records.FirstOrDefault(r => r.CollapseId == collapseId);
+            if (current is null) { outcome = CollapseRecordCas.AlreadyAbsent; return false; }
+            if (current.Generation != onlyIfGeneration) { outcome = CollapseRecordCas.GenerationMoved; return false; }
+            records.RemoveAll(r => r.CollapseId == collapseId);
+            outcome = CollapseRecordCas.Applied;
+            return true;
+        });
+        return storeAgrees ? outcome : CollapseRecordCas.StoreFailed;
+    }
+
+    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration)
+    {
+        if (CollapseRecordShape.Describe(record) is { } defect)
+        {
+            _logger?.LogError("Conditional collapse-history upsert refused: {Defect}", defect);
+            return CollapseRecordCas.StoreFailed;
+        }
+        var outcome = CollapseRecordCas.StoreFailed;
+        bool storeAgrees = MutateCollapseHistorySync(records =>
+        {
+            var current = records.FirstOrDefault(r => r.CollapseId == record.CollapseId);
+            if (current is null && onlyIfGeneration is not null) { outcome = CollapseRecordCas.AlreadyAbsent; return false; }
+            if (current is not null && (onlyIfGeneration is null || current.Generation != onlyIfGeneration.Value)) { outcome = CollapseRecordCas.GenerationMoved; return false; }
+            records.RemoveAll(r => r.CollapseId == record.CollapseId);
+            records.Add(record);
+            outcome = CollapseRecordCas.Applied;
+            return true;
+        });
+        return storeAgrees ? outcome : CollapseRecordCas.StoreFailed;
+    }
+
+    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record)
+    {
+        record = null;
+        if (!TryReadCollapseHistory(out var records))
+            return false;
+        record = records.FirstOrDefault(r => r.CollapseId == collapseId);
+        return true;
+    }
+
+    public bool TryReadCollapseHistory(out List<CollapseRecord> records)
+    {
+        records = new List<CollapseRecord>();
+        try
+        {
+            using var conn = OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT json_data, checksum FROM global_data WHERE key = @key";
+            cmd.Parameters.AddWithValue("@key", "collapse_history");
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
             {
-                deletes = new();
-                _pendingEntryDeletes[ns] = deletes;
+                var json = reader.GetString(0);
+                var checksum = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (checksum is not null && !VerifyChecksum(json, checksum, "collapse_history"))
+                {
+                    _logger?.LogWarning("Strict collapse-record read refused: content does not match its stored checksum");
+                    return false;
+                }
+                if (!CollapseRecordShape.TryDeserializeStrict(
+                        json, JsonOptions, out records, out var defect))
+                {
+                    _logger?.LogWarning("Strict collapse-record read refused: {Defect}", defect);
+                    records = new List<CollapseRecord>();
+                    return false;
+                }
             }
-            deletes.Add(key);
-
-            // Cancel any pending upsert for this entry
-            if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
-            {
-                upserts.Remove(key);
-                if (upserts.Count == 0)
-                    _pendingEntryUpserts.Remove(ns);
-            }
-
-            ScheduleIncrementalFlush(ns, delayOverride: null);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Strict collapse-record read failed; existence reported as unknown");
+            return false;
         }
     }
 
-    /// <summary>Schedule or reset a debounce timer for incremental writes on a namespace. Must be called under _timerLock.</summary>
-    private void ScheduleIncrementalFlush(string ns, TimeSpan? delayOverride)
+    private bool MutateCollapseHistorySync(Func<List<CollapseRecord>, bool> mutate)
     {
-        if (_incrementalTimers.TryGetValue(ns, out var existing))
-            existing.Dispose();
+        if (!_coordinator.TryBeginTrackedExternalWrite())
+            return false;
 
-        var dueTime = delayOverride ?? _debounceDelay;
-        ITimer? selfRef = null;
-        selfRef = TimerProvider.CreateTimer(_ =>
+        bool committed = false;
+        try
         {
-            // The WHOLE capture-and-write runs under the flush gate: a TryFlush interleaving
-            // between this callback's capture and its commit could otherwise retain a batch
-            // this write supersedes -- or this write could land, stale, over state the flush
-            // just vouched for. A failed write feeds the same retention the flush uses instead
-            // of being dropped with a log line.
-            _flushGate.Wait();
+            using var conn = OpenConnection();
+            using var tx = conn.BeginTransaction();
+
+            List<CollapseRecord> records;
             try
             {
-                Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
-                HashSet<EntryStorageKey>? deletes = null;
-
-                lock (_timerLock)
+                using var readCmd = conn.CreateCommand();
+                readCmd.Transaction = tx;
+                readCmd.CommandText = "SELECT json_data, checksum FROM global_data WHERE key = @key";
+                readCmd.Parameters.AddWithValue("@key", "collapse_history");
+                using var reader = readCmd.ExecuteReader();
+                if (reader.Read())
                 {
-                    // Validate ownership BEFORE taking the batch, not just before removal.
-                    if (!_incrementalTimers.TryGetValue(ns, out var current)
-                        || !ReferenceEquals(current, selfRef)) return;
-
-                    if (_pendingEntryUpserts.Remove(ns, out var u) && u.Count > 0)
-                        upserts = u;
-                    if (_pendingEntryDeletes.Remove(ns, out var d) && d.Count > 0)
-                        deletes = d;
-                    current.Dispose();
-                    _incrementalTimers.Remove(ns);
-                }
-
-                if (WriteIncrementalChanges(ns, upserts, deletes))
-                {
-                    lock (_timerLock) { _incrementalFailures.Remove(ns); }
+                    var json = reader.GetString(0);
+                    var storedChecksum = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    if (storedChecksum is not null && !VerifyChecksum(json, storedChecksum, "collapse_history"))
+                    {
+                        _logger?.LogError("Collapse-history record write refused: content does not match its stored checksum");
+                        return false;
+                    }
+                    if (!CollapseRecordShape.TryDeserializeStrict(
+                            json, JsonOptions, out records, out var defect))
+                    {
+                        _logger?.LogError("Collapse-history record write refused: {Defect}", defect);
+                        return false;
+                    }
                 }
                 else
                 {
-                    RetainIncrementalBatch(ns, upserts, deletes);
+                    records = new List<CollapseRecord>();
                 }
             }
-            finally
+            catch (Exception ex)
             {
-                _flushGate.Release();
+                _logger?.LogError(ex, "Collapse-history record write refused: the current set could not be read");
+                return false;
             }
-        }, null, dueTime, Timeout.InfiniteTimeSpan);
-        _incrementalTimers[ns] = selfRef;
+
+            if (!mutate(records))
+                return true;
+
+            OnBeforeCollapseCommit?.Invoke();
+
+            var serialized = JsonSerializer.Serialize(records, JsonOptions);
+            var checksum = ComputeChecksum(serialized);
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT OR REPLACE INTO global_data (key, json_data, checksum)
+                VALUES (@key, @json, @checksum)
+                """;
+            cmd.Parameters.AddWithValue("@key", "collapse_history");
+            cmd.Parameters.AddWithValue("@json", serialized);
+            cmd.Parameters.AddWithValue("@checksum", checksum);
+            cmd.ExecuteNonQuery();
+            tx.Commit();
+            committed = true;
+        }
+        catch (Exception ex)
+        {
+            if (!committed)
+            {
+                _logger?.LogError(ex, "Synchronous collapse-history save failed; transaction rolled back");
+                return false;
+            }
+            _logger?.LogWarning(ex, "Post-commit teardown failed after collapse-history save; the commit stands");
+        }
+        finally
+        {
+            _coordinator.EndTrackedWrite();
+        }
+
+        return true;
     }
 
-    /// <summary>Write batched incremental changes in a single transaction.</summary>
-    private bool WriteIncrementalChanges(string ns,
-        Dictionary<EntryStorageKey, CognitiveEntry>? upserts, HashSet<EntryStorageKey>? deletes)
+    // ── Write implementations ──
+
+    private bool WriteNamespace(string ns, Func<NamespaceData> provider)
+    {
+        try
+        {
+            var data = provider();
+            WriteNamespaceData(ns, data);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save namespace '{Namespace}' to SQLite", ns);
+            return false;
+        }
+    }
+
+    private void WriteNamespaceData(string ns, NamespaceData data)
+    {
+        using var conn = OpenConnection();
+        using var transaction = conn.BeginTransaction();
+        try
+        {
+            using var deleteCmd = conn.CreateCommand();
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM entries WHERE ns = @ns";
+            deleteCmd.Parameters.AddWithValue("@ns", ns);
+            deleteCmd.ExecuteNonQuery();
+
+            using var insertCmd = conn.CreateCommand();
+            insertCmd.Transaction = transaction;
+            insertCmd.CommandText = "INSERT INTO entries (tenant_id, id, ns, json_data, checksum, lifecycle_state) VALUES (@tenant, @id, @ns, @json, @checksum, @state)";
+            var tenantParam = insertCmd.Parameters.Add("@tenant", SqliteType.Text);
+            var idParam = insertCmd.Parameters.Add("@id", SqliteType.Text);
+            var nsParam = insertCmd.Parameters.Add("@ns", SqliteType.Text);
+            var jsonParam = insertCmd.Parameters.Add("@json", SqliteType.Text);
+            var checksumParam = insertCmd.Parameters.Add("@checksum", SqliteType.Text);
+            var stateParam = insertCmd.Parameters.Add("@state", SqliteType.Text);
+            insertCmd.Prepare();
+
+            foreach (var entry in data.Entries)
+            {
+                var json = JsonSerializer.Serialize(entry, JsonOptions);
+                tenantParam.Value = entry.TenantId;
+                idParam.Value = entry.Id;
+                nsParam.Value = ns;
+                jsonParam.Value = json;
+                checksumParam.Value = ComputeChecksum(json);
+                stateParam.Value = entry.LifecycleState;
+                insertCmd.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    private bool WriteIncrementalChanges(
+        string ns,
+        Dictionary<EntryStorageKey, CognitiveEntry>? upserts,
+        HashSet<EntryStorageKey>? deletes)
     {
         if ((upserts is null || upserts.Count == 0) && (deletes is null || deletes.Count == 0))
             return true;
@@ -777,594 +790,11 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
-    public void ScheduleSaveGlobalEdges(Func<List<GraphEdge>> dataProvider)
-        => ScheduleSaveGlobalEdgesCore(dataProvider, delayOverride: null);
-
-    private void ScheduleSaveGlobalEdgesCore(Func<List<GraphEdge>> dataProvider, TimeSpan? delayOverride)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
-            _pendingEdgeTimer?.Dispose();
-            _pendingEdgeProvider = dataProvider;
-            var dueTime = delayOverride ?? _debounceDelay;
-            ITimer? timer = null;
-            timer = TimerProvider.CreateTimer(_ =>
-            {
-                _flushGate.Wait();
-                try
-                {
-                    Func<List<GraphEdge>>? provider;
-                    lock (_timerLock)
-                    {
-                        // Only the current timer can consume or rearm this slot.
-                        if (!ReferenceEquals(_pendingEdgeTimer, timer)) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            _pendingEdgeTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
-                            return;
-                        }
-                        provider = _pendingEdgeProvider;
-                        _pendingEdgeProvider = null;
-                        _pendingEdgeTimer?.Dispose();
-                        _pendingEdgeTimer = null;
-                    }
-                    if (provider is null) return;
-
-                    // Snapshot providers may acquire graph/cluster/index locks. Let
-                    // their holders schedule entries while capture waits for them.
-                    bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
-                    lock (_timerLock)
-                    {
-                        if (_pendingEdgeProvider is not null) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            // Dispose waits on _flushGate and will drain this provider.
-                            if (_disposed)
-                                _pendingEdgeProvider = provider;
-                            else
-                                ScheduleSaveGlobalEdgesCore(provider, _debounceDelay);
-                            return;
-                        }
-                        if (!captured)
-                        {
-                            if (_disposed)
-                                _pendingEdgeProvider = provider;
-                            else
-                                ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
-                            return;
-                        }
-                    }
-
-                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
-                    // against flush/dispose by _flushGate).
-                    if (WriteGlobalData("edges", () => snapshot!))
-                    {
-                        lock (_timerLock) { _edgeSaveFailures = 0; }
-                    }
-                    else
-                    {
-                        lock (_timerLock)
-                        {
-                            if (_pendingEdgeProvider is not null) return;
-                            if (_disposed)
-                                _pendingEdgeProvider = provider;
-                            else
-                                ScheduleSaveGlobalEdgesCore(provider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
-                        }
-                    }
-                }
-                finally
-                {
-                    _flushGate.Release();
-                }
-            }, null, dueTime, Timeout.InfiniteTimeSpan);
-            _pendingEdgeTimer = timer;
-        }
-    }
-
-    public void ScheduleSaveClusters(Func<List<SemanticCluster>> dataProvider)
-        => ScheduleSaveClustersCore(dataProvider, delayOverride: null);
-
-    private void ScheduleSaveClustersCore(Func<List<SemanticCluster>> dataProvider, TimeSpan? delayOverride)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
-            _pendingClusterTimer?.Dispose();
-            _pendingClusterProvider = dataProvider;
-            var dueTime = delayOverride ?? _debounceDelay;
-            ITimer? timer = null;
-            timer = TimerProvider.CreateTimer(_ =>
-            {
-                _flushGate.Wait();
-                try
-                {
-                    Func<List<SemanticCluster>>? provider;
-                    lock (_timerLock)
-                    {
-                        // Only the current timer can consume or rearm this slot.
-                        if (!ReferenceEquals(_pendingClusterTimer, timer)) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            _pendingClusterTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
-                            return;
-                        }
-                        provider = _pendingClusterProvider;
-                        _pendingClusterProvider = null;
-                        _pendingClusterTimer?.Dispose();
-                        _pendingClusterTimer = null;
-                    }
-                    if (provider is null) return;
-
-                    // Snapshot providers may acquire graph/cluster/index locks. Let
-                    // their holders schedule entries while capture waits for them.
-                    bool captured = StorageSnapshot.TryCapture(provider, _logger, out var snapshot);
-                    lock (_timerLock)
-                    {
-                        if (_pendingClusterProvider is not null) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            // Dispose waits on _flushGate and will drain this provider.
-                            if (_disposed)
-                                _pendingClusterProvider = provider;
-                            else
-                                ScheduleSaveClustersCore(provider, _debounceDelay);
-                            return;
-                        }
-                        if (!captured)
-                        {
-                            if (_disposed)
-                                _pendingClusterProvider = provider;
-                            else
-                                ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
-                            return;
-                        }
-                    }
-
-                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
-                    // against flush/dispose by _flushGate).
-                    if (WriteGlobalData("clusters", () => snapshot!))
-                    {
-                        lock (_timerLock) { _clusterSaveFailures = 0; }
-                    }
-                    else
-                    {
-                        lock (_timerLock)
-                        {
-                            if (_pendingClusterProvider is not null) return;
-                            if (_disposed)
-                                _pendingClusterProvider = provider;
-                            else
-                                ScheduleSaveClustersCore(provider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
-                        }
-                    }
-                }
-                finally
-                {
-                    _flushGate.Release();
-                }
-            }, null, dueTime, Timeout.InfiniteTimeSpan);
-            _pendingClusterTimer = timer;
-        }
-    }
-
-
-    // CROSS-QUEUE CAUSAL ORDER on the timer path — the graph-level callbacks (edges,
-    // clusters, decay) call this under _timerLock and DEFER while any entry-level work is
-    // pending or retained: a cluster or edge save references entries by id, and committing
-    // it while an entry write sits failed-and-retained, then crashing, reloads durable
-    // topology naming entries that never became durable — the exact window TryFlushCore's
-    // part 2 refuses, re-opened 500ms later by its own retention without this check.
-    // Sustained entry traffic defers graph saves rather than dropping them; a TryFlush
-    // always drains both levels in order.
-    private bool HasPendingEntryLevelWork()
-    {
-        if (_pendingNsSaves.Count > 0) return true;
-        foreach (var u in _pendingEntryUpserts.Values)
-            if (u.Count > 0) return true;
-        foreach (var d in _pendingEntryDeletes.Values)
-            if (d.Count > 0) return true;
-        return false;
-    }
-
-    /// <summary>Record-level synchronous collapse-history writes — see <see cref="IStorageProvider"/>.</summary>
-    public bool UpsertCollapseRecordSync(CollapseRecord record)
-    {
-        if (CollapseRecordShape.Describe(record) is { } defect)
-        {
-            _logger?.LogError("Collapse-history upsert refused: {Defect}", defect);
-            return false;
-        }
-        return MutateCollapseHistorySync(records =>
-        {
-            records.RemoveAll(r => r.CollapseId == record.CollapseId);
-            records.Add(record);
-            return true;
-        });
-    }
-
-    public bool DeleteCollapseRecordSync(string collapseId)
-        => MutateCollapseHistorySync(records => records.RemoveAll(r => r.CollapseId == collapseId) > 0);
-
-    /// <summary>
-    /// The generation-compared delete — compare and removal one atom inside the same backend
-    /// transaction as the unconditional read-modify-writes. See
-    /// <see cref="IStorageProvider.DeleteCollapseRecordSync(string, long)"/>.
-    /// </summary>
-    public CollapseRecordCas DeleteCollapseRecordSync(string collapseId, long onlyIfGeneration)
-    {
-        var outcome = CollapseRecordCas.StoreFailed;
-        // MutateCollapseHistorySync reports "the store now agrees with the mutate outcome" —
-        // true for a committed change AND for a no-op refusal (AlreadyAbsent/GenerationMoved,
-        // where the mutate callback returns false and nothing is written). False means the
-        // store failed to read or commit, which overrides whatever the callback decided.
-        bool storeAgrees = MutateCollapseHistorySync(records =>
-        {
-            var current = records.FirstOrDefault(r => r.CollapseId == collapseId);
-            if (current is null) { outcome = CollapseRecordCas.AlreadyAbsent; return false; }
-            if (current.Generation != onlyIfGeneration) { outcome = CollapseRecordCas.GenerationMoved; return false; }
-            records.RemoveAll(r => r.CollapseId == collapseId);
-            outcome = CollapseRecordCas.Applied;
-            return true;
-        });
-        return storeAgrees ? outcome : CollapseRecordCas.StoreFailed;
-    }
-
-    /// <summary>
-    /// The generation-compared upsert — compare and write one atom inside the same backend
-    /// transaction. See <see cref="IStorageProvider.UpsertCollapseRecordSync(CollapseRecord, long?)"/>.
-    /// </summary>
-    public CollapseRecordCas UpsertCollapseRecordSync(CollapseRecord record, long? onlyIfGeneration)
-    {
-        if (CollapseRecordShape.Describe(record) is { } defect)
-        {
-            _logger?.LogError("Conditional collapse-history upsert refused: {Defect}", defect);
-            return CollapseRecordCas.StoreFailed;
-        }
-        var outcome = CollapseRecordCas.StoreFailed;
-        bool storeAgrees = MutateCollapseHistorySync(records =>
-        {
-            var current = records.FirstOrDefault(r => r.CollapseId == record.CollapseId);
-            // NULL expected = must be absent; a NUMBER (0 included -- legacy records carry a
-            // real generation 0) must match a RESIDENT record. See the interface contract.
-            if (current is null && onlyIfGeneration is not null) { outcome = CollapseRecordCas.AlreadyAbsent; return false; }
-            if (current is not null && (onlyIfGeneration is null || current.Generation != onlyIfGeneration.Value)) { outcome = CollapseRecordCas.GenerationMoved; return false; }
-            records.RemoveAll(r => r.CollapseId == record.CollapseId);
-            records.Add(record);
-            outcome = CollapseRecordCas.Applied;
-            return true;
-        });
-        return storeAgrees ? outcome : CollapseRecordCas.StoreFailed;
-    }
-
-    /// <summary>
-    /// Strict single-record read — a failed or checksum-refuted read REFUSES (false) rather
-    /// than reporting the record absent, because <see cref="LoadCollapseHistory"/> deliberately
-    /// degrades to an empty list and a verification caller must be able to tell "gone" from
-    /// "unreadable".
-    /// </summary>
-    public bool TryReadCollapseRecord(string collapseId, out CollapseRecord? record)
-    {
-        record = null;
-        if (!TryReadCollapseHistory(out var records))
-            return false;
-        record = records.FirstOrDefault(r => r.CollapseId == collapseId);
-        return true;
-    }
-
-    /// <summary>Strict full-set read — see <see cref="IStorageProvider.TryReadCollapseHistory"/>.
-    /// Same checksum discipline as the single-record read.</summary>
-    public bool TryReadCollapseHistory(out List<CollapseRecord> records)
-    {
-        records = new List<CollapseRecord>();
-        try
-        {
-            using var conn = OpenConnection();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT json_data, checksum FROM global_data WHERE key = @key";
-            cmd.Parameters.AddWithValue("@key", "collapse_history");
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
-            {
-                var json = reader.GetString(0);
-                var checksum = reader.IsDBNull(1) ? null : reader.GetString(1);
-                if (checksum is not null && !VerifyChecksum(json, checksum, "collapse_history"))
-                {
-                    _logger?.LogWarning("Strict collapse-record read refused: content does not match its stored checksum");
-                    return false;
-                }
-                if (!CollapseRecordShape.TryDeserializeStrict(
-                        json, JsonOptions, out records, out var defect))
-                {
-                    _logger?.LogWarning("Strict collapse-record read refused: {Defect}", defect);
-                    records = new List<CollapseRecord>();
-                    return false;
-                }
-            }
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Strict collapse-record read failed; existence reported as unknown");
-            return false;
-        }
-    }
-
-    // Read-modify-write inside ONE BACKEND TRANSACTION on one connection — BEGIN IMMEDIATE, so
-    // SQLite itself serializes the whole read-modify-write against every other writer of this
-    // database: another connection, another provider instance under a differently-spelled
-    // connection string, another OS process. A process-local gate keyed by the connection
-    // string could not say that — two equivalent spellings got two gates, and two processes
-    // shared none — and the two-connection read-then-write it guarded let both readers see the
-    // old set and last-write-wins erase a record. The read is STRICT (throws are refusals,
-    // never treated as an empty set — committing over an unreadable set would erase records
-    // this caller never saw), the write is direct rather than WriteGlobalData (which swallows
-    // backend errors by design while a write-ahead receipt caller has to know), and the report
-    // is commit-precise: only a failure BEFORE Commit reports false — the transaction then
-    // rolled back and the store is unchanged; a post-commit teardown exception cannot flip a
-    // commit the store already accepted into a rollback signal. A lock-contention timeout
-    // (SQLITE_BUSY) surfaces as an honest false the same way: nothing was committed.
-    private bool MutateCollapseHistorySync(Func<List<CollapseRecord>, bool> mutate)
-    {
-        // Gate first, tracking second (matching PersistenceManager): bounds the in-flight
-        // drain in Dispose()/TryFlush() so CheckpointWal() and teardown cannot race an active
-        // collapse-history transaction.
-        _flushGate.Wait();
-        try
-        {
-            lock (_timerLock)
-            {
-                if (_disposed) return false;
-                BeginTrackedWrite();
-            }
-        }
-        finally
-        {
-            _flushGate.Release();
-        }
-
-        bool committed = false;
-        try
-        {
-            using var conn = OpenConnection();
-            // Not deferred: takes SQLite's write lock at BEGIN, before the read, so the set
-            // this transaction reads is the set its commit replaces.
-            using var tx = conn.BeginTransaction();
-
-            List<CollapseRecord> records;
-            try
-            {
-                using var readCmd = conn.CreateCommand();
-                readCmd.Transaction = tx;
-                readCmd.CommandText = "SELECT json_data, checksum FROM global_data WHERE key = @key";
-                readCmd.Parameters.AddWithValue("@key", "collapse_history");
-                using var reader = readCmd.ExecuteReader();
-                if (reader.Read())
-                {
-                    var json = reader.GetString(0);
-                    var storedChecksum = reader.IsDBNull(1) ? null : reader.GetString(1);
-                    // Tampered-but-valid JSON under a stale checksum must be REFUSED, not
-                    // deserialized and then normalized (re-checksummed) by this commit.
-                    if (storedChecksum is not null && !VerifyChecksum(json, storedChecksum, "collapse_history"))
-                    {
-                        _logger?.LogError("Collapse-history record write refused: content does not match its stored checksum");
-                        return false;
-                    }
-                    if (!CollapseRecordShape.TryDeserializeStrict(
-                            json, JsonOptions, out records, out var defect))
-                    {
-                        _logger?.LogError("Collapse-history record write refused: {Defect}", defect);
-                        return false;
-                    }
-                }
-                else
-                {
-                    records = new List<CollapseRecord>();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Collapse-history record write refused: the current set could not be read");
-                return false;
-            }
-
-            // A mutate that changed nothing (deleting an absent record, refusing a
-            // generation compare) commits nothing and reports agreement: rewriting
-            // identical content would turn "the store already agrees" into a fallible
-            // write for nothing.
-            if (!mutate(records))
-                return true;
-
-            OnBeforeCollapseCommit?.Invoke();
-
-            var serialized = JsonSerializer.Serialize(records, JsonOptions);
-            var checksum = ComputeChecksum(serialized);
-            using var cmd = conn.CreateCommand();
-            cmd.Transaction = tx;
-            cmd.CommandText = """
-                INSERT OR REPLACE INTO global_data (key, json_data, checksum)
-                VALUES (@key, @json, @checksum)
-                """;
-            cmd.Parameters.AddWithValue("@key", "collapse_history");
-            cmd.Parameters.AddWithValue("@json", serialized);
-            cmd.Parameters.AddWithValue("@checksum", checksum);
-            cmd.ExecuteNonQuery();
-            tx.Commit();
-            committed = true;
-        }
-        catch (Exception ex)
-        {
-            if (!committed)
-            {
-                _logger?.LogError(ex, "Synchronous collapse-history save failed; transaction rolled back");
-                return false;
-            }
-            _logger?.LogWarning(ex, "Post-commit teardown failed after collapse-history save; the commit stands");
-        }
-        finally
-        {
-            EndTrackedWrite();
-        }
-
-        return true;
-    }
-
-    public void ScheduleSaveDecayConfigs(Func<Dictionary<string, DecayConfig>> dataProvider)
-        => ScheduleSaveDecayConfigsCore(dataProvider, delayOverride: null);
-
-    private void ScheduleSaveDecayConfigsCore(Func<Dictionary<string, DecayConfig>> dataProvider, TimeSpan? delayOverride)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
-            _pendingDecayConfigTimer?.Dispose();
-            _pendingDecayConfigProvider = dataProvider;
-            var dueTime = delayOverride ?? _debounceDelay;
-            ITimer? timer = null;
-            timer = TimerProvider.CreateTimer(_ =>
-            {
-                _flushGate.Wait();
-                try
-                {
-                    Func<Dictionary<string, DecayConfig>>? provider;
-                    lock (_timerLock)
-                    {
-                        // Only the current timer can consume or rearm this slot.
-                        if (!ReferenceEquals(_pendingDecayConfigTimer, timer)) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            _pendingDecayConfigTimer?.Change(_debounceDelay, Timeout.InfiniteTimeSpan);
-                            return;
-                        }
-                        provider = _pendingDecayConfigProvider;
-                        _pendingDecayConfigProvider = null;
-                        _pendingDecayConfigTimer?.Dispose();
-                        _pendingDecayConfigTimer = null;
-                    }
-                    if (provider is null) return;
-
-                    // Snapshot providers may acquire graph/cluster/index locks. Let
-                    // their holders schedule entries while capture waits for them.
-                    bool captured = StorageSnapshot.TryCapture(() => provider().Values.ToList(), _logger, out var snapshot);
-                    lock (_timerLock)
-                    {
-                        if (_pendingDecayConfigProvider is not null) return;
-                        if (HasPendingEntryLevelWork())
-                        {
-                            // Dispose waits on _flushGate and will drain this provider.
-                            if (_disposed)
-                                _pendingDecayConfigProvider = provider;
-                            else
-                                ScheduleSaveDecayConfigsCore(provider, _debounceDelay);
-                            return;
-                        }
-                        if (!captured)
-                        {
-                            if (_disposed)
-                                _pendingDecayConfigProvider = provider;
-                            else
-                                ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
-                            return;
-                        }
-                    }
-
-                    // Run blocking SQLite I/O strictly outside _timerLock (still serialized
-                    // against flush/dispose by _flushGate).
-                    if (WriteGlobalData("decay_configs", () => snapshot!))
-                    {
-                        lock (_timerLock) { _decayConfigSaveFailures = 0; }
-                    }
-                    else
-                    {
-                        lock (_timerLock)
-                        {
-                            if (_pendingDecayConfigProvider is not null) return;
-                            if (_disposed)
-                                _pendingDecayConfigProvider = provider;
-                            else
-                                ScheduleSaveDecayConfigsCore(provider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
-                        }
-                    }
-                }
-                finally
-                {
-                    _flushGate.Release();
-                }
-            }, null, dueTime, Timeout.InfiniteTimeSpan);
-            _pendingDecayConfigTimer = timer;
-        }
-    }
-
-    // ── Write implementations ──
-
-    private bool WriteNamespace(string ns, Func<NamespaceData> provider)
-    {
-        try
-        {
-            var data = provider();
-            WriteNamespaceData(ns, data);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save namespace '{Namespace}' to SQLite", ns);
-            return false;
-        }
-    }
-
-    private void WriteNamespaceData(string ns, NamespaceData data)
-    {
-        using var conn = OpenConnection();
-        using var transaction = conn.BeginTransaction();
-        try
-        {
-            // Delete existing entries for this namespace
-            using var deleteCmd = conn.CreateCommand();
-            deleteCmd.Transaction = transaction;
-            deleteCmd.CommandText = "DELETE FROM entries WHERE ns = @ns";
-            deleteCmd.Parameters.AddWithValue("@ns", ns);
-            deleteCmd.ExecuteNonQuery();
-
-            // Insert all entries
-            using var insertCmd = conn.CreateCommand();
-            insertCmd.Transaction = transaction;
-            insertCmd.CommandText = "INSERT INTO entries (tenant_id, id, ns, json_data, checksum, lifecycle_state) VALUES (@tenant, @id, @ns, @json, @checksum, @state)";
-            var tenantParam = insertCmd.Parameters.Add("@tenant", SqliteType.Text);
-            var idParam = insertCmd.Parameters.Add("@id", SqliteType.Text);
-            var nsParam = insertCmd.Parameters.Add("@ns", SqliteType.Text);
-            var jsonParam = insertCmd.Parameters.Add("@json", SqliteType.Text);
-            var checksumParam = insertCmd.Parameters.Add("@checksum", SqliteType.Text);
-            var stateParam = insertCmd.Parameters.Add("@state", SqliteType.Text);
-            insertCmd.Prepare();
-
-            foreach (var entry in data.Entries)
-            {
-                var json = JsonSerializer.Serialize(entry, JsonOptions);
-                tenantParam.Value = entry.TenantId;
-                idParam.Value = entry.Id;
-                nsParam.Value = ns;
-                jsonParam.Value = json;
-                checksumParam.Value = ComputeChecksum(json);
-                stateParam.Value = entry.LifecycleState;
-                insertCmd.ExecuteNonQuery();
-            }
-
-            transaction.Commit();
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
-    }
-
-    private bool WriteGlobalData<T>(string key, Func<T> provider)
+    private bool WriteGlobalData<T>(string key, T data)
     {
         try
         {
             OnBeforeGlobalWrite?.Invoke(key);
-            var data = provider();
             var json = JsonSerializer.Serialize(data, JsonOptions);
             var checksum = ComputeChecksum(json);
 
@@ -1387,23 +817,14 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
     }
 
-    /// <summary>Delete all entries in a namespace from the SQLite database.</summary>
+    // ── Namespace deletion ──
+
     public async Task DeleteNamespaceAsync(string ns)
     {
-        await _flushGate.WaitAsync().ConfigureAwait(false);
+        await _coordinator.FlushGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            lock (_timerLock)
-            {
-                if (_pendingNsSaves.Remove(ns, out var pendingNs))
-                    pendingNs.Timer.Dispose();
-                if (_incrementalTimers.Remove(ns, out var incTimer))
-                    incTimer.Dispose();
-                _pendingEntryUpserts.Remove(ns);
-                _pendingEntryDeletes.Remove(ns);
-                _nsSaveFailures.Remove(ns);
-                _incrementalFailures.Remove(ns);
-            }
+            _coordinator.CancelAllPendingForNamespaceUnlockedByGate(ns);
 
             using var conn = await OpenConnectionAsync().ConfigureAwait(false);
             using var tx = await conn.BeginTransactionAsync().ConfigureAwait(false);
@@ -1431,51 +852,18 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
         finally
         {
-            _flushGate.Release();
+            _coordinator.FlushGate.Release();
         }
     }
 
-    /// <summary>Delete exactly one tenant + namespace partition.</summary>
     public async Task DeleteNamespaceAsync(string ns, string tenantId)
     {
         tenantId = NormalizeTenantId(tenantId);
-        await _flushGate.WaitAsync().ConfigureAwait(false);
+        await _coordinator.FlushGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            Func<NamespaceData>? pendingNsProvider = null;
-            lock (_timerLock)
-            {
-                if (_pendingNsSaves.Remove(ns, out var pendingNs))
-                {
-                    pendingNs.Timer.Dispose();
-                    pendingNsProvider = pendingNs.DataProvider;
-                }
-                _nsSaveFailures.Remove(ns);
+            _coordinator.CancelTenantPendingForNamespaceUnlockedByGate(ns, tenantId, out var pendingNsProvider);
 
-                if (_pendingEntryUpserts.TryGetValue(ns, out var upserts))
-                {
-                    var matchingKeys = upserts.Keys.Where(k => k.TenantId == tenantId).ToList();
-                    foreach (var k in matchingKeys)
-                        upserts.Remove(k);
-                    if (upserts.Count == 0)
-                        _pendingEntryUpserts.Remove(ns);
-                }
-                if (_pendingEntryDeletes.TryGetValue(ns, out var deletes))
-                {
-                    deletes.RemoveWhere(k => k.TenantId == tenantId);
-                    if (deletes.Count == 0)
-                        _pendingEntryDeletes.Remove(ns);
-                }
-                if (!_pendingEntryUpserts.ContainsKey(ns) && !_pendingEntryDeletes.ContainsKey(ns))
-                {
-                    if (_incrementalTimers.Remove(ns, out var incTimer))
-                        incTimer.Dispose();
-                    _incrementalFailures.Remove(ns);
-                }
-            }
-
-            // Preserve any pending full-save entries belonging to other tenants before deleting
-            // this tenant's partition so cancelling the full-save timer cannot drop peer tenants.
             if (pendingNsProvider is not null
                 && StorageSnapshot.TryCapture(pendingNsProvider, _logger, out var pendingData)
                 && pendingData is not null)
@@ -1522,7 +910,7 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
         finally
         {
-            _flushGate.Release();
+            _coordinator.FlushGate.Release();
         }
     }
 
@@ -1530,420 +918,14 @@ public sealed class SqliteStorageProvider : IStorageProvider
 
     public void Flush() => TryFlush();
 
-    // Serializes whole flushes, timer commits, and namespace deletions: two concurrent
-    // TryFlush calls could otherwise interleave so that the LATER capture commits first and
-    // the earlier capture's FAILED batch is then retained and re-flushed over it — a stale
-    // resurrection. Deliberately not disposed on Dispose() (no OS wait handle is allocated)
-    // so late timer callbacks queued before disposal exit cleanly without ObjectDisposedException.
-    private readonly SemaphoreSlim _flushGate = new(1, 1);
-
-    /// <summary>Flush and REPORT — see <see cref="IStorageProvider.TryFlush"/>: true only when
-    /// every pending write committed; failed batches are retained and re-scheduled.</summary>
-    public bool TryFlush()
-    {
-        _flushGate.Wait();
-        try
-        {
-            return TryFlushCore(refuseWhenDisposed: true);
-        }
-        finally
-        {
-            _flushGate.Release();
-        }
-    }
-
-    private bool TryFlushCore(bool refuseWhenDisposed)
-    {
-        // A PUBLIC flush after Dispose refuses rather than vouching: the pending slots were
-        // drained by Dispose's own final flush, and a true here would claim durability from
-        // a provider that no longer accepts work. Dispose's own flush passes false — it set
-        // the flag itself. Mirrors PersistenceManager.TryFlushCore.
-        if (refuseWhenDisposed)
-        {
-            lock (_timerLock)
-            {
-                if (_disposed) return false;
-            }
-        }
-
-        // A graph slot refilled between our materialization and this drain is deliberately
-        // LEFT for its own timer — resurrecting an older snapshot over it would invert capture
-        // order. But it is still pending work this flush did not commit, and the contract is
-        // "true only when all of them committed", so the vouch must be withheld. The comment
-        // below already claimed this; nothing enforced it.
-        bool supersededDuringDrain = false;
-        List<(string Ns, Func<NamespaceData> Provider)> pendingNs;
-        List<(string Ns, Dictionary<EntryStorageKey, CognitiveEntry>? Upserts, HashSet<EntryStorageKey>? Deletes)> pendingIncremental;
-        Func<List<GraphEdge>>? edgeProvider;
-        Func<List<SemanticCluster>>? clusterProvider;
-        Func<Dictionary<string, DecayConfig>>? decayConfigProvider;
-
-        // CROSS-QUEUE CAUSAL ORDER, part 3 — the graph-level payloads are MATERIALIZED
-        // BEFORE the entry queues are drained. Entry changes apply to memory and schedule
-        // their writes in one atom, so everything a payload materialized HERE can reference
-        // was scheduled before the drain below and commits with this flush's entry phase —
-        // where a payload materialized at write time (after the drain) could name entries
-        // whose writes were scheduled post-drain and remain pending: committed topology
-        // naming uncommitted entries across a crash. A provider REPLACED between this read
-        // and the drain stays pending (its newer payload commits on its own schedule) and
-        // the stale materialization is discarded.
-        Func<List<GraphEdge>>? edgeProviderRef;
-        Func<List<SemanticCluster>>? clusterProviderRef;
-        Func<Dictionary<string, DecayConfig>>? decayProviderRef;
-        lock (_timerLock)
-        {
-            edgeProviderRef = _pendingEdgeProvider;
-            clusterProviderRef = _pendingClusterProvider;
-            decayProviderRef = _pendingDecayConfigProvider;
-        }
-        List<GraphEdge>? edgeData = null;
-        List<SemanticCluster>? clusterData = null;
-        List<DecayConfig>? decayData = null;
-        bool edgeMaterialized = false, clusterMaterialized = false, decayMaterialized = false;
-        try { if (edgeProviderRef is not null) { edgeData = edgeProviderRef(); edgeMaterialized = true; } } catch (Exception ex) { _logger?.LogError(ex, "Edge payload materialization failed; the pending save is retained"); }
-        try { if (clusterProviderRef is not null) { clusterData = clusterProviderRef(); clusterMaterialized = true; } } catch (Exception ex) { _logger?.LogError(ex, "Cluster payload materialization failed; the pending save is retained"); }
-        try { if (decayProviderRef is not null) { decayData = decayProviderRef().Values.ToList(); decayMaterialized = true; } } catch (Exception ex) { _logger?.LogError(ex, "Decay-config payload materialization failed; the pending save is retained"); }
-
-        lock (_timerLock)
-        {
-            pendingNs = _pendingNsSaves
-                .Select(kv => (kv.Key, kv.Value.DataProvider))
-                .ToList();
-            foreach (var (_, (timer, _)) in _pendingNsSaves)
-                timer.Dispose();
-            _pendingNsSaves.Clear();
-
-            // Collect pending incremental writes and remove empty namespace keys so
-            // HasPendingEntryLevelWork() never iterates leaked empty entries.
-            pendingIncremental = new();
-            var incrementalNs = new HashSet<string>(_pendingEntryUpserts.Keys);
-            foreach (var k in _pendingEntryDeletes.Keys)
-                incrementalNs.Add(k);
-            foreach (var ns in incrementalNs)
-            {
-                Dictionary<EntryStorageKey, CognitiveEntry>? upserts = null;
-                HashSet<EntryStorageKey>? deletes = null;
-
-                if (_pendingEntryUpserts.Remove(ns, out var u) && u.Count > 0)
-                    upserts = u;
-                if (_pendingEntryDeletes.Remove(ns, out var d) && d.Count > 0)
-                    deletes = d;
-                if (upserts is not null || deletes is not null)
-                    pendingIncremental.Add((ns, upserts, deletes));
-            }
-            foreach (var (_, timer) in _incrementalTimers)
-                timer.Dispose();
-            _incrementalTimers.Clear();
-
-            // Drain a graph slot only while it still holds the provider whose payload was
-            // materialized above; a newer schedule keeps its slot (and its own timer) and
-            // this flush does not vouch for it.
-            if (ReferenceEquals(_pendingEdgeProvider, edgeProviderRef))
-            {
-                edgeProvider = _pendingEdgeProvider;
-                _pendingEdgeProvider = null;
-                _pendingEdgeTimer?.Dispose();
-                _pendingEdgeTimer = null;
-            }
-            // Something newer is queued there and this flush is not committing
-            // it — record that so the report stays honest.
-            else { edgeProvider = null; supersededDuringDrain |= _pendingEdgeProvider is not null; }
-
-            if (ReferenceEquals(_pendingClusterProvider, clusterProviderRef))
-            {
-                clusterProvider = _pendingClusterProvider;
-                _pendingClusterProvider = null;
-                _pendingClusterTimer?.Dispose();
-                _pendingClusterTimer = null;
-            }
-            // Something newer is queued there and this flush is not committing
-            // it — record that so the report stays honest.
-            else { clusterProvider = null; supersededDuringDrain |= _pendingClusterProvider is not null; }
-
-            if (ReferenceEquals(_pendingDecayConfigProvider, decayProviderRef))
-            {
-                decayConfigProvider = _pendingDecayConfigProvider;
-                _pendingDecayConfigProvider = null;
-                _pendingDecayConfigTimer?.Dispose();
-                _pendingDecayConfigTimer = null;
-            }
-            // Something newer is queued there and this flush is not committing
-            // it — record that so the report stays honest.
-            else { decayConfigProvider = null; supersededDuringDrain |= _pendingDecayConfigProvider is not null; }
-        }
-
-        bool allCommitted = !supersededDuringDrain;
-
-        // CROSS-QUEUE CAUSAL ORDER, part 1 — incremental batches and full-namespace saves
-        // for the SAME namespace never both commit: a batch whose namespace also has a
-        // pending full save is SUBSUMED and skipped outright — not written, not retained.
-        // The full save's provider MATERIALIZES the live state when invoked
-        // (NamespaceStore.ScheduleSave builds its snapshot at invoke time — the contract
-        // this relies on), and every change a captured batch describes was applied to
-        // memory before it was scheduled, so the materialization contains it. Writing the
-        // batch anyway would be harmless now but fatal on FAILURE: a retained frozen batch
-        // firing after the full save committed would overwrite fresher rows with stale
-        // values — and if the full save itself fails, its retained retry re-materializes
-        // and still subsumes the dropped batch. Batches with no pending full save commit
-        // first, before any full save of OTHER namespaces, keeping entry-level work ahead
-        // of the graph-level writes below.
-        var fullSaveNs = new HashSet<string>();
-        foreach (var (ns, _) in pendingNs)
-            fullSaveNs.Add(ns);
-        var unsubsumedBatchFailures = new HashSet<string>();
-        foreach (var (ns, upserts, deletes) in pendingIncremental)
-        {
-            // The subsumption skip is bypassed on the DISPOSE flush (refuseWhenDisposed is
-            // false only there): with no later retry possible, a skipped batch whose full
-            // save then fails is simply lost, where writing it first gives the data an
-            // independent commit chance — and batch-before-full-save within ONE flush is
-            // the safe order (the full save re-materializes and wins).
-            if (refuseWhenDisposed && fullSaveNs.Contains(ns))
-                continue;
-            if (WriteIncrementalChanges(ns, upserts, deletes))
-            {
-                lock (_timerLock) { _incrementalFailures.Remove(ns); }
-            }
-            else
-            {
-                // Deferred verdict: a same-ns full save committing below SUBSUMES this
-                // failure (its materialization contains everything the batch held), and the
-                // flush must not withhold the graph-level saves over data that is in fact
-                // durable.
-                unsubsumedBatchFailures.Add(ns);
-                RetainIncrementalBatch(ns, upserts, deletes);
-            }
-        }
-
-        foreach (var (ns, provider) in pendingNs)
-        {
-            if (!WriteNamespace(ns, provider))
-            {
-                allCommitted = false;
-                // Newer-wins retention: the (reentrant) lock makes the emptiness check and the
-                // re-schedule one atom, so a snapshot scheduled since the drain supersedes the
-                // failed (older) one instead of being clobbered by it. At dispose, the drop is
-                // logged explicitly -- nobody is left to retry.
-                lock (_timerLock)
-                {
-                    if (_disposed)
-                        _logger?.LogError("Pending write for namespace '{Namespace}' dropped: provider disposed during a failed flush", ns);
-                    else if (!_pendingNsSaves.ContainsKey(ns))
-                        ScheduleSaveCore(ns, provider, RecordKeyFailureAndComputeDelay(_nsSaveFailures, ns));
-                }
-            }
-            else
-            {
-                lock (_timerLock)
-                {
-                    _nsSaveFailures.Remove(ns);
-                    _incrementalFailures.Remove(ns);
-                }
-                unsubsumedBatchFailures.Remove(ns);
-            }
-        }
-        if (unsubsumedBatchFailures.Count > 0)
-            allCommitted = false;
-
-        // CROSS-QUEUE CAUSAL ORDER, part 2 — the graph-level saves (edges, clusters, decay)
-        // commit only when every ENTRY-level write above committed. A cluster or edge save
-        // references entries by id (a cluster's SummaryEntryId in particular), so committing
-        // it over a failed-and-retained entry write, then crashing, reloads durable topology
-        // naming entries that never became durable. On failure they are RETAINED unattempted
-        // through their own re-schedule paths and the flush reports false.
-        if (!allCommitted)
-        {
-            lock (_timerLock)
-            {
-                if (_disposed)
-                {
-                    if (edgeProvider is not null) _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
-                    if (clusterProvider is not null) _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
-                    if (decayConfigProvider is not null) _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed flush");
-                }
-                else
-                {
-                    if (edgeProvider is not null && _pendingEdgeProvider is null) ScheduleSaveGlobalEdgesCore(edgeProvider, _debounceDelay);
-                    if (clusterProvider is not null && _pendingClusterProvider is null) ScheduleSaveClustersCore(clusterProvider, _debounceDelay);
-                    if (decayConfigProvider is not null && _pendingDecayConfigProvider is null) ScheduleSaveDecayConfigsCore(decayConfigProvider, _debounceDelay);
-                }
-            }
-            _writesIdle.Wait();
-            return false;
-        }
-
-        if (edgeProvider is not null)
-        {
-            if (edgeMaterialized && WriteGlobalData("edges", () => edgeData!))
-            {
-                lock (_timerLock) { _edgeSaveFailures = 0; }
-            }
-            else
-            {
-                allCommitted = false;
-                lock (_timerLock)
-                {
-                    if (_disposed)
-                        _logger?.LogError("Pending global-edges write dropped: provider disposed during a failed flush");
-                    else if (_pendingEdgeProvider is null)
-                        ScheduleSaveGlobalEdgesCore(edgeProvider, RecordFailureAndComputeDelay(ref _edgeSaveFailures));
-                }
-            }
-        }
-
-        if (clusterProvider is not null)
-        {
-            if (clusterMaterialized && WriteGlobalData("clusters", () => clusterData!))
-            {
-                lock (_timerLock) { _clusterSaveFailures = 0; }
-            }
-            else
-            {
-                allCommitted = false;
-                lock (_timerLock)
-                {
-                    if (_disposed)
-                        _logger?.LogError("Pending clusters write dropped: provider disposed during a failed flush");
-                    else if (_pendingClusterProvider is null)
-                        ScheduleSaveClustersCore(clusterProvider, RecordFailureAndComputeDelay(ref _clusterSaveFailures));
-                }
-            }
-        }
-
-        if (decayConfigProvider is not null)
-        {
-            // The materialized payload commits (see part 3 above); a materialization
-            // failure is a failed write — retained like one.
-            if (decayMaterialized && WriteGlobalData("decay_configs", () => decayData!))
-            {
-                lock (_timerLock) { _decayConfigSaveFailures = 0; }
-            }
-            else
-            {
-                allCommitted = false;
-                lock (_timerLock)
-                {
-                    if (_disposed)
-                        _logger?.LogError("Pending decay-config write dropped: provider disposed during a failed flush");
-                    else if (_pendingDecayConfigProvider is null)
-                        ScheduleSaveDecayConfigsCore(decayConfigProvider, RecordFailureAndComputeDelay(ref _decayConfigSaveFailures));
-                }
-            }
-        }
-
-        // Wait for any in-flight synchronous collapse-history RMWs to finish before returning.
-        _writesIdle.Wait();
-
-        // FINAL LINEARIZATION CHECKPOINT. Schedule calls publish under _timerLock, so at this
-        // instant every write queued before the checkpoint is either committed above or visible
-        // here. In particular, an entry queued while a blocked backend write was in progress may
-        // not hide behind a successful report; it remains pending and makes this flush return
-        // false. Work scheduled after this lock is released is ordered after the checkpoint.
-        lock (_timerLock)
-        {
-            if (HasPendingEntryLevelWork()
-                || _pendingEdgeProvider is not null
-                || _pendingClusterProvider is not null
-                || _pendingDecayConfigProvider is not null)
-            {
-                allCommitted = false;
-            }
-        }
-        return allCommitted;
-    }
-
-    // Put a failed incremental batch BACK into the pending queues (newer pending entries win —
-    // they were written after the failed batch was captured) and re-arm the debounce, so a
-    // failed flush retains the writes for a later attempt instead of dropping them.
-    private void RetainIncrementalBatch(string ns,
-        Dictionary<EntryStorageKey, CognitiveEntry>? upserts, HashSet<EntryStorageKey>? deletes)
-    {
-        lock (_timerLock)
-        {
-            if (_disposed)
-            {
-                _logger?.LogError("Pending incremental batch for namespace '{Namespace}' dropped: provider disposed during a failed flush", ns);
-                return;
-            }
-
-            if (upserts is not null && upserts.Count > 0)
-            {
-                _pendingEntryUpserts.TryGetValue(ns, out var u);
-                foreach (var (key, entry) in upserts)
-                {
-                    if ((u is null || !u.ContainsKey(key))
-                        && !(_pendingEntryDeletes.TryGetValue(ns, out var dd) && dd.Contains(key)))
-                    {
-                        if (u is null)
-                            _pendingEntryUpserts[ns] = u = new();
-                        u[key] = entry;
-                    }
-                }
-            }
-            if (deletes is not null && deletes.Count > 0)
-            {
-                _pendingEntryDeletes.TryGetValue(ns, out var d);
-                foreach (var key in deletes)
-                {
-                    if (!(_pendingEntryUpserts.TryGetValue(ns, out var uu) && uu.ContainsKey(key)))
-                    {
-                        if (d is null)
-                            _pendingEntryDeletes[ns] = d = new();
-                        d.Add(key);
-                    }
-                }
-            }
-
-            bool hasPendingForNs = (_pendingEntryUpserts.TryGetValue(ns, out var cu) && cu.Count > 0)
-                || (_pendingEntryDeletes.TryGetValue(ns, out var cd) && cd.Count > 0);
-            if (hasPendingForNs)
-                ScheduleIncrementalFlush(ns, RecordKeyFailureAndComputeDelay(_incrementalFailures, ns));
-        }
-    }
+    public bool TryFlush() => _coordinator.TryFlush();
 
     public void Dispose()
     {
-        lock (_timerLock)
-        {
-            if (_disposed) return;
-            _disposed = true;
-        }
-        // The disposing thread's own final flush — bypasses the post-dispose refusal it
-        // itself armed; see TryFlushCore. Also drains any in-flight synchronous collapse-history
-        // writes before CheckpointWal() runs.
-        _flushGate.Wait();
-        try
-        {
-            TryFlushCore(refuseWhenDisposed: false);
-            _writesIdle.Wait();
-        }
-        finally
-        {
-            _flushGate.Release();
-        }
+        _coordinator.Dispose();
         CheckpointWal();
-        _writesIdle.Dispose();
     }
 
-    /// <summary>
-    /// Fold the write-ahead log back into the main database and truncate it, so a
-    /// shutdown leaves a self-contained file rather than a database plus a multi-megabyte
-    /// <c>-wal</c> sidecar.
-    ///
-    /// Why this is needed at all: SQLite checkpoints and removes the WAL when the *last*
-    /// connection closes, and this provider opens a connection per operation — so in
-    /// principle that happens constantly. In practice <c>Microsoft.Data.Sqlite</c> pools
-    /// connections by default, so the native handle stays open and the "last close" never
-    /// arrives. Measured: after 4,000 scheduled upserts the WAL sits at ~4 MB and is still
-    /// ~4 MB after <see cref="Dispose"/> without this call.
-    ///
-    /// Note this is about tidiness on shutdown, not durability or unbounded growth. During
-    /// normal operation SQLite's automatic checkpoint (every 1,000 pages) holds the WAL to a
-    /// steady ~4 MB no matter how many writes follow — measured flat from 1,000 through
-    /// 4,000 writes — so no periodic checkpoint policy is warranted. Committed data is never
-    /// at risk either way: an un-checkpointed WAL is replayed when the database is next
-    /// opened. That is also why failure here is logged rather than thrown.
-    /// </summary>
     private void CheckpointWal()
     {
         try
@@ -1955,7 +937,6 @@ public sealed class SqliteStorageProvider : IStorageProvider
         }
         catch (Exception ex)
         {
-            // Never let shutdown fail over housekeeping. The WAL is replayed on next open.
             _logger?.LogWarning(ex,
                 "WAL checkpoint on shutdown failed; the write-ahead log will be replayed when the database is next opened.");
         }

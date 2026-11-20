@@ -18,6 +18,12 @@ public sealed class NamespaceRegistry
 
     private const string PermissionCategory = "ns-permission";
 
+    private sealed record PermissionRecord(
+        string Ns,
+        string Owner,
+        IReadOnlyList<ShareGrant> SharedWith,
+        IReadOnlyList<string> DerivedSources);
+
     private static readonly JsonSerializerOptions GrantsJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
@@ -66,7 +72,7 @@ public sealed class NamespaceRegistry
 
         lock (LockFor(ns, tenantId: tenantId))
         {
-            var permission = GetPermission(ns, tenantId)
+            var permission = GetPermissionRecord(ns, tenantId)
                              ?? RegisterLegacyOwnerUnlocked(ns, ownerAgentId, tenantId);
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, accessLevel);
@@ -74,6 +80,18 @@ public sealed class NamespaceRegistry
             // Check ownership (only legacy-unisolated default agent bypasses ownership checks for backward compat)
             if (permission.Owner != ownerAgentId && !IsLegacyDefault(ownerAgentId, tenantId))
                 return new ShareResult("error_not_owner", ns, targetAgentId, accessLevel);
+
+            // Prevent permission laundering: a namespace carrying content derived from foreign-owned
+            // source namespaces cannot be shared with a principal who lacks read access to every
+            // restricted source namespace.
+            if (permission.DerivedSources.Count > 0 && !IsLegacyDefault(ownerAgentId, tenantId))
+            {
+                foreach (var sourceNs in permission.DerivedSources)
+                {
+                    if (!HasAccess(targetAgentId, sourceNs, requiredLevel: "read", tenantId: tenantId))
+                        return new ShareResult("error_derived_restricted", ns, targetAgentId, accessLevel);
+                }
+            }
 
             // Update sharing list
             var grants = permission.SharedWith.ToList();
@@ -83,7 +101,7 @@ public sealed class NamespaceRegistry
             else
                 grants.Add(new ShareGrant(targetAgentId, accessLevel));
 
-            SavePermission(ns, permission.Owner, grants, tenantId);
+            SavePermission(ns, permission.Owner, grants, tenantId, permission.DerivedSources);
             return new ShareResult("shared", ns, targetAgentId, accessLevel);
         }
     }
@@ -99,7 +117,7 @@ public sealed class NamespaceRegistry
 
         lock (LockFor(ns, tenantId: tenantId))
         {
-            var permission = GetPermission(ns, tenantId);
+            var permission = GetPermissionRecord(ns, tenantId);
             if (permission is null)
                 return new ShareResult("error_not_found", ns, targetAgentId, "none");
 
@@ -109,9 +127,260 @@ public sealed class NamespaceRegistry
                 return new ShareResult("error_not_owner", ns, targetAgentId, "none");
 
             var grants = permission.SharedWith.Where(g => g.AgentId != targetAgentId).ToList();
-            SavePermission(ns, permission.Owner, grants, tenantId);
+            SavePermission(ns, permission.Owner, grants, tenantId, permission.DerivedSources);
             return new ShareResult("unshared", ns, targetAgentId, "none");
         }
+    }
+
+    /// <summary>
+    /// Side-effect-free write-access check: returns true if <paramref name="agentId"/> is allowed
+    /// to write to <paramref name="ns"/> (including claiming it if currently unregistered and empty),
+    /// WITHOUT mutating <c>_system_sharing</c>. Use during input validation and dry-run paths,
+    /// then call <see cref="TryAcquireWriteAccess"/> immediately before performing the validated write.
+    /// </summary>
+    public bool CanWriteWithoutClaiming(string agentId, string ns, string tenantId)
+    {
+        if (IsLegacyDefault(agentId, tenantId))
+            return true;
+
+        if (string.IsNullOrEmpty(ns) || ns.StartsWith('_'))
+            return false;
+
+        var permission = GetPermissionRecord(ns, tenantId);
+        if (permission is null)
+            return _index.GetAllInNamespace(ns, tenantId: Tenancy.Normalize(tenantId)).Count == 0;
+
+        if (permission.Owner == agentId)
+            return true;
+
+        return permission.SharedWith.Any(g => g.AgentId == agentId && g.AccessLevel == "write");
+    }
+
+    /// <summary>
+    /// Atomically verify write access and claim ownership if <paramref name="ns"/> is unregistered
+    /// and empty. Call immediately before committing a validated write.
+    /// </summary>
+    public bool TryAcquireWriteAccess(string agentId, string ns, string tenantId)
+        => HasAccess(agentId, ns, requiredLevel: "write", tenantId: tenantId);
+
+    /// <summary>
+    /// Returns true if <paramref name="agentId"/> is the recorded owner of <paramref name="ns"/>
+    /// (or is the legacy-unisolated default principal). Returns false for shared-only grantees.
+    /// </summary>
+    public bool IsOwner(string agentId, string ns, string tenantId)
+    {
+        if (IsLegacyDefault(agentId, tenantId))
+            return true;
+
+        if (string.IsNullOrEmpty(ns) || ns.StartsWith('_'))
+            return false;
+
+        var permission = GetPermissionRecord(ns, tenantId);
+        return permission is not null && permission.Owner == agentId;
+    }
+
+    /// <summary>
+    /// Remove the <c>_system_sharing</c> permission entry for <paramref name="ns"/> if and only if
+    /// the namespace currently holds zero entries in <paramref name="tenantId"/>. Prevents orphaned
+    /// sharing records from accumulating when temporary namespaces (e.g. debates) are purged.
+    /// </summary>
+    public bool TryRemoveEmptyNamespacePermission(string ns, string tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(ns) || ns.StartsWith('_'))
+            return false;
+
+        tenantId = Tenancy.Normalize(tenantId);
+        lock (LockFor(ns, tenantId: tenantId))
+        {
+            if (GetPermissionRecord(ns, tenantId) is null)
+                return false;
+
+            if (_index.GetAllInNamespace(ns, tenantId: tenantId).Count != 0)
+                return false;
+
+            return _index.Delete(PermissionEntryId(ns, tenantId), SystemNamespace, tenantId: "");
+        }
+    }
+
+    /// <summary>
+    /// Return the restricted foreign source namespaces whose content was copied or summarized into
+    /// <paramref name="ns"/>. Empty when <paramref name="ns"/> has no derived-source restrictions.
+    /// </summary>
+    public IReadOnlyList<string> GetDerivedSources(string ns, string tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(ns) || ns.StartsWith('_'))
+            return Array.Empty<string>();
+
+        return GetPermissionRecord(ns, tenantId)?.DerivedSources ?? Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Record restricted foreign source namespaces on <paramref name="ns"/> so it cannot later be
+    /// shared with any agent lacking read access to every listed source namespace.
+    /// </summary>
+    public void AddDerivedSources(string ns, IReadOnlyCollection<string> sourceNamespaces, string tenantId)
+    {
+        if (string.IsNullOrWhiteSpace(ns) || ns.StartsWith('_') || sourceNamespaces is null || sourceNamespaces.Count == 0)
+            return;
+
+        tenantId = Tenancy.Normalize(tenantId);
+        lock (LockFor(ns, tenantId: tenantId))
+        {
+            var permission = GetPermissionRecord(ns, tenantId);
+            if (permission is null)
+                return;
+
+            var merged = new HashSet<string>(permission.DerivedSources, StringComparer.Ordinal);
+            bool changed = false;
+            foreach (var src in sourceNamespaces)
+            {
+                if (!string.IsNullOrWhiteSpace(src) && !src.StartsWith('_') && !string.Equals(src, ns, StringComparison.Ordinal))
+                {
+                    if (merged.Add(src))
+                        changed = true;
+                }
+            }
+
+            if (!changed)
+                return;
+
+            var sorted = merged.OrderBy(s => s, StringComparer.Ordinal).ToList();
+            SavePermission(ns, permission.Owner, permission.SharedWith, tenantId, sorted);
+        }
+    }
+
+    /// <summary>
+    /// Atomically verify write access, verify that every existing non-actor reader of <paramref name="ns"/>
+    /// has read access to every namespace in <paramref name="sourceNamespaces"/>, claim ownership if
+    /// <paramref name="ns"/> is unregistered and empty, and record <paramref name="sourceNamespaces"/>
+    /// in <c>derivedSources</c> under one per-namespace lock — eliminating any TOCTOU window between
+    /// checking recipients and writing derived content.
+    /// </summary>
+    public bool TryAcquireWriteAccessForDerived(
+        string agentId,
+        string ns,
+        IReadOnlyCollection<string>? sourceNamespaces,
+        string tenantId,
+        out bool rejectedByDerivedPolicy)
+    {
+        rejectedByDerivedPolicy = false;
+
+        if (IsLegacyDefault(agentId, tenantId))
+            return true;
+
+        if (string.IsNullOrEmpty(ns) || ns.StartsWith('_'))
+            return false;
+
+        var normalizedSources = sourceNamespaces is { Count: > 0 }
+            ? sourceNamespaces
+                .Where(s => !string.IsNullOrWhiteSpace(s) && !s.StartsWith('_') && !string.Equals(s, ns, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToList()
+            : null;
+
+        tenantId = Tenancy.Normalize(tenantId);
+        lock (LockFor(ns, tenantId: tenantId))
+        {
+            var existing = GetPermissionRecord(ns, tenantId);
+            if (existing is null)
+            {
+                if (_index.GetAllInNamespace(ns, tenantId: tenantId).Count != 0)
+                    return false;
+
+                var sorted = normalizedSources?.OrderBy(s => s, StringComparer.Ordinal).ToList();
+                SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId, sorted);
+                return true;
+            }
+
+            bool canWrite = existing.Owner == agentId ||
+                            existing.SharedWith.Any(grant => grant.AgentId == agentId && grant.AccessLevel == "write");
+            if (!canWrite)
+                return false;
+
+            if (normalizedSources is { Count: > 0 })
+            {
+                var recipients = new HashSet<string>(StringComparer.Ordinal);
+                if (!string.Equals(existing.Owner, agentId, StringComparison.Ordinal))
+                    recipients.Add(existing.Owner);
+                foreach (var grant in existing.SharedWith)
+                {
+                    if (!string.Equals(grant.AgentId, agentId, StringComparison.Ordinal))
+                        recipients.Add(grant.AgentId);
+                }
+
+                foreach (var recipient in recipients)
+                {
+                    foreach (var sourceNs in normalizedSources)
+                    {
+                        if (!HasAccess(recipient, sourceNs, requiredLevel: "read", tenantId: tenantId))
+                        {
+                            rejectedByDerivedPolicy = true;
+                            return false;
+                        }
+                    }
+                }
+
+                var merged = new HashSet<string>(existing.DerivedSources, StringComparer.Ordinal);
+                bool changed = false;
+                foreach (var src in normalizedSources)
+                {
+                    if (merged.Add(src))
+                        changed = true;
+                }
+
+                if (changed)
+                {
+                    var sorted = merged.OrderBy(s => s, StringComparer.Ordinal).ToList();
+                    SavePermission(ns, existing.Owner, existing.SharedWith, tenantId, sorted);
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Verify that every existing reader of <paramref name="ns"/> other than <paramref name="actorAgentId"/>
+    /// (both shared grantees and a non-actor owner) already has read access to every namespace in
+    /// <paramref name="sourceNamespaces"/>. Returns false if writing derived content into
+    /// <paramref name="ns"/> would launder restricted source data to an unauthorized principal.
+    /// </summary>
+    public bool CanAllReadersAccessSources(
+        string ns,
+        string actorAgentId,
+        IReadOnlyCollection<string> sourceNamespaces,
+        string tenantId)
+    {
+        if (sourceNamespaces is null || sourceNamespaces.Count == 0)
+            return true;
+        if (IsLegacyDefault(actorAgentId, tenantId))
+            return true;
+        if (string.IsNullOrWhiteSpace(ns) || ns.StartsWith('_'))
+            return false;
+
+        var permission = GetPermissionRecord(ns, tenantId);
+        if (permission is null)
+            return true; // Unregistered empty namespace has no other readers yet.
+
+        var recipients = new HashSet<string>(StringComparer.Ordinal);
+        if (!string.Equals(permission.Owner, actorAgentId, StringComparison.Ordinal))
+            recipients.Add(permission.Owner);
+        foreach (var grant in permission.SharedWith)
+        {
+            if (!string.Equals(grant.AgentId, actorAgentId, StringComparison.Ordinal))
+                recipients.Add(grant.AgentId);
+        }
+
+        foreach (var recipient in recipients)
+        {
+            foreach (var sourceNs in sourceNamespaces)
+            {
+                if (!HasAccess(recipient, sourceNs, requiredLevel: "read", tenantId: tenantId))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -253,7 +522,7 @@ public sealed class NamespaceRegistry
         }
     }
 
-    private NamespacePermission? GetPermission(string ns, string tenantId)
+    private PermissionRecord? GetPermissionRecord(string ns, string tenantId)
     {
         tenantId = Tenancy.Normalize(tenantId);
         var entryId = PermissionEntryId(ns, tenantId);
@@ -271,7 +540,14 @@ public sealed class NamespaceRegistry
 
         var owner = entry.Metadata.GetValueOrDefault("owner") ?? AgentIdentity.DefaultAgentId;
         var grantsStr = entry.Metadata.GetValueOrDefault("grants") ?? "";
-        return new NamespacePermission(ns, owner, ParseGrants(grantsStr));
+        var derivedStr = entry.Metadata.GetValueOrDefault("derivedSources") ?? "";
+        return new PermissionRecord(ns, owner, ParseGrants(grantsStr), ParseDerivedSources(derivedStr));
+    }
+
+    private NamespacePermission? GetPermission(string ns, string tenantId)
+    {
+        var record = GetPermissionRecord(ns, tenantId);
+        return record is null ? null : new NamespacePermission(record.Ns, record.Owner, record.SharedWith);
     }
 
     /// <summary>
@@ -287,13 +563,13 @@ public sealed class NamespaceRegistry
     /// (or be assigned it administratively), so sharing can never be the act that takes over
     /// pre-existing unregistered content. Caller must hold <see cref="LockFor"/>.
     /// </summary>
-    private NamespacePermission? RegisterLegacyOwnerUnlocked(string ns, string agentId, string tenantId)
+    private PermissionRecord? RegisterLegacyOwnerUnlocked(string ns, string agentId, string tenantId)
     {
         if (agentId != AgentIdentity.DefaultAgentId || Tenancy.Normalize(tenantId).Length != 0)
             return null;
 
-        SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
-        return new NamespacePermission(ns, agentId, Array.Empty<ShareGrant>());
+        SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId, Array.Empty<string>());
+        return new PermissionRecord(ns, agentId, Array.Empty<ShareGrant>(), Array.Empty<string>());
     }
 
     private bool TryClaimEmptyNamespace(string ns, string agentId, string tenantId)
@@ -301,7 +577,7 @@ public sealed class NamespaceRegistry
         tenantId = Tenancy.Normalize(tenantId);
         lock (LockFor(ns, tenantId: tenantId))
         {
-            var existing = GetPermission(ns, tenantId);
+            var existing = GetPermissionRecord(ns, tenantId);
             if (existing is not null)
                 return existing.Owner == agentId ||
                        existing.SharedWith.Any(grant => grant.AgentId == agentId && grant.AccessLevel == "write");
@@ -309,12 +585,17 @@ public sealed class NamespaceRegistry
             if (_index.GetAllInNamespace(ns, tenantId: tenantId).Count != 0)
                 return false;
 
-            SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId);
+            SavePermission(ns, agentId, Array.Empty<ShareGrant>(), tenantId, Array.Empty<string>());
             return true;
         }
     }
 
-    private void SavePermission(string ns, string owner, IReadOnlyList<ShareGrant> grants, string tenantId)
+    private void SavePermission(
+        string ns,
+        string owner,
+        IReadOnlyList<ShareGrant> grants,
+        string tenantId,
+        IReadOnlyList<string>? derivedSources = null)
     {
         tenantId = Tenancy.Normalize(tenantId);
         var entryId = PermissionEntryId(ns, tenantId);
@@ -323,25 +604,48 @@ public sealed class NamespaceRegistry
         var grantsStr = JsonSerializer.Serialize(grants, GrantsJsonOptions);
         var vector = _embedding.Embed($"namespace permission {ns}");
 
+        var metadata = new Dictionary<string, string>
+        {
+            ["ns"] = ns,
+            ["tenantId"] = tenantId,
+            ["owner"] = owner,
+            ["grants"] = grantsStr
+        };
+        if (derivedSources is { Count: > 0 })
+            metadata["derivedSources"] = JsonSerializer.Serialize(derivedSources, GrantsJsonOptions);
+
         var entry = new CognitiveEntry(
             id: entryId,
             vector: vector,
             ns: SystemNamespace,
             text: $"Namespace '{ns}' owned by '{owner}'",
             category: PermissionCategory,
-            metadata: new Dictionary<string, string>
-            {
-                ["ns"] = ns,
-                ["tenantId"] = tenantId,
-                ["owner"] = owner,
-                ["grants"] = grantsStr
-            },
+            metadata: metadata,
             lifecycleState: "ltm")
         {
             IsSummaryNode = true
         };
 
         _index.Upsert(entry);
+    }
+
+    private static IReadOnlyList<string> ParseDerivedSources(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return Array.Empty<string>();
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<List<string>>(raw, GrantsJsonOptions);
+            if (parsed is not null)
+                return parsed.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.Ordinal).ToList();
+        }
+        catch (JsonException)
+        {
+            // Ignore malformed legacy/hand-edited derivedSources metadata.
+        }
+
+        return Array.Empty<string>();
     }
 
     internal static string PermissionEntryId(string ns, string tenantId)

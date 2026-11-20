@@ -360,6 +360,23 @@ internal sealed class NamespaceStore
     public ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)>? GetNamespace(NsKey key)
         => _namespaces.TryGetValue(key, out var entries) ? entries : null;
 
+    /// <summary>
+    /// Return every non-system <c>(TenantId, Namespace)</c> partition currently loaded in memory,
+    /// without triggering <see cref="LoadAll"/> or touching storage.
+    /// </summary>
+    internal IReadOnlyList<(string TenantId, string Namespace)> GetLoadedPartitions()
+    {
+        var result = new List<(string TenantId, string Namespace)>();
+        foreach (var kv in _namespaces)
+        {
+            if (kv.Key.Ns.StartsWith('_'))
+                continue;
+            if (!kv.Value.IsEmpty)
+                result.Add((kv.Key.Tenant, kv.Key.Ns));
+        }
+        return result;
+    }
+
     /// <summary>Get or create the entry dictionary for the legacy-tenant partition of a namespace.</summary>
     public ConcurrentDictionary<string, (CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> GetOrCreateNamespace(string ns)
         => GetOrCreateNamespace(new NsKey(string.Empty, ns));
@@ -713,7 +730,7 @@ internal sealed class NamespaceStore
     /// <summary>
     /// Schedule persistence for a batch of accepted entries within one (tenant, ns) partition.
     /// Incremental providers queue per-entry upserts; snapshot providers schedule one debounced
-    /// namespace save and persist that partition's HNSW snapshot once after the batch completes.
+    /// namespace save and schedule one debounced HNSW snapshot after the batch completes.
     /// </summary>
     public void ScheduleBatchUpsert(NsKey key, IReadOnlyList<CognitiveEntry> entries, bool persistHnsw = true)
     {
@@ -741,7 +758,9 @@ internal sealed class NamespaceStore
         if (_persistence.SupportsIncrementalWrites)
             _persistence.ScheduleDeleteEntry(ns, entryId, tenantId);
         else
+        {
             ScheduleSave(ns, persistHnsw, persistHnsw ? new NsKey(tenantId, ns) : null);
+        }
     }
 
     /// <summary>
@@ -1306,17 +1325,19 @@ internal sealed class NamespaceStore
         // else: snapshot was stale (or missing live entries), HNSW will be lazily rebuilt on first Search or AddToHnsw
     }
 
-    /// <summary>Persist the current HNSW snapshot for exactly one (tenant, ns) partition.</summary>
+    /// <summary>Schedule a debounced HNSW snapshot save for exactly one (tenant, ns) partition.</summary>
     private void PersistHnswPartition(NsKey key)
     {
         if (ContainsPartitionControlChar(key.Tenant) || ContainsPartitionControlChar(key.Ns))
             return;
 
         string pk = ComposeKeyUnchecked(key.Tenant, key.Ns);
-        if (_hnswIndices.TryGetValue(pk, out var idx))
+        if (_hnswIndices.ContainsKey(pk))
         {
-            var snapshot = idx.CreateSnapshot();
-            _persistence.SaveHnswSnapshotSync(pk, snapshot);
+            // Materialize the snapshot lazily on the storage debounce timer (off the partition
+            // write lock) so rapid upserts/deletes coalesce into a single disk/DB write.
+            _persistence.ScheduleSaveHnswSnapshot(pk, () =>
+                _hnswIndices.TryGetValue(pk, out var current) ? current.CreateSnapshot() : null);
         }
     }
 

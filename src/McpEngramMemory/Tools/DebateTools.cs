@@ -61,21 +61,42 @@ public sealed class DebateTools
         var states = ParseStates(includeStates);
         float[] queryVector = _embedding.Embed(problemStatement);
         string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
-        if (!_access.CanWrite(debateNs))
+        if (!_access.CanWriteWithoutClaiming(debateNs))
             return SessionUnavailable(sessionId);
+
+        // Collect every restricted source namespace transitively: both foreign-owned readable
+        // expert namespaces AND any derivedSources already attached to readable expert namespaces
+        // (even ones owned by the caller, blocking multi-hop debate permission laundering).
+        var restrictedSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in experts)
+        {
+            if (string.IsNullOrWhiteSpace(e) || e.StartsWith('_') || !_access.CanRead(e))
+                continue;
+            if (!_access.IsOwner(e))
+                restrictedSet.Add(e);
+            foreach (var transitiveSrc in _access.GetDerivedSources(e))
+                restrictedSet.Add(transitiveSrc);
+        }
+        var restrictedSources = restrictedSet.OrderBy(s => s, StringComparer.Ordinal).ToList();
+        if (restrictedSources.Count > 0 && !_access.CanAllReadersAccessSources(debateNs, restrictedSources))
+        {
+            return $"Error: Cannot write derived content from restricted expert namespace(s) [{string.Join(", ", restrictedSources)}] into '{debateNs}' because existing recipients lack read access to those sources.";
+        }
 
         // Session state is keyed by (tenant, sessionId), so two tenants picking the same sessionId
         // get independent sessions rather than one shared alias table.
         if (!_sessions.TryCreateSession(_access.TenantId, sessionId))
             return $"Error: Session '{sessionId}' already exists. Use a new sessionId or call resolve_debate first.";
 
-        // Bind the volatile session to the same ACL boundary as its persisted nodes.
-        // Re-check after claiming to close a concurrent first-writer race.
-        _access.ClaimOnWrite(debateNs);
-        if (!_access.CanWrite(debateNs))
+        // Atomically bind the volatile session to the ACL boundary AND enforce/attach derivedSources
+        // under one per-namespace lock after all validation succeeds, preventing both pre-validation
+        // ownership grabs and concurrent share TOCTOU races.
+        if (!_access.TryAcquireWriteAccessForDerived(debateNs, restrictedSources, out bool derivedRejected))
         {
             _sessions.RemoveSession(_access.TenantId, sessionId);
-            return SessionUnavailable(sessionId);
+            return derivedRejected
+                ? $"Error: Cannot write derived content from restricted expert namespace(s) [{string.Join(", ", restrictedSources)}] into '{debateNs}' because existing recipients lack read access to those sources."
+                : SessionUnavailable(sessionId);
         }
 
         // Search each expert namespace sequentially — CognitiveIndex.Search uses
@@ -170,7 +191,7 @@ public sealed class DebateTools
             return "Error: At least one edge must be provided.";
 
         string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
-        if (!_access.CanWrite(debateNs))
+        if (!_access.CanWriteWithoutClaiming(debateNs))
             return SessionNotFound(sessionId);
         if (!_sessions.HasSession(_access.TenantId, sessionId))
             return SessionNotFound(sessionId);
@@ -229,18 +250,33 @@ public sealed class DebateTools
             return "Error: targetNamespace must not be empty.";
 
         string debateNs = DebateSessionManager.GetDebateNamespace(sessionId);
-        if (!_access.CanWrite(debateNs))
+        if (!_access.CanWriteWithoutClaiming(debateNs))
             return SessionNotFound(sessionId);
-        if (!_access.CanWrite(targetNamespace))
+        if (!_access.CanWriteWithoutClaiming(targetNamespace))
             return NamespaceAccess.WriteDenied(targetNamespace);
 
-        // Resolve winning node atomically (also validates session exists)
+        // Resolve winning node atomically (also validates session exists) before claiming targetNamespace
         var winningEntryId = _sessions.ResolveAlias(_access.TenantId, sessionId, winningNode);
         if (winningEntryId is null)
         {
             return _sessions.HasSession(_access.TenantId, sessionId)
                 ? $"Error: Winning node {winningNode} not found in session '{sessionId}'."
                 : SessionNotFound(sessionId);
+        }
+
+        // Prevent laundering derived content from restricted source namespaces into a target
+        // namespace whose existing recipients lack read access to those source namespaces.
+        // Include both transitive derivedSources AND debateNs itself when the caller is not
+        // the owner of debateNs (so a shared writer on someone else's debate cannot resolve
+        // it into a namespace visible to third parties who lack access to debateNs).
+        var restrictedSet = new HashSet<string>(_access.GetDerivedSources(debateNs), StringComparer.Ordinal);
+        if (!_access.IsOwner(debateNs))
+            restrictedSet.Add(debateNs);
+        restrictedSet.Remove(targetNamespace);
+        var derivedSources = restrictedSet.OrderBy(s => s, StringComparer.Ordinal).ToList();
+        if (derivedSources.Count > 0 && !_access.CanAllReadersAccessSources(targetNamespace, derivedSources))
+        {
+            return $"Error: Cannot resolve debate derived from restricted source namespace(s) [{string.Join(", ", derivedSources)}] into '{targetNamespace}' because existing recipients of '{targetNamespace}' lack read access to those sources.";
         }
 
         // 1. Store the consensus as a new LTM entry in the target namespace
@@ -255,6 +291,14 @@ public sealed class DebateTools
                 ["resolvedAt"] = DateTimeOffset.UtcNow.ToString("O")
             },
             lifecycleState: "ltm", tenantId: _access.TenantId);
+        // Atomically verify write access, re-check all target readers against derivedSources,
+        // claim targetNamespace if unregistered/empty, and propagate derivedSources BEFORE upsert.
+        if (!_access.TryAcquireWriteAccessForDerived(targetNamespace, derivedSources, out bool resolveDerivedRejected))
+        {
+            return resolveDerivedRejected
+                ? $"Error: Cannot resolve debate derived from restricted source namespace(s) [{string.Join(", ", derivedSources)}] into '{targetNamespace}' because existing recipients of '{targetNamespace}' lack read access to those sources."
+                : NamespaceAccess.WriteDenied(targetNamespace);
+        }
         _index.Upsert(consensusEntry);
         _access.ClaimOnWrite(targetNamespace);
 

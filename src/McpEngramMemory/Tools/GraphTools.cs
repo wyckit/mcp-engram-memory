@@ -173,7 +173,7 @@ public sealed class GraphTools
         [Description("Cosine-similarity threshold above which a pair gets a similar_to edge. Default 0.85 (clear semantic neighbors but not duplicates).")] float threshold = 0.85f,
         [Description("Per-scan safety cap on new edges. Default 1000.")] int maxNewEdges = 1000)
     {
-        if (!_access.CanWrite(ns))
+        if (!_access.CanWriteWithoutClaiming(ns))
             return new AutoLinkResult(ns, 0, 0, 0, 0, false);
         return _autoLink.Scan(ns, threshold, maxNewEdges, tenantId: _access.TenantId);
     }

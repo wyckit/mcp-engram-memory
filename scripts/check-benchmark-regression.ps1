@@ -56,10 +56,10 @@
     Recurse into subdirectories when Path is a directory.
 
 .EXAMPLE
-    ./scripts/check-benchmark-regression.ps1 -Path benchmarks/2026-04-16
+    ./scripts/check-benchmark-regression.ps1 -Path benchmarks/baselines
 
 .EXAMPLE
-    ./scripts/check-benchmark-regression.ps1 -Path benchmarks/2026-04-16/default-v1-vector_rerank.json
+    ./scripts/check-benchmark-regression.ps1 -Path benchmarks/baselines/agent-outcome-v1-baseline.json
 #>
 [CmdletBinding()]
 param(

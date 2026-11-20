@@ -131,7 +131,9 @@ These are *predictions* the benchmark is designed to verify. Running the suite w
 
 Offline proxy + live Ollama (`phi3.5:3.8b`) runs with ablations enabled, after the two
 expert-panel-recommended retrieval fixes landed (`archived-contradicts-skip`,
-`hybrid-gate-at-50`). Full artifacts at `benchmarks/2026-04-18/`.
+`hybrid-gate-at-50`). Historical 2026-04-18 raw JSON artifacts were pruned from git;
+re-run `run_agent_outcome_benchmark` or `run_live_agent_outcome_benchmark` with
+`runAblations=true` to generate fresh artifacts locally.
 
 ### Graph-traversal is the causal mechanism for multi-hop uplift
 

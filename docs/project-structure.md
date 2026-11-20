@@ -72,18 +72,17 @@ tests/
   McpEngramMemory.Tests/        # xUnit v3 test suite (190+ test files across net8.0 / net9.0 / net10.0)
 benchmarks/
   McpEngramMemory.Benchmarks/   # Benchmark harness & statistical regression gate
+  baselines/                    # Pinned baselines for CI regression testing
+  baseline-v1.json              # Sprint 1 baseline (2026-03-07)
+  baseline-*.json               # Additional pinned IR baselines
+  2026-04-27/                   # Historical spectral retrieval v0.9.0 scorecard
+  2026-05-07/                   # Self-referential cold-start benchmark scorecard (Opus)
+  datasets/                     # Benchmark dataset manifests and download guides
+  ideas/                        # Benchmark proposals and analysis
 .github/
   workflows/
     ci.yml                      # Build + test on push/PR (excludes MSA)
     benchmark.yml               # Nightly MSA benchmarks at 6 AM UTC
-benchmarks/
-  baseline-v1.json              # Sprint 1 baseline (2026-03-07)
-  baseline-paraphrase-v1.json
-  baseline-multihop-v1.json
-  baseline-scale-v1.json
-  2026-03-10-ablation/          # First ONNX ablation study (10 configs across 5 datasets x 4 modes)
-  2026-03-20/                   # Day 10 stability test (12 configs + operational metrics)
-  ideas/                        # Benchmark proposals and analysis
 ```
 
 ## NuGet Package

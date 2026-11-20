@@ -52,20 +52,32 @@ public sealed class AdminTools
 
     private bool CanRead(string ns) => _principal.IsSystem ||
         _registry.HasAccess(_principal.AgentId, ns, requiredLevel: "read", tenantId: _principal.TenantId);
-    private bool CanWrite(string ns) => _principal.IsSystem ||
-        _registry.HasAccess(_principal.AgentId, ns, "write", tenantId: _principal.TenantId);
+    private bool CanWriteWithoutClaiming(string ns) => _principal.IsSystem ||
+        _registry.CanWriteWithoutClaiming(_principal.AgentId, ns, tenantId: _principal.TenantId);
 
     [McpServerTool(Name = "get_memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
+    [Description("Look up one memory's full metadata — lifecycle state, graph edges, cluster memberships, access count — without triggering an access-count increment. Optionally pass `ns` to disambiguate duplicate IDs across namespaces. Don't use it to search by topic; use `recall` or `search_memory` for that.")]
     public object GetMemory(
-        [Description("Entry ID.")] string id)
+        [Description("Entry ID.")] string id,
+        [Description("Optional namespace to disambiguate duplicate IDs across namespaces. When supplied, only that namespace is checked (no fallback to other namespaces).")] string? ns = null)
     {
-        // get_memory resolves by id across every namespace, so unguarded it hands back the
-        // full text and metadata of any entry whose id a caller can guess or has seen in a
-        // graph edge. EntryAccessResolver applies the read predicate before matching, and
-        // not-found, not-permitted, and ambiguous all share the reply of a genuine miss -
-        // a distinct denial would confirm the id. Same semantics as the edge filter below.
-        var entry = EntryAccessResolver.Resolve(_index, id, _principal.TenantId, CanRead);
+        // When the caller explicitly names `ns`, check that exact namespace with no fallback so
+        // duplicate IDs across namespaces can be inspected unambiguously (and denied/missing
+        // namespaces still return the identical miss reply).
+        CognitiveEntry? entry;
+        if (!string.IsNullOrWhiteSpace(ns))
+        {
+            entry = CanRead(ns) ? _index.Get(id, ns, tenantId: _principal.TenantId) : null;
+        }
+        else
+        {
+            // get_memory resolves by id across every namespace, so unguarded it hands back the
+            // full text and metadata of any entry whose id a caller can guess or has seen in a
+            // graph edge. EntryAccessResolver applies the read predicate before matching, and
+            // not-found, not-permitted, and ambiguous all share the reply of a genuine miss -
+            // a distinct denial would confirm the id. Same semantics as the edge filter below.
+            entry = EntryAccessResolver.Resolve(_index, id, _principal.TenantId, CanRead);
+        }
         if (entry is null)
             return $"Entry '{id}' not found.";
 
@@ -207,9 +219,8 @@ public sealed class AdminTools
         var debateNamespaces = namespaces
             .Where(n => n.StartsWith("active-debate-"))
             // Dry-run details are sensitive too, so use the execution permission for both
-            // modes. Once a debate session is claimed by its creator, other principals can
-            // neither enumerate nor delete it through this maintenance path.
-            .Where(CanWrite)
+            // modes without claiming unregistered empty namespaces during inspection or deletion.
+            .Where(CanWriteWithoutClaiming)
             .ToList();
 
         if (debateNamespaces.Count == 0)
@@ -317,6 +328,7 @@ public sealed class AdminTools
                     // any point since staging keeps its namespace — it is left for a future
                     // pass to age-check rather than wholesale-deleted underneath it.
                     _index.DeleteAllInNamespaceIfEmpty(debateNs, _principal.TenantId);
+                    _registry.TryRemoveEmptyNamespacePermission(debateNs, _principal.TenantId);
                 }
                 purged.Add(new PurgedNamespaceInfo(debateNs, 0, 0, 0, null));
                 continue;
@@ -361,6 +373,14 @@ public sealed class AdminTools
                 entriesRemoved = deleted;
                 if (unsettled is not null)
                     totalIdsDeferredUnsettled += unsettled.Count;
+
+                // If every entry in this debate namespace is now gone (no unsettled or concurrent
+                // replacements remain), clean up the empty partition and its _system_sharing record.
+                if (_index.DeleteAllInNamespaceIfEmpty(debateNs, _principal.TenantId) ||
+                    _index.CountInNamespace(debateNs, _principal.TenantId) == 0)
+                {
+                    _registry.TryRemoveEmptyNamespacePermission(debateNs, _principal.TenantId);
+                }
             }
 
             totalEntriesRemoved += entriesRemoved;

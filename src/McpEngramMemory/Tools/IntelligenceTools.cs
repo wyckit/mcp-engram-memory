@@ -43,7 +43,8 @@ public sealed class IntelligenceTools
         [Description("Namespace to scan.")] string ns,
         [Description("Cosine similarity threshold (default: 0.95). Entries above this are flagged as duplicates.")] float threshold = 0.95f,
         [Description("Filter by category.")] string? category = null,
-        [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null)
+        [Description("Comma-separated lifecycle states to include (default: 'stm,ltm').")] string? includeStates = null,
+        CancellationToken cancellationToken = default)
     {
         if (threshold < 0f || threshold > 1f)
             return "Error: Threshold must be between 0 and 1.";
@@ -54,7 +55,12 @@ public sealed class IntelligenceTools
             ? new HashSet<string>(includeStates.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             : new HashSet<string> { "stm", "ltm" };
 
-        var raw = _index.FindDuplicates(ns, tenantId: _access.TenantId, threshold: threshold, category: category, includeStates: states);
+        var raw = _index.FindDuplicates(
+            ns, tenantId: _access.TenantId, threshold: threshold, category: category,
+            includeStates: states, maxResults: 100,
+            maxEntries: DuplicateDetector.DefaultMaxEntries,
+            maxPairComparisons: DuplicateDetector.DefaultMaxPairComparisons,
+            cancellationToken: cancellationToken);
 
         var pairs = new List<DuplicatePair>(raw.Count);
         foreach (var (idA, idB, sim) in raw)
@@ -177,7 +183,7 @@ public sealed class IntelligenceTools
         // Resolve the collapse's namespace before touching anything (within this tenant) - same
         // reply shape as a genuine miss for both "doesn't exist" and "exists but you can't touch it".
         var ns = _scanner.GetCollapseRecordNs(collapseId, tenantId: _access.TenantId);
-        if (ns is null || !_access.CanWrite(ns))
+        if (ns is null || !_access.CanWriteWithoutClaiming(ns))
             return $"Error: No collapse record found for '{collapseId}'.";
 
         var result = _scanner.UndoCollapse(collapseId, _lifecycle, _clusters, tenantId: _access.TenantId);
@@ -238,7 +244,7 @@ public sealed class IntelligenceTools
         [Description("ID of the duplicate entry to archive.")] string archiveId,
         [Description("Namespace containing both entries.")] string ns)
     {
-        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+        if (!_access.CanWriteWithoutClaiming(ns)) return NamespaceAccess.WriteDenied(ns);
 
         // MERGING AN ENTRY WITH ITSELF IS NOT A MERGE, it is an archive of the entry the reply
         // claims to be keeping. Both lookups below resolve to the one entry, so every step

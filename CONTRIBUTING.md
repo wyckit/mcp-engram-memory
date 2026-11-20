@@ -86,10 +86,15 @@ Start with `docs/core-10.md` and `docs/first-5-minutes.md` to get oriented.
 4. Merge the release PR.
 5. Tag `vX.Y.Z` on `main` and push the tag.
 6. `gh release create vX.Y.Z --notes-file <excerpt from CHANGELOG>`.
-7. Run `./publish-nuget.ps1 -WhatIf` and retain its unique package staging directory and validation evidence.
-   After release approval, publish all three packages in dependency order (Core, Synthesis.Onnx, tool),
-   using the publisher's configured feeds. Never update a 2.0.0 tool with default data until completing
-   the [pre-update migration](docs/installation-and-upgrades.md).
+7. Download the three archives from the successful merged-commit CI run; retain its validation report.
+   Record that run's version, revision, package sizes and SHA256 hashes in `scripts/release-packages.json`.
+   Keep the archives in `artifacts/release-<version>/publication/packages`, or pass `-PackageDirectory`.
+   Run `./publish-nuget.ps1 -WhatIf` to verify every archive without building or uploading anything.
+   After release approval, run `./publish-nuget.ps1`; it prompts for a hidden API key (or reads
+   `NUGET_API_KEY`) and uploads to **NuGet.org only**, in dependency order (Core, Synthesis.Onnx, tool).
+   The publisher never rebuilds packages or modifies GitHub. Release assets and GitHub Packages are
+   published separately using these same archives. Never update a 2.0.0 tool with default data until
+   completing the [pre-update migration](docs/installation-and-upgrades.md).
 
 ## Reporting security issues
 

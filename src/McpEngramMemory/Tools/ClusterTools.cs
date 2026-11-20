@@ -33,12 +33,22 @@ public sealed class ClusterTools
         [Description("Comma-separated initial member entry IDs.")] string memberIds,
         [Description("Human-readable cluster name.")] string? label = null)
     {
-        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+        if (string.IsNullOrWhiteSpace(clusterId))
+            return ToolError.Create("clusterId must not be empty.");
+        if (string.IsNullOrWhiteSpace(ns))
+            return ToolError.Create("ns must not be empty.");
+        if (!_access.CanWriteWithoutClaiming(ns)) return NamespaceAccess.WriteDenied(ns);
 
         try
         {
             var ids = memberIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            return _clusters.CreateCluster(clusterId, ns, ids, label, tenantId: _access.TenantId);
+            if (ids.Count == 0)
+                return ToolError.Create("memberIds must contain at least one entry ID.");
+
+            var result = _clusters.CreateCluster(clusterId, ns, ids, label, tenantId: _access.TenantId);
+            if (!result.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                _access.ClaimOnWrite(ns);
+            return result;
         }
         catch (Exception ex)
         {
@@ -61,7 +71,7 @@ public sealed class ClusterTools
         // return null under tenant-wide attribution churn — refusing a write the fenced
         // mutation itself would have admitted.
         var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
-        if (clusterNs is null || !_access.CanWrite(clusterNs))
+        if (clusterNs is null || !_access.CanWriteWithoutClaiming(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
         var addIds = addMemberIds?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -82,7 +92,7 @@ public sealed class ClusterTools
     {
         // GetClusterNamespace for the gate, like update_cluster — see the comment there.
         var clusterNs = _clusters.GetClusterNamespace(clusterId, tenantId: _access.TenantId);
-        if (clusterNs is null || !_access.CanWrite(clusterNs))
+        if (clusterNs is null || !_access.CanWriteWithoutClaiming(clusterNs))
             return $"Error: Cluster '{clusterId}' not found.";
 
         var resolved = summaryVector is not null && summaryVector.Length > 0

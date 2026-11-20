@@ -2,9 +2,9 @@
   "mcpServers": {
     "engram-memory": {
       "command": "dotnet",
-      "args": ["run", "--project", "/path/to/mcp-engram-memory/src/McpEngramMemory"],
+      "args": ["/path/to/mcp-engram-memory/.engram/server/McpEngramMemory.dll"],
       "env": {
-        "MEMORY_TOOL_PROFILE": "minimal"
+        "MEMORY_TOOL_PROFILE": "standard"
       }
     }
   }

@@ -450,8 +450,9 @@ internal sealed record CommittedMergeTopology(
 ///   and it releases and retakes the fence every <see cref="AddEdgesFenceChunk"/> edges rather than
 ///   spanning the batch. A new mutator that holds the fence across an unbounded loop reopens this.
 /// </summary>
-public sealed class KnowledgeGraph
+public sealed class KnowledgeGraph : IDisposable
 {
+    private int _disposedFlag;
     // A discardable read gets one optimistic retry when attribution changes while it is building
     // its projection. A continuously mutating tenant fails closed after the second stale attempt;
     // taking the writer fence here would invert the index/graph lock order described above.
@@ -2452,5 +2453,22 @@ public sealed class KnowledgeGraph
             return snapshot;
         }
         finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Flush any pending edge snapshot referencing this graph's lock, then release the underlying
+    /// <see cref="ReaderWriterLockSlim"/>. Idempotent and safe under either disposal order with
+    /// <see cref="IStorageProvider"/>.
+    /// </summary>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposedFlag, 1) != 0)
+            return;
+
+        try { _persistence.TryFlush(); }
+        catch { /* best effort before releasing lock */ }
+
+        try { _lock.Dispose(); }
+        catch (SynchronizationLockException) { /* contended lock left to GC */ }
     }
 }

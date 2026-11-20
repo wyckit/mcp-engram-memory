@@ -37,7 +37,7 @@ public sealed class MaintenanceTools
         // caller may write to. A single explicit ns that fails the check simply rebuilds
         // nothing, same shape as "namespace has no entries".
         var namespaces = (ns == "*" ? _index.GetNamespaces(tenantId: _access.TenantId) : new[] { ns })
-            .Where(_access.CanWrite)
+            .Where(_access.CanWriteWithoutClaiming)
             .ToList();
 
         var results = new List<RebuildNamespaceResult>();

@@ -31,7 +31,7 @@ public sealed class SpectralRetrievalTools
         _access = access;
     }
 
-    [McpServerTool(Name = "spectral_recall", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "spectral_recall", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Graph-aware retrieval: gathers vector-search candidates, then re-ranks them through the memory-graph diffusion kernel. Mode 'broad' applies a low-pass filter for conceptual queries and can surface additional cluster-supported memories. Mode 'specific' preserves candidate relevance and adds a bounded specificity bonus (at most 25%) for precise factual queries; isolated entries retain their scores. Mode 'none' disables spectral re-ranking and returns standard search results.")]
     public IReadOnlyList<CognitiveSearchResult> SpectralRecall(
         [Description("Query text. Embedded via the configured embedding model.")] string query,
@@ -55,36 +55,46 @@ public sealed class SpectralRetrievalTools
 
         if (candidates.Count == 0) return Array.Empty<CognitiveSearchResult>();
 
-        // Pull (id, score) out for the reranker.
+        // Pull (id, score) out for the reranker. Over-fetch slightly so filtering out archived
+        // spectrally-surfaced neighbors does not silently shrink the returned top-K.
         var scoreList = new List<(string Id, float Score)>(candidates.Count);
         foreach (var c in candidates) scoreList.Add((c.Id, c.Score));
 
-        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, tenantId: _access.TenantId, topK: k, diffusionTime: diffusionTime);
+        int rerankTopK = Math.Max(k * 2, k + 10);
+        var reranked = _reranker.Rerank(ns, scoreList, parsedMode, tenantId: _access.TenantId, topK: rerankTopK, diffusionTime: diffusionTime);
 
         // Resolve the reranked ids back to full search results. Entries that
         // surfaced via spectral redistribution (weren't in the original
-        // candidate pool) are fetched fresh from the index.
+        // candidate pool) are fetched fresh from the index and filtered to active states.
         var byId = new Dictionary<string, CognitiveSearchResult>(candidates.Count);
         foreach (var c in candidates) byId[c.Id] = c;
 
-        var results = new List<CognitiveSearchResult>(reranked.Count);
+        var results = new List<CognitiveSearchResult>(Math.Min(k, reranked.Count));
         foreach (var (id, score) in reranked)
         {
+            if (results.Count >= k) break;
+
             if (byId.TryGetValue(id, out var existing))
             {
                 results.Add(existing with { Score = score });
                 continue;
             }
 
-            // Entry surfaced spectrally; fetch it (within this tenant).
+            // Entry surfaced spectrally; fetch it (within this tenant) and exclude archived entries
+            // to match the default active-state ('stm', 'ltm') contract of upstream Search.
             var entry = _index.Get(id, ns, tenantId: _access.TenantId);
-            if (entry is null) continue;
+            if (entry is null || entry.LifecycleState is not ("stm" or "ltm")) continue;
             results.Add(new CognitiveSearchResult(
                 entry.Id, entry.Text, score, entry.LifecycleState,
                 entry.ActivationEnergy, entry.Category,
                 entry.Metadata.Count > 0 ? new Dictionary<string, string>(entry.Metadata) : null,
                 entry.IsSummaryNode, entry.SourceClusterId, entry.AccessCount));
         }
+
+        // Record access on returned entries (matching search_memory and recall) so spectrally
+        // retrieved memories receive normal activation reinforcement.
+        foreach (var r in results)
+            _index.RecordAccess(r.Id, ns, _access.TenantId);
 
         return results;
     }

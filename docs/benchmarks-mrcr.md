@@ -91,7 +91,7 @@ full-context tokens.
   is minor for Claude (already interpreted it correctly) but was necessary for Gemini 2.5 Pro
   to stop truncating long needles.
 
-Artifacts: `benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-{claude-cli,codex-cli,gemini-cli}-*-ordinal.json`.
+_Historical 2026-04-19 raw JSON run artifacts were pruned from git; re-run `run_mrcr_benchmark` to regenerate local scorecards._
 
 ## Scaling across needle counts (25 stratified probes per variant, 2026-04-19)
 
@@ -127,7 +127,7 @@ count or model choice.
    engram hits 0.997 sim / 100% pass on 300K+ char 8-needle probes.
 5. The 320× token-reduction payoff is independent of model and needle count.
 
-Artifacts: `benchmarks/2026-04-19/mrcr-v2-{2,4,8}needle-mrcr-claude-cli-{sonnet,opus}-ordinal.json`.
+_Historical 2026-04-19 scaling run JSONs were pruned from git; re-run `run_mrcr_benchmark` per needle count to regenerate locally._
 
 ## Results (25 stratified probes, 2026-04-19)
 
@@ -185,8 +185,8 @@ Opus 0.645) because MRCR probes ask for positional recall that content-similarit
 retrieval cannot answer. Switching to ordinal mode recovered the signal
 (Sonnet 0.930, Opus 0.986 at n=3). The n=25 run above confirms the ordinal
 result at publishable scale for Opus; Sonnet's pass-rate drop (100% → 71% on the
-matched set) is the n=3→n=25 reality check. Artifacts:
-`benchmarks/2026-04-19/mrcr-v2-8needle-mrcr-claude-cli-{sonnet,opus}[-ordinal].json`.
+matched set) is the n=3→n=25 reality check. Historical 2026-04-19 pilot JSONs
+were pruned from git and can be regenerated with `run_mrcr_benchmark`.
 
 ## Scoring
 
@@ -227,8 +227,8 @@ Artifact output: `benchmarks/YYYY-MM-DD/mrcr-v2-8needle-mrcr-claude-cli-opus.jso
 
 ```
 compare_mrcr_artifacts
-  baselineArtifactPath  = "benchmarks/2026-04-18/mrcr-v2-8needle-mrcr-claude-cli-opus.json"
-  candidateArtifactPath = "benchmarks/2026-04-20/mrcr-v2-8needle-mrcr-claude-cli-opus.json"
+  baselineArtifactPath  = "benchmarks/<baseline-date>/mrcr-v2-8needle-mrcr-claude-cli-opus.json"
+  candidateArtifactPath = "benchmarks/<candidate-date>/mrcr-v2-8needle-mrcr-claude-cli-opus.json"
 ```
 
 Returns per-arm similarity and pass-rate deltas plus the change in prompt-token

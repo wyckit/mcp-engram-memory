@@ -17,16 +17,44 @@ public sealed class OnnxEmbeddingService : IEmbeddingService, IDisposable
 
     public int Dimensions { get; }
 
+    /// <summary>Bounded default intra-op thread count so embedding inference does not oversubscribe high-core hosts.</summary>
+    public static int DefaultIntraOpNumThreads => Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+
+    /// <summary>Configured ONNX Runtime intra-op thread count for this session.</summary>
+    public int IntraOpNumThreads { get; }
+
+    /// <summary>Configured ONNX Runtime inter-op thread count for this session.</summary>
+    public int InterOpNumThreads { get; }
+
     public OnnxEmbeddingService(string? modelDir = null, int maximumTokens = 512)
+        : this(modelDir, maximumTokens, intraOpNumThreads: null, interOpNumThreads: null) { }
+
+    public OnnxEmbeddingService(
+        string? modelDir,
+        int maximumTokens,
+        int? intraOpNumThreads,
+        int? interOpNumThreads = null)
     {
+        if (intraOpNumThreads is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(intraOpNumThreads), "IntraOpNumThreads must be positive.");
+        if (interOpNumThreads is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(interOpNumThreads), "InterOpNumThreads must be positive.");
+
         _maximumTokens = maximumTokens;
+        IntraOpNumThreads = intraOpNumThreads ?? DefaultIntraOpNumThreads;
+        InterOpNumThreads = interOpNumThreads ?? 1;
 
         modelDir ??= Path.Combine(AppContext.BaseDirectory, "LocalEmbeddingsModel", "default");
 
         var modelPath = Path.Combine(modelDir, "model.onnx");
         var vocabPath = Path.Combine(modelDir, "vocab.txt");
 
-        _session = new InferenceSession(modelPath);
+        using var sessionOptions = new SessionOptions
+        {
+            IntraOpNumThreads = IntraOpNumThreads,
+            InterOpNumThreads = InterOpNumThreads
+        };
+        _session = new InferenceSession(modelPath, sessionOptions);
         Dimensions = _session.OutputMetadata.First().Value.Dimensions.Last();
 
         // Case-insensitive tokenization (matching bge-micro-v2 defaults)

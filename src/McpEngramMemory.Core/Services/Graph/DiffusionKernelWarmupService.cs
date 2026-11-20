@@ -35,8 +35,25 @@ namespace McpEngramMemory.Core.Services.Graph;
 /// </summary>
 public sealed class DiffusionKernelWarmupService : BackgroundService
 {
-    private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(30);
+    /// <summary>Default startup delay before the first warmup pass.</summary>
+    public static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>Default interval between warmup passes.</summary>
+    public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromMinutes(30);
+
+    /// <summary>Configurable startup delay before the first warmup pass.</summary>
+    public TimeSpan StartupDelay { get; set; } = DefaultStartupDelay;
+
+    /// <summary>Configurable interval between warmup passes.</summary>
+    public TimeSpan RefreshInterval { get; set; } = DefaultRefreshInterval;
+
+    /// <summary>
+    /// When true, warms only partitions already loaded in memory instead of forcing a full
+    /// <see cref="CognitiveIndex.GetAllTenants"/> (<c>LoadAll()</c>) disk sweep at startup.
+    /// Defaults to false for direct Core API callers (preserving existing behavior); the MCP
+    /// host enables this by default unless <c>MEMORY_DIFFUSION_WARMUP_EAGER_LOAD=1</c> is set.
+    /// </summary>
+    public bool WarmOnlyLoadedPartitions { get; set; } = false;
 
     /// <summary>Maximum tenant names spelled out in the failure line before truncating to "+N more".</summary>
     private const int MaxTenantsShown = 5;
@@ -82,7 +99,7 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
     }
 
     /// <summary>
-    /// Run one full warmup sweep across every tenant's qualifying namespaces.
+    /// Run one full warmup sweep across qualifying namespaces.
     /// <see cref="ExecuteAsync"/> is the only production caller. Internal rather than public
     /// so a test can drive a single deterministic pass — asserting on what the kernel was
     /// asked to compute instead of waiting out <see cref="StartupDelay"/> and racing the
@@ -102,45 +119,16 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
         var failedTenants = new List<string>();
         var sw = Stopwatch.StartNew();
 
-        // Every tenant, including the legacy tenant "" when legacy data is present.
-        foreach (var tenant in _index.GetAllTenants())
+        if (WarmOnlyLoadedPartitions)
         {
-            stoppingToken.ThrowIfCancellationRequested();
-            tenantCount++;
-
-            IReadOnlyList<string> namespaces;
-            try
-            {
-                namespaces = _index.GetNamespaces(tenant);
-            }
-            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
-            {
-                // The isolation boundary stays on the partition even though a tenant loop
-                // now wraps the namespace loop. Per-tenant enumeration hits storage in its
-                // own right, so leaving it outside the guards would let one unreadable
-                // tenant unwind the sweep and permanently starve every tenant ordered
-                // after it — the failure is deterministic, so the next cycle dies in the
-                // same place.
-                failed++;
-                attempted++;
-                AddFailedTenant(failedTenants, tenant);
-                _logger?.LogWarning(ex,
-                    "Diffusion warmup namespace enumeration failed for tenant='{Tenant}'; continuing.", tenant);
-                continue;
-            }
-
-            foreach (var ns in namespaces)
+            var loadedPartitions = _index.GetLoadedPartitions();
+            var tenantsSeen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (tenant, ns) in loadedPartitions)
             {
                 stoppingToken.ThrowIfCancellationRequested();
-
-                // Skip system / internal namespaces — anything starting with underscore.
                 if (ns.StartsWith('_')) continue;
-
+                tenantsSeen.Add(tenant);
                 attempted++;
-
-                // Per-partition fault isolation: one failing basis computation must
-                // not abort warmup for every later partition. The kernel negative-caches
-                // the failure per graph revision, so subsequent sweeps rethrow cheaply.
                 try
                 {
                     var basis = _kernel.GetBasis(ns, tenantId: tenant);
@@ -153,6 +141,64 @@ public sealed class DiffusionKernelWarmupService : BackgroundService
                     AddFailedTenant(failedTenants, tenant);
                     _logger?.LogWarning(ex,
                         "Diffusion warmup failed for tenant='{Tenant}' ns={Namespace}; continuing.", tenant, ns);
+                }
+            }
+            tenantCount = tenantsSeen.Count;
+        }
+        else
+        {
+            // Every tenant, including the legacy tenant "" when legacy data is present.
+            foreach (var tenant in _index.GetAllTenants())
+            {
+                stoppingToken.ThrowIfCancellationRequested();
+                tenantCount++;
+
+                IReadOnlyList<string> namespaces;
+                try
+                {
+                    namespaces = _index.GetNamespaces(tenant);
+                }
+                catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    // The isolation boundary stays on the partition even though a tenant loop
+                    // now wraps the namespace loop. Per-tenant enumeration hits storage in its
+                    // own right, so leaving it outside the guards would let one unreadable
+                    // tenant unwind the sweep and permanently starve every tenant ordered
+                    // after it — the failure is deterministic, so the next cycle dies in the
+                    // same place.
+                    failed++;
+                    attempted++;
+                    AddFailedTenant(failedTenants, tenant);
+                    _logger?.LogWarning(ex,
+                        "Diffusion warmup namespace enumeration failed for tenant='{Tenant}'; continuing.", tenant);
+                    continue;
+                }
+
+                foreach (var ns in namespaces)
+                {
+                    stoppingToken.ThrowIfCancellationRequested();
+
+                    // Skip system / internal namespaces — anything starting with underscore.
+                    if (ns.StartsWith('_')) continue;
+
+                    attempted++;
+
+                    // Per-partition fault isolation: one failing basis computation must
+                    // not abort warmup for every later partition. The kernel negative-caches
+                    // the failure per graph revision, so subsequent sweeps rethrow cheaply.
+                    try
+                    {
+                        var basis = _kernel.GetBasis(ns, tenantId: tenant);
+                        if (basis is not null) warmed++;
+                        else bypassed++;
+                    }
+                    catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                    {
+                        failed++;
+                        AddFailedTenant(failedTenants, tenant);
+                        _logger?.LogWarning(ex,
+                            "Diffusion warmup failed for tenant='{Tenant}' ns={Namespace}; continuing.", tenant, ns);
+                    }
                 }
             }
         }

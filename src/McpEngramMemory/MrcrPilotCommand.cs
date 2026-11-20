@@ -40,58 +40,62 @@ internal static class MrcrPilotCommand
 
         // Minimal DI — only the services the runner actually needs.
         var persistencePath = Path.Combine(Path.GetTempPath(), $"mrcr_pilot_{Guid.NewGuid():N}");
-        var persistence = new PersistenceManager(persistencePath, debounceMs: 100);
-        var index = new CognitiveIndex(persistence);
-        var embedding = new OnnxEmbeddingService();
-        var scorer = new MrcrScorer(embedding);
-        var runner = new MrcrBenchmarkRunner(index, embedding, scorer);
-
-        var factory = new AgentOutcomeModelClientFactory();
-        IAgentOutcomeModelClient client;
-        try
-        {
-            client = factory.Create(opts.Provider, opts.ClaudeExecutable);
-        }
-        catch (ArgumentOutOfRangeException ex)
-        {
-            Console.Error.WriteLine($"[mrcr-pilot] {ex.Message}");
-            return 3;
-        }
-
-        if (!await client.IsAvailableAsync(opts.Model))
-        {
-            Console.Error.WriteLine($"[mrcr-pilot] provider '{opts.Provider}' CLI not available — is it on PATH?");
-            client.Dispose();
-            return 3;
-        }
-
-        using var _disposableClient = client;
-
-        var runOptions = new MrcrGenerationOptions(
-            Provider: opts.Provider,
-            Model: opts.Model,
-            Endpoint: null,
-            Limit: opts.Limit,
-            TopK: opts.TopK,
-            MaxTokens: opts.MaxTokens,
-            Temperature: opts.Temperature,
-            MaxContextTokens: opts.MaxContextTokens,
-            RunFullContextArm: opts.RunFullContextArm,
-            RunEngramArm: opts.RunEngramArm,
-            EngramMode: opts.EngramMode);
-
         MrcrBenchmarkResult result;
         try
         {
-            result = await runner.RunAsync(opts.DatasetId, tasks, runOptions, client);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[mrcr-pilot] run failed: {ex.Message}");
-            return 4;
+            using var persistence = new PersistenceManager(persistencePath, debounceMs: 100);
+            using var index = new CognitiveIndex(persistence);
+            using var embedding = new OnnxEmbeddingService();
+            var scorer = new MrcrScorer(embedding);
+            var runner = new MrcrBenchmarkRunner(index, embedding, scorer);
+
+            var factory = new AgentOutcomeModelClientFactory();
+            IAgentOutcomeModelClient client;
+            try
+            {
+                client = factory.Create(opts.Provider, opts.ClaudeExecutable);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                Console.Error.WriteLine($"[mrcr-pilot] {ex.Message}");
+                return 3;
+            }
+
+            using var _disposableClient = client;
+
+            if (!await client.IsAvailableAsync(opts.Model))
+            {
+                Console.Error.WriteLine($"[mrcr-pilot] provider '{opts.Provider}' CLI not available — is it on PATH?");
+                return 3;
+            }
+
+            var runOptions = new MrcrGenerationOptions(
+                Provider: opts.Provider,
+                Model: opts.Model,
+                Endpoint: null,
+                Limit: opts.Limit,
+                TopK: opts.TopK,
+                MaxTokens: opts.MaxTokens,
+                Temperature: opts.Temperature,
+                MaxContextTokens: opts.MaxContextTokens,
+                RunFullContextArm: opts.RunFullContextArm,
+                RunEngramArm: opts.RunEngramArm,
+                EngramMode: opts.EngramMode);
+
+            try
+            {
+                result = await runner.RunAsync(opts.DatasetId, tasks, runOptions, client);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[mrcr-pilot] run failed: {ex.Message}");
+                return 4;
+            }
         }
         finally
         {
+            // Runs strictly after persistence, index, embedding, and client are disposed so no
+            // background debounce timer or open handle races temp-directory cleanup.
             try { if (Directory.Exists(persistencePath)) Directory.Delete(persistencePath, recursive: true); } catch { }
         }
 

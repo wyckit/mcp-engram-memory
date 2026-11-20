@@ -114,5 +114,7 @@ CI runs these checks on Windows, Linux and Apple Silicon macOS and uploads the g
 
 These checks do not establish SQL Server upgrades, a 48-hour soak, arbitrary Core hosts, multiple
 process writers, or fresh live-LLM outcomes. Those require separate qualification before making such
-release claims. Publisher `-WhatIf` packs into a unique subdirectory under `artifacts/packages` and
-preserves prior validation evidence; it never publishes packages.
+release claims. Publisher `-WhatIf` verifies the prebuilt release archives in
+`artifacts/release-<version>/publication/packages` (or `-PackageDirectory`) against
+`scripts/release-packages.json` (name, size, and SHA256) and prints the NuGet.org upload plan
+without building, packing, modifying prior validation evidence, or uploading packages.

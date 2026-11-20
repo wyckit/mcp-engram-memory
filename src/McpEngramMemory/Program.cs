@@ -21,7 +21,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 ServerTelemetry.Configure();
-ServerNativeRuntime.Configure();
+ServerNativeRuntime.Configure(args);
 
 // Subcommand: `dotnet run -- mrcr-pilot ...` runs the MRCR benchmark without starting the MCP server.
 if (args.Length > 0 && args[0] == "mrcr-pilot")
@@ -57,7 +57,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
 // Storage provider — set MEMORY_STORAGE=sqlite|sqlserver to switch backends
-var storageMode = Environment.GetEnvironmentVariable("MEMORY_STORAGE");
+var storageMode = Environment.GetEnvironmentVariable("MEMORY_STORAGE")?.Trim();
 if (string.Equals(storageMode, "sqlite", StringComparison.OrdinalIgnoreCase))
 {
     var dbPath = Environment.GetEnvironmentVariable("MEMORY_SQLITE_PATH") ?? Path.Combine(dataPath, "memory.db");
@@ -187,25 +187,34 @@ builder.Services.AddSingleton(new FileKnowledgeAssetStore(governancePath));
 builder.Services.AddSingleton<IGovernedKnowledgeStore>(new FileGovernedKnowledgeStore(governancePath));
 builder.Services.AddSingleton(new FileConstitutionDecisionStore(governancePath));
 builder.Services.AddSingleton<IProvenanceStore>(new FileProvenanceStore(governancePath));
-builder.Services.AddSingleton<IConstitutionAuditStore>(new FileConstitutionAuditStore(governancePath));
+var auditReadFlushInterval = BackgroundWorkerRegistration.ParseAuditReadFlushInterval(
+    Environment.GetEnvironmentVariable, Console.Error);
+// Use a factory registration so Microsoft.Extensions.DependencyInjection owns the lifetime and
+// invokes DisposeAsync() on clean shutdown, flushing any buffered read-only Allow audit records.
+builder.Services.AddSingleton<IConstitutionAuditStore>(_ =>
+    new FileConstitutionAuditStore(governancePath, auditReadFlushInterval));
 builder.Services.AddSingleton<IConstitutionRule, AuditEnvelopeConstitutionRule>();
 builder.Services.AddSingleton<IConstitutionEvaluator>(sp =>
     new DeterministicConstitutionEvaluator(sp.GetServices<IConstitutionRule>()));
 builder.Services.AddSingleton<ConstitutionKernel>();
-builder.Services.AddSingleton<OnnxEmbeddingService>();
+var onnxIntraOpThreads = BackgroundWorkerRegistration.ParseOptionalPositiveInt(
+    Environment.GetEnvironmentVariable, "MEMORY_ONNX_INTRA_OP_THREADS", Console.Error);
+var onnxInterOpThreads = BackgroundWorkerRegistration.ParseOptionalPositiveInt(
+    Environment.GetEnvironmentVariable, "MEMORY_ONNX_INTER_OP_THREADS", Console.Error);
+builder.Services.AddSingleton(_ => new OnnxEmbeddingService(
+    modelDir: null, maximumTokens: 512, intraOpNumThreads: onnxIntraOpThreads, interOpNumThreads: onnxInterOpThreads));
 builder.Services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxEmbeddingService>());
-builder.Services.AddHostedService<EmbeddingWarmupService>();
-builder.Services.AddHostedService<DecayBackgroundService>();
-builder.Services.AddHostedService<AccretionBackgroundService>();
-builder.Services.AddHostedService<DiffusionKernelWarmupService>();
-builder.Services.AddHostedService<ConsolidationBackgroundService>();
-builder.Services.AddHostedService<AutoLinkBackgroundService>();
 
 // Tool profile (default: "minimal", set MEMORY_TOOL_PROFILE=standard or full to expand):
 //   "minimal"  → 17 tools: core memory ops + composite + multi-agent + admin (recommended for most agents)
 //   "standard" → graph, lifecycle, clusters, intelligence, diffusion, spectral
 //   "full"     → adds benchmarks, debate, expert routing, synthesis, visualization, maintenance
-var toolProfile = Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE")?.ToLowerInvariant() ?? "minimal";
+var toolProfile = ToolProfileRegistration.ResolveProfile(
+    Environment.GetEnvironmentVariable("MEMORY_TOOL_PROFILE"), out var profileWarning);
+if (profileWarning is not null)
+    Console.Error.WriteLine(profileWarning);
+
+builder.Services.AddConfiguredBackgroundWorkers(toolProfile, Environment.GetEnvironmentVariable, Console.Error);
 
 builder.Services
     .AddMcpServer()

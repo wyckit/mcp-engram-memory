@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "version": "2.1.0",
+  "revision": "71c7d0fb2324e643341e4f9356a70a18c7fe76ff",
+  "validationRun": "https://github.com/wyckit/mcp-engram-memory/actions/runs/39648500155",
+  "release": "https://github.com/wyckit/mcp-engram-memory/releases/tag/v2.1.0",
+  "packages": [
+    {
+      "package": "McpEngramMemory.Core",
+      "version": "2.1.0",
+      "bytes": 4390788,
+      "sha256": "80d907d79954031930af6dd39e97ce18bc884e99e9f89aea02bcb3175e3356cc"
+    },
+    {
+      "package": "McpEngramMemory.Synthesis.Onnx",
+      "version": "2.1.0",
+      "bytes": 91183,
+      "sha256": "2970f34ed57cfcb98b191648e7186595972305b69c575a88c18af26019db91a9"
+    },
+    {
+      "package": "McpEngramMemory",
+      "version": "2.1.0",
+      "bytes": 79994190,
+      "sha256": "ee1479ff47619ef6f20ce730530bba82161578a15f38b18a50722d86bec2ec6b"
+    }
+  ]
+}

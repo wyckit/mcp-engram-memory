@@ -112,6 +112,12 @@ public sealed class DuplicateDetector
         return duplicates;
     }
 
+    /// <summary>Default maximum candidate entries scanned in a single <see cref="FindDuplicates(IReadOnlyList{ValueTuple{CognitiveEntry, float, QuantizedVector?}}, float, int)"/> pass.</summary>
+    public const int DefaultMaxEntries = 10_000;
+
+    /// <summary>Default maximum logical pair comparisons evaluated in a single <see cref="FindDuplicates(IReadOnlyList{ValueTuple{CognitiveEntry, float, QuantizedVector?}}, float, int)"/> pass.</summary>
+    public const long DefaultMaxPairComparisons = 25_000_000L;
+
     /// <summary>
     /// Find near-duplicate entries by pairwise cosine similarity scan, highest similarity first.
     /// Above <see cref="LowRankPivot"/> candidates, switches to a spectral
@@ -129,20 +135,63 @@ public sealed class DuplicateDetector
         IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
         float threshold = 0.95f,
         int maxResults = 100)
+        => FindDuplicates(candidates, threshold, maxResults,
+            DefaultMaxEntries, DefaultMaxPairComparisons, CancellationToken.None);
+
+    /// <summary>
+    /// Find near-duplicate entries with explicit entry-count, pair-comparison, and cancellation bounds
+    /// so interactive calls (e.g. <c>detect_duplicates</c>) stay bounded on very large namespaces.
+    /// Pass <c>0</c> for <paramref name="maxEntries"/> or <paramref name="maxPairComparisons"/> to disable that cap.
+    /// </summary>
+    public IReadOnlyList<(string IdA, string IdB, float Similarity)> FindDuplicates(
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> candidates,
+        float threshold,
+        int maxResults,
+        int maxEntries,
+        long maxPairComparisons,
+        CancellationToken cancellationToken = default)
     {
-        if (maxResults <= 0)
+        ArgumentNullException.ThrowIfNull(candidates);
+        if (maxResults <= 0 || candidates.Count < 2)
             return Array.Empty<(string, string, float)>();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        IReadOnlyList<(CognitiveEntry Entry, float Norm, QuantizedVector? Quantized)> bounded =
+            maxEntries > 0 && candidates.Count > maxEntries
+                ? candidates.Take(maxEntries).ToList()
+                : candidates;
+
+        using var budgetCts = maxPairComparisons > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : null;
+        CancellationToken effectiveToken = budgetCts?.Token ?? cancellationToken;
+        long pairsExamined = 0;
 
         // A bounded prefix of the same stream, so there is exactly one pairwise implementation and a
         // caller that filters as it goes cannot drift away from what this returns. Abandoning the
         // enumeration at the bound abandons the comparisons behind it, which is the early exit the
         // old nested-loop form got from testing the bound in its loop conditions.
         var duplicates = new List<(string IdA, string IdB, float Similarity)>();
-        foreach (var pair in StreamDuplicates(candidates, threshold, PairScanWindow.Full, CancellationToken.None))
+        foreach (var pair in StreamDuplicates(
+            bounded,
+            threshold,
+            PairScanWindow.Full,
+            effectiveToken,
+            onAnchorCompleted: maxPairComparisons > 0
+                ? progress =>
+                {
+                    pairsExamined += progress.PairSlotsCompleted;
+                    if (pairsExamined >= maxPairComparisons)
+                        budgetCts!.Cancel();
+                }
+                : null))
         {
             duplicates.Add(pair);
             if (duplicates.Count >= maxResults) break;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
         duplicates.Sort((a, b) => b.Similarity.CompareTo(a.Similarity));
         return duplicates;
     }
@@ -338,6 +387,8 @@ public sealed class DuplicateDetector
         var memberLists = new List<List<int>>();
         for (int idx = 0; idx < candidates.Count; idx++)
         {
+            if ((idx & 255) == 0 && cancellationToken.IsCancellationRequested)
+                return Enumerable.Empty<(string, string, float)>();
             var (e, n, _) = candidates[idx];
             if (n == 0f || e.Vector.Length == 0) continue;
             if (!cohortIndexByLength.TryGetValue(e.Vector.Length, out int c))

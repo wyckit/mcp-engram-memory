@@ -176,9 +176,13 @@ public class McpSdkConformanceTests
         AssertAnnotations(tools["remember"], readOnly: false, destructive: true, idempotent: false, openWorld: false);
         AssertAnnotations(tools["delete_memory"], readOnly: false, destructive: true, idempotent: true, openWorld: false);
         AssertAnnotations(tools["recall"], readOnly: false, destructive: false, idempotent: false, openWorld: false);
+        AssertAnnotations(tools["search_memory"], readOnly: false, destructive: false, idempotent: false, openWorld: false);
+        AssertAnnotations(tools["spectral_recall"], readOnly: false, destructive: false, idempotent: false, openWorld: false);
+        AssertAnnotations(tools["dispatch_task"], readOnly: false, destructive: false, idempotent: false, openWorld: false);
+        AssertAnnotations(tools["compute_diffusion_basis"], readOnly: false, destructive: false, idempotent: true, openWorld: false);
         AssertAnnotations(tools["compare_live_agent_outcome_artifacts"], readOnly: true, destructive: false, idempotent: true, openWorld: false);
         AssertAnnotations(tools["run_live_agent_outcome_benchmark"], readOnly: false, destructive: true, idempotent: false, openWorld: true);
-        AssertAnnotations(tools["synthesize_memories"], readOnly: true, destructive: false, idempotent: true, openWorld: true);
+        AssertAnnotations(tools["synthesize_memories"], readOnly: true, destructive: false, idempotent: false, openWorld: true);
         AssertAnnotations(tools["share_namespace"], readOnly: false, destructive: true, idempotent: true, openWorld: false);
     }
 

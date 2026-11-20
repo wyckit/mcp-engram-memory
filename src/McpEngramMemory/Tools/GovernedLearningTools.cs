@@ -63,7 +63,7 @@ public sealed class GovernedLearningTools
             return Error("id, ns, and claim are required");
         if (supportingSourceIds is null || supportingSourceIds.Length == 0)
             return Error("at least one supporting source is required");
-        if (!_access.CanRead(ns) || !_access.CanWrite(ns))
+        if (!_access.CanRead(ns) || !_access.CanWriteWithoutClaiming(ns))
             return Error("namespace is not accessible for governed publication");
 
         var support = ResolveSources(ns, supportingSourceIds);
@@ -216,7 +216,7 @@ public sealed class GovernedLearningTools
     private static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
-    private static object Error(string message) => new { status = "error", message };
+    private static object Error(string message) => ToolError.Create(message);
 
     private sealed record SourceSnapshot(CognitiveEntry Entry, ArtifactRef Reference, string ContentHash);
 

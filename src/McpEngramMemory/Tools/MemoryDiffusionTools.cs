@@ -22,26 +22,24 @@ public sealed class MemoryDiffusionTools
         _access = access;
     }
 
-    [McpServerTool(Name = "compute_diffusion_basis", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "compute_diffusion_basis", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Force computation of the top-K diffusion basis (graph-Laplacian eigenbasis) for a namespace. Returns diagnostics; the basis itself is held in-memory by the server. Returns null if the namespace is below the spectral threshold (32 nodes / 8 positive-relation edges).")]
     public DiffusionStats? ComputeDiffusionBasis(
         [Description("Namespace to compute the basis for.")] string ns,
         [Description("Number of eigenpairs to retain (default 96). Higher = finer multi-scale resolution at higher compute cost.")] int topK = MemoryDiffusionKernel.DefaultTopK,
         [Description("Drop any cached basis and recompute from scratch.")] bool force = false)
     {
-        // Authorize read access first so this ReadOnly tool never triggers
+        // Authorize read access first so this tool never triggers
         // NamespaceRegistry.TryClaimEmptyNamespace on an unclaimed empty namespace.
         // Nullable return already models "nothing here" (below spectral threshold), so a
         // denied check reuses that same shape rather than a distinct error.
         if (!_access.CanRead(ns)) return null;
 
         // Dropping an existing cached basis (`force: true`) mutates cache state, so require
-        // write access before invalidating. Because CanRead(ns) already succeeded, the
-        // namespace is either already registered or the caller is legacy-unisolated, so
-        // CanWrite(ns) here cannot claim an unclaimed namespace.
+        // write access without claiming empty namespaces.
         if (force)
         {
-            if (!_access.CanWrite(ns)) return null;
+            if (!_access.CanWriteWithoutClaiming(ns)) return null;
             _kernel.Invalidate(ns, tenantId: _access.TenantId);
         }
 
@@ -60,7 +58,7 @@ public sealed class MemoryDiffusionTools
     public string InvalidateDiffusion(
         [Description("Namespace to invalidate.")] string ns)
     {
-        if (!_access.CanWrite(ns)) return NamespaceAccess.WriteDenied(ns);
+        if (!_access.CanWriteWithoutClaiming(ns)) return NamespaceAccess.WriteDenied(ns);
 
         _kernel.Invalidate(ns, tenantId: _access.TenantId);
         return $"Invalidated diffusion basis for namespace '{ns}'.";

@@ -48,7 +48,7 @@ public sealed class AccretionTools
         // Resolve first (within this tenant): same reply shape as a genuine miss for both
         // "doesn't exist" and "exists but you can't touch it".
         var ns = _scanner.GetPendingCollapseNs(collapseId, tenantId: _access.TenantId);
-        if (ns is null || !_access.CanWrite(ns))
+        if (ns is null || !_access.CanWriteWithoutClaiming(ns))
             return $"Error: Collapse '{collapseId}' not found.";
 
         var resolved = summaryVector is not null && summaryVector.Length > 0
@@ -67,7 +67,7 @@ public sealed class AccretionTools
         [Description("The pending collapse ID to dismiss.")] string collapseId)
     {
         var ns = _scanner.GetPendingCollapseNs(collapseId, tenantId: _access.TenantId);
-        if (ns is null || !_access.CanWrite(ns))
+        if (ns is null || !_access.CanWriteWithoutClaiming(ns))
             return $"Error: Collapse '{collapseId}' not found.";
 
         return _scanner.DismissCollapse(collapseId, tenantId: _access.TenantId, clusters: _clusters);

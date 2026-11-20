@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-Benchmark results are stored in `benchmarks/` organized by date. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
+Pinned regression baselines live in `benchmarks/baselines/` and `benchmarks/baseline-*.json`, reference scorecards live in retained dated folders (`benchmarks/2026-04-27/`, `benchmarks/2026-05-07/`), and local benchmark runs write artifacts to `benchmarks/YYYY-MM-DD/`. Each run captures IR quality metrics (Recall@K, Precision@K, MRR, nDCG@K) and latency percentiles across 17 datasets and 4 search modes.
 
 The [realistic recall evaluation](recall-evaluation.md) adds 36 labeled operational
 questions, direct/expert/broadcast route comparisons, archive/restart cases, and a CI
@@ -141,13 +141,15 @@ On 2026-04-17, `phi3.5:3.8b` was established as the baseline for `agent-outcome-
 | Dataset | Model | Pass Rate | Success Score | Result |
 |---------|-------|-----------|---------------|--------|
 | **agent-outcome-hard-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json) | **1.000** | **0.917** | **Best** |
-| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | 0.750 | 0.750 | Regressed |
-| | [deepseek-r1:8b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-deepseek-r1-8b.json) | 0.000 | 0.000 | Format Fail |
-| **agent-outcome-reasoning-v1** | [phi3.5:3.8b](../benchmarks/2026-04-17/agent-outcome-reasoning-v1-live-agent-outcome-ollama-phi3.5-3.8b.json) | **0.250** | **0.667** | **New Baseline** |
+| | qwen2.5:7b | 0.750 | 0.750 | Regressed |
+| | deepseek-r1:8b | 0.000 | 0.000 | Format Fail |
+| **agent-outcome-reasoning-v1** | phi3.5:3.8b | **0.250** | **0.667** | **New Baseline** |
 | **agent-outcome-repo-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json) | **1.000** | **0.900** | Stable |
-| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-repo-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **1.000** | **0.900** | Stable |
+| | qwen2.5:7b | **1.000** | **0.900** | Stable |
 | **agent-outcome-v1** | [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json) | **0.600** | **0.833** | **Best** |
-| | [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-v1-live-agent-outcome-ollama-qwen2.5-7b.json) | **0.600** | 0.767 | Slight Regression |
+| | qwen2.5:7b | **0.600** | 0.767 | Slight Regression |
+
+_Note: Pinned CI baseline artifacts remain under `benchmarks/baselines/`. Historical non-baseline 2026-04-17 live-model run JSONs were pruned from git; re-run `run_live_agent_outcome_benchmark` to generate fresh dated artifacts locally._
 
 ## Intelligence Tier Verification
 
@@ -171,18 +173,11 @@ cognitive mechanisms.
 
 **Key Proof of Intelligence**: In the `agent-outcome-reasoning-v1` benchmark, the **Full Engram** condition was the only one to solve the `reason-safe-exit` task. It followed a graph edge (SIGTERM → Shutdown → DB Flush) to find a required behavior that was completely missing from the model's immediate context window.
 
-### Detailed Artifacts
+### Pinned Baseline Artifacts
 
-- **Hard Dataset (v1)**
-    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json)
-    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
-    - [deepseek-r1:8b](../benchmarks/2026-04-17/agent-outcome-hard-v1-live-agent-outcome-ollama-deepseek-r1-8b.json)
-- **Repo Recovery (v1)**
-    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json)
-    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-repo-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
-- **General Assistant (v1)**
-    - [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json)
-    - [qwen2.5:7b](../benchmarks/2026-04-17/agent-outcome-v1-live-agent-outcome-ollama-qwen2.5-7b.json)
+- **Hard Dataset (v1)** — [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-hard-v1-baseline.json)
+- **Repo Recovery (v1)** — [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-repo-v1-baseline.json)
+- **General Assistant (v1)** — [phi3.5:3.8b (Baseline)](../benchmarks/baselines/agent-outcome-v1-baseline.json)
 
 ## Directory Structure
 
@@ -190,38 +185,40 @@ cognitive mechanisms.
 benchmarks/
   baselines/                          # Pinned artifacts for CI regression testing
   baseline-v1.json                    # Original Sprint 1 baseline (2026-03-07)
-...
-  baseline-paraphrase-v1.json
+  baseline-ambiguity-v1.json
+  baseline-distractor-v1.json
   baseline-multihop-v1.json
+  baseline-paraphrase-v1.json
   baseline-scale-v1.json
-  2026-03-10-ablation/                # First ONNX ablation study (10 configs)
-  2026-03-20/                         # Day 10 stability test (12 configs + ops)
-  2026-04-16/                         # Post-cleanup stability run (34 configs: 12 datasets × up to 4 modes)
-  runner/                             # Benchmark execution infrastructure
+  baseline-specificity-v1.json
+  2026-04-27/                         # Historical spectral retrieval v0.9.0 scorecard
+  2026-05-07/                         # Self-referential cold-start benchmark scorecard (Opus)
+  datasets/                           # Benchmark dataset manifests and download guides
   ideas/                              # Benchmark proposals and analysis
+  McpEngramMemory.Benchmarks/         # BenchmarkDotNet retrieval scaling harness
 ```
 
 ## Key Findings (2026-04-16 — post-cleanup run)
 
-Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run after dead code removal, bug fixes, and `DeleteMemory` signature correction. Zero regression from v0.6.1. 34 benchmark result files across 12 datasets.
+Full test suite: **850 passed, 0 failed** (net8.0). Architecture cleanup run after dead code removal, bug fixes, and `DeleteMemory` signature correction. Zero regression from v0.6.1. 34 benchmark result files across 12 datasets (historical `2026-03-20` and `2026-04-16` run JSONs were pruned from git; pinned baselines remain in `benchmarks/` and `benchmarks/baselines/`).
 
 | Dataset | Best Mode | Recall@K | MRR | nDCG@K | Notes |
 |---------|-----------|----------|-----|--------|-------|
-| [default-v1](../benchmarks/2026-04-16/default-v1-vector_rerank.json) (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
-| [scale-v1](../benchmarks/2026-04-16/scale-v1-hybrid.json) (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / 0.734 | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
+| default-v1 (25 seeds) | vector_rerank | **0.900** | 1.000 | **0.956** | Stable; nDCG +0.003 vs March 20 run |
+| scale-v1 (80 seeds) | hybrid (recall) / vector_rerank (nDCG) | **0.745** / 0.734 | 0.975 / 0.983 | 0.856 / **0.884** | Run variance vs v0.5.4 doc; all regression thresholds pass |
 | [paraphrase-v1](../benchmarks/baseline-paraphrase-v1.json) (25 seeds) | vector | 0.944 | 1.000 | 0.964 | March 2026 baseline |
 | [multihop-v1](../benchmarks/baseline-multihop-v1.json) (25 seeds) | vector | 0.939 | 1.000 | 0.952 | March 2026 baseline |
-| [realworld-v1](../benchmarks/2026-03-20/realworld-v1-hybrid.json) (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | March 2026 baseline |
-| [compound-v1](../benchmarks/2026-03-20/scale-v1-hybrid.json) (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | March 2026 baseline |
-| [ambiguity-v1](../benchmarks/2026-04-16/ambiguity-v1-vector_rerank.json) (24 seeds) | vector_rerank | **0.922** | 1.000 | **0.941** | Stable vs March 25 baseline |
+| realworld-v1 (30 seeds) | hybrid | 0.792 | 0.883 | 0.835 | March 2026 baseline |
+| compound-v1 (20 seeds) | hybrid | 0.900 | 0.978 | 0.937 | March 2026 baseline |
+| ambiguity-v1 (24 seeds) | vector_rerank | **0.922** | 1.000 | **0.941** | Stable vs March 25 baseline |
 | [distractor-v1](../benchmarks/baseline-distractor-v1.json) (22 seeds) | vector_rerank / hybrid_rerank | 0.737 | 1.000 | 0.988 | March 25 baseline |
-| [specificity-v1](../benchmarks/2026-04-16/specificity-v1-vector_rerank.json) (30 seeds) | vector_rerank | **0.919** | 0.972 | **0.905** | Stable vs March 25 baseline |
-| [contamination-v1](../benchmarks/2026-04-16/contamination-v1-vector_rerank.json) (15 seeds) | vector / vector_rerank | **0.972** | 0.958 | **0.917** | Strong cross-domain resistance; all modes ≥ 0.972 recall |
-| [physics-v1](../benchmarks/2026-04-16/physics-v1-hybrid_rerank.json) (20 seeds) | hybrid_rerank | **1.000** | 1.000 | **0.917** | Perfect recall all modes; hybrid_rerank best nDCG |
-| [lifecycle-v1](../benchmarks/2026-04-16/lifecycle-v1-vector_rerank.json) (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
-| [msa-multihop-v1](../benchmarks/2026-04-16/msa-multihop-v1-hybrid.json) (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
-| [msa-coldstart-v1](../benchmarks/2026-04-16/msa-coldstart-v1-vector.json) (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
-| [scale-v2](../benchmarks/2026-04-16/scale-v2-hybrid_rerank.json) (10000 seeds) | hybrid_rerank | **0.614** | 0.708 | **0.625** | Extreme-scale stress test (10× scale-v1); redesigned gold sets (easy K=50, medium K=10, hard K=20); hybrid 0.524, vector 0.460 |
+| specificity-v1 (30 seeds) | vector_rerank | **0.919** | 0.972 | **0.905** | Stable vs March 25 baseline |
+| contamination-v1 (15 seeds) | vector / vector_rerank | **0.972** | 0.958 | **0.917** | Strong cross-domain resistance; all modes ≥ 0.972 recall |
+| physics-v1 (20 seeds) | hybrid_rerank | **1.000** | 1.000 | **0.917** | Perfect recall all modes; hybrid_rerank best nDCG |
+| lifecycle-v1 (25 seeds) | vector_rerank | 0.666 | 0.867 | 0.655 | Lifecycle-state-aware retrieval; lower due to STM/LTM/archived split |
+| msa-multihop-v1 (30 seeds) | hybrid | **0.800** | 1.000 | **0.900** | MSA multi-hop reasoning; hybrid best across all metrics |
+| msa-coldstart-v1 (20 seeds) | vector | **0.815** | 0.900 | **0.855** | Cold-start namespace scenario |
+| scale-v2 (10000 seeds) | hybrid_rerank | **0.614** | 0.708 | **0.625** | Extreme-scale stress test (10× scale-v1); redesigned gold sets (easy K=50, medium K=10, hard K=20); hybrid 0.524, vector 0.460 |
 | disambiguation-v1 (24 seeds) | hybrid | — | — | — | Dense-domain diversity; data in March 2026 baseline |
 | cluster-summary-v1 | hybrid | — | — | — | Cluster summary retrieval quality |
 

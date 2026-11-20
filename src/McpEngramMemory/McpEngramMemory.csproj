@@ -38,34 +38,35 @@
   </ItemGroup>
 
   <!--
-    Drop native runtimes for platforms this server cannot run on.
+    Drop native runtimes and C++ link libraries this server cannot use.
 
-    Microsoft.ML.OnnxRuntime ships natives for every RID it supports, including iOS
-    xcframeworks, Android .aars, Mac Catalyst, and browser-wasm. A `dotnet` global tool is
-    RID-agnostic ("any"), so PackAsTool bundles all of them — but this is a console stdio
-    process on .NET 8, which cannot execute on any of those four platforms. They were ~81 MB
-    of a package that has a 250 MB ceiling on nuget.org.
+    1. Mobile/WASM RIDs (ios-*, android-*, maccatalyst-*, browser-*): a console stdio global
+       tool on .NET 8 cannot execute on these platforms (~81 MB).
+    2. Dead SQLite/SNI-only RIDs where Microsoft.ML.OnnxRuntime does NOT ship a native binary
+       (linux-arm, linux-armel, linux-mips64, linux-musl-*, linux-ppc64le, linux-riscv64,
+       linux-s390x, linux-x86, osx-x64, win-x86) (~10.1 MB compressed). Because
+       OnnxEmbeddingService requires onnxruntime at startup, the server cannot run on those
+       platforms regardless. The 5 supported desktop/server native RIDs (win-x64, win-arm64,
+       linux-x64, linux-arm64, osx-arm64) and managed RIDs (win, unix) are kept intact.
+    3. Windows C++ static import libraries (*.lib) under runtimes/*/native/: only needed by
+       native C++ linkers, never loaded by the .NET runtime.
 
-    Every desktop and server RID is deliberately kept, including linux-musl-* (Alpine
-    containers) and the minor architectures, which cost ~2 MB each.
-
-    If ONNX Runtime ever gains a platform that belongs here, this list is the thing to update.
-
-    The trailing [^/\\]* on each alternative is load-bearing: these appear as RIDs with an
-    architecture suffix - ios-arm64, iossimulator-x64, android-arm, maccatalyst-x64,
-    browser-wasm - never as a bare "ios" or "android" directory. An earlier form of this
-    pattern anchored `ios` and `android` directly against the path separator, so it matched
-    neither and silently shipped every mobile native. The Message below reports the count;
-    if it drops back to single digits, this pattern has stopped matching again.
+    If ONNX Runtime ever gains a supported platform RID, remove it from _UnsupportedNativeRidFiles.
   -->
   <Target Name="TrimNonDesktopNativeRuntimes" AfterTargets="ComputeResolvedFilesToPublishList">
     <ItemGroup>
       <_NonDesktopRuntimeFiles Include="@(ResolvedFileToPublish)"
                                Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\](ios|android|maccatalyst|browser)[^/\\]*[/\\]'))" />
+      <_UnsupportedNativeRidFiles Include="@(ResolvedFileToPublish)"
+                                  Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\](linux-arm|linux-armel|linux-mips64|linux-musl-[^/\\]+|linux-ppc64le|linux-riscv64|linux-s390x|linux-x86|osx-x64|win-x86)[/\\]'))" />
+      <_NativeLinkLibraries Include="@(ResolvedFileToPublish)"
+                            Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('%(ResolvedFileToPublish.RelativePath)', '^runtimes[/\\][^/\\]+[/\\]native[/\\].*\.lib$'))" />
       <ResolvedFileToPublish Remove="@(_NonDesktopRuntimeFiles)" />
+      <ResolvedFileToPublish Remove="@(_UnsupportedNativeRidFiles)" />
+      <ResolvedFileToPublish Remove="@(_NativeLinkLibraries)" />
     </ItemGroup>
     <Message Importance="high"
-             Text="TrimNonDesktopNativeRuntimes: excluded @(_NonDesktopRuntimeFiles->Count()) native file(s) for ios/android/maccatalyst/browser." />
+             Text="TrimNonDesktopNativeRuntimes: excluded @(_NonDesktopRuntimeFiles->Count()) mobile/wasm file(s), @(_UnsupportedNativeRidFiles->Count()) unsupported-RID file(s), and @(_NativeLinkLibraries->Count()) C++ .lib file(s)." />
   </Target>
 
   <ItemGroup>
