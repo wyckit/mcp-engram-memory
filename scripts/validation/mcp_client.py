@@ -59,6 +59,16 @@ class Client:
         result = self.request("tools/call", {"name": tool, "arguments": arguments})
         if result.get("isError"):
             raise RuntimeError(result)
+        return self._decode_text(result)
+
+    def call_error(self, tool, **arguments):
+        result = self.request("tools/call", {"name": tool, "arguments": arguments})
+        if not result.get("isError"):
+            raise RuntimeError(f"Expected MCP tool error (isError=true): {result}")
+        return self._decode_text(result)
+
+    @staticmethod
+    def _decode_text(result):
         text = "\n".join(x["text"] for x in result.get("content", []) if x["type"] == "text")
         try:
             return json.loads(text)

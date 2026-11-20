@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 from validation.load_client import LoadClient
+from validation.mcp_client import Client as McpClient
 spec = importlib.util.spec_from_file_location('soak', SCRIPTS / 'run-release-soak.py')
 soak = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(soak)
@@ -66,6 +67,33 @@ class ClientTests(unittest.TestCase):
             finally:
                 client.process.kill()
                 client.close(check=False)
+
+    def test_call_and_call_error_enforce_is_error_contract(self):
+        tool_server = (
+            "import json,sys\n"
+            "for line in sys.stdin:\n"
+            " r=json.loads(line)\n"
+            " if 'id' not in r: continue\n"
+            " if r['method']=='initialize':\n"
+            "  print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{}}),flush=True)\n"
+            " elif r['method']=='tools/call':\n"
+            "  name=r['params']['name']\n"
+            "  is_err=(name=='deny')\n"
+            "  text='Error: denied' if is_err else json.dumps({'ok':True})\n"
+            "  print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{'isError':is_err,'content':[{'type':'text','text':text}]}}),flush=True)\n"
+        )
+        cmd = [sys.executable, '-u', '-c', tool_server]
+        with tempfile.TemporaryDirectory() as root:
+            with LoadClient(cmd, {}, root, 'load-err', timeout=5) as client:
+                self.assertEqual(client.call('allow'), {'ok': True})
+                with self.assertRaises(RuntimeError): client.call('deny')
+                self.assertEqual(client.call_error('deny'), 'Error: denied')
+                with self.assertRaises(RuntimeError): client.call_error('allow')
+            with McpClient(cmd, root, 'mcp-err', {}) as client:
+                self.assertEqual(client.call('allow'), {'ok': True})
+                with self.assertRaises(RuntimeError): client.call('deny')
+                self.assertEqual(client.call_error('deny'), 'Error: denied')
+                with self.assertRaises(RuntimeError): client.call_error('allow')
 
 
 class OracleTests(unittest.TestCase):

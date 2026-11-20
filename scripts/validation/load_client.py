@@ -94,6 +94,15 @@ class LoadClient:
     def call(self, tool, **arguments):
         result = self.request('tools/call', {'name': tool, 'arguments': arguments})
         if result.get('isError'): raise RuntimeError(result)
+        return self._decode_text(result)
+
+    def call_error(self, tool, **arguments):
+        result = self.request('tools/call', {'name': tool, 'arguments': arguments})
+        if not result.get('isError'): raise RuntimeError(f'Expected MCP tool error (isError=true): {result}')
+        return self._decode_text(result)
+
+    @staticmethod
+    def _decode_text(result):
         text = '\n'.join(c['text'] for c in result.get('content', []) if c['type'] == 'text')
         try: return json.loads(text)
         except ValueError: return text

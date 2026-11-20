@@ -87,7 +87,7 @@ def main():
             with client(phase + "-reader", agent="reader") as c:
                 assert isinstance(c.call("get_memory", id="owner"), dict)
                 assert isinstance(c.call("get_memory", id="private"), str)
-                denied = c.call("remember", id="forbidden", ns="public", text="Forbidden reader write")
+                denied = c.call_error("remember", id="forbidden", ns="public", text="Forbidden reader write")
                 assert isinstance(denied, str) and denied.startswith("Error:"), denied
                 recalled = c.call("recall", query="Who owns Citrine production deployment?", k=10, minScore=0)
                 assert "PRIVATE_SCOPE_SENTINEL" not in json.dumps(recalled)

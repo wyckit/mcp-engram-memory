@@ -152,7 +152,7 @@ def main():
         for marker in CANARIES:
             result = client.call('recall', query='Who owns Citrine production deployment?', ns='soak-private' if marker == CANARIES[0] else 'missing-namespace')
             assert not result['results'] and marker not in json.dumps(result), result
-        denied = client.call('store_memory', id='forbidden', ns='soak-private', text='Forbidden mutation.')
+        denied = client.call_error('store_memory', id='forbidden', ns='soak-private', text='Forbidden mutation.')
         assert isinstance(denied, str) and denied.startswith('Error:'), denied
         threshold = client.call('recall', query='Who owns Citrine production deployment?', ns='expert_citrine_ops', minScore=1)
         assert not threshold['results'], threshold
